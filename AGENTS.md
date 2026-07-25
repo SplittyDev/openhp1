@@ -111,7 +111,7 @@ current internal responsibility split is:
 | Crate | Modules |
 | --- | --- |
 | `openhp1-package` | checked archive cursor, object properties, package owner, configured package resolver, public summary types, index-table decoding, errors |
-| `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, triangulation, errors |
+| `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, errors |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
 | `openhp1-render` | camera/bounds, coordinate conversion, decoded render scene, wgpu renderer |
 | `openhp1-viewer` | executable startup, package/texture scene loading, egui application, offscreen color target |
@@ -167,7 +167,8 @@ decoded in isolation.
   application event loop or require eframe.
 - Base palettes/textures, UE texture coordinates, invisible/fake-backdrop
   filtering, masked cutouts, one-/two-sided rendering, material diagnostics,
-  and translucent/modulated passes are implemented. Next add sky zones and
+  translucent/modulated passes, unlit surfaces, and fixed-view sky zones
+  composited through fake-backdrop polygons are implemented. Next add
   lightmaps.
 - UE1 rendering will later require masked, translucent, and modulated surfaces,
   zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
@@ -261,17 +262,19 @@ palette/texture, static `WetTexture`/`FireTexture` preview, `Level`, and inline
 `Model` decoders are implemented. The eframe viewer renders base-textured BSP
 with depth and a free camera.
 `Lev5_Chess.unr` is visually verified with all 961 surfaces resolving to 15
-unique textures. Invisible and fake-backdrop surfaces are omitted, masked
-palette index zero is alpha-tested, and surface/texture two-sided flags control
-culling. Translucent and modulated surfaces use their UE1 blend equations,
+unique textures. Invisible surfaces are omitted, fake-backdrop surfaces
+screen-sample a separate BSP pass from the decoded `SkyZoneInfo` viewpoint,
+masked palette index zero is alpha-tested, unlit surfaces bypass diagnostic
+shading, and surface/texture two-sided flags control culling. Translucent and
+modulated surfaces use their UE1 blend equations,
 depth-test without writing depth, and are sorted per BSP surface. `WetWater` in
 `Lev2_HogFront.unr` is visually verified without the fallback checkerboard.
 Procedural textures are static snapshots until runtime texture ticking exists.
-Sky zones and lightmaps remain future work.
+Lightmaps remain future work.
 
-The next renderer fidelity step is sky-zone rendering followed by UE1
-lightmaps. Until lightmaps exist, colored surfaces such as the outdoor water
-retain their raw source palette rather than the final in-game tint.
+The next renderer fidelity step is UE1 lightmaps. Until lightmaps exist,
+colored surfaces such as the outdoor water retain their raw source palette
+rather than the final in-game tint.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

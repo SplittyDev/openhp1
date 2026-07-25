@@ -13,11 +13,15 @@ on world BSP geometry.
    `WetTexture` and `FireTexture` exports produce static preview frames.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    coordinates.
-6. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
+6. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
+   Unreal rotator.
+7. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
    surface materials.
-7. `openhp1-render` normalizes coordinates, batches opaque triangles, sorts
+8. `openhp1-render` normalizes coordinates, batches opaque triangles, sorts
    blended BSP surfaces, and draws them with repeat sampling and depth testing.
-8. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
+   A sky map first renders to a separate color/depth target; fake-backdrop
+   polygons sample that target in screen space during the playable pass.
+9. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
 
 The renderer does not know package paths or export indices. It accepts decoded
 CPU geometry and texture images plus a caller-provided wgpu device, queue,
@@ -76,18 +80,30 @@ for each frame. UE1 precedence makes translucent win when both blend flags are
 present and clears masking only for translucent surfaces.
 
 Masked P8 textures discard palette index zero, invisible surfaces are omitted,
-fake backdrops are left open for future sky-zone rendering, and only surfaces
-or textures marked two-sided disable backface culling.
+and only surfaces or textures marked two-sided disable backface culling.
+When a map has fake backdrops, the renderer first draws the same BSP from the
+map's fixed `SkyZoneInfo` viewpoint into a separate target. The playable pass
+then composites that image only over depth-tested fake-backdrop polygons.
+Backdrop depth prevents geometry outside the visible zone from leaking through
+until full BSP visibility traversal exists.
+
+Surfaces carrying UE1's `PF_Unlit` flag bypass the temporary diagnostic
+directional light. This matters for sky-box cube faces, whose texture edges
+otherwise become visible because each face receives a different brightness.
 
 Future rendering work, in order:
 
-1. Decode sky-zone actors and render them through fake-backdrop openings.
-2. Decode and multiply UE1 lightmaps.
+1. Decode and multiply UE1 lightmaps.
 
 The renderer still uses only the first mip and does not cull by zones, render
 actors, or decode vertex meshes. `WetTexture` and `FireTexture` previews are
 static; runtime procedural animation is not implemented. Unsupported texture
 classes use a magenta checkerboard.
+
+Sky rendering clips at the fake-backdrop polygons rather than reproducing
+UE1's scanline BSP portal-span clipper. Full BSP zone/visibility traversal can
+replace that rasterized equivalent when it is needed for broader engine
+compatibility.
 
 The outdoor `WetWater` source palette is orange-brown. The original game turns
 it blue by multiplying it with a colored BSP lightmap before blending, so the

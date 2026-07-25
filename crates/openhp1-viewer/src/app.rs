@@ -118,6 +118,12 @@ impl eframe::App for ViewerApp {
                     ui.label("Modulated");
                     ui.label(self.scene.modulated_surfaces.to_string());
                     ui.end_row();
+                    ui.label("Fake backdrops");
+                    ui.label(self.scene.fake_backdrop_surfaces.to_string());
+                    ui.end_row();
+                    ui.label("Sky zone");
+                    ui.label(if self.scene.has_sky_zone { "yes" } else { "no" });
+                    ui.end_row();
                     ui.label("Triangles");
                     ui.label((self.scene.render.mesh.indices.len() / 3).to_string());
                     ui.end_row();

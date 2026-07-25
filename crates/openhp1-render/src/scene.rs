@@ -1,4 +1,4 @@
-use openhp1_map::TriangleMesh;
+use openhp1_map::{SkyZone, TriangleMesh};
 
 #[derive(Clone, Debug)]
 pub struct TextureImage {
@@ -13,8 +13,9 @@ pub enum SurfaceMode {
     Opaque,
     Translucent,
     Modulated,
-    /// Not submitted to the GPU. Fake backdrops use this until sky-zone
-    /// rendering exists.
+    /// Samples the rendered sky zone in screen space.
+    Backdrop,
+    /// Not submitted to the GPU.
     Hidden,
 }
 
@@ -26,6 +27,7 @@ pub struct SurfaceMaterial {
     /// because UE1 permits masked modulated surfaces.
     pub masked: bool,
     pub two_sided: bool,
+    pub unlit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -35,4 +37,6 @@ pub struct RenderScene {
     /// Material for each BSP surface. Missing textures use the renderer's
     /// checkerboard.
     pub surface_materials: Vec<SurfaceMaterial>,
+    /// A fixed UE1 sky-box viewpoint rendered behind the main scene.
+    pub sky_zone: Option<SkyZone>,
 }

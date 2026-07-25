@@ -44,6 +44,20 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fragment_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
+    return linear_color(textureSample(color_texture, color_sampler, input.texture_coordinates));
+}
+
+@fragment
+fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    if color.a < 0.5 {
+        discard;
+    }
+    return linear_color(color);
+}
+
+@fragment
 fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(color_texture, color_sampler, input.texture_coordinates);
 }
@@ -55,6 +69,12 @@ fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     return color;
+}
+
+@fragment
+fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    return textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
 }
 
 fn linear_color(color: vec4<f32>) -> vec4<f32> {

@@ -51,6 +51,7 @@ impl PolyFlags {
     pub const MODULATED: Self = Self(0x0000_0040);
     pub const FAKE_BACKDROP: Self = Self(0x0000_0080);
     pub const TWO_SIDED: Self = Self(0x0000_0100);
+    pub const UNLIT: Self = Self(0x0040_0000);
 
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)

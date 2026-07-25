@@ -9,8 +9,8 @@ use crate::{
 };
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const PIPELINES_PER_MODE: usize = 4;
-const PIPELINE_COUNT: usize = 12;
+const PIPELINES_PER_MODE: usize = 8;
+const PIPELINE_COUNT: usize = 24;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -27,16 +27,27 @@ struct CameraUniform {
 
 pub struct Renderer {
     pipelines: [wgpu::RenderPipeline; PIPELINE_COUNT],
+    backdrop_pipelines: [wgpu::RenderPipeline; 2],
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    sky_camera_buffer: Option<wgpu::Buffer>,
+    sky_camera_bind_group: Option<wgpu::BindGroup>,
     texture_bind_groups: Vec<wgpu::BindGroup>,
     vertex_buffer: wgpu::Buffer,
     opaque_index_buffer: wgpu::Buffer,
     opaque_batches: Vec<DrawBatch>,
+    backdrop_index_buffer: wgpu::Buffer,
+    backdrop_batches: Vec<BackdropBatch>,
     blended_index_buffer: wgpu::Buffer,
+    sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
+    sky_target: Option<SkyTarget>,
     bounds: SceneBounds,
+    sky_zone: Option<openhp1_map::SkyZone>,
+    target_format: wgpu::TextureFormat,
+    texture_layout: wgpu::BindGroupLayout,
+    sky_sampler: wgpu::Sampler,
 }
 
 impl Renderer {
@@ -77,6 +88,7 @@ impl Renderer {
             .collect();
         let bounds = scene_bounds(&vertices);
         let (opaque_indices, opaque_batches) = texture_batches(scene, fallback_texture);
+        let (backdrop_indices, backdrop_batches) = backdrop_batches(scene);
         let blended_surfaces = blended_surfaces(scene, fallback_texture, &vertices);
         let blended_index_count = blended_surfaces
             .iter()
@@ -92,17 +104,46 @@ impl Renderer {
             contents: bytemuck::cast_slice(&opaque_indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let backdrop_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 fake-backdrop indices"),
+            size: (backdrop_indices.len() * size_of::<u32>()).max(size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        if !backdrop_indices.is_empty() {
+            queue.write_buffer(
+                &backdrop_index_buffer,
+                0,
+                bytemuck::cast_slice(&backdrop_indices),
+            );
+        }
         let blended_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 blended BSP indices"),
             size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let sky_blended_index_buffer = scene.sky_zone.map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("OpenHP1 sky blended BSP indices"),
+                size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 camera"),
             size: size_of::<CameraUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        let sky_camera_buffer = scene.sky_zone.map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("OpenHP1 sky camera"),
+                size: size_of::<CameraUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 camera layout"),
@@ -124,6 +165,16 @@ impl Renderer {
                 binding: 0,
                 resource: camera_buffer.as_entire_binding(),
             }],
+        });
+        let sky_camera_bind_group = sky_camera_buffer.as_ref().map(|buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("OpenHP1 sky camera bind group"),
+                layout: &camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 texture layout"),
@@ -155,6 +206,14 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
+        let sky_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("OpenHP1 sky sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let checkerboard = checkerboard();
         let texture_bind_groups = scene
             .textures
@@ -180,24 +239,51 @@ impl Renderer {
                 target_format,
                 &pipeline_layout,
                 &shader,
-                mode,
-                index % PIPELINES_PER_MODE >= 2,
-                index % 2 != 0,
+                SurfaceMaterial {
+                    mode,
+                    masked: index % 4 >= 2,
+                    two_sided: index % 2 != 0,
+                    unlit: index % PIPELINES_PER_MODE >= 4,
+                    ..Default::default()
+                },
+            )
+        });
+        let backdrop_pipelines = std::array::from_fn(|index| {
+            create_backdrop_pipeline(device, target_format, &pipeline_layout, &shader, index != 0)
+        });
+        let sky_target = scene.sky_zone.map(|_| {
+            SkyTarget::new(
+                device,
+                viewport_size,
+                target_format,
+                &texture_layout,
+                &sky_sampler,
             )
         });
 
         Self {
             pipelines,
+            backdrop_pipelines,
             camera_buffer,
             camera_bind_group,
+            sky_camera_buffer,
+            sky_camera_bind_group,
             texture_bind_groups,
             vertex_buffer,
             opaque_index_buffer,
             opaque_batches,
+            backdrop_index_buffer,
+            backdrop_batches,
             blended_index_buffer,
+            sky_blended_index_buffer,
             blended_surfaces,
             depth: DepthTarget::new(device, viewport_size),
+            sky_target,
             bounds,
+            sky_zone: scene.sky_zone,
+            target_format,
+            texture_layout,
+            sky_sampler,
         }
     }
 
@@ -208,6 +294,15 @@ impl Renderer {
     pub fn resize(&mut self, device: &wgpu::Device, viewport_size: [u32; 2]) {
         if self.depth.size != viewport_size {
             self.depth = DepthTarget::new(device, viewport_size);
+            if self.sky_target.is_some() {
+                self.sky_target = Some(SkyTarget::new(
+                    device,
+                    viewport_size,
+                    self.target_format,
+                    &self.texture_layout,
+                    &self.sky_sampler,
+                ));
+            }
         }
     }
 
@@ -236,6 +331,69 @@ impl Renderer {
                 bytemuck::cast_slice(&blended_indices),
             );
         }
+
+        if let (
+            Some(sky_zone),
+            Some(sky_camera_buffer),
+            Some(sky_camera_bind_group),
+            Some(sky_blended_index_buffer),
+            Some(sky_target),
+        ) = (
+            self.sky_zone,
+            self.sky_camera_buffer.as_ref(),
+            self.sky_camera_bind_group.as_ref(),
+            self.sky_blended_index_buffer.as_ref(),
+            self.sky_target.as_ref(),
+        ) {
+            let sky_camera = camera.for_sky_zone(sky_zone);
+            queue.write_buffer(
+                sky_camera_buffer,
+                0,
+                bytemuck::bytes_of(&CameraUniform {
+                    view_projection: sky_camera.view_projection(aspect).to_cols_array_2d(),
+                }),
+            );
+            let (sky_indices, sky_batches) =
+                sorted_blended_batches(&self.blended_surfaces, sky_camera.position);
+            if !sky_indices.is_empty() {
+                queue.write_buffer(
+                    sky_blended_index_buffer,
+                    0,
+                    bytemuck::cast_slice(&sky_indices),
+                );
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 sky-zone render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &sky_target.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear_color()),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &sky_target.depth.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.draw_scene(
+                &mut pass,
+                sky_camera_bind_group,
+                sky_blended_index_buffer,
+                &sky_batches,
+                None,
+            );
+        }
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 BSP render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -243,12 +401,7 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.035,
-                        g: 0.045,
-                        b: 0.065,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(clear_color()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -264,8 +417,28 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        if !self.opaque_batches.is_empty() || !blended_batches.is_empty() {
+        self.draw_scene(
+            &mut pass,
+            &self.camera_bind_group,
+            &self.blended_index_buffer,
+            &blended_batches,
+            self.sky_target.as_ref().map(|target| &target.bind_group),
+        );
+    }
+
+    fn draw_scene<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        camera_bind_group: &'pass wgpu::BindGroup,
+        blended_index_buffer: &'pass wgpu::Buffer,
+        blended_batches: &[DrawBatch],
+        backdrop_bind_group: Option<&'pass wgpu::BindGroup>,
+    ) {
+        pass.set_bind_group(0, camera_bind_group, &[]);
+        if !self.opaque_batches.is_empty()
+            || !blended_batches.is_empty()
+            || (backdrop_bind_group.is_some() && !self.backdrop_batches.is_empty())
+        {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         }
         if !self.opaque_batches.is_empty() {
@@ -279,17 +452,36 @@ impl Renderer {
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
             }
         }
-        if !blended_batches.is_empty() {
+        if let Some(backdrop_bind_group) = backdrop_bind_group
+            && !self.backdrop_batches.is_empty()
+        {
             pass.set_index_buffer(
-                self.blended_index_buffer.slice(..),
+                self.backdrop_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            for batch in &blended_batches {
+            pass.set_bind_group(1, backdrop_bind_group, &[]);
+            for batch in &self.backdrop_batches {
+                pass.set_pipeline(&self.backdrop_pipelines[batch.pipeline]);
+                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+            }
+        }
+        if !blended_batches.is_empty() {
+            pass.set_index_buffer(blended_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for batch in blended_batches {
                 pass.set_pipeline(&self.pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
             }
         }
+    }
+}
+
+fn clear_color() -> wgpu::Color {
+    wgpu::Color {
+        r: 0.035,
+        g: 0.045,
+        b: 0.065,
+        a: 1.0,
     }
 }
 
@@ -299,11 +491,48 @@ struct DrawBatch {
     pipeline: usize,
 }
 
+struct BackdropBatch {
+    indices: Range<u32>,
+    pipeline: usize,
+}
+
 struct BlendedSurface {
     indices: Vec<u32>,
     center: Vec3,
     texture: usize,
     pipeline: usize,
+}
+
+fn backdrop_batches(scene: &RenderScene) -> (Vec<u32>, Vec<BackdropBatch>) {
+    let mut buckets = [Vec::new(), Vec::new()];
+    for (triangle, &surface) in scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+    {
+        let Some(material) = scene.surface_materials.get(surface) else {
+            continue;
+        };
+        if material.mode == SurfaceMode::Backdrop {
+            buckets[usize::from(material.two_sided)].extend_from_slice(triangle);
+        }
+    }
+
+    let mut indices = Vec::new();
+    let mut batches = Vec::new();
+    for (pipeline, bucket) in buckets.into_iter().enumerate() {
+        if bucket.is_empty() {
+            continue;
+        }
+        let start = indices.len() as u32;
+        indices.extend(bucket);
+        batches.push(BackdropBatch {
+            indices: start..indices.len() as u32,
+            pipeline,
+        });
+    }
+    (indices, batches)
 }
 
 fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, Vec<DrawBatch>) {
@@ -437,11 +666,14 @@ fn sorted_blended_batches(
 
 fn pipeline_index(material: SurfaceMaterial) -> usize {
     let mode = match material.mode {
-        SurfaceMode::Opaque | SurfaceMode::Hidden => 0,
+        SurfaceMode::Opaque | SurfaceMode::Backdrop | SurfaceMode::Hidden => 0,
         SurfaceMode::Translucent => 1,
         SurfaceMode::Modulated => 2,
     };
-    mode * PIPELINES_PER_MODE + usize::from(material.masked) * 2 + usize::from(material.two_sided)
+    mode * PIPELINES_PER_MODE
+        + usize::from(material.unlit) * 4
+        + usize::from(material.masked) * 2
+        + usize::from(material.two_sided)
 }
 
 fn create_pipeline(
@@ -449,11 +681,12 @@ fn create_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    mode: SurfaceMode,
-    masked: bool,
-    two_sided: bool,
+    material: SurfaceMaterial,
 ) -> wgpu::RenderPipeline {
-    let blended = matches!(mode, SurfaceMode::Translucent | SurfaceMode::Modulated);
+    let blended = matches!(
+        material.mode,
+        SurfaceMode::Translucent | SurfaceMode::Modulated
+    );
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 BSP pipeline"),
         layout: Some(layout),
@@ -471,7 +704,7 @@ fn create_pipeline(
             // The Unreal-to-render axis conversion changes handedness, so UE
             // polygon winding becomes clockwise in render space.
             front_face: wgpu::FrontFace::Cw,
-            cull_mode: (!two_sided).then_some(wgpu::Face::Back),
+            cull_mode: (!material.two_sided).then_some(wgpu::Face::Back),
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -484,11 +717,15 @@ fn create_pipeline(
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(fragment_entry(mode, masked)),
+            entry_point: Some(fragment_entry(
+                material.mode,
+                material.masked,
+                material.unlit,
+            )),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
-                blend: blend_state(mode),
+                blend: blend_state(material.mode),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -497,13 +734,66 @@ fn create_pipeline(
     })
 }
 
-fn fragment_entry(mode: SurfaceMode, masked: bool) -> &'static str {
-    match (mode, masked) {
-        (SurfaceMode::Opaque, false) => "fragment_main",
-        (SurfaceMode::Opaque, true) => "fragment_masked",
-        (SurfaceMode::Translucent | SurfaceMode::Modulated, false) => "fragment_blended",
-        (SurfaceMode::Translucent | SurfaceMode::Modulated, true) => "fragment_blended_masked",
-        (SurfaceMode::Hidden, _) => unreachable!(),
+fn create_backdrop_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    two_sided: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("OpenHP1 fake-backdrop pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+            }],
+        },
+        primitive: wgpu::PrimitiveState {
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: (!two_sided).then_some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            // The original BSP visibility pass excludes geometry behind the
+            // portal. Writing the backdrop plane provides the same occlusion
+            // until node/zone visibility traversal is implemented.
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_backdrop"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn fragment_entry(mode: SurfaceMode, masked: bool, unlit: bool) -> &'static str {
+    match (mode, masked, unlit) {
+        (SurfaceMode::Opaque, false, false) => "fragment_main",
+        (SurfaceMode::Opaque, true, false) => "fragment_masked",
+        (SurfaceMode::Opaque, false, true) => "fragment_unlit",
+        (SurfaceMode::Opaque, true, true) => "fragment_unlit_masked",
+        (SurfaceMode::Translucent | SurfaceMode::Modulated, false, _) => "fragment_blended",
+        (SurfaceMode::Translucent | SurfaceMode::Modulated, true, _) => "fragment_blended_masked",
+        (SurfaceMode::Backdrop | SurfaceMode::Hidden, _, _) => unreachable!(),
     }
 }
 
@@ -520,7 +810,7 @@ fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
             dst_factor: wgpu::BlendFactor::Src,
             operation: wgpu::BlendOperation::Add,
         },
-        SurfaceMode::Hidden => unreachable!(),
+        SurfaceMode::Backdrop | SurfaceMode::Hidden => unreachable!(),
     };
     Some(wgpu::BlendState {
         color,
@@ -586,6 +876,60 @@ fn checkerboard() -> TextureImage {
 struct DepthTarget {
     view: wgpu::TextureView,
     size: [u32; 2],
+}
+
+struct SkyTarget {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    depth: DepthTarget,
+}
+
+impl SkyTarget {
+    fn new(
+        device: &wgpu::Device,
+        size: [u32; 2],
+        format: wgpu::TextureFormat,
+        texture_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> Self {
+        let size = [size[0].max(1), size[1].max(1)];
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("OpenHP1 sky-zone color"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OpenHP1 sky-zone texture bind group"),
+            layout: texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Self {
+            _texture: texture,
+            view,
+            bind_group,
+            depth: DepthTarget::new(device, size),
+        }
+    }
 }
 
 impl DepthTarget {
@@ -676,6 +1020,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            sky_zone: None,
         };
         let (indices, batches) = texture_batches(&scene, 2);
         assert_eq!(indices, [6, 7, 8, 0, 1, 2, 3, 4, 5]);
@@ -718,6 +1063,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            sky_zone: None,
         };
         let surfaces = blended_surfaces(&scene, 2, &vertices);
         let (indices, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
@@ -727,7 +1073,7 @@ mod tests {
                 .iter()
                 .map(|batch| (batch.texture, batch.pipeline, batch.indices.clone()))
                 .collect::<Vec<_>>(),
-            [(1, 10, 0..3), (0, 4, 3..6)]
+            [(1, 18, 0..3), (0, 8, 3..6)]
         );
     }
 
@@ -741,9 +1087,43 @@ mod tests {
         assert_eq!(modulated.color.src_factor, wgpu::BlendFactor::Dst);
         assert_eq!(modulated.color.dst_factor, wgpu::BlendFactor::Src);
         assert_eq!(
-            fragment_entry(SurfaceMode::Modulated, true),
+            fragment_entry(SurfaceMode::Modulated, true, false),
             "fragment_blended_masked"
         );
+        assert_eq!(
+            fragment_entry(SurfaceMode::Opaque, false, true),
+            "fragment_unlit"
+        );
+    }
+
+    #[test]
+    fn extracts_only_fake_backdrop_triangles() {
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..9).collect(),
+                triangle_surfaces: vec![0, 1, 2],
+                ..Default::default()
+            },
+            textures: vec![],
+            surface_materials: vec![
+                SurfaceMaterial::default(),
+                SurfaceMaterial {
+                    mode: SurfaceMode::Backdrop,
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    mode: SurfaceMode::Backdrop,
+                    two_sided: true,
+                    ..Default::default()
+                },
+            ],
+            sky_zone: None,
+        };
+        let (indices, batches) = backdrop_batches(&scene);
+        assert_eq!(indices, [3, 4, 5, 6, 7, 8]);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].indices, 0..3);
+        assert_eq!(batches[1].indices, 3..6);
     }
 
     fn vertex_at(x: f32, y: f32, z: f32) -> Vertex {

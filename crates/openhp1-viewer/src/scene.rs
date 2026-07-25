@@ -17,6 +17,8 @@ pub(crate) struct LoadedScene {
     pub(crate) masked_surfaces: usize,
     pub(crate) translucent_surfaces: usize,
     pub(crate) modulated_surfaces: usize,
+    pub(crate) fake_backdrop_surfaces: usize,
+    pub(crate) has_sky_zone: bool,
 }
 
 impl LoadedScene {
@@ -35,6 +37,18 @@ impl LoadedScene {
         let model =
             Model::decode(&package, model_export).context("failed to decode the world model")?;
         let mesh = model.triangulate().context("failed to triangulate BSP")?;
+        let fake_backdrop_surfaces = model
+            .surfaces
+            .iter()
+            .filter(|surface| surface.poly_flags.contains(PolyFlags::FAKE_BACKDROP))
+            .count();
+        let sky_zone = if fake_backdrop_surfaces == 0 {
+            None
+        } else {
+            model
+                .sky_zone(&package)
+                .context("failed to decode the sky zone")?
+        };
         let (textures, surface_materials) = load_materials(&mut packages, &package, &model);
         let textured_surfaces = surface_materials
             .iter()
@@ -63,14 +77,23 @@ impl LoadedScene {
             masked_surfaces,
             translucent_surfaces,
             modulated_surfaces,
+            fake_backdrop_surfaces,
+            has_sky_zone = sky_zone.is_some(),
             "loaded map"
         );
+        if fake_backdrop_surfaces != 0 && sky_zone.is_none() {
+            warn!(
+                fake_backdrop_surfaces,
+                "map has fake backdrops but no BSP SkyZoneInfo"
+            );
+        }
         Ok(Self {
             path,
             render: RenderScene {
                 mesh,
                 textures,
                 surface_materials,
+                sky_zone,
             },
             points: model.points.len(),
             nodes: model.nodes.len(),
@@ -79,6 +102,8 @@ impl LoadedScene {
             masked_surfaces,
             translucent_surfaces,
             modulated_surfaces,
+            fake_backdrop_surfaces,
+            has_sky_zone: sky_zone.is_some(),
         })
     }
 }
@@ -94,9 +119,16 @@ fn load_materials(
     let mut materials = Vec::with_capacity(model.surfaces.len());
 
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
-        if is_hidden(surface.poly_flags, TextureRenderFlags::default()) {
+        if surface.poly_flags.contains(PolyFlags::INVISIBLE) {
             materials.push(SurfaceMaterial {
                 mode: SurfaceMode::Hidden,
+                ..Default::default()
+            });
+            continue;
+        }
+        if surface.poly_flags.contains(PolyFlags::FAKE_BACKDROP) {
+            materials.push(SurfaceMaterial {
+                mode: SurfaceMode::Backdrop,
                 ..Default::default()
             });
             continue;
@@ -208,6 +240,8 @@ fn surface_material(
         texture,
         mode: if is_hidden(flags, texture_flags) {
             SurfaceMode::Hidden
+        } else if flags.contains(PolyFlags::FAKE_BACKDROP) || texture_flags.fake_backdrop {
+            SurfaceMode::Backdrop
         } else if translucent {
             SurfaceMode::Translucent
         } else if modulated {
@@ -219,14 +253,12 @@ fn surface_material(
         // it for modulated surfaces.
         masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
+        unlit: flags.contains(PolyFlags::UNLIT),
     }
 }
 
 fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
-    flags.contains(PolyFlags::INVISIBLE)
-        || flags.contains(PolyFlags::FAKE_BACKDROP)
-        || texture_flags.invisible
-        || texture_flags.fake_backdrop
+    flags.contains(PolyFlags::INVISIBLE) || texture_flags.invisible
 }
 
 #[cfg(test)]
@@ -248,10 +280,14 @@ mod tests {
         assert_eq!(masked.mode, SurfaceMode::Opaque);
         assert!(masked.masked);
         assert!(masked.two_sided);
+        assert!(!masked.unlit);
 
         let hidden =
             super::surface_material(PolyFlags::FAKE_BACKDROP, Some(1), Some(Default::default()));
-        assert_eq!(hidden.mode, SurfaceMode::Hidden);
+        assert_eq!(hidden.mode, SurfaceMode::Backdrop);
+
+        let unlit = super::surface_material(PolyFlags::UNLIT, None, None);
+        assert!(unlit.unlit);
     }
 
     #[test]
