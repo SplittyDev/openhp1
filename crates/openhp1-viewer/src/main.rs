@@ -111,7 +111,7 @@ impl ViewerApp {
     fn update_camera(&mut self, ui: &egui::Ui, response: &egui::Response, delta_time: f32) {
         if response.dragged() {
             let drag = ui.input(|input| input.pointer.delta());
-            self.camera.yaw -= drag.x * 0.004;
+            self.camera.yaw += drag.x * 0.004;
             self.camera.pitch = (self.camera.pitch - drag.y * 0.004).clamp(-1.55, 1.55);
         }
         if !response.hovered() {
