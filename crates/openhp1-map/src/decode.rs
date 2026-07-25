@@ -88,13 +88,6 @@ pub(crate) fn index(value: i32, length: usize, field: &'static str) -> Result<us
         })
 }
 
-pub(crate) fn point_index(value: i32, length: usize) -> Result<u32> {
-    let index = index(value, length, "BSP vertex point")?;
-    u32::try_from(index).map_err(|_| Error::MeshTooLarge {
-        point_count: length,
-    })
-}
-
 pub(crate) fn require_class(
     package: &Package,
     export_index: usize,

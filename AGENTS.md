@@ -110,11 +110,11 @@ current internal responsibility split is:
 
 | Crate | Modules |
 | --- | --- |
-| `openhp1-package` | checked archive cursor, object properties, package owner, public summary types, index-table decoding, errors |
+| `openhp1-package` | checked archive cursor, object properties, package owner, configured package resolver, public summary types, index-table decoding, errors |
 | `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, triangulation, errors |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
-| `openhp1-render` | camera/bounds, coordinate conversion, wgpu renderer |
-| `openhp1-viewer` | executable startup, scene loading, egui application, offscreen color target |
+| `openhp1-render` | camera/bounds, coordinate conversion, decoded render scene, wgpu renderer |
+| `openhp1-viewer` | executable startup, package/texture scene loading, egui application, offscreen color target |
 
 Prefer a module for a substantial data structure and its behavior. Keep small
 format records together when they share one serialization boundary; do not
@@ -165,8 +165,8 @@ decoded in isolation.
 - The renderer should be usable with a caller-provided device, queue, command
   encoder, target view, target format, and viewport size. It must not own the
   application event loop or require eframe.
-- Begin with untextured BSP, then palettes/textures and UE texture coordinates,
-  then lightmaps and render flags.
+- Base palettes/textures and UE texture coordinates are implemented. Add
+  lightmaps and render flags next.
 - UE1 rendering will later require masked, translucent, and modulated surfaces,
   zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
   meshes, animated textures, and HP-specific particles. Do not implement these
@@ -254,10 +254,11 @@ The map-viewer milestone is complete when it:
 ## Current implementation status
 
 The package inspector has scanned all 248 magic-detected packages in the local
-installation. The package, tagged-property, P8 palette/texture, `Level`, and
-inline `Model` decoders are implemented. The eframe viewer renders untextured
-BSP with depth and a free camera; `Quid_RavenA.unr` is the first visually
-verified map.
+installation. The package, tagged-property, configured package resolver, P8
+palette/texture, `Level`, and inline `Model` decoders are implemented. The
+eframe viewer renders base-textured BSP with depth and a free camera.
+`Lev5_Chess.unr` is visually verified with all 961 surfaces resolving to 15
+unique textures. Lightmaps and polygon blend flags remain unimplemented.
 
 The next renderer step is texture-package resolution and BSP UV generation.
 Do not replace the exact `Level` world-model reference with a largest-export

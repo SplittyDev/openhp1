@@ -12,5 +12,6 @@ glam.workspace = true
 openhp1-map = { path = "../openhp1-map" }
 openhp1-package = { path = "../openhp1-package" }
 openhp1-render = { path = "../openhp1-render" }
+openhp1-texture = { path = "../openhp1-texture" }
 tracing.workspace = true
 tracing-subscriber.workspace = true

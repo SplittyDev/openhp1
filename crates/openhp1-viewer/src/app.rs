@@ -30,8 +30,9 @@ impl ViewerApp {
         let target = ColorTarget::new(&state, size);
         let renderer = Renderer::new(
             &state.device,
+            &state.queue,
             wgpu::TextureFormat::Rgba8Unorm,
-            &scene.mesh,
+            &scene.render,
             size,
         );
         let bounds = renderer.bounds();
@@ -105,11 +106,14 @@ impl eframe::App for ViewerApp {
                     ui.label("Surfaces");
                     ui.label(self.scene.surfaces.to_string());
                     ui.end_row();
+                    ui.label("Textured");
+                    ui.label(self.scene.textured_surfaces.to_string());
+                    ui.end_row();
                     ui.label("Triangles");
-                    ui.label((self.scene.mesh.indices.len() / 3).to_string());
+                    ui.label((self.scene.render.mesh.indices.len() / 3).to_string());
                     ui.end_row();
                 });
-                if self.scene.mesh.indices.is_empty() {
+                if self.scene.render.mesh.indices.is_empty() {
                     ui.colored_label(egui::Color32::YELLOW, "This map contains no BSP geometry.");
                 }
                 ui.separator();

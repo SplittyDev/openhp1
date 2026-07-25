@@ -40,6 +40,19 @@ A surface contains its texture object reference, polygon flags, base point,
 normal and texture-axis indices, lightmap and editor brush information, pan
 values, and brush actor.
 
+For a surface point `P`, base point `B`, texture vectors `U` and `V`, and
+integer pans, its raw texture coordinates in texels are:
+
+```text
+u = dot(U, P - B) + PanU
+v = dot(V, P - B) + PanV
+```
+
+Divide these values by the selected texture mip's width and height before
+sampling a normalized repeating GPU texture. Vertices are emitted per BSP node
+polygon because a shared world point may use different surfaces and therefore
+different texture coordinates.
+
 After the geometry arrays come the shared-side count, zone table, editor
 polygon object, lightmap metadata and bits, collision bounds, leaf hulls,
 convex leaves, light actors, and two final model flags.
@@ -48,4 +61,6 @@ convex leaves, light actors, and two final model flags.
 
 `openhp1-map` retains coordinates in Unreal's native convention. Axis or
 handedness conversion belongs in one renderer conversion module; loaders must
-not mutate positions to suit a particular graphics backend.
+not mutate positions to suit a particular graphics backend. Texture
+coordinates remain in raw UE texels until `openhp1-render` knows the decoded
+texture dimensions.

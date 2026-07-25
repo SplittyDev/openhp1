@@ -20,6 +20,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         summary.exports.len()
     );
 
+    for (index, import) in summary.imports.iter().enumerate() {
+        println!(
+            "  import {index:>5}: {:<28} {:<20} outer={}",
+            summary.name(import.object_name),
+            summary.name(import.class_name),
+            summary.object_name(import.outer).unwrap_or("-")
+        );
+    }
     for (index, export) in summary.exports.iter().enumerate() {
         println!(
             "  export {index:>5}: {:<28} {:<20} size={:#x} offset={}",

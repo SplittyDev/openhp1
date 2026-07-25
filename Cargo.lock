@@ -1900,6 +1900,7 @@ dependencies = [
  "openhp1-map",
  "openhp1-package",
  "openhp1-render",
+ "openhp1-texture",
  "tracing",
  "tracing-subscriber",
 ]

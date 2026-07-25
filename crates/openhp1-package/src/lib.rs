@@ -9,12 +9,14 @@ mod archive;
 mod error;
 mod object;
 mod package;
+mod resolver;
 mod summary;
 mod tables;
 
 pub use error::{Error, Result};
 pub use object::{ObjectReader, PropertyKind, PropertyTag};
 pub use package::Package;
+pub use resolver::{PackageStore, ResolveError, ResolveResult, ResolvedObject};
 pub use summary::{
     Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PackageHeader,
     PackageSummary,
