@@ -1,0 +1,9 @@
+# cargo
+debug/
+target/
+
+# backup files
+**/*.rs.bk
+
+# game files
+res/

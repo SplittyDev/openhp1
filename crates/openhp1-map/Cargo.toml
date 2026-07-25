@@ -1,0 +1,12 @@
+[package]
+name = "openhp1-map"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glam.workspace = true
+openhp1-package = { path = "../openhp1-package" }
+thiserror.workspace = true
+
