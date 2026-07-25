@@ -85,7 +85,7 @@ impl Model {
         for _ in 0..surface_count {
             surfaces.push(BspSurface {
                 texture: reader.read_object_reference()?,
-                poly_flags: reader.read_u32()?,
+                poly_flags: crate::PolyFlags::from_bits(reader.read_u32()?),
                 base_point: reader.read_compact_index()?,
                 normal: reader.read_compact_index()?,
                 texture_u: reader.read_compact_index()?,

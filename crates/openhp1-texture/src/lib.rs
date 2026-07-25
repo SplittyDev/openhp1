@@ -7,4 +7,4 @@ mod texture;
 
 pub use error::{Error, Result};
 pub use palette::{Color, Palette};
-pub use texture::{MipLevel, Texture};
+pub use texture::{MipLevel, Texture, TextureRenderFlags};

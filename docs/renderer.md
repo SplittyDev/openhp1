@@ -12,9 +12,11 @@ on world BSP geometry.
 4. `openhp1-texture` expands the first P8 mip and its palette to RGBA8.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    coordinates.
-6. `openhp1-render` normalizes those coordinates, batches triangles by texture,
-   and draws them with repeat sampling and depth testing.
-7. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
+6. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
+   surface materials.
+7. `openhp1-render` normalizes coordinates, batches triangles by texture and
+   material, and draws them with repeat sampling and depth testing.
+8. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
 
 The renderer does not know package paths or export indices. It accepts decoded
 CPU geometry and texture images plus a caller-provided wgpu device, queue,
@@ -29,6 +31,9 @@ coordinates:
 ```text
 (unreal.x, unreal.y, unreal.z) -> (unreal.y, unreal.z, -unreal.x)
 ```
+
+This conversion changes handedness, so UE polygon winding is clockwise after
+conversion. One-sided wgpu pipelines therefore use clockwise front faces.
 
 The initial camera starts at the converted model-bounds center. UE1 maps are
 commonly subtractive worlds carved inside solid BSP; placing an overview camera
@@ -59,7 +64,18 @@ it uses the Quidditch map above.
 
 ## Known omissions
 
-The current renderer uses only the first mip and ordinary opaque sampling.
-It does not yet draw lightmaps, interpret masked/translucent/modulated polygon
-flags, cull by zones, render actors, or decode vertex meshes. Unsupported
-texture classes use a magenta checkerboard.
+The renderer currently supports opaque and masked base textures. Masked P8
+textures discard palette index zero, invisible surfaces are omitted, fake
+backdrops are left open for future sky-zone rendering, and only surfaces or
+textures marked two-sided disable backface culling.
+
+Future rendering work, in order:
+
+1. Add viewer diagnostics for surface-flag counts and material inspection.
+2. Render translucent and modulated surfaces in their own sorted passes.
+3. Decode sky-zone actors and render them through fake-backdrop openings.
+4. Decode and multiply UE1 lightmaps.
+
+The renderer still uses only the first mip and does not cull by zones, render
+actors, or decode vertex meshes. Unsupported texture classes use a magenta
+checkerboard.

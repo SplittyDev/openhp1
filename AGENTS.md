@@ -165,8 +165,10 @@ decoded in isolation.
 - The renderer should be usable with a caller-provided device, queue, command
   encoder, target view, target format, and viewport size. It must not own the
   application event loop or require eframe.
-- Base palettes/textures and UE texture coordinates are implemented. Add
-  lightmaps and render flags next.
+- Base palettes/textures, UE texture coordinates, invisible/fake-backdrop
+  filtering, masked cutouts, and one-/two-sided surface rendering are
+  implemented. Next add material diagnostics, translucent/modulated passes,
+  sky zones, and lightmaps, in that order.
 - UE1 rendering will later require masked, translucent, and modulated surfaces,
   zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
   meshes, animated textures, and HP-specific particles. Do not implement these
@@ -258,7 +260,11 @@ installation. The package, tagged-property, configured package resolver, P8
 palette/texture, `Level`, and inline `Model` decoders are implemented. The
 eframe viewer renders base-textured BSP with depth and a free camera.
 `Lev5_Chess.unr` is visually verified with all 961 surfaces resolving to 15
-unique textures. Lightmaps and polygon blend flags remain unimplemented.
+unique textures. Invisible and fake-backdrop surfaces are omitted, masked
+palette index zero is alpha-tested, and surface/texture two-sided flags control
+culling.
+Material diagnostics, translucent/modulated blending, sky zones, and lightmaps
+remain future work.
 
 The next renderer step is texture-package resolution and BSP UV generation.
 Do not replace the exact `Level` world-model reference with a largest-export

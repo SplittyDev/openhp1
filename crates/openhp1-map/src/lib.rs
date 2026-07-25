@@ -7,7 +7,9 @@ mod level;
 mod mesh;
 mod model;
 
-pub use bsp::{BspNode, BspSurface, BspVertex, ConvexLeaf, LightMap, PrimitiveBounds, Zone};
+pub use bsp::{
+    BspNode, BspSurface, BspVertex, ConvexLeaf, LightMap, PolyFlags, PrimitiveBounds, Zone,
+};
 pub use error::{Error, Result};
 pub use level::{Level, world_model_export};
 pub use mesh::TriangleMesh;

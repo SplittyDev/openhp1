@@ -4,7 +4,9 @@ use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-use crate::{Camera, RenderScene, SceneBounds, TextureImage, unreal_to_render};
+use crate::{
+    Camera, RenderScene, SceneBounds, SurfaceMaterial, SurfaceMode, TextureImage, unreal_to_render,
+};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -22,7 +24,7 @@ struct CameraUniform {
 }
 
 pub struct Renderer {
-    pipeline: wgpu::RenderPipeline,
+    pipelines: [wgpu::RenderPipeline; 4],
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_groups: Vec<wgpu::BindGroup>,
@@ -52,10 +54,9 @@ impl Renderer {
                 let position = unreal_to_render(position);
                 let surface = scene.mesh.vertex_surfaces[vertex_index];
                 let texture = scene
-                    .surface_textures
+                    .surface_materials
                     .get(surface)
-                    .copied()
-                    .flatten()
+                    .and_then(|material| material.texture)
                     .and_then(|index| scene.textures.get(index));
                 let dimensions = texture.map_or([64.0, 64.0], |texture| {
                     [texture.width as f32, texture.height as f32]
@@ -152,43 +153,19 @@ impl Renderer {
             bind_group_layouts: &[Some(&camera_layout), Some(&texture_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("OpenHP1 BSP pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
-                }],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(target_format.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
+        let pipelines = std::array::from_fn(|index| {
+            create_pipeline(
+                device,
+                target_format,
+                &pipeline_layout,
+                &shader,
+                index >= 2,
+                index % 2 != 0,
+            )
         });
 
         Self {
-            pipeline,
+            pipelines,
             camera_buffer,
             camera_bind_group,
             texture_bind_groups,
@@ -254,12 +231,12 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         if !self.batches.is_empty() {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in &self.batches {
+                pass.set_pipeline(&self.pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
             }
@@ -270,29 +247,36 @@ impl Renderer {
 struct DrawBatch {
     indices: Range<u32>,
     texture: usize,
+    pipeline: usize,
 }
 
 fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, Vec<DrawBatch>) {
-    let mut by_texture = vec![Vec::new(); fallback_texture + 1];
+    let mut buckets = vec![Vec::new(); (fallback_texture + 1) * 4];
     for (triangle, surface) in scene
         .mesh
         .indices
         .chunks_exact(3)
         .zip(&scene.mesh.triangle_surfaces)
     {
-        let texture = scene
-            .surface_textures
+        let material = scene
+            .surface_materials
             .get(*surface)
             .copied()
-            .flatten()
+            .unwrap_or_default();
+        if material.mode == SurfaceMode::Hidden {
+            continue;
+        }
+        let texture = material
+            .texture
             .filter(|index| *index < fallback_texture)
             .unwrap_or(fallback_texture);
-        by_texture[texture].extend_from_slice(triangle);
+        let pipeline = pipeline_index(material);
+        buckets[texture * 4 + pipeline].extend_from_slice(triangle);
     }
 
     let mut indices = Vec::with_capacity(scene.mesh.indices.len());
     let mut batches = Vec::new();
-    for (texture, source) in by_texture.into_iter().enumerate() {
+    for (bucket, source) in buckets.into_iter().enumerate() {
         if source.is_empty() {
             continue;
         }
@@ -300,10 +284,66 @@ fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, V
         indices.extend(source);
         batches.push(DrawBatch {
             indices: start..indices.len() as u32,
-            texture,
+            texture: bucket / 4,
+            pipeline: bucket % 4,
         });
     }
     (indices, batches)
+}
+
+fn pipeline_index(material: SurfaceMaterial) -> usize {
+    usize::from(material.mode == SurfaceMode::Masked) * 2 + usize::from(material.two_sided)
+}
+
+fn create_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    masked: bool,
+    two_sided: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("OpenHP1 BSP pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+            }],
+        },
+        primitive: wgpu::PrimitiveState {
+            // The Unreal-to-render axis conversion changes handedness, so UE
+            // polygon winding becomes clockwise in render space.
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: (!two_sided).then_some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(if masked {
+                "fragment_masked"
+            } else {
+                "fragment_main"
+            }),
+            compilation_options: Default::default(),
+            targets: &[Some(target_format.into())],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn texture_bind_group(
@@ -427,24 +467,39 @@ mod tests {
     }
 
     #[test]
-    fn batches_triangles_by_texture_and_keeps_fallback() {
+    fn batches_by_texture_and_material_while_skipping_hidden_surfaces() {
         let scene = RenderScene {
             mesh: TriangleMesh {
-                indices: (0..9).collect(),
-                triangle_surfaces: vec![0, 1, 2],
+                indices: (0..12).collect(),
+                triangle_surfaces: vec![0, 1, 2, 3],
                 ..Default::default()
             },
             textures: vec![checkerboard(), checkerboard()],
-            surface_textures: vec![Some(1), None, Some(0)],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    texture: Some(1),
+                    mode: SurfaceMode::Masked,
+                    two_sided: true,
+                },
+                SurfaceMaterial::default(),
+                SurfaceMaterial {
+                    texture: Some(0),
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    mode: SurfaceMode::Hidden,
+                    ..Default::default()
+                },
+            ],
         };
         let (indices, batches) = texture_batches(&scene, 2);
         assert_eq!(indices, [6, 7, 8, 0, 1, 2, 3, 4, 5]);
         assert_eq!(
             batches
                 .iter()
-                .map(|batch| (batch.texture, batch.indices.clone()))
+                .map(|batch| (batch.texture, batch.pipeline, batch.indices.clone()))
                 .collect::<Vec<_>>(),
-            [(0, 0..3), (1, 3..6), (2, 6..9)]
+            [(0, 0, 0..3), (1, 3, 3..6), (2, 0, 6..9)]
         );
     }
 }

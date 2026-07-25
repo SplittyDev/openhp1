@@ -29,7 +29,7 @@ pub struct BspNode {
 #[derive(Clone, Debug)]
 pub struct BspSurface {
     pub texture: ObjectReference,
-    pub poly_flags: u32,
+    pub poly_flags: PolyFlags,
     pub base_point: i32,
     pub normal: i32,
     pub texture_u: i32,
@@ -39,6 +39,24 @@ pub struct BspSurface {
     pub pan_u: i16,
     pub pan_v: i16,
     pub brush_actor: ObjectReference,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PolyFlags(u32);
+
+impl PolyFlags {
+    pub const INVISIBLE: Self = Self(0x0000_0001);
+    pub const MASKED: Self = Self(0x0000_0002);
+    pub const FAKE_BACKDROP: Self = Self(0x0000_0080);
+    pub const TWO_SIDED: Self = Self(0x0000_0100);
+
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    pub const fn contains(self, flag: Self) -> bool {
+        self.0 & flag.0 != 0
+    }
 }
 
 #[derive(Clone, Debug)]

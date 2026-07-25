@@ -17,4 +17,12 @@ mod tests {
         assert_eq!(unreal_to_render(Vec3::Y), Vec3::X);
         assert_eq!(unreal_to_render(Vec3::Z), Vec3::Y);
     }
+
+    #[test]
+    fn coordinate_conversion_flips_winding() {
+        assert_eq!(
+            unreal_to_render(Vec3::X).cross(unreal_to_render(Vec3::Y)),
+            -unreal_to_render(Vec3::X.cross(Vec3::Y))
+        );
+    }
 }

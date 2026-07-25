@@ -22,7 +22,16 @@ pub struct Texture {
     pub palette: ObjectReference,
     pub declared_width: Option<u32>,
     pub declared_height: Option<u32>,
+    pub render_flags: TextureRenderFlags,
     pub mips: Vec<MipLevel>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TextureRenderFlags {
+    pub invisible: bool,
+    pub masked: bool,
+    pub fake_backdrop: bool,
+    pub two_sided: bool,
 }
 
 impl Texture {
@@ -32,6 +41,7 @@ impl Texture {
         let mut palette = None;
         let mut declared_width = None;
         let mut declared_height = None;
+        let mut render_flags = TextureRenderFlags::default();
 
         while let Some(property) = reader.next_property()? {
             let name = reader.summary().name(property.name);
@@ -44,6 +54,9 @@ impl Texture {
                 }
                 "VSize" if property.kind == PropertyKind::Int => {
                     declared_height = Some(reader.property_reader(&property).read_u32()?);
+                }
+                _ if property.kind == PropertyKind::Bool => {
+                    render_flags.set(name, property.bool_value.unwrap_or(false));
                 }
                 _ => {}
             }
@@ -109,6 +122,7 @@ impl Texture {
             palette,
             declared_width,
             declared_height,
+            render_flags,
             mips,
         })
     }
@@ -130,13 +144,79 @@ impl Texture {
                         index,
                         color_count: palette.colors.len(),
                     })?;
-            rgba.extend_from_slice(&[
-                color.red,
-                color.green,
-                color.blue,
-                if masked && index == 0 { 0 } else { 255 },
-            ]);
+            if masked && index == 0 {
+                rgba.extend_from_slice(&[0; 4]);
+            } else {
+                rgba.extend_from_slice(&[color.red, color.green, color.blue, 255]);
+            }
         }
         Ok(rgba)
+    }
+}
+
+impl TextureRenderFlags {
+    fn set(&mut self, name: &str, value: bool) {
+        if name.eq_ignore_ascii_case("bInvisible") {
+            self.invisible = value;
+        } else if name.eq_ignore_ascii_case("bMasked") {
+            self.masked = value;
+        } else if name.eq_ignore_ascii_case("bFakeBackdrop") {
+            self.fake_backdrop = value;
+        } else if name.eq_ignore_ascii_case("bTwoSided") {
+            self.two_sided = value;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use openhp1_package::ObjectReference;
+
+    use crate::{Color, MipLevel, Palette, Texture, TextureRenderFlags};
+
+    #[test]
+    fn masked_palette_index_zero_becomes_transparent_black() {
+        let texture = Texture {
+            palette: ObjectReference::None,
+            declared_width: Some(2),
+            declared_height: Some(1),
+            render_flags: TextureRenderFlags::default(),
+            mips: vec![MipLevel {
+                width: 2,
+                height: 1,
+                width_bits: 1,
+                height_bits: 0,
+                indices: vec![0, 1],
+            }],
+        };
+        let palette = Palette {
+            colors: vec![
+                Color {
+                    red: 255,
+                    green: 0,
+                    blue: 255,
+                    alpha: 0,
+                },
+                Color {
+                    red: 1,
+                    green: 2,
+                    blue: 3,
+                    alpha: 0,
+                },
+            ],
+        };
+        assert_eq!(
+            texture.rgba(0, &palette, true).unwrap(),
+            [0, 0, 0, 0, 1, 2, 3, 255]
+        );
+    }
+
+    #[test]
+    fn reads_texture_render_booleans_case_insensitively() {
+        let mut flags = TextureRenderFlags::default();
+        flags.set("bMASKED", true);
+        flags.set("bTwoSided", true);
+        assert!(flags.masked);
+        assert!(flags.two_sided);
     }
 }
