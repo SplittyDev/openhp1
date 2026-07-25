@@ -166,6 +166,9 @@ impl eframe::App for ViewerApp {
                     ui.label((self.scene.mesh.indices.len() / 3).to_string());
                     ui.end_row();
                 });
+                if self.scene.mesh.indices.is_empty() {
+                    ui.colored_label(egui::Color32::YELLOW, "This map contains no BSP geometry.");
+                }
                 ui.separator();
                 ui.label("Drag to look");
                 ui.label("WASD move · Q/E down/up");

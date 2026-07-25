@@ -11,6 +11,10 @@ model happens to be the world in inspected maps, but relying on size would be a
 heuristic. The authoritative reference is serialized by the map's `Level`
 export after its actor array and travel URL fields.
 
+`Entry.unr` is a valid version-72 package whose referenced world model is
+empty: it contains no points, nodes, surfaces, or triangles. Renderers must
+treat that as an empty scene rather than trying to bind zero-length buffers.
+
 ## Primitive prefix
 
 `Model` inherits `Primitive`. After tagged UObject properties, it serializes:
@@ -45,4 +49,3 @@ convex leaves, light actors, and two final model flags.
 `openhp1-map` retains coordinates in Unreal's native convention. Axis or
 handedness conversion belongs in one renderer conversion module; loaders must
 not mutate positions to suit a particular graphics backend.
-
