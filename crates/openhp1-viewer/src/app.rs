@@ -109,6 +109,15 @@ impl eframe::App for ViewerApp {
                     ui.label("Textured");
                     ui.label(self.scene.textured_surfaces.to_string());
                     ui.end_row();
+                    ui.label("Masked");
+                    ui.label(self.scene.masked_surfaces.to_string());
+                    ui.end_row();
+                    ui.label("Translucent");
+                    ui.label(self.scene.translucent_surfaces.to_string());
+                    ui.end_row();
+                    ui.label("Modulated");
+                    ui.label(self.scene.modulated_surfaces.to_string());
+                    ui.end_row();
                     ui.label("Triangles");
                     ui.label((self.scene.render.mesh.indices.len() / 3).to_string());
                     ui.end_row();

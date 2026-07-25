@@ -4,8 +4,9 @@
 
 OpenHP1 requires the original game files to run.
 
-The first development milestone can already parse and display untextured BSP
-world geometry from the original maps:
+The first development milestone can parse and display textured BSP world
+geometry from the original maps, including masked, translucent, and modulated
+surfaces:
 
 ```sh
 cargo run -p openhp1-viewer -- res/Maps/Quid_RavenA.unr

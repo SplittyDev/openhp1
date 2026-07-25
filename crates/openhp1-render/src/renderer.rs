@@ -9,6 +9,8 @@ use crate::{
 };
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const PIPELINES_PER_MODE: usize = 4;
+const PIPELINE_COUNT: usize = 12;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -24,13 +26,15 @@ struct CameraUniform {
 }
 
 pub struct Renderer {
-    pipelines: [wgpu::RenderPipeline; 4],
+    pipelines: [wgpu::RenderPipeline; PIPELINE_COUNT],
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_groups: Vec<wgpu::BindGroup>,
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    batches: Vec<DrawBatch>,
+    opaque_index_buffer: wgpu::Buffer,
+    opaque_batches: Vec<DrawBatch>,
+    blended_index_buffer: wgpu::Buffer,
+    blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
     bounds: SceneBounds,
 }
@@ -72,16 +76,27 @@ impl Renderer {
             })
             .collect();
         let bounds = scene_bounds(&vertices);
-        let (indices, batches) = texture_batches(scene, fallback_texture);
+        let (opaque_indices, opaque_batches) = texture_batches(scene, fallback_texture);
+        let blended_surfaces = blended_surfaces(scene, fallback_texture, &vertices);
+        let blended_index_count = blended_surfaces
+            .iter()
+            .map(|surface| surface.indices.len())
+            .sum::<usize>();
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("OpenHP1 BSP vertices"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("OpenHP1 BSP indices"),
-            contents: bytemuck::cast_slice(&indices),
+        let opaque_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("OpenHP1 opaque BSP indices"),
+            contents: bytemuck::cast_slice(&opaque_indices),
             usage: wgpu::BufferUsages::INDEX,
+        });
+        let blended_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 blended BSP indices"),
+            size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 camera"),
@@ -154,12 +169,19 @@ impl Renderer {
             immediate_size: 0,
         });
         let pipelines = std::array::from_fn(|index| {
+            let mode = match index / PIPELINES_PER_MODE {
+                0 => SurfaceMode::Opaque,
+                1 => SurfaceMode::Translucent,
+                2 => SurfaceMode::Modulated,
+                _ => unreachable!(),
+            };
             create_pipeline(
                 device,
                 target_format,
                 &pipeline_layout,
                 &shader,
-                index >= 2,
+                mode,
+                index % PIPELINES_PER_MODE >= 2,
                 index % 2 != 0,
             )
         });
@@ -170,8 +192,10 @@ impl Renderer {
             camera_bind_group,
             texture_bind_groups,
             vertex_buffer,
-            index_buffer,
-            batches,
+            opaque_index_buffer,
+            opaque_batches,
+            blended_index_buffer,
+            blended_surfaces,
             depth: DepthTarget::new(device, viewport_size),
             bounds,
         }
@@ -203,6 +227,15 @@ impl Renderer {
                 view_projection: camera.view_projection(aspect).to_cols_array_2d(),
             }),
         );
+        let (blended_indices, blended_batches) =
+            sorted_blended_batches(&self.blended_surfaces, camera.position);
+        if !blended_indices.is_empty() {
+            queue.write_buffer(
+                &self.blended_index_buffer,
+                0,
+                bytemuck::cast_slice(&blended_indices),
+            );
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 BSP render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -232,10 +265,26 @@ impl Renderer {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        if !self.batches.is_empty() {
+        if !self.opaque_batches.is_empty() || !blended_batches.is_empty() {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in &self.batches {
+        }
+        if !self.opaque_batches.is_empty() {
+            pass.set_index_buffer(
+                self.opaque_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            for batch in &self.opaque_batches {
+                pass.set_pipeline(&self.pipelines[batch.pipeline]);
+                pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
+                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+            }
+        }
+        if !blended_batches.is_empty() {
+            pass.set_index_buffer(
+                self.blended_index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            for batch in &blended_batches {
                 pass.set_pipeline(&self.pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
@@ -250,8 +299,15 @@ struct DrawBatch {
     pipeline: usize,
 }
 
+struct BlendedSurface {
+    indices: Vec<u32>,
+    center: Vec3,
+    texture: usize,
+    pipeline: usize,
+}
+
 fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, Vec<DrawBatch>) {
-    let mut buckets = vec![Vec::new(); (fallback_texture + 1) * 4];
+    let mut buckets = vec![Vec::new(); (fallback_texture + 1) * PIPELINES_PER_MODE];
     for (triangle, surface) in scene
         .mesh
         .indices
@@ -263,7 +319,7 @@ fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, V
             .get(*surface)
             .copied()
             .unwrap_or_default();
-        if material.mode == SurfaceMode::Hidden {
+        if material.mode != SurfaceMode::Opaque {
             continue;
         }
         let texture = material
@@ -271,7 +327,7 @@ fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, V
             .filter(|index| *index < fallback_texture)
             .unwrap_or(fallback_texture);
         let pipeline = pipeline_index(material);
-        buckets[texture * 4 + pipeline].extend_from_slice(triangle);
+        buckets[texture * PIPELINES_PER_MODE + pipeline].extend_from_slice(triangle);
     }
 
     let mut indices = Vec::with_capacity(scene.mesh.indices.len());
@@ -284,15 +340,108 @@ fn texture_batches(scene: &RenderScene, fallback_texture: usize) -> (Vec<u32>, V
         indices.extend(source);
         batches.push(DrawBatch {
             indices: start..indices.len() as u32,
-            texture: bucket / 4,
-            pipeline: bucket % 4,
+            texture: bucket / PIPELINES_PER_MODE,
+            pipeline: bucket % PIPELINES_PER_MODE,
         });
     }
     (indices, batches)
 }
 
+fn blended_surfaces(
+    scene: &RenderScene,
+    fallback_texture: usize,
+    vertices: &[Vertex],
+) -> Vec<BlendedSurface> {
+    let mut indices = vec![Vec::new(); scene.surface_materials.len()];
+    let mut center_sums = vec![Vec3::ZERO; scene.surface_materials.len()];
+    let mut triangle_counts = vec![0_u32; scene.surface_materials.len()];
+
+    for (triangle, &surface) in scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+    {
+        let Some(material) = scene.surface_materials.get(surface).copied() else {
+            continue;
+        };
+        if !matches!(
+            material.mode,
+            SurfaceMode::Translucent | SurfaceMode::Modulated
+        ) {
+            continue;
+        }
+        indices[surface].extend_from_slice(triangle);
+        center_sums[surface] += triangle
+            .iter()
+            .map(|&index| Vec3::from_array(vertices[index as usize].position))
+            .sum::<Vec3>()
+            / 3.0;
+        triangle_counts[surface] += 1;
+    }
+
+    indices
+        .into_iter()
+        .enumerate()
+        .filter_map(|(surface, indices)| {
+            if indices.is_empty() {
+                return None;
+            }
+            let material = scene.surface_materials[surface];
+            Some(BlendedSurface {
+                indices,
+                center: center_sums[surface] / triangle_counts[surface] as f32,
+                texture: material
+                    .texture
+                    .filter(|index| *index < fallback_texture)
+                    .unwrap_or(fallback_texture),
+                pipeline: pipeline_index(material),
+            })
+        })
+        .collect()
+}
+
+fn sorted_blended_batches(
+    surfaces: &[BlendedSurface],
+    camera_position: Vec3,
+) -> (Vec<u32>, Vec<DrawBatch>) {
+    let mut sorted = surfaces.iter().collect::<Vec<_>>();
+    // Match UE1's translucent-node pass: closest surface origins first.
+    sorted.sort_by(|left, right| {
+        left.center
+            .distance_squared(camera_position)
+            .total_cmp(&right.center.distance_squared(camera_position))
+    });
+
+    let mut indices = Vec::new();
+    let mut batches: Vec<DrawBatch> = Vec::new();
+    for surface in sorted {
+        let start = indices.len() as u32;
+        indices.extend_from_slice(&surface.indices);
+        let end = indices.len() as u32;
+        if let Some(batch) = batches.last_mut()
+            && batch.texture == surface.texture
+            && batch.pipeline == surface.pipeline
+        {
+            batch.indices.end = end;
+        } else {
+            batches.push(DrawBatch {
+                indices: start..end,
+                texture: surface.texture,
+                pipeline: surface.pipeline,
+            });
+        }
+    }
+    (indices, batches)
+}
+
 fn pipeline_index(material: SurfaceMaterial) -> usize {
-    usize::from(material.mode == SurfaceMode::Masked) * 2 + usize::from(material.two_sided)
+    let mode = match material.mode {
+        SurfaceMode::Opaque | SurfaceMode::Hidden => 0,
+        SurfaceMode::Translucent => 1,
+        SurfaceMode::Modulated => 2,
+    };
+    mode * PIPELINES_PER_MODE + usize::from(material.masked) * 2 + usize::from(material.two_sided)
 }
 
 fn create_pipeline(
@@ -300,9 +449,11 @@ fn create_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
+    mode: SurfaceMode,
     masked: bool,
     two_sided: bool,
 ) -> wgpu::RenderPipeline {
+    let blended = matches!(mode, SurfaceMode::Translucent | SurfaceMode::Modulated);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 BSP pipeline"),
         layout: Some(layout),
@@ -325,24 +476,55 @@ fn create_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_write_enabled: Some(!blended),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
             bias: Default::default(),
         }),
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if masked {
-                "fragment_masked"
-            } else {
-                "fragment_main"
-            }),
+            entry_point: Some(fragment_entry(mode, masked)),
             compilation_options: Default::default(),
-            targets: &[Some(target_format.into())],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: blend_state(mode),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         multiview_mask: None,
         cache: None,
+    })
+}
+
+fn fragment_entry(mode: SurfaceMode, masked: bool) -> &'static str {
+    match (mode, masked) {
+        (SurfaceMode::Opaque, false) => "fragment_main",
+        (SurfaceMode::Opaque, true) => "fragment_masked",
+        (SurfaceMode::Translucent | SurfaceMode::Modulated, false) => "fragment_blended",
+        (SurfaceMode::Translucent | SurfaceMode::Modulated, true) => "fragment_blended_masked",
+        (SurfaceMode::Hidden, _) => unreachable!(),
+    }
+}
+
+fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
+    let color = match mode {
+        SurfaceMode::Opaque => return None,
+        SurfaceMode::Translucent => wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc,
+            operation: wgpu::BlendOperation::Add,
+        },
+        SurfaceMode::Modulated => wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Dst,
+            dst_factor: wgpu::BlendFactor::Src,
+            operation: wgpu::BlendOperation::Add,
+        },
+        SurfaceMode::Hidden => unreachable!(),
+    };
+    Some(wgpu::BlendState {
+        color,
+        alpha: color,
     })
 }
 
@@ -365,7 +547,9 @@ fn texture_bind_group(
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Keep palette bytes unconverted for UE1's brightness-based blend
+            // equations. Opaque shaders perform the sRGB conversion explicitly.
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         },
@@ -478,8 +662,9 @@ mod tests {
             surface_materials: vec![
                 SurfaceMaterial {
                     texture: Some(1),
-                    mode: SurfaceMode::Masked,
+                    masked: true,
                     two_sided: true,
+                    ..Default::default()
                 },
                 SurfaceMaterial::default(),
                 SurfaceMaterial {
@@ -501,5 +686,70 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(0, 0, 0..3), (1, 3, 3..6), (2, 0, 6..9)]
         );
+    }
+
+    #[test]
+    fn extracts_and_sorts_blended_surfaces_by_camera_distance() {
+        let vertices = [
+            vertex_at(0.0, 0.0, 10.0),
+            vertex_at(1.0, 0.0, 10.0),
+            vertex_at(0.0, 1.0, 10.0),
+            vertex_at(0.0, 0.0, 1.0),
+            vertex_at(1.0, 0.0, 1.0),
+            vertex_at(0.0, 1.0, 1.0),
+        ];
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..6).collect(),
+                triangle_surfaces: vec![0, 1],
+                ..Default::default()
+            },
+            textures: vec![checkerboard(), checkerboard()],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    texture: Some(0),
+                    mode: SurfaceMode::Translucent,
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    texture: Some(1),
+                    mode: SurfaceMode::Modulated,
+                    masked: true,
+                    ..Default::default()
+                },
+            ],
+        };
+        let surfaces = blended_surfaces(&scene, 2, &vertices);
+        let (indices, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
+        assert_eq!(indices, [3, 4, 5, 0, 1, 2]);
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| (batch.texture, batch.pipeline, batch.indices.clone()))
+                .collect::<Vec<_>>(),
+            [(1, 10, 0..3), (0, 4, 3..6)]
+        );
+    }
+
+    #[test]
+    fn uses_ue1_blend_equations() {
+        let translucent = blend_state(SurfaceMode::Translucent).unwrap();
+        assert_eq!(translucent.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(translucent.color.dst_factor, wgpu::BlendFactor::OneMinusSrc);
+
+        let modulated = blend_state(SurfaceMode::Modulated).unwrap();
+        assert_eq!(modulated.color.src_factor, wgpu::BlendFactor::Dst);
+        assert_eq!(modulated.color.dst_factor, wgpu::BlendFactor::Src);
+        assert_eq!(
+            fragment_entry(SurfaceMode::Modulated, true),
+            "fragment_blended_masked"
+        );
+    }
+
+    fn vertex_at(x: f32, y: f32, z: f32) -> Vertex {
+        Vertex {
+            position: [x, y, z],
+            texture_coordinates: [0.0; 2],
+        }
     }
 }

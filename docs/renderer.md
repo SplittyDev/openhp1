@@ -10,12 +10,13 @@ on world BSP geometry.
 3. `openhp1-package::PackageStore` discovers packages through the original
    `[Core.System] Paths` and resolves grouped imports case-insensitively.
 4. `openhp1-texture` expands the first P8 mip and its palette to RGBA8.
+   `WetTexture` and `FireTexture` exports produce static preview frames.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    coordinates.
 6. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
    surface materials.
-7. `openhp1-render` normalizes coordinates, batches triangles by texture and
-   material, and draws them with repeat sampling and depth testing.
+7. `openhp1-render` normalizes coordinates, batches opaque triangles, sorts
+   blended BSP surfaces, and draws them with repeat sampling and depth testing.
 8. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
 
 The renderer does not know package paths or export indices. It accepts decoded
@@ -53,6 +54,10 @@ The base-texture path was visually verified with `Lev5_Chess.unr`: all 961 BSP
 surfaces resolved to 15 unique decoded textures and rendered with their UE1
 coordinates.
 
+The translucent and modulated paths were visually verified on
+`Lev2_HogFront.unr`, including overlapping fountain sheets and basins using
+`WetWater`.
+
 Run a map from the repository root:
 
 ```sh
@@ -64,18 +69,26 @@ it uses the Quidditch map above.
 
 ## Known omissions
 
-The renderer currently supports opaque and masked base textures. Masked P8
-textures discard palette index zero, invisible surfaces are omitted, fake
-backdrops are left open for future sky-zone rendering, and only surfaces or
-textures marked two-sided disable backface culling.
+The renderer supports opaque, masked, translucent, and modulated base
+textures. Translucent and modulated BSP surfaces use the original blend
+equations, depth-test without writing depth, and are sorted by surface center
+for each frame. UE1 precedence makes translucent win when both blend flags are
+present and clears masking only for translucent surfaces.
+
+Masked P8 textures discard palette index zero, invisible surfaces are omitted,
+fake backdrops are left open for future sky-zone rendering, and only surfaces
+or textures marked two-sided disable backface culling.
 
 Future rendering work, in order:
 
-1. Add viewer diagnostics for surface-flag counts and material inspection.
-2. Render translucent and modulated surfaces in their own sorted passes.
-3. Decode sky-zone actors and render them through fake-backdrop openings.
-4. Decode and multiply UE1 lightmaps.
+1. Decode sky-zone actors and render them through fake-backdrop openings.
+2. Decode and multiply UE1 lightmaps.
 
 The renderer still uses only the first mip and does not cull by zones, render
-actors, or decode vertex meshes. Unsupported texture classes use a magenta
-checkerboard.
+actors, or decode vertex meshes. `WetTexture` and `FireTexture` previews are
+static; runtime procedural animation is not implemented. Unsupported texture
+classes use a magenta checkerboard.
+
+The outdoor `WetWater` source palette is orange-brown. The original game turns
+it blue by multiplying it with a colored BSP lightmap before blending, so the
+viewer intentionally retains the source hue until lightmaps are implemented.

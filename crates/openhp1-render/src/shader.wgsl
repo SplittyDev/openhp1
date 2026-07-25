@@ -31,7 +31,7 @@ fn vertex_main(
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return shade(input, linear_color(textureSample(color_texture, color_sampler, input.texture_coordinates)));
 }
 
 @fragment
@@ -40,7 +40,27 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return shade(input, color);
+    return shade(input, linear_color(color));
+}
+
+@fragment
+fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(color_texture, color_sampler, input.texture_coordinates);
+}
+
+@fragment
+fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    if color.a < 0.5 {
+        discard;
+    }
+    return color;
+}
+
+fn linear_color(color: vec4<f32>) -> vec4<f32> {
+    let low = color.rgb / 12.92;
+    let high = pow((color.rgb + 0.055) / 1.055, vec3(2.4));
+    return vec4(select(low, high, color.rgb > vec3(0.04045)), color.a);
 }
 
 fn shade(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {

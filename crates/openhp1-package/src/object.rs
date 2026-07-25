@@ -28,6 +28,65 @@ pub enum PropertyKind {
     FixedArray = 15,
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::{
+        HeaderHistory, NameEntry, PackageHeader, PackageSummary,
+        object::{ObjectReader, PropertyKind},
+    };
+
+    #[test]
+    fn struct_metadata_precedes_extended_size_and_native_array_index() {
+        let summary = PackageSummary {
+            source: Arc::from("test"),
+            header: PackageHeader {
+                version: 68,
+                licensee_version: 0,
+                package_flags: 0,
+                name_count: 3,
+                name_offset: 0,
+                export_count: 0,
+                export_offset: 0,
+                import_count: 0,
+                import_offset: 0,
+                history: HeaderHistory::Heritage {
+                    count: 0,
+                    offset: 0,
+                },
+            },
+            names: ["Drops", "ADrop", "None"]
+                .into_iter()
+                .map(|value| NameEntry {
+                    value: value.to_owned(),
+                    flags: 0,
+                })
+                .collect(),
+            imports: vec![],
+            exports: vec![],
+        };
+        let bytes = [
+            0x00, // Drops
+            0xda, // struct, byte-sized length, array element present
+            0x01, // ADrop
+            0x03, // payload length
+            0x81, 0x23, // native array index 0x123
+            0xaa, 0xbb, 0xcc, 0x02, // payload, None
+        ];
+        let mut reader = ObjectReader::new(&bytes, &summary, 0);
+        let property = reader.next_property().unwrap().unwrap();
+        assert_eq!(property.kind, PropertyKind::Struct);
+        assert_eq!(property.struct_name, Some(1));
+        assert_eq!(property.array_index, Some(0x123));
+        assert_eq!(
+            reader.property_reader(&property).read_bytes(3).unwrap(),
+            [0xaa, 0xbb, 0xcc]
+        );
+        assert!(reader.next_property().unwrap().is_none());
+    }
+}
+
 impl PropertyKind {
     fn from_tag(value: u8, package: Arc<str>, offset: usize) -> Result<Self> {
         Ok(match value {
@@ -163,6 +222,9 @@ impl<'a> ObjectReader<'a> {
         let info_offset = self.absolute_position();
         let info = self.read_u8()?;
         let kind = PropertyKind::from_tag(info & 0x0f, self.archive.source(), info_offset)?;
+        let struct_name = (kind == PropertyKind::Struct)
+            .then(|| self.read_name_index("property struct"))
+            .transpose()?;
         let mut size = match (info >> 4) & 0x07 {
             0 => 1,
             1 => 2,
@@ -186,11 +248,8 @@ impl<'a> ObjectReader<'a> {
             size = 0;
         }
 
-        let struct_name = (kind == PropertyKind::Struct)
-            .then(|| self.read_name_index("property struct"))
-            .transpose()?;
         let array_index = (info & 0x80 != 0 && kind != PropertyKind::Bool)
-            .then(|| self.read_nonnegative_compact("property array index"))
+            .then(|| self.read_array_index())
             .transpose()?;
         let start = self.position();
         self.read_bytes(size)?;
@@ -230,14 +289,17 @@ impl<'a> ObjectReader<'a> {
             })
     }
 
-    fn read_nonnegative_compact(&mut self, field: &'static str) -> Result<usize> {
-        let offset = self.absolute_position();
-        let value = self.read_compact_index()?;
-        usize::try_from(value).map_err(|_| Error::InvalidCount {
-            package: self.archive.source(),
-            field,
-            count: value,
-            offset,
+    fn read_array_index(&mut self) -> Result<usize> {
+        let first = self.read_u8()?;
+        Ok(if first & 0xc0 == 0xc0 {
+            (usize::from(first & 0x3f) << 24)
+                | (usize::from(self.read_u8()?) << 16)
+                | (usize::from(self.read_u8()?) << 8)
+                | usize::from(self.read_u8()?)
+        } else if first & 0x80 != 0 {
+            (usize::from(first & 0x7f) << 8) | usize::from(self.read_u8()?)
+        } else {
+            usize::from(first)
         })
     }
 

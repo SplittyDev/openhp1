@@ -11,7 +11,8 @@ pub struct TextureImage {
 pub enum SurfaceMode {
     #[default]
     Opaque,
-    Masked,
+    Translucent,
+    Modulated,
     /// Not submitted to the GPU. Fake backdrops use this until sky-zone
     /// rendering exists.
     Hidden,
@@ -21,6 +22,9 @@ pub enum SurfaceMode {
 pub struct SurfaceMaterial {
     pub texture: Option<usize>,
     pub mode: SurfaceMode,
+    /// Discard palette index zero. This remains independent of the blend mode
+    /// because UE1 permits masked modulated surfaces.
+    pub masked: bool,
     pub two_sided: bool,
 }
 

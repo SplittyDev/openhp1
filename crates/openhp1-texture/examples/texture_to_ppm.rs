@@ -28,7 +28,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .summary()
         .exports
         .iter()
-        .position(|export| package.summary().name(export.object_name) == texture_name)
+        .position(|export| {
+            package.summary().name(export.object_name) == texture_name
+                && matches!(
+                    package.summary().class_name(export),
+                    Some("Texture" | "WetTexture" | "FireTexture")
+                )
+        })
         .ok_or("texture export not found")?;
     let texture = Texture::decode(&package, export_index)?;
     let ObjectReference::Export(palette_index) = texture.palette else {

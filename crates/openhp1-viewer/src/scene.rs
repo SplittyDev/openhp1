@@ -14,6 +14,9 @@ pub(crate) struct LoadedScene {
     pub(crate) nodes: usize,
     pub(crate) surfaces: usize,
     pub(crate) textured_surfaces: usize,
+    pub(crate) masked_surfaces: usize,
+    pub(crate) translucent_surfaces: usize,
+    pub(crate) modulated_surfaces: usize,
 }
 
 impl LoadedScene {
@@ -37,6 +40,18 @@ impl LoadedScene {
             .iter()
             .filter(|material| material.texture.is_some())
             .count();
+        let masked_surfaces = surface_materials
+            .iter()
+            .filter(|material| material.masked)
+            .count();
+        let translucent_surfaces = surface_materials
+            .iter()
+            .filter(|material| material.mode == SurfaceMode::Translucent)
+            .count();
+        let modulated_surfaces = surface_materials
+            .iter()
+            .filter(|material| material.mode == SurfaceMode::Modulated)
+            .count();
         info!(
             map = %path.display(),
             points = model.points.len(),
@@ -45,6 +60,9 @@ impl LoadedScene {
             triangles = mesh.indices.len() / 3,
             textures = textures.len(),
             textured_surfaces,
+            masked_surfaces,
+            translucent_surfaces,
+            modulated_surfaces,
             "loaded map"
         );
         Ok(Self {
@@ -58,6 +76,9 @@ impl LoadedScene {
             nodes: model.nodes.len(),
             surfaces: model.surfaces.len(),
             textured_surfaces,
+            masked_surfaces,
+            translucent_surfaces,
+            modulated_surfaces,
         })
     }
 }
@@ -111,20 +132,16 @@ fn load_materials(
             continue;
         };
         let texture_flags = decoded_texture.texture.render_flags;
-        let masked = surface.poly_flags.contains(PolyFlags::MASKED) || texture_flags.masked;
-        let image_key = (key.0.clone(), key.1, masked);
+        let material = surface_material(surface.poly_flags, None, Some(texture_flags));
+        let image_key = (key.0.clone(), key.1, material.masked);
         let texture_index = if let Some(index) = images.get(&image_key) {
             *index
         } else {
-            let image = match decoded_texture.image(masked) {
+            let image = match decoded_texture.image(material.masked) {
                 Ok(image) => image,
                 Err(error) => {
                     warn!(surface_index, %error, "could not expand surface texture");
-                    materials.push(surface_material(
-                        surface.poly_flags,
-                        None,
-                        Some(texture_flags),
-                    ));
+                    materials.push(material);
                     continue;
                 }
             };
@@ -133,11 +150,10 @@ fn load_materials(
             images.insert(image_key, index);
             index
         };
-        materials.push(surface_material(
-            surface.poly_flags,
-            Some(texture_index),
-            Some(texture_flags),
-        ));
+        materials.push(SurfaceMaterial {
+            texture: Some(texture_index),
+            ..material
+        });
     }
 
     (textures, materials)
@@ -186,15 +202,22 @@ fn surface_material(
     texture_flags: Option<TextureRenderFlags>,
 ) -> SurfaceMaterial {
     let texture_flags = texture_flags.unwrap_or_default();
+    let translucent = flags.contains(PolyFlags::TRANSLUCENT) || texture_flags.translucent;
+    let modulated = flags.contains(PolyFlags::MODULATED) || texture_flags.modulated;
     SurfaceMaterial {
         texture,
         mode: if is_hidden(flags, texture_flags) {
             SurfaceMode::Hidden
-        } else if flags.contains(PolyFlags::MASKED) || texture_flags.masked {
-            SurfaceMode::Masked
+        } else if translucent {
+            SurfaceMode::Translucent
+        } else if modulated {
+            SurfaceMode::Modulated
         } else {
             SurfaceMode::Opaque
         },
+        // UE1 precedence clears masking for translucent surfaces but retains
+        // it for modulated surfaces.
+        masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
     }
 }
@@ -222,11 +245,31 @@ mod tests {
                 ..Default::default()
             }),
         );
-        assert_eq!(masked.mode, SurfaceMode::Masked);
+        assert_eq!(masked.mode, SurfaceMode::Opaque);
+        assert!(masked.masked);
         assert!(masked.two_sided);
 
         let hidden =
             super::surface_material(PolyFlags::FAKE_BACKDROP, Some(1), Some(Default::default()));
         assert_eq!(hidden.mode, SurfaceMode::Hidden);
+    }
+
+    #[test]
+    fn applies_ue1_blend_precedence() {
+        let translucent = super::surface_material(
+            PolyFlags::from_bits(0x0000_0046),
+            Some(1),
+            Some(Default::default()),
+        );
+        assert_eq!(translucent.mode, SurfaceMode::Translucent);
+        assert!(!translucent.masked);
+
+        let modulated = super::surface_material(
+            PolyFlags::from_bits(0x0000_0042),
+            Some(1),
+            Some(Default::default()),
+        );
+        assert_eq!(modulated.mode, SurfaceMode::Modulated);
+        assert!(modulated.masked);
     }
 }

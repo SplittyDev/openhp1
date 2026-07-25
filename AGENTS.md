@@ -166,9 +166,9 @@ decoded in isolation.
   encoder, target view, target format, and viewport size. It must not own the
   application event loop or require eframe.
 - Base palettes/textures, UE texture coordinates, invisible/fake-backdrop
-  filtering, masked cutouts, and one-/two-sided surface rendering are
-  implemented. Next add material diagnostics, translucent/modulated passes,
-  sky zones, and lightmaps, in that order.
+  filtering, masked cutouts, one-/two-sided rendering, material diagnostics,
+  and translucent/modulated passes are implemented. Next add sky zones and
+  lightmaps.
 - UE1 rendering will later require masked, translucent, and modulated surfaces,
   zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
   meshes, animated textures, and HP-specific particles. Do not implement these
@@ -257,16 +257,21 @@ The map-viewer milestone is complete when it:
 
 The package inspector has scanned all 248 magic-detected packages in the local
 installation. The package, tagged-property, configured package resolver, P8
-palette/texture, `Level`, and inline `Model` decoders are implemented. The
-eframe viewer renders base-textured BSP with depth and a free camera.
+palette/texture, static `WetTexture`/`FireTexture` preview, `Level`, and inline
+`Model` decoders are implemented. The eframe viewer renders base-textured BSP
+with depth and a free camera.
 `Lev5_Chess.unr` is visually verified with all 961 surfaces resolving to 15
 unique textures. Invisible and fake-backdrop surfaces are omitted, masked
 palette index zero is alpha-tested, and surface/texture two-sided flags control
-culling.
-Material diagnostics, translucent/modulated blending, sky zones, and lightmaps
-remain future work.
+culling. Translucent and modulated surfaces use their UE1 blend equations,
+depth-test without writing depth, and are sorted per BSP surface. `WetWater` in
+`Lev2_HogFront.unr` is visually verified without the fallback checkerboard.
+Procedural textures are static snapshots until runtime texture ticking exists.
+Sky zones and lightmaps remain future work.
 
-The next renderer step is texture-package resolution and BSP UV generation.
+The next renderer fidelity step is sky-zone rendering followed by UE1
+lightmaps. Until lightmaps exist, colored surfaces such as the outdoor water
+retain their raw source palette rather than the final in-game tint.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

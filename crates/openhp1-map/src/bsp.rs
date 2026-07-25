@@ -47,6 +47,8 @@ pub struct PolyFlags(u32);
 impl PolyFlags {
     pub const INVISIBLE: Self = Self(0x0000_0001);
     pub const MASKED: Self = Self(0x0000_0002);
+    pub const TRANSLUCENT: Self = Self(0x0000_0004);
+    pub const MODULATED: Self = Self(0x0000_0040);
     pub const FAKE_BACKDROP: Self = Self(0x0000_0080);
     pub const TWO_SIDED: Self = Self(0x0000_0100);
 

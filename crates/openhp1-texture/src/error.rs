@@ -45,6 +45,9 @@ pub enum Error {
     #[error("mip dimensions {width}x{height} overflow the host address space")]
     InvalidMipDimensions { width: u32, height: u32 },
 
+    #[error("fire spark count {count} overflows the host address space")]
+    InvalidFireSparkCount { count: usize },
+
     #[error("mip {mip_index} is {width}x{height} but contains {actual} palette indices")]
     InvalidMipLength {
         mip_index: usize,
