@@ -9,10 +9,15 @@ mod archive;
 mod error;
 mod object;
 mod package;
+mod summary;
+mod tables;
 
 pub use error::{Error, Result};
 pub use object::{ObjectReader, PropertyKind, PropertyTag};
-pub use package::{
-    Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PACKAGE_MAGIC, Package,
-    PackageHeader, PackageSummary,
+pub use package::Package;
+pub use summary::{
+    Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PackageHeader,
+    PackageSummary,
 };
+
+pub const PACKAGE_MAGIC: u32 = 0x9e2a_83c1;

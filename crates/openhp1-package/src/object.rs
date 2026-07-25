@@ -3,7 +3,8 @@ use std::{ops::Range, sync::Arc};
 use crate::{
     archive::Archive,
     error::{Error, Result},
-    package::{ObjectReference, PackageSummary, object_reference},
+    summary::{ObjectReference, PackageSummary},
+    tables::object_reference,
 };
 
 /// The type nibble stored in an Unreal serialized property tag.

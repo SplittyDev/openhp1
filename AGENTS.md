@@ -105,6 +105,22 @@ dependency boundary, not merely because it has grown.
 The renderer consumes decoded render data. It must not know about package
 paths, byte offsets, import/export tables, or filesystem resolution.
 
+Keep crate roots as small module indexes or executable entry points. The
+current internal responsibility split is:
+
+| Crate | Modules |
+| --- | --- |
+| `openhp1-package` | checked archive cursor, object properties, package owner, public summary types, index-table decoding, errors |
+| `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, triangulation, errors |
+| `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
+| `openhp1-render` | camera/bounds, coordinate conversion, wgpu renderer |
+| `openhp1-viewer` | executable startup, scene loading, egui application, offscreen color target |
+
+Prefer a module for a substantial data structure and its behavior. Keep small
+format records together when they share one serialization boundary; do not
+create one file per trivial record. Preserve public re-exports from the crate
+root so internal cleanup does not force downstream churn.
+
 ## Package loader invariants
 
 - Use a small bounds-checked archive over `Read + Seek` or an in-memory byte
