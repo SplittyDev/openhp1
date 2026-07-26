@@ -241,6 +241,39 @@ impl LoadedScene {
         Ok(true)
     }
 
+    pub fn set_actor_rotation(&mut self, actor_index: usize, rotation: Rotator) -> Result<bool> {
+        let actor = self
+            .actors
+            .get(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        if actor.rotation == rotation {
+            return Ok(false);
+        }
+        let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
+        if let Some(vertices) = &vertices {
+            ensure!(
+                vertices.start <= vertices.end && vertices.end <= self.render.mesh.positions.len(),
+                "actor render range is outside the scene mesh"
+            );
+        }
+
+        let transform = rotation_delta(actor.location + actor.pre_pivot, actor.rotation, rotation);
+        self.actors[actor_index].rotation = rotation;
+        if let Some(vertices) = vertices {
+            transform_positions(&mut self.render.mesh.positions[vertices], transform);
+        }
+        if let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        {
+            animation.transform = transform * animation.transform;
+            animation.normal_transform = Mat3::from_mat4(animation.transform).inverse().transpose();
+        }
+        // ponytail: retain baked actor lighting until moving lights/zones are observable.
+        Ok(true)
+    }
+
     pub fn destroy_actor(&mut self, actor_index: usize) -> Result<bool> {
         let actor = self
             .actors
@@ -358,6 +391,19 @@ fn translate_positions(positions: &mut [Vec3], delta: Vec3) {
     for position in positions {
         *position += delta;
     }
+}
+
+fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
+    for position in positions {
+        *position = transform.transform_point3(*position);
+    }
+}
+
+fn rotation_delta(origin: Vec3, old: Rotator, new: Rotator) -> Mat4 {
+    Mat4::from_translation(origin)
+        * rotation_matrix(new)
+        * rotation_matrix(old).inverse()
+        * Mat4::from_translation(-origin)
 }
 
 fn collapse_positions(positions: &mut [Vec3]) -> bool {
@@ -1318,6 +1364,22 @@ mod tests {
                 glam::Vec3::new(3.0, 4.0, 5.0)
             ]
         );
+    }
+
+    #[test]
+    fn rotates_actor_vertices_around_their_unreal_origin() {
+        let origin = glam::Vec3::new(10.0, 0.0, 0.0);
+        let mut positions = [glam::Vec3::new(11.0, 0.0, 0.0)];
+        let transform = super::rotation_delta(
+            origin,
+            Default::default(),
+            openhp1_map::Rotator {
+                yaw: 16_384,
+                ..Default::default()
+            },
+        );
+        super::transform_positions(&mut positions, transform);
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(10.0, 1.0, 0.0), 1.0e-5));
     }
 
     #[test]

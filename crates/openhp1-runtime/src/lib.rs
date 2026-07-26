@@ -858,11 +858,12 @@ impl StructMember {
 }
 
 fn is_compound_assignment(index: u16) -> bool {
-    matches!(index, 0xb6..=0xb9 | 0xdd..=0xe0)
+    matches!(index, 0xa1 | 0xb6..=0xb9 | 0xdd..=0xe0)
 }
 
 fn compound_assignment(index: u16, left: &Value, right: &Value) -> Result<Value> {
     Ok(match (index, left, right) {
+        (0xa1, Value::Int(left), Value::Int(right)) => Value::Int(left.wrapping_add(*right)),
         (0xb6, Value::Float(left), Value::Float(right)) => Value::Float(left * right),
         (0xb7, Value::Float(left), Value::Float(right)) => Value::Float(left / right),
         (0xb8, Value::Float(left), Value::Float(right)) => Value::Float(left + right),
@@ -1079,6 +1080,10 @@ mod tests {
             Value::Float(4.0)
         );
         assert_eq!(frame.local(7), Some(&Value::Float(4.0)));
+        assert_eq!(
+            compound_assignment(0xa1, &Value::Int(i32::MAX), &Value::Int(1)).unwrap(),
+            Value::Int(i32::MIN)
+        );
     }
 
     #[test]

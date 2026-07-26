@@ -24,6 +24,7 @@ const LOOP_ANIM: u16 = 0x104;
 const SET_COLLISION: u16 = 0x106;
 const SET_LOCATION: u16 = 0x10b;
 const SET_TIMER: u16 = 0x118;
+const SET_ROTATION: u16 = 0x12b;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
@@ -108,6 +109,10 @@ pub enum ActorAction {
         actor: usize,
         location: [f32; 3],
     },
+    SetRotation {
+        actor: usize,
+        rotation: [i32; 3],
+    },
     DestroyActor {
         actor: usize,
     },
@@ -164,13 +169,20 @@ pub enum DispatchError {
 
 pub struct ScriptRuntime {
     packages: PackageStore,
+    scripts: HashMap<ObjectId, Arc<ScriptExport>>,
     instances: HashMap<usize, InstanceState>,
     class_defaults: HashMap<ObjectId, InstanceState>,
     class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
+    resolved_fields: HashMap<(Arc<str>, i32), Option<ObjectId>>,
+    zero_values: HashMap<ObjectId, Option<Value>>,
+    frame_fields: HashMap<ObjectId, Arc<Vec<(i32, ObjectId)>>>,
+    struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
     actor_classes: HashMap<usize, ObjectId>,
     // ponytail: store state identity only; add label/IP state frames when state code ticks.
     actor_states: HashMap<usize, Option<String>>,
+    tick_functions: HashMap<usize, ResolvedObject>,
+    failed_ticks: HashSet<usize>,
     disabled_events: HashMap<(usize, String), HashSet<String>>,
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,
@@ -209,12 +221,19 @@ impl ScriptRuntime {
     pub fn new(game_root: impl AsRef<Path>) -> DispatchResult<Self> {
         Ok(Self {
             packages: PackageStore::scan_game_root(game_root)?,
+            scripts: HashMap::new(),
             instances: HashMap::new(),
             class_defaults: HashMap::new(),
             class_relations: HashMap::new(),
             fields: HashMap::new(),
+            resolved_fields: HashMap::new(),
+            zero_values: HashMap::new(),
+            frame_fields: HashMap::new(),
+            struct_members: HashMap::new(),
             actor_classes: HashMap::new(),
             actor_states: HashMap::new(),
+            tick_functions: HashMap::new(),
+            failed_ticks: HashSet::new(),
             disabled_events: HashMap::new(),
             object_actors: HashMap::new(),
             actor_objects: HashMap::new(),
@@ -286,6 +305,7 @@ impl ScriptRuntime {
             }
         }
         self.actor_states.insert(actor, state);
+        self.refresh_tick_actor(actor, &class)?;
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
         self.instances.insert(actor, instance);
         Ok(())
@@ -305,6 +325,55 @@ impl ScriptRuntime {
         if !delta_time.is_finite() || delta_time < 0.0 {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
+        let mut actors = self
+            .tick_functions
+            .iter()
+            .filter(|(actor, _)| !self.failed_ticks.contains(actor))
+            .map(|(&actor, function)| {
+                (
+                    actor,
+                    ResolvedObject {
+                        package: Arc::clone(&function.package),
+                        export_index: function.export_index,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        actors.sort_unstable_by_key(|(actor, _)| *actor);
+        let mut actions = Vec::new();
+        for (actor, function) in actors {
+            if event_disabled(
+                &self.disabled_events,
+                actor,
+                self.actor_states
+                    .get(&actor)
+                    .and_then(|state| state.as_deref()),
+                "Tick",
+            ) {
+                continue;
+            }
+            let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                continue;
+            };
+            let class = ResolvedObject {
+                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
+                export_index: class.export_index,
+            };
+            match self.execute_actor_function(actor, &class, &function, &[Value::Float(delta_time)])
+            {
+                Ok(mut actor_actions) => actions.append(&mut actor_actions),
+                Err(error) => {
+                    // ponytail: retry deterministic Tick failures only after a state change
+                    // or explicit Enable instead of failing every rendered frame.
+                    self.failed_ticks.insert(actor);
+                    actions.push(ActorAction::DeferredCall {
+                        actor,
+                        message: format!("Tick: {error}"),
+                    });
+                }
+            }
+        }
+
         let mut due = Vec::new();
         let actors = self.timers.keys().copied().collect::<Vec<_>>();
         for actor in actors {
@@ -320,7 +389,6 @@ impl ScriptRuntime {
             }
         }
 
-        let mut actions = Vec::new();
         for actor in due {
             let Some(class) = self.actor_classes.get(&actor).cloned() else {
                 continue;
@@ -380,12 +448,22 @@ impl ScriptRuntime {
         let Some(function) = self.find_actor_function(actor, class, event, 0)? else {
             return Ok(Vec::new());
         };
+        self.execute_actor_function(actor, &actor_class, &function, arguments)
+    }
+
+    fn execute_actor_function(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+    ) -> DispatchResult<Vec<ActorAction>> {
         let mut actions = Vec::new();
         let mut instance = self.instances.remove(&actor).unwrap_or_default();
         let result = self.execute_function(
             actor,
-            &actor_class,
-            &function,
+            actor_class,
+            function,
             arguments,
             &mut instance,
             &mut actions,
@@ -536,6 +614,28 @@ impl ScriptRuntime {
         )
     }
 
+    fn refresh_tick_actor(&mut self, actor: usize, class: &ResolvedObject) -> DispatchResult<()> {
+        let function = if self.state_ignores_event(actor, class, "Tick")? {
+            None
+        } else {
+            self.find_actor_function(
+                actor,
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                "Tick",
+                0,
+            )?
+        };
+        if let Some(function) = function {
+            self.tick_functions.insert(actor, function);
+        } else {
+            self.tick_functions.remove(&actor);
+        }
+        Ok(())
+    }
+
     fn state_ignores_event(
         &mut self,
         actor: usize,
@@ -626,7 +726,8 @@ impl ScriptRuntime {
         if depth >= MAX_CALL_DEPTH {
             return Err(DispatchError::CallDepth);
         }
-        let script = ScriptExport::decode(&function.package, function.export_index)?;
+        let script = self.script(function)?;
+        let frame_fields = self.frame_fields(function, &script.bytecode)?;
         if let ScriptMetadata::Function(metadata) = &script.metadata
             && script.bytecode.bytes.is_empty()
             && metadata.native_index != 0
@@ -649,18 +750,21 @@ impl ScriptRuntime {
         }
 
         let mut frame = Frame::new(&script.bytecode);
-        self.bind_struct_members(&function.package, &script.bytecode, &mut frame)?;
+        self.bind_struct_members(function, &script.bytecode, &mut frame)?;
         self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
         let mut frame_instance = HashMap::new();
-        self.load_frame_instance(
-            &function.package,
-            &script.bytecode,
-            instance,
-            &mut frame_instance,
-        )?;
+        self.load_frame_instance(&frame_fields, instance, &mut frame_instance)?;
         let result = frame.execute_with_instance(&mut frame_instance, |request, frame_instance| {
-            self.store_frame_instance(&function.package, frame_instance, instance)
+            let synchronize = request_needs_instance_sync(&request);
+            if synchronize {
+                self.store_frame_instance(
+                    &function.package,
+                    &frame_fields,
+                    frame_instance,
+                    instance,
+                )
                 .map_err(|error| error.to_string())?;
+            }
             let result = match request {
                 FrameRequest::Call {
                     receiver,
@@ -704,17 +808,47 @@ impl ScriptRuntime {
                     .set_context_field(actor, receiver, &function.package, field, value, instance)
                     .map(|()| FrameResponse::Value(Value::None)),
             };
-            self.load_frame_instance(
-                &function.package,
-                &script.bytecode,
-                instance,
-                frame_instance,
-            )
-            .map_err(|error| error.to_string())?;
+            if synchronize {
+                self.load_frame_instance(&frame_fields, instance, frame_instance)
+                    .map_err(|error| error.to_string())?;
+            }
             result.map_err(|error| error.to_string())
         });
-        self.store_frame_instance(&function.package, &frame_instance, instance)?;
+        self.store_frame_instance(&function.package, &frame_fields, &frame_instance, instance)?;
         result.map_err(Into::into)
+    }
+
+    fn script(&mut self, object: &ResolvedObject) -> DispatchResult<Arc<ScriptExport>> {
+        let id = object_id(&object.package, object.export_index);
+        if let Some(script) = self.scripts.get(&id) {
+            return Ok(Arc::clone(script));
+        }
+        let script = Arc::new(ScriptExport::decode(&object.package, object.export_index)?);
+        self.scripts.insert(id, Arc::clone(&script));
+        Ok(script)
+    }
+
+    fn frame_fields(
+        &mut self,
+        function: &ResolvedObject,
+        bytecode: &Bytecode,
+    ) -> DispatchResult<Arc<Vec<(i32, ObjectId)>>> {
+        let key = object_id(&function.package, function.export_index);
+        if let Some(fields) = self.frame_fields.get(&key) {
+            return Ok(Arc::clone(fields));
+        }
+        let mut seen = HashSet::new();
+        let mut fields = Vec::new();
+        for field in instance_fields(bytecode) {
+            if seen.insert(field)
+                && let Some(id) = self.resolve_field(&function.package, field)?
+            {
+                fields.push((field, id));
+            }
+        }
+        let fields = Arc::new(fields);
+        self.frame_fields.insert(key, Arc::clone(&fields));
+        Ok(fields)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1097,6 +1231,9 @@ impl ScriptRuntime {
                 &event,
                 index == DISABLE,
             );
+            if index == ENABLE && event.eq_ignore_ascii_case("Tick") {
+                self.failed_ticks.remove(&actor);
+            }
             return Ok(Value::None);
         }
         if index == DESTROY {
@@ -1118,6 +1255,8 @@ impl ScriptRuntime {
             if !self.destroyed.insert(actor) {
                 return Ok(Value::Bool(true));
             }
+            self.tick_functions.remove(&actor);
+            self.failed_ticks.remove(&actor);
             let field = self
                 .find_property(actor_class, "bDeleteMe", 0)
                 .map_err(|error| error.to_string())?
@@ -1161,6 +1300,9 @@ impl ScriptRuntime {
                     })
             };
             self.actor_states.insert(actor, state);
+            self.failed_ticks.remove(&actor);
+            self.refresh_tick_actor(actor, actor_class)
+                .map_err(|error| error.to_string())?;
             return Ok(Value::None);
         }
         if index == LOOP_ANIM
@@ -1254,6 +1396,29 @@ impl ScriptRuntime {
                 location: *location,
             });
             // ponytail: accept finite locations until UE1 BSP collision rejection exists.
+            return Ok(Value::Bool(true));
+        }
+        if index == SET_ROTATION {
+            let [Value::Rotator(rotation)] = arguments else {
+                return Err(format!(
+                    "SetRotation expects one rotator, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            let field = self
+                .find_property(actor_class, "Rotation", 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "SetRotation property Rotation is missing".to_owned())?;
+            instance.insert(field, StoredValue::Value(Value::Rotator(*rotation)));
+            actions.push(ActorAction::SetRotation {
+                actor,
+                rotation: *rotation,
+            });
+            // ponytail: accept rotations until UE1 collision rejection exists.
             return Ok(Value::Bool(true));
         }
         scalar_native(index, arguments)
@@ -1424,23 +1589,24 @@ impl ScriptRuntime {
 
     fn load_frame_instance(
         &mut self,
-        source: &Arc<Package>,
-        bytecode: &Bytecode,
+        fields: &[(i32, ObjectId)],
         instance: &InstanceState,
         frame: &mut HashMap<i32, Value>,
     ) -> DispatchResult<()> {
         frame.clear();
-        for field in instance_fields(bytecode) {
-            let Some(resolved) = self.packages.resolve(source, object_reference(field))? else {
-                continue;
-            };
-            let id = object_id(&resolved.package, resolved.export_index);
-            let value = match instance.get(&id) {
+        for (field, id) in fields {
+            let value = match instance.get(id) {
                 Some(value) => Some(self.frame_value(value)?),
-                None => self.zero_field_value(&resolved)?,
+                None => {
+                    let resolved = ResolvedObject {
+                        package: self.packages.load_path(Path::new(id.package.as_ref()))?,
+                        export_index: id.export_index,
+                    };
+                    self.zero_field_value(&resolved)?
+                }
             };
             if let Some(value) = value {
-                frame.insert(field, value);
+                frame.insert(*field, value);
             }
         }
         Ok(())
@@ -1449,14 +1615,15 @@ impl ScriptRuntime {
     fn store_frame_instance(
         &mut self,
         source: &Arc<Package>,
+        fields: &[(i32, ObjectId)],
         frame: &HashMap<i32, Value>,
         instance: &mut InstanceState,
     ) -> DispatchResult<()> {
-        for (&field, value) in frame {
-            let Some(id) = self.resolve_field(source, field)? else {
+        for (field, id) in fields {
+            let Some(value) = frame.get(field) else {
                 continue;
             };
-            instance.insert(id, self.stored_value(source, value)?);
+            instance.insert(id.clone(), self.stored_value(source, value)?);
         }
         Ok(())
     }
@@ -1503,6 +1670,10 @@ impl ScriptRuntime {
     }
 
     fn zero_field_value(&mut self, field: &ResolvedObject) -> DispatchResult<Option<Value>> {
+        let id = object_id(&field.package, field.export_index);
+        if let Some(value) = self.zero_values.get(&id) {
+            return Ok(value.clone());
+        }
         let class = field
             .package
             .summary()
@@ -1518,23 +1689,31 @@ impl ScriptRuntime {
             "StrProperty" | "StringProperty" => Value::String(String::new()),
             "StructProperty" => {
                 let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
-                let Some(struct_type) = metadata.struct_type else {
+                if let Some(struct_type) = metadata.struct_type
+                    && let Some(struct_type) = self.packages.resolve(&field.package, struct_type)?
+                {
+                    let name = struct_type.package.summary().name(
+                        struct_type.package.summary().exports[struct_type.export_index].object_name,
+                    );
+                    match name {
+                        "Vector" => Value::Vector([0.0; 3]),
+                        "Rotator" => Value::Rotator([0; 3]),
+                        _ => {
+                            self.zero_values.insert(id, None);
+                            return Ok(None);
+                        }
+                    }
+                } else {
+                    self.zero_values.insert(id, None);
                     return Ok(None);
-                };
-                let Some(struct_type) = self.packages.resolve(&field.package, struct_type)? else {
-                    return Ok(None);
-                };
-                let name = struct_type.package.summary().name(
-                    struct_type.package.summary().exports[struct_type.export_index].object_name,
-                );
-                match name {
-                    "Vector" => Value::Vector([0.0; 3]),
-                    "Rotator" => Value::Rotator([0; 3]),
-                    _ => return Ok(None),
                 }
             }
-            _ => return Ok(None),
+            _ => {
+                self.zero_values.insert(id, None);
+                return Ok(None);
+            }
         };
+        self.zero_values.insert(id, Some(value.clone()));
         Ok(Some(value))
     }
 
@@ -1554,40 +1733,65 @@ impl ScriptRuntime {
         source: &Arc<Package>,
         field: i32,
     ) -> DispatchResult<Option<ObjectId>> {
-        Ok(self
+        let key = (Arc::clone(&source.summary().source), field);
+        if let Some(resolved) = self.resolved_fields.get(&key) {
+            return Ok(resolved.clone());
+        }
+        let resolved = self
             .packages
             .resolve(source, object_reference(field))?
             .map(|field| ObjectId {
                 package: Arc::clone(&field.package.summary().source),
                 export_index: field.export_index,
-            }))
+            });
+        self.resolved_fields.insert(key, resolved.clone());
+        Ok(resolved)
     }
 
     fn bind_struct_members(
         &mut self,
-        source: &Arc<Package>,
+        function: &ResolvedObject,
         bytecode: &Bytecode,
         frame: &mut Frame<'_>,
     ) -> DispatchResult<()> {
-        for field in fields(bytecode, 0x36) {
-            let Some(resolved) = self.packages.resolve(source, object_reference(field))? else {
-                continue;
-            };
-            let summary = resolved.package.summary();
-            let export = &summary.exports[resolved.export_index];
-            let Some(owner) = summary.object_name(export.outer) else {
-                continue;
-            };
-            let name = summary.name(export.object_name);
-            let member = match (owner, name) {
-                ("Vector", "X") => StructMember::X,
-                ("Vector", "Y") => StructMember::Y,
-                ("Vector", "Z") => StructMember::Z,
-                ("Rotator", "Pitch") => StructMember::Pitch,
-                ("Rotator", "Yaw") => StructMember::Yaw,
-                ("Rotator", "Roll") => StructMember::Roll,
-                _ => continue,
-            };
+        let key = object_id(&function.package, function.export_index);
+        let members = if let Some(members) = self.struct_members.get(&key) {
+            Arc::clone(members)
+        } else {
+            let mut members = Vec::new();
+            let mut seen = HashSet::new();
+            for field in fields(bytecode, 0x36) {
+                if !seen.insert(field) {
+                    continue;
+                }
+                let Some(resolved) = self
+                    .packages
+                    .resolve(&function.package, object_reference(field))?
+                else {
+                    continue;
+                };
+                let summary = resolved.package.summary();
+                let export = &summary.exports[resolved.export_index];
+                let Some(owner) = summary.object_name(export.outer) else {
+                    continue;
+                };
+                let name = summary.name(export.object_name);
+                let member = match (owner, name) {
+                    ("Vector", "X") => StructMember::X,
+                    ("Vector", "Y") => StructMember::Y,
+                    ("Vector", "Z") => StructMember::Z,
+                    ("Rotator", "Pitch") => StructMember::Pitch,
+                    ("Rotator", "Yaw") => StructMember::Yaw,
+                    ("Rotator", "Roll") => StructMember::Roll,
+                    _ => continue,
+                };
+                members.push((field, member));
+            }
+            let members = Arc::new(members);
+            self.struct_members.insert(key, Arc::clone(&members));
+            members
+        };
+        for &(field, member) in members.iter() {
             frame.set_struct_member(field, member);
         }
         Ok(())
@@ -1643,6 +1847,27 @@ impl ScriptRuntime {
 
 fn local_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
     fields(bytecode, 0x00)
+}
+
+fn request_needs_instance_sync(request: &FrameRequest) -> bool {
+    !matches!(
+        request,
+        FrameRequest::Call {
+            function: FunctionCall::Native(index),
+            ..
+        } if !matches!(
+            *index,
+            ENABLE
+                | DISABLE
+                | DESTROY
+                | GOTO_STATE
+                | LOOP_ANIM
+                | SET_COLLISION
+                | SET_LOCATION
+                | SET_TIMER
+                | SET_ROTATION
+        )
+    )
 }
 
 fn advance_timer(timer: &mut ActorTimer, delta_time: f32) -> bool {
@@ -1788,6 +2013,7 @@ fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Result<Value, 
         (0x97, [Value::Int(left), Value::Int(right)]) => Value::Bool(left > right),
         (0x9a, [Value::Int(left), Value::Int(right)]) => Value::Bool(left == right),
         (0x9b, [Value::Int(left), Value::Int(right)]) => Value::Bool(left != right),
+        (0x9c, [Value::Int(left), Value::Int(right)]) => Value::Int(left & right),
         (0x7a, [Value::String(left), Value::String(right)]) => {
             Value::Bool(left.eq_ignore_ascii_case(right))
         }
@@ -1872,6 +2098,10 @@ mod tests {
             Ok(Value::Int(3))
         );
         assert!(scalar_native(0x91, &[Value::Int(1), Value::Int(0)]).is_err());
+        assert_eq!(
+            scalar_native(0x9c, &[Value::Int(0x1_ffff), Value::Int(0xffff)]),
+            Ok(Value::Int(0xffff))
+        );
     }
 
     #[test]

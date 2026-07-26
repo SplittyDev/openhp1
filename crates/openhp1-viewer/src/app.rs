@@ -8,7 +8,7 @@ use eframe::{
 use glam::Vec3;
 use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, ScriptRuntime};
-use openhp1_scene::{LoadedScene, SceneActor, SceneObjectId};
+use openhp1_scene::{LoadedScene, Rotator, SceneActor, SceneObjectId};
 use tracing::info;
 
 use crate::target::ColorTarget;
@@ -535,6 +535,16 @@ fn apply_runtime_actions(
             }
             ActorAction::SetLocation { actor, location } => {
                 transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;
+            }
+            ActorAction::SetRotation { actor, rotation } => {
+                transformed |= scene.set_actor_rotation(
+                    actor,
+                    Rotator {
+                        pitch: rotation[0],
+                        yaw: rotation[1],
+                        roll: rotation[2],
+                    },
+                )?;
             }
             ActorAction::DestroyActor { actor } => {
                 transformed |= scene.destroy_actor(actor)?;
