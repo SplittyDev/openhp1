@@ -19,6 +19,7 @@ struct Vertex {
     texture_coordinates: [f32; 2],
     lightmap_coordinates: [f32; 2],
     has_lightmap: f32,
+    vertex_color: [u8; 4],
 }
 
 #[repr(C)]
@@ -116,6 +117,14 @@ impl Renderer {
                     ],
                     lightmap_coordinates,
                     has_lightmap: f32::from(lightmap_rectangle.is_some()),
+                    vertex_color: pack_vertex_color(
+                        scene
+                            .mesh
+                            .vertex_colors
+                            .get(vertex_index)
+                            .copied()
+                            .unwrap_or(Vec3::ONE),
+                    ),
                 }
             })
             .collect();
@@ -563,6 +572,16 @@ fn display_gamma(brightness: f32) -> f32 {
     1.0 / (brightness * 2.0).clamp(0.05, 2.99)
 }
 
+fn pack_vertex_color(color: Vec3) -> [u8; 4] {
+    let color = color.clamp(Vec3::ZERO, Vec3::ONE) * 255.0;
+    [
+        color.x.round() as u8,
+        color.y.round() as u8,
+        color.z.round() as u8,
+        255,
+    ]
+}
+
 fn clear_color() -> wgpu::Color {
     wgpu::Color {
         r: 0.035,
@@ -788,7 +807,8 @@ fn create_pipeline(
                     0 => Float32x3,
                     1 => Float32x2,
                     2 => Float32x2,
-                    3 => Float32
+                    3 => Float32,
+                    4 => Unorm8x4
                 ],
             }],
         },
@@ -847,7 +867,8 @@ fn create_backdrop_pipeline(
                     0 => Float32x3,
                     1 => Float32x2,
                     2 => Float32x2,
-                    3 => Float32
+                    3 => Float32,
+                    4 => Unorm8x4
                 ],
             }],
         },
@@ -1246,6 +1267,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shader_is_valid_wgsl() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shader.wgsl")).unwrap();
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
+
+    #[test]
     fn computes_scene_bounds() {
         let vertices = [
             Vertex {
@@ -1253,12 +1285,14 @@ mod tests {
                 texture_coordinates: [0.0; 2],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
+                vertex_color: [255; 4],
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
                 texture_coordinates: [0.0; 2],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
+                vertex_color: [255; 4],
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -1377,6 +1411,14 @@ mod tests {
     }
 
     #[test]
+    fn packs_vertex_lighting_like_fixed_function_diffuse_color() {
+        assert_eq!(
+            pack_vertex_color(Vec3::new(-0.5, 0.5, 2.0)),
+            [0, 128, 255, 255]
+        );
+    }
+
+    #[test]
     fn lightmap_atlas_replicates_edge_texels_into_gutters() {
         let atlas = build_lightmap_atlas(
             &[openhp1_map::LightmapImage {
@@ -1434,6 +1476,7 @@ mod tests {
             texture_coordinates: [0.0; 2],
             lightmap_coordinates: [0.0; 2],
             has_lightmap: 0.0,
+            vertex_color: [255; 4],
         }
     }
 }

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail, ensure};
-use glam::{Mat4, Vec2, Vec3};
-use openhp1_map::{Actor, ActorProperties, Level, Model, PolyFlags, Rotator};
+use glam::{Mat3, Mat4, Vec2, Vec3};
+use openhp1_map::{Actor, ActorProperties, Level, Model, PolyFlags, Rotator, VertexLighting};
 use openhp1_mesh::Mesh;
 use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, ResolvedObject};
 use openhp1_render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
@@ -84,10 +84,12 @@ impl LoadedScene {
             &mut packages,
             &package,
             &level,
+            &model,
             &mut mesh,
             &mut textures,
             &mut surface_materials,
-        );
+        )
+        .context("failed to load actor meshes")?;
         info!(
             map = %path.display(),
             points = model.points.len(),
@@ -169,6 +171,8 @@ struct ActorState {
     texture: Option<SceneObject>,
     multi_skins: Vec<Option<SceneObject>>,
     style: u8,
+    ambient_glow: u8,
+    scale_glow: f32,
     hidden: bool,
     unlit: bool,
 }
@@ -186,6 +190,8 @@ impl Default for ActorState {
             texture: None,
             multi_skins: Vec::new(),
             style: 1,
+            ambient_glow: 0,
+            scale_glow: 1.0,
             hidden: false,
             unlit: false,
         }
@@ -233,6 +239,12 @@ impl ActorState {
         if let Some(style) = properties.style {
             self.style = style;
         }
+        if let Some(ambient_glow) = properties.ambient_glow {
+            self.ambient_glow = ambient_glow;
+        }
+        if let Some(scale_glow) = properties.scale_glow {
+            self.scale_glow = scale_glow;
+        }
         if let Some(hidden) = properties.hidden {
             self.hidden = hidden;
         }
@@ -247,10 +259,14 @@ fn load_actor_meshes(
     packages: &mut PackageStore,
     map: &Arc<Package>,
     level: &Level,
+    model: &Model,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
-) -> usize {
+) -> Result<usize> {
+    let vertex_lighting = model
+        .vertex_lighting(map)
+        .context("failed to decode actor vertex lighting")?;
     let mut class_cache = HashMap::<ObjectKey, Option<ActorState>>::new();
     let mut mesh_cache = HashMap::<ObjectKey, Option<Arc<Mesh>>>::new();
     let mut decoded_textures = HashMap::<ObjectKey, Option<DecodedTexture>>::new();
@@ -311,6 +327,8 @@ fn load_actor_meshes(
             &mesh_object,
             &mesh,
             &state,
+            model,
+            &vertex_lighting,
             render_mesh,
             textures,
             materials,
@@ -328,7 +346,7 @@ fn load_actor_meshes(
             }
         }
     }
-    rendered
+    Ok(rendered)
 }
 
 fn class_state(
@@ -434,6 +452,8 @@ fn append_actor_mesh(
     mesh_object: &SceneObject,
     mesh: &Mesh,
     actor: &ActorState,
+    model: &Model,
+    vertex_lighting: &VertexLighting,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
@@ -459,6 +479,18 @@ fn append_actor_mesh(
         })
         * Mat4::from_scale(mesh.scale)
         * Mat4::from_translation(-mesh.origin);
+    let normal_transform = Mat3::from_mat4(transform).inverse().transpose();
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    for vertex in mesh.triangles.iter().flat_map(|triangle| triangle.vertices) {
+        let position = transform.transform_point3(vertex.position);
+        minimum = minimum.min(position);
+        maximum = maximum.max(position);
+    }
+    let center = (minimum + maximum) * 0.5;
+    let actor_lighting =
+        vertex_lighting.for_actor(model, center, actor.ambient_glow, actor.scale_glow);
+    let unlit = actor.unlit || model.zone_at(center) == 0;
     let mut actor_materials = HashMap::<(u32, i32), usize>::new();
     let first_vertex = render_mesh.positions.len();
 
@@ -490,14 +522,17 @@ fn append_actor_mesh(
             });
         let base = u32::try_from(render_mesh.positions.len())?;
         for vertex in triangle.vertices {
-            render_mesh
-                .positions
-                .push(transform.transform_point3(vertex.position));
+            let position = transform.transform_point3(vertex.position);
+            let normal = (normal_transform * vertex.normal).normalize_or_zero();
+            render_mesh.positions.push(position);
             render_mesh
                 .texture_coordinates
                 .push(vertex.texture_coordinates * dimensions);
             render_mesh.lightmap_coordinates.push(Vec2::ZERO);
             render_mesh.vertex_lightmaps.push(None);
+            render_mesh
+                .vertex_colors
+                .push(actor_lighting.color(position, normal, unlit));
             render_mesh.vertex_surfaces.push(surface);
         }
         render_mesh

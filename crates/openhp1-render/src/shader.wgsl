@@ -23,6 +23,7 @@ struct VertexOutput {
     @location(0) texture_coordinates: vec2<f32>,
     @location(1) lightmap_coordinates: vec2<f32>,
     @location(2) has_lightmap: f32,
+    @location(3) vertex_color: vec3<f32>,
 };
 
 @vertex
@@ -31,12 +32,14 @@ fn vertex_main(
     @location(1) texture_coordinates: vec2<f32>,
     @location(2) lightmap_coordinates: vec2<f32>,
     @location(3) has_lightmap: f32,
+    @location(4) vertex_color: vec4<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
     output.texture_coordinates = texture_coordinates;
     output.lightmap_coordinates = lightmap_coordinates;
     output.has_lightmap = has_lightmap;
+    output.vertex_color = vertex_color.rgb;
     return output;
 }
 
@@ -56,7 +59,7 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_display_gamma(textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return apply_display_gamma(apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates)));
 }
 
 @fragment
@@ -65,7 +68,7 @@ fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return apply_display_gamma(color);
+    return apply_display_gamma(apply_vertex_light(input, color));
 }
 
 @fragment
@@ -94,7 +97,11 @@ fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
         lightmap_sampler,
         input.lightmap_coordinates,
     ).rgb * 2.0;
-    return vec4(color.rgb * mix(vec3(1.0), light, input.has_lightmap), color.a);
+    return vec4(color.rgb * mix(input.vertex_color, light, input.has_lightmap), color.a);
+}
+
+fn apply_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    return vec4(color.rgb * input.vertex_color, color.a);
 }
 
 fn apply_display_gamma(color: vec4<f32>) -> vec4<f32> {

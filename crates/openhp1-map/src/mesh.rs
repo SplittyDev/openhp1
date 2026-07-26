@@ -12,6 +12,9 @@ pub struct TriangleMesh {
     /// Raw lightmap texel coordinates, paired with `vertex_lightmaps`.
     pub lightmap_coordinates: Vec<Vec2>,
     pub vertex_lightmaps: Vec<Option<usize>>,
+    /// Linear RGB modulation. BSP vertices default to white; actor meshes use
+    /// UE1's Gouraud vertex lighting.
+    pub vertex_colors: Vec<Vec3>,
     pub vertex_surfaces: Vec<usize>,
     pub indices: Vec<u32>,
     pub triangle_surfaces: Vec<usize>,
@@ -23,6 +26,7 @@ impl Model {
         let mut texture_coordinates = Vec::new();
         let mut lightmap_coordinates = Vec::new();
         let mut vertex_lightmaps = Vec::new();
+        let mut vertex_colors = Vec::new();
         let mut vertex_surfaces = Vec::new();
         let mut indices = Vec::new();
         let mut triangle_surfaces = Vec::new();
@@ -95,6 +99,7 @@ impl Model {
                     None => Vec2::ZERO,
                 });
                 vertex_lightmaps.push(lightmap_index);
+                vertex_colors.push(Vec3::ONE);
                 vertex_surfaces.push(surface);
             }
             for offset in 1..u32::from(node.vertex_count) - 1 {
@@ -111,6 +116,7 @@ impl Model {
             texture_coordinates,
             lightmap_coordinates,
             vertex_lightmaps,
+            vertex_colors,
             vertex_surfaces,
             indices,
             triangle_surfaces,

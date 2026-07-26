@@ -21,6 +21,8 @@ pub struct ActorProperties {
     pub texture: Option<ObjectReference>,
     pub multi_skins: Vec<Option<ObjectReference>>,
     pub style: Option<u8>,
+    pub ambient_glow: Option<u8>,
+    pub scale_glow: Option<f32>,
     pub hidden: Option<bool>,
     pub unlit: Option<bool>,
 }
@@ -81,6 +83,12 @@ impl ActorProperties {
                 }
                 ("Style", PropertyKind::Byte, _) => {
                     properties.style = Some(value.read_u8()?);
+                }
+                ("AmbientGlow", PropertyKind::Byte, _) => {
+                    properties.ambient_glow = Some(value.read_u8()?);
+                }
+                ("ScaleGlow", PropertyKind::Float, _) => {
+                    properties.scale_glow = Some(value.read_f32()?);
                 }
                 ("bHidden", PropertyKind::Bool, _) => {
                     properties.hidden = property.bool_value;

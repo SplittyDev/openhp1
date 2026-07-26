@@ -16,7 +16,7 @@ pub use bsp::{
 };
 pub use error::{Error, Result};
 pub use level::{Level, world_model_export};
-pub use lighting::LightmapImage;
+pub use lighting::{ActorVertexLighting, LightmapImage, VertexLighting};
 pub use mesh::TriangleMesh;
 pub use model::Model;
 pub use sky::{Rotator, SkyZone};

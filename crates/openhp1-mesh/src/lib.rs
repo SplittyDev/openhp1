@@ -31,6 +31,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
     pub position: Vec3,
+    pub normal: Vec3,
     /// Normalized texture coordinates.
     pub texture_coordinates: Vec2,
 }
@@ -144,16 +145,28 @@ fn classic_triangles(
     vertices: &[Vec3],
     triangles: &[SerializedTriangle],
 ) -> Result<Vec<MeshTriangle>> {
+    let mut faces = Vec::with_capacity(triangles.len());
+    for (indices, _, _, _) in triangles {
+        let face = indices.map(usize::from);
+        for index in face {
+            checked(vertices, index, "mesh vertex")?;
+        }
+        faces.push(face);
+    }
+    let normals = vertex_normals(vertices, &faces);
     triangles
         .iter()
-        .map(|&(indices, uv, poly_flags, texture_index)| {
+        .zip(faces)
+        .map(|(&(indices, uv, poly_flags, texture_index), face)| {
             let mut corners = [MeshVertex {
                 position: Vec3::ZERO,
+                normal: Vec3::ZERO,
                 texture_coordinates: Vec2::ZERO,
             }; 3];
             for corner in 0..3 {
                 corners[corner] = MeshVertex {
                     position: checked(vertices, usize::from(indices[corner]), "mesh vertex")?,
+                    normal: normals[face[corner]],
                     texture_coordinates: Vec2::new(
                         f32::from(uv[corner][0]) / 255.0,
                         f32::from(uv[corner][1]) / 255.0,
@@ -233,31 +246,46 @@ fn lod_triangles(
     } else {
         frame_vertices.min(vertices.len())
     };
+    let face_vertices = faces
+        .iter()
+        .map(|(indices, _)| {
+            let mut vertices = [0; 3];
+            for corner in 0..3 {
+                let &(vertex, _) = checked_ref(&wedges, usize::from(indices[corner]), "LOD wedge")?;
+                let base = usize::from(vertex) + special_vertices;
+                let vertex = if remap.is_empty() {
+                    base
+                } else {
+                    usize::from(checked(&remap, base, "animation vertex remap")?)
+                };
+                if vertex >= frame_vertices {
+                    return Err(Error::InvalidIndex {
+                        field: "LOD vertex",
+                        index: vertex,
+                        length: frame_vertices,
+                    });
+                }
+                vertices[corner] = vertex;
+            }
+            Ok(vertices)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let normals = vertex_normals(vertices, &face_vertices);
     let mut triangles = Vec::with_capacity(faces.len());
-    for (indices, material_index) in faces {
+    for ((indices, material_index), face_vertices) in faces.into_iter().zip(face_vertices) {
         let &(poly_flags, texture_index) =
             checked_ref(&materials, usize::from(material_index), "LOD material")?;
         let mut corners = [MeshVertex {
             position: Vec3::ZERO,
+            normal: Vec3::ZERO,
             texture_coordinates: Vec2::ZERO,
         }; 3];
         for corner in 0..3 {
-            let &(vertex, uv) = checked_ref(&wedges, usize::from(indices[corner]), "LOD wedge")?;
-            let base = usize::from(vertex) + special_vertices;
-            let vertex = if remap.is_empty() {
-                base
-            } else {
-                usize::from(checked(&remap, base, "animation vertex remap")?)
-            };
-            if vertex >= frame_vertices {
-                return Err(Error::InvalidIndex {
-                    field: "LOD vertex",
-                    index: vertex,
-                    length: frame_vertices,
-                });
-            }
+            let &(_, uv) = checked_ref(&wedges, usize::from(indices[corner]), "LOD wedge")?;
+            let vertex = face_vertices[corner];
             corners[corner] = MeshVertex {
                 position: vertices[vertex],
+                normal: normals[vertex],
                 texture_coordinates: Vec2::new(f32::from(uv[0]) / 255.0, f32::from(uv[1]) / 255.0),
             };
         }
@@ -268,6 +296,19 @@ fn lod_triangles(
         });
     }
     Ok(triangles)
+}
+
+fn vertex_normals(vertices: &[Vec3], faces: &[[usize; 3]]) -> Vec<Vec3> {
+    let mut normals = vec![Vec3::ZERO; vertices.len()];
+    for &[a, b, c] in faces {
+        let normal = (vertices[b] - vertices[a])
+            .cross(vertices[c] - vertices[a])
+            .normalize_or_zero();
+        normals[a] += normal;
+        normals[b] += normal;
+        normals[c] += normal;
+    }
+    normals.into_iter().map(Vec3::normalize_or_zero).collect()
 }
 
 fn skip_primitive(reader: &mut ObjectReader<'_>) -> Result<()> {
@@ -406,5 +447,15 @@ mod tests {
     fn unpacks_signed_ue1_vertex_components() {
         let packed = ((-512_i32 & 0x3ff) << 22) | ((-1024_i32 & 0x7ff) << 11) | 0x7ff;
         assert_eq!(unpack_vertex(packed), Vec3::new(-1.0, -1024.0, -512.0));
+    }
+
+    #[test]
+    fn averages_normals_across_shared_mesh_vertices() {
+        let vertices = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+        let normals = vertex_normals(&vertices, &[[0, 1, 2], [0, 3, 1]]);
+        assert_eq!(normals[0], Vec3::new(0.0, 1.0, 1.0).normalize());
+        assert_eq!(normals[1], normals[0]);
+        assert_eq!(normals[2], Vec3::Z);
+        assert_eq!(normals[3], Vec3::Y);
     }
 }
