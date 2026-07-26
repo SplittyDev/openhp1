@@ -7,8 +7,9 @@ use eframe::{
 };
 use glam::Vec3;
 use openhp1_render::{Camera, RenderStats, Renderer};
+use openhp1_scene::LoadedScene;
 
-use crate::{scene::LoadedScene, target::ColorTarget};
+use crate::target::ColorTarget;
 
 pub(crate) struct ViewerApp {
     state: eframe::egui_wgpu::RenderState,

@@ -1,5 +1,5 @@
 use glam::{Mat4, Quat, Vec3};
-use openhp1_map::SkyZone;
+use openhp1_scene::SkyZone;
 
 use crate::unreal_to_render;
 
@@ -82,7 +82,7 @@ impl SceneBounds {
 
 #[cfg(test)]
 mod tests {
-    use openhp1_map::{Rotator, SkyZone};
+    use openhp1_scene::{Rotator, SkyZone};
 
     use super::*;
 

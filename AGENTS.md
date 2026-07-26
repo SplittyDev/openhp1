@@ -84,7 +84,8 @@ crates/
   openhp1-map/      Level, Model, BSP, surfaces, vertices, and actors
   openhp1-mesh/     Mesh, LodMesh, and SkeletalMesh geometry decoding
   openhp1-texture/  Palette, Texture, mipmaps, and pixel conversion
-  openhp1-render/   wgpu renderer, render scene, and camera
+  openhp1-scene/    Package-backed CPU scene assembly and render-ready data
+  openhp1-render/   wgpu renderer and camera
   openhp1-viewer/   eframe application and egui inspection UI
 ```
 
@@ -92,14 +93,18 @@ Keep the dependency direction acyclic:
 
 ```text
 openhp1-package ──┬── openhp1-map ─────┐
-                  ├── openhp1-mesh ────┤
-                  └── openhp1-texture ─┴── openhp1-render ── openhp1-viewer
+                  ├── openhp1-mesh ────┼── openhp1-scene ── openhp1-render
+                  └── openhp1-texture ─┘                         │
+                                                                └── openhp1-viewer
 ```
 
 Add these only when their implementation begins:
 
 - `openhp1-script`: class metadata, bytecode decoding, and the UnrealScript VM
 - `openhp1-audio`: sound/music extraction, decoding, and playback integration
+- `openhp1-animation`: reusable skeleton/sequence playback, pose sampling, and
+  animation state once animated actors are implemented; package-specific mesh
+  and sequence decoding remains in `openhp1-mesh`
 - `openhp1-runtime`: object lifecycle, ticking, gameplay, collision, and game state
 - A separate game executable that owns the real game loop
 
@@ -116,11 +121,12 @@ current internal responsibility split is:
 | Crate | Modules |
 | --- | --- |
 | `openhp1-package` | checked archive cursor, object properties, package owner, configured package resolver, public summary types, index-table decoding, errors |
-| `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, errors |
-| `openhp1-mesh` | classic, LOD, and skeletal mesh geometry decoding |
+| `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, static lightmaps, actor vertex lighting, errors |
+| `openhp1-mesh` | classic, LOD, and skeletal mesh records, decoding, and geometry conversion |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
-| `openhp1-render` | camera/bounds, coordinate conversion, decoded render scene, wgpu renderer |
-| `openhp1-viewer` | executable startup, package/texture scene loading, egui application, offscreen color target |
+| `openhp1-scene` | package-backed scene loading, actor/material assembly, coordinate conversion, render-ready CPU scene data |
+| `openhp1-render` | camera/bounds, GPU batching, pipelines, lightmap atlas, render targets, wgpu renderer |
+| `openhp1-viewer` | executable startup, egui application/input/diagnostics, scene selection, offscreen color target |
 
 Prefer a module for a substantial data structure and its behavior. Keep small
 format records together when they share one serialization boundary; do not

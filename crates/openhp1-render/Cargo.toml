@@ -8,6 +8,6 @@ rust-version.workspace = true
 [dependencies]
 bytemuck.workspace = true
 glam.workspace = true
-openhp1-map = { path = "../openhp1-map" }
+openhp1-scene = { path = "../openhp1-scene" }
 thiserror.workspace = true
 wgpu.workspace = true

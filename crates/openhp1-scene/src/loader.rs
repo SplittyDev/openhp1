@@ -7,35 +7,36 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
-    Actor, ActorProperties, BspNode, Level, Model, PolyFlags, Rotator, VertexLighting, bsp_zone_at,
+    Actor, ActorProperties, BspNode, Level, Model, PolyFlags, VertexLighting, bsp_zone_at,
 };
 use openhp1_mesh::Mesh;
 use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, ResolvedObject};
-use openhp1_render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal};
 use openhp1_texture::{Palette, Texture, TextureRenderFlags};
 use tracing::{info, warn};
 
-pub(crate) struct LoadedScene {
-    pub(crate) path: PathBuf,
-    pub(crate) levels: Vec<PathBuf>,
-    pub(crate) render: RenderScene,
-    pub(crate) points: usize,
-    pub(crate) nodes: usize,
-    pub(crate) surfaces: usize,
-    pub(crate) visible_bsp_surfaces: usize,
-    pub(crate) textured_surfaces: usize,
-    pub(crate) masked_surfaces: usize,
-    pub(crate) translucent_surfaces: usize,
-    pub(crate) modulated_surfaces: usize,
-    pub(crate) fake_backdrop_surfaces: usize,
-    pub(crate) has_sky_zone: bool,
-    pub(crate) actor_meshes: usize,
+use crate::{RenderScene, Rotator, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal};
+
+pub struct LoadedScene {
+    pub path: PathBuf,
+    pub levels: Vec<PathBuf>,
+    pub render: RenderScene,
+    pub points: usize,
+    pub nodes: usize,
+    pub surfaces: usize,
+    pub visible_bsp_surfaces: usize,
+    pub textured_surfaces: usize,
+    pub masked_surfaces: usize,
+    pub translucent_surfaces: usize,
+    pub modulated_surfaces: usize,
+    pub fake_backdrop_surfaces: usize,
+    pub has_sky_zone: bool,
+    pub actor_meshes: usize,
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
 }
 
 impl LoadedScene {
-    pub(crate) fn load(path: PathBuf) -> Result<Self> {
+    pub fn load(path: PathBuf) -> Result<Self> {
         let path = path
             .canonicalize()
             .with_context(|| format!("failed to locate {}", path.display()))?;
@@ -174,7 +175,7 @@ impl LoadedScene {
         })
     }
 
-    pub(crate) fn zone_at(&self, render_position: Vec3) -> usize {
+    pub fn zone_at(&self, render_position: Vec3) -> usize {
         bsp_zone_at(
             &self.zone_nodes,
             self.zone_count,
@@ -831,8 +832,9 @@ fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
 #[cfg(test)]
 mod tests {
     use openhp1_map::PolyFlags;
-    use openhp1_render::SurfaceMode;
     use openhp1_texture::TextureRenderFlags;
+
+    use crate::SurfaceMode;
 
     #[test]
     fn combines_surface_and_texture_render_flags() {

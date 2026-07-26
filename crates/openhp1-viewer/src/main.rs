@@ -1,5 +1,4 @@
 mod app;
-mod scene;
 mod target;
 
 use std::{env, path::PathBuf};
@@ -8,7 +7,8 @@ use anyhow::{Result, anyhow};
 use eframe::egui;
 use tracing_subscriber::EnvFilter;
 
-use crate::{app::ViewerApp, scene::LoadedScene};
+use crate::app::ViewerApp;
+use openhp1_scene::LoadedScene;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()

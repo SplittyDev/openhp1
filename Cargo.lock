@@ -1886,9 +1886,22 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
- "openhp1-map",
+ "openhp1-scene",
  "thiserror 2.0.19",
  "wgpu",
+]
+
+[[package]]
+name = "openhp1-scene"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "openhp1-map",
+ "openhp1-mesh",
+ "openhp1-package",
+ "openhp1-texture",
+ "tracing",
 ]
 
 [[package]]
@@ -1906,11 +1919,8 @@ dependencies = [
  "anyhow",
  "eframe",
  "glam",
- "openhp1-map",
- "openhp1-mesh",
- "openhp1-package",
  "openhp1-render",
- "openhp1-texture",
+ "openhp1-scene",
  "tracing",
  "tracing-subscriber",
 ]
