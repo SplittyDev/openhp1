@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Range,
     path::PathBuf,
     sync::Arc,
 };
@@ -7,7 +8,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
-    Actor, ActorProperties, BspNode, Level, Model, PolyFlags, VertexLighting, bsp_zone_at,
+    Actor, ActorProperties, ActorVertexLighting, BspNode, Level, Model, PolyFlags, VertexLighting,
+    bsp_zone_at,
 };
 use openhp1_mesh::Mesh;
 use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, ResolvedObject};
@@ -31,8 +33,10 @@ pub struct LoadedScene {
     pub fake_backdrop_surfaces: usize,
     pub has_sky_zone: bool,
     pub actor_meshes: usize,
+    pub animated_actor_meshes: usize,
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
+    animations: Vec<AnimatedActorMesh>,
 }
 
 impl LoadedScene {
@@ -116,16 +120,23 @@ impl LoadedScene {
             .filter(|&surface| surface_materials[surface].mode != SurfaceMode::Hidden)
             .collect::<HashSet<_>>()
             .len();
+        let mut animations = Vec::new();
+        let vertex_lighting = model
+            .vertex_lighting(&package)
+            .context("failed to decode actor vertex lighting")?;
         let actor_meshes = load_actor_meshes(
             &mut packages,
             &package,
             &level,
             &model,
+            &vertex_lighting,
             &mut mesh,
             &mut textures,
             &mut surface_materials,
+            &mut animations,
         )
         .context("failed to load actor meshes")?;
+        let animated_actor_meshes = animations.len();
         info!(
             map = %path.display(),
             points = model.points.len(),
@@ -141,6 +152,7 @@ impl LoadedScene {
             fake_backdrop_surfaces,
             has_sky_zone = sky_zone.is_some(),
             actor_meshes,
+            animated_actor_meshes,
             "loaded map"
         );
         if fake_backdrop_surfaces != 0 && sky_zone.is_none() {
@@ -170,8 +182,10 @@ impl LoadedScene {
             fake_backdrop_surfaces,
             has_sky_zone: sky_zone.is_some(),
             actor_meshes,
+            animated_actor_meshes,
             zone_nodes: model.nodes.clone(),
             zone_count: model.zones.len(),
+            animations,
         })
     }
 
@@ -182,6 +196,45 @@ impl LoadedScene {
             render_to_unreal(render_position),
         )
     }
+
+    pub fn tick_animations(&mut self, delta_time: f32) -> Result<bool> {
+        if delta_time <= 0.0 || !delta_time.is_finite() {
+            return Ok(false);
+        }
+        for animation in &mut self.animations {
+            animation.phase = (animation.phase + animation.rate * delta_time).rem_euclid(1.0);
+            let sequence = &animation.mesh.animation_sequences[animation.sequence];
+            let triangles = animation.mesh.sample_sequence(sequence, animation.phase)?;
+            ensure!(
+                triangles.len() * 3 == animation.vertices.len(),
+                "animation changed actor vertex count"
+            );
+            for (destination, vertex) in animation
+                .vertices
+                .clone()
+                .zip(triangles.into_iter().flat_map(|triangle| triangle.vertices))
+            {
+                let position = animation.transform.transform_point3(vertex.position);
+                let normal = (animation.normal_transform * vertex.normal).normalize_or_zero();
+                self.render.mesh.positions[destination] = position;
+                self.render.mesh.vertex_colors[destination] =
+                    animation.lighting.color(position, normal, animation.unlit);
+            }
+        }
+        Ok(!self.animations.is_empty())
+    }
+}
+
+struct AnimatedActorMesh {
+    mesh: Arc<Mesh>,
+    sequence: usize,
+    phase: f32,
+    rate: f32,
+    vertices: Range<usize>,
+    transform: Mat4,
+    normal_transform: Mat3,
+    lighting: ActorVertexLighting,
+    unlit: bool,
 }
 
 type ObjectKey = (String, usize);
@@ -221,6 +274,9 @@ struct ActorState {
     style: u8,
     ambient_glow: u8,
     scale_glow: f32,
+    anim_sequence: Option<String>,
+    anim_frame: f32,
+    anim_rate: f32,
     hidden: bool,
     unlit: bool,
 }
@@ -240,6 +296,9 @@ impl Default for ActorState {
             style: 1,
             ambient_glow: 0,
             scale_glow: 1.0,
+            anim_sequence: None,
+            anim_frame: 0.0,
+            anim_rate: 0.0,
             hidden: false,
             unlit: false,
         }
@@ -293,6 +352,15 @@ impl ActorState {
         if let Some(scale_glow) = properties.scale_glow {
             self.scale_glow = scale_glow;
         }
+        if let Some(anim_sequence) = &properties.anim_sequence {
+            self.anim_sequence = Some(anim_sequence.clone());
+        }
+        if let Some(anim_frame) = properties.anim_frame {
+            self.anim_frame = anim_frame;
+        }
+        if let Some(anim_rate) = properties.anim_rate {
+            self.anim_rate = anim_rate;
+        }
         if let Some(hidden) = properties.hidden {
             self.hidden = hidden;
         }
@@ -308,13 +376,12 @@ fn load_actor_meshes(
     map: &Arc<Package>,
     level: &Level,
     model: &Model,
+    vertex_lighting: &VertexLighting,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
+    animations: &mut Vec<AnimatedActorMesh>,
 ) -> Result<usize> {
-    let vertex_lighting = model
-        .vertex_lighting(map)
-        .context("failed to decode actor vertex lighting")?;
     let mut class_cache = HashMap::<ObjectKey, Option<ActorState>>::new();
     let mut mesh_cache = HashMap::<ObjectKey, Option<Arc<Mesh>>>::new();
     let mut decoded_textures = HashMap::<ObjectKey, Option<DecodedTexture>>::new();
@@ -376,12 +443,13 @@ fn load_actor_meshes(
             &mesh,
             &state,
             model,
-            &vertex_lighting,
+            vertex_lighting,
             render_mesh,
             textures,
             materials,
             &mut decoded_textures,
             &mut images,
+            animations,
         ) {
             Ok(true) => rendered += 1,
             Ok(false) => {}
@@ -498,7 +566,7 @@ fn skip_class_array(
 fn append_actor_mesh(
     packages: &mut PackageStore,
     mesh_object: &SceneObject,
-    mesh: &Mesh,
+    mesh: &Arc<Mesh>,
     actor: &ActorState,
     model: &Model,
     vertex_lighting: &VertexLighting,
@@ -507,6 +575,7 @@ fn append_actor_mesh(
     materials: &mut Vec<SurfaceMaterial>,
     decoded_textures: &mut HashMap<ObjectKey, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
+    animations: &mut Vec<AnimatedActorMesh>,
 ) -> Result<bool> {
     let mesh_textures = mesh
         .textures
@@ -541,8 +610,27 @@ fn append_actor_mesh(
     let unlit = actor.unlit || model.zone_at(center) == 0;
     let mut actor_materials = HashMap::<(u32, i32), usize>::new();
     let first_vertex = render_mesh.positions.len();
+    let sequence = mesh
+        .animation_sequences
+        .iter()
+        .position(|sequence| {
+            actor
+                .anim_sequence
+                .as_deref()
+                .is_some_and(|name| sequence.name.eq_ignore_ascii_case(name))
+        })
+        .or((!mesh.animation_sequences.is_empty()).then_some(0))
+        .filter(|&index| mesh.animation_sequences[index].frame_count != 0);
+    let phase = actor.anim_frame.max(0.0).rem_euclid(1.0);
+    let sampled;
+    let triangles = if let Some(sequence) = sequence {
+        sampled = mesh.sample_sequence(&mesh.animation_sequences[sequence], phase)?;
+        sampled.as_slice()
+    } else {
+        &mesh.triangles
+    };
 
-    for triangle in &mesh.triangles {
+    for triangle in triangles {
         let material_key = (triangle.poly_flags, triangle.texture_index);
         let surface = if let Some(surface) = actor_materials.get(&material_key) {
             *surface
@@ -587,6 +675,27 @@ fn append_actor_mesh(
             .indices
             .extend_from_slice(&[base, base + 2, base + 1]);
         render_mesh.triangle_surfaces.push(surface);
+    }
+    if let Some(sequence) = sequence
+        && mesh.animation_sequences[sequence].frame_count > 1
+    {
+        let native_rate = mesh.animation_sequences[sequence].rate
+            / mesh.animation_sequences[sequence].frame_count as f32;
+        animations.push(AnimatedActorMesh {
+            mesh: Arc::clone(mesh),
+            sequence,
+            phase,
+            rate: if actor.anim_rate > 0.0 {
+                actor.anim_rate
+            } else {
+                native_rate
+            },
+            vertices: first_vertex..render_mesh.positions.len(),
+            transform,
+            normal_transform,
+            lighting: actor_lighting,
+            unlit,
+        });
     }
     Ok(render_mesh.positions.len() != first_vertex)
 }

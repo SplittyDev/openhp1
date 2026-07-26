@@ -33,6 +33,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mesh = Mesh::decode(&package, export_index)?;
             meshes += 1;
             sequences += mesh.animation_sequences.len();
+            if !mesh.animation_sequences.is_empty() {
+                println!(
+                    "{}:{} ({})",
+                    path.display(),
+                    package.summary().name(export.object_name),
+                    mesh.animation_sequences
+                        .iter()
+                        .map(|sequence| sequence.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             if mesh.frame_vertices == 0 || mesh.animation_frames == 0 {
                 continue;
             }

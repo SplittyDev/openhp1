@@ -2,6 +2,7 @@ use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use openhp1_scene::TriangleMesh;
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -16,7 +17,7 @@ mod target;
 use atlas::build_lightmap_atlas;
 use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
-    sorted_blended_batches, texture_batches,
+    sorted_blended_batches, texture_batches, update_blended_centers,
 };
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
@@ -59,6 +60,7 @@ pub struct Renderer {
     sky_camera_buffer: Option<wgpu::Buffer>,
     sky_camera_bind_group: Option<wgpu::BindGroup>,
     texture_bind_groups: Vec<wgpu::BindGroup>,
+    vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
     opaque_index_buffer: wgpu::Buffer,
     opaque_batches: Vec<DrawBatch>,
@@ -162,7 +164,7 @@ impl Renderer {
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("OpenHP1 BSP vertices"),
             contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         let opaque_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("OpenHP1 opaque BSP indices"),
@@ -386,6 +388,7 @@ impl Renderer {
             sky_camera_buffer,
             sky_camera_bind_group,
             texture_bind_groups,
+            vertices,
             vertex_buffer,
             opaque_index_buffer,
             opaque_batches,
@@ -409,6 +412,20 @@ impl Renderer {
 
     pub fn bounds(&self) -> SceneBounds {
         self.bounds
+    }
+
+    pub fn update_vertices(&mut self, queue: &wgpu::Queue, mesh: &TriangleMesh) -> bool {
+        if mesh.positions.len() != self.vertices.len() {
+            return false;
+        }
+        for (index, vertex) in self.vertices.iter_mut().enumerate() {
+            vertex.position = unreal_to_render(mesh.positions[index]).to_array();
+            vertex.vertex_color =
+                pack_vertex_color(mesh.vertex_colors.get(index).copied().unwrap_or(Vec3::ONE));
+        }
+        update_blended_centers(&mut self.blended_surfaces, &self.vertices);
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+        true
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, viewport_size: [u32; 2]) {

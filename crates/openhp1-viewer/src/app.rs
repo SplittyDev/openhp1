@@ -18,6 +18,8 @@ pub(crate) struct ViewerApp {
     camera: Camera,
     movement_speed: f32,
     brightness: f32,
+    animations_playing: bool,
+    animation_speed: f32,
     scene: LoadedScene,
     last_frame: Instant,
     render_stats: RenderStats,
@@ -52,6 +54,8 @@ impl ViewerApp {
             camera,
             movement_speed: (radius * 0.35).max(200.0),
             brightness: 0.625,
+            animations_playing: true,
+            animation_speed: 1.0,
             scene,
             last_frame: Instant::now(),
             render_stats: RenderStats::default(),
@@ -82,6 +86,7 @@ impl ViewerApp {
         self.renderer = renderer;
         self.scene = scene;
         self.render_stats = RenderStats::default();
+        self.last_frame = Instant::now();
         self.load_error = None;
     }
 
@@ -132,6 +137,9 @@ impl ViewerApp {
                     ui.end_row();
                     ui.label("Visible meshes");
                     ui.label(self.scene.actor_meshes.to_string());
+                    ui.end_row();
+                    ui.label("Animated meshes");
+                    ui.label(self.scene.animated_actor_meshes.to_string());
                     ui.end_row();
                     ui.label("Draw calls");
                     ui.label(self.render_stats.draw_calls.to_string());
@@ -208,6 +216,10 @@ impl ViewerApp {
             .default_open(true)
             .show(ui, |ui| {
                 ui.add(egui::Slider::new(&mut self.brightness, 0.2..=1.0).text("Brightness"));
+                ui.checkbox(&mut self.animations_playing, "Play animations");
+                ui.add(
+                    egui::Slider::new(&mut self.animation_speed, 0.1..=2.0).text("Animation speed"),
+                );
                 ui.label("Drag to look");
                 ui.label("WASD move · Q/E down/up");
                 ui.label("Hold Shift to move faster");
@@ -242,6 +254,31 @@ impl ViewerApp {
             + Vec3::Y * movement.y)
             * speed
             * delta_time;
+    }
+
+    fn update_animations(&mut self, delta_time: f32) {
+        if !self.animations_playing {
+            return;
+        }
+        match self
+            .scene
+            .tick_animations(delta_time * self.animation_speed)
+        {
+            Ok(true) => {
+                if !self
+                    .renderer
+                    .update_vertices(&self.state.queue, &self.scene.render.mesh)
+                {
+                    self.animations_playing = false;
+                    self.load_error = Some("animation changed the scene vertex count".to_owned());
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.animations_playing = false;
+                self.load_error = Some(format!("animation failed: {error:#}"));
+            }
+        }
     }
 }
 
@@ -282,6 +319,7 @@ impl eframe::App for ViewerApp {
                     .maintain_aspect_ratio(false),
             );
             self.update_camera(ui, &response, delta_time);
+            self.update_animations(delta_time);
 
             let mut encoder =
                 self.state

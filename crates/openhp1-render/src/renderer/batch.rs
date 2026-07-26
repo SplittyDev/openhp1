@@ -188,6 +188,23 @@ pub(super) fn sorted_blended_batches(
     (indices, batches)
 }
 
+pub(super) fn update_blended_centers(surfaces: &mut [BlendedSurface], vertices: &[Vertex]) {
+    for surface in surfaces {
+        let mut center = Vec3::ZERO;
+        let mut count = 0;
+        for &index in &surface.indices {
+            let Some(vertex) = vertices.get(index as usize) else {
+                continue;
+            };
+            center += Vec3::from_array(vertex.position);
+            count += 1;
+        }
+        if count != 0 {
+            surface.center = center / count as f32;
+        }
+    }
+}
+
 fn pipeline_index(material: SurfaceMaterial) -> usize {
     let mode = match material.mode {
         SurfaceMode::Opaque | SurfaceMode::Backdrop | SurfaceMode::Hidden => 0,

@@ -23,6 +23,9 @@ pub struct ActorProperties {
     pub style: Option<u8>,
     pub ambient_glow: Option<u8>,
     pub scale_glow: Option<f32>,
+    pub anim_sequence: Option<String>,
+    pub anim_frame: Option<f32>,
+    pub anim_rate: Option<f32>,
     pub hidden: Option<bool>,
     pub unlit: Option<bool>,
 }
@@ -89,6 +92,16 @@ impl ActorProperties {
                 }
                 ("ScaleGlow", PropertyKind::Float, _) => {
                     properties.scale_glow = Some(value.read_f32()?);
+                }
+                ("AnimSequence", PropertyKind::Name, _) => {
+                    let index = value.read_name_index("actor animation sequence")?;
+                    properties.anim_sequence = Some(value.summary().name(index).to_owned());
+                }
+                ("AnimFrame", PropertyKind::Float, _) => {
+                    properties.anim_frame = Some(value.read_f32()?);
+                }
+                ("AnimRate", PropertyKind::Float, _) => {
+                    properties.anim_rate = Some(value.read_f32()?);
                 }
                 ("bHidden", PropertyKind::Bool, _) => {
                     properties.hidden = property.bool_value;
