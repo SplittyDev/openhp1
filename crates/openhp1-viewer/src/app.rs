@@ -400,10 +400,8 @@ impl ViewerApp {
         if !self.animations_playing {
             return;
         }
-        match self
-            .scene
-            .tick_animations(delta_time * self.animation_speed)
-        {
+        let delta_time = delta_time * self.animation_speed;
+        match self.scene.tick_animations(delta_time) {
             Ok(true) => {
                 if !self
                     .renderer
@@ -417,6 +415,26 @@ impl ViewerApp {
             Err(error) => {
                 self.animations_playing = false;
                 self.load_error = Some(format!("animation failed: {error:#}"));
+            }
+        }
+        if !self.animations_playing {
+            return;
+        }
+        match self.scene.tick_water(delta_time) {
+            Ok(changed)
+                if !self.renderer.update_textures(
+                    &self.state.queue,
+                    &self.scene.render.textures,
+                    &changed,
+                ) =>
+            {
+                self.animations_playing = false;
+                self.load_error = Some("animation changed the scene textures".to_owned());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.animations_playing = false;
+                self.load_error = Some(format!("water animation failed: {error:#}"));
             }
         }
     }

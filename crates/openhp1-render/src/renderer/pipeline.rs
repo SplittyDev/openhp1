@@ -162,21 +162,19 @@ pub(super) fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
 
 pub(super) fn texture_bind_group(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
-    image: &TextureImage,
+    view: &wgpu::TextureView,
     lightmap_view: &wgpu::TextureView,
     lightmap_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
-    let view = texture_view(device, queue, "OpenHP1 texture", image);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("OpenHP1 texture bind group"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
+                resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -200,27 +198,34 @@ pub(super) fn texture_view(
     label: &str,
     image: &TextureImage,
 ) -> wgpu::TextureView {
-    device
-        .create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: image.width,
-                    height: image.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                // UE1's fixed-function path modulates palette and lightmap
-                // samples directly in display space.
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
+    texture(device, queue, label, image).create_view(&Default::default())
+}
+
+pub(super) fn texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    image: &TextureImage,
+) -> wgpu::Texture {
+    device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
             },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            &image.rgba,
-        )
-        .create_view(&Default::default())
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // UE1's fixed-function path modulates palette and lightmap
+            // samples directly in display space.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &image.rgba,
+    )
 }

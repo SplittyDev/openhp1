@@ -21,7 +21,9 @@ use batch::{
 };
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
-use pipeline::{create_backdrop_pipeline, create_pipeline, texture_bind_group, texture_view};
+use pipeline::{
+    create_backdrop_pipeline, create_pipeline, texture, texture_bind_group, texture_view,
+};
 use target::{DepthTarget, SkyTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -59,6 +61,7 @@ pub struct Renderer {
     camera_bind_group: wgpu::BindGroup,
     sky_camera_buffer: Option<wgpu::Buffer>,
     sky_camera_bind_group: Option<wgpu::BindGroup>,
+    textures: Vec<wgpu::Texture>,
     texture_bind_groups: Vec<wgpu::BindGroup>,
     vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
@@ -322,17 +325,21 @@ impl Renderer {
                 + checkerboard.rgba.len(),
             lightmap_memory_bytes: lightmap_atlas.image.rgba.len(),
         };
-        let texture_bind_groups = scene
+        let textures = scene
             .textures
             .iter()
             .chain(std::iter::once(&checkerboard))
+            .map(|image| texture(device, queue, "OpenHP1 texture", image))
+            .collect::<Vec<_>>();
+        let texture_bind_groups = textures
+            .iter()
             .map(|texture| {
+                let view = texture.create_view(&Default::default());
                 texture_bind_group(
                     device,
-                    queue,
                     &texture_layout,
                     &sampler,
-                    texture,
+                    &view,
                     &lightmap_view,
                     &lightmap_sampler,
                 )
@@ -387,6 +394,7 @@ impl Renderer {
             camera_bind_group,
             sky_camera_buffer,
             sky_camera_bind_group,
+            textures,
             texture_bind_groups,
             vertices,
             vertex_buffer,
@@ -425,6 +433,50 @@ impl Renderer {
         }
         update_blended_centers(&mut self.blended_surfaces, &self.vertices);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+        true
+    }
+
+    pub fn update_textures(
+        &self,
+        queue: &wgpu::Queue,
+        images: &[TextureImage],
+        changed: &[usize],
+    ) -> bool {
+        if images.len() + 1 != self.textures.len() {
+            return false;
+        }
+        for &index in changed {
+            let (Some(texture), Some(image)) = (self.textures.get(index), images.get(index)) else {
+                return false;
+            };
+            let expected = usize::try_from(image.width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(image.height)
+                        .ok()
+                        .and_then(|height| width.checked_mul(height))
+                })
+                .and_then(|pixels| pixels.checked_mul(4));
+            let Some(bytes_per_row) = image.width.checked_mul(4) else {
+                return false;
+            };
+            if texture.width() != image.width
+                || texture.height() != image.height
+                || expected != Some(image.rgba.len())
+            {
+                return false;
+            }
+            queue.write_texture(
+                texture.as_image_copy(),
+                &image.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(image.height),
+                },
+                texture.size(),
+            );
+        }
         true
     }
 

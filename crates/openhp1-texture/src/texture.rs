@@ -21,6 +21,7 @@ pub struct Texture {
     pub declared_height: Option<u32>,
     pub render_flags: TextureRenderFlags,
     pub mips: Vec<MipLevel>,
+    pub wet: Option<WetTexture>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -31,6 +32,40 @@ pub struct TextureRenderFlags {
     pub modulated: bool,
     pub fake_backdrop: bool,
     pub two_sided: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WetTexture {
+    pub source_texture: ObjectReference,
+    pub drops: Vec<WaterDrop>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WaterDrop {
+    pub kind: u8,
+    pub depth: u8,
+    pub x: u8,
+    pub y: u8,
+    pub bytes: [u8; 4],
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct WaterCell {
+    pressure: f32,
+    velocity: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct WaterAnimation {
+    width: usize,
+    height: usize,
+    source: Vec<u8>,
+    indices: Vec<u8>,
+    fields: [Vec<WaterCell>; 2],
+    current: usize,
+    accumulator: f32,
+    random: u32,
+    drops: Vec<WaterDrop>,
 }
 
 impl Texture {
@@ -45,6 +80,8 @@ impl Texture {
         let mut source_texture = ObjectReference::None;
         let mut render_heat = 255;
         let mut rising = false;
+        let mut water_drop_count = 0;
+        let mut water_drops = Vec::new();
         let mut render_flags = TextureRenderFlags::default();
 
         while let Some(property) = reader.next_property()? {
@@ -73,6 +110,33 @@ impl Texture {
                 }
                 "bRising" if property.kind == PropertyKind::Bool => {
                     rising = property.bool_value.unwrap_or(false);
+                }
+                "NumDrops" if property.kind == PropertyKind::Int => {
+                    let offset = reader.property_reader(&property).absolute_position();
+                    water_drop_count = nonnegative(
+                        reader.property_reader(&property).read_i32()?,
+                        offset,
+                        "water drops",
+                    )?;
+                }
+                "Drops" if property.kind == PropertyKind::Struct => {
+                    let index = property.array_index.unwrap_or_default();
+                    let mut value = reader.property_reader(&property);
+                    let actual = value.remaining();
+                    if actual != 8 {
+                        return Err(Error::InvalidWaterDropLength { index, actual });
+                    }
+                    let bytes = value.read_bytes(8)?;
+                    water_drops.push((
+                        index,
+                        WaterDrop {
+                            kind: bytes[0],
+                            depth: bytes[1],
+                            x: bytes[2],
+                            y: bytes[3],
+                            bytes: bytes[4..8].try_into().expect("checked water drop size"),
+                        },
+                    ));
                 }
                 _ if property.kind == PropertyKind::Bool => {
                     render_flags.set(name, property.bool_value.unwrap_or(false));
@@ -124,6 +188,13 @@ impl Texture {
                 }
             }
         }
+        let wet = (class == TextureClass::Wet)
+            .then(|| decode_water_drops(water_drop_count, water_drops))
+            .transpose()?
+            .map(|drops| WetTexture {
+                source_texture,
+                drops,
+            });
 
         Ok(Self {
             palette,
@@ -131,6 +202,7 @@ impl Texture {
             declared_height,
             render_flags,
             mips,
+            wet,
         })
     }
 
@@ -141,24 +213,253 @@ impl Texture {
             .mips
             .get(mip_index)
             .ok_or(Error::MissingMip { mip_index })?;
-        let mut rgba = Vec::with_capacity(mip.indices.len() * 4);
-        for &index in &mip.indices {
-            let color =
-                palette
-                    .colors
-                    .get(usize::from(index))
-                    .ok_or(Error::PaletteIndexOutOfRange {
-                        index,
-                        color_count: palette.colors.len(),
-                    })?;
-            if masked && index == 0 {
-                rgba.extend_from_slice(&[0; 4]);
-            } else {
-                rgba.extend_from_slice(&[color.red, color.green, color.blue, 255]);
+        rgba(&mip.indices, palette, masked)
+    }
+}
+
+impl WetTexture {
+    pub fn animate(
+        &self,
+        width: u32,
+        height: u32,
+        source_indices: &[u8],
+    ) -> Result<WaterAnimation> {
+        for drop in &self.drops {
+            if !matches!(drop.kind, 0 | 1 | 2 | 3 | 6 | 7 | 12 | 16) {
+                return Err(Error::UnsupportedWaterDropType(drop.kind));
             }
         }
-        Ok(rgba)
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidWaterDimensions { width, height });
+        }
+        let count = pixel_count(width, height)?;
+        if source_indices.len() != count {
+            return Err(Error::InvalidWaterSourceLength {
+                width,
+                height,
+                actual: source_indices.len(),
+            });
+        }
+        Ok(WaterAnimation {
+            width: width as usize,
+            height: height as usize,
+            source: source_indices.to_vec(),
+            indices: source_indices.to_vec(),
+            fields: [
+                vec![WaterCell::default(); count],
+                vec![WaterCell::default(); count],
+            ],
+            current: 0,
+            accumulator: 0.0,
+            random: 0x6d2b_79f5,
+            drops: self.drops.clone(),
+        })
     }
+}
+
+impl WaterAnimation {
+    pub fn tick(&mut self, delta_time: f32) -> bool {
+        if !delta_time.is_finite() || delta_time <= 0.0 {
+            return false;
+        }
+        self.accumulator += delta_time.min(0.1);
+        let mut changed = false;
+        while self.accumulator >= 1.0 / 30.0 {
+            self.step();
+            self.accumulator -= 1.0 / 30.0;
+            changed = true;
+        }
+        changed
+    }
+
+    pub fn rgba(&self, palette: &Palette, masked: bool) -> Result<Vec<u8>> {
+        rgba(&self.indices, palette, masked)
+    }
+
+    fn step(&mut self) {
+        self.apply_drops();
+        let current = self.current;
+        let next = 1 - current;
+        let (source, destination) = if current == 0 {
+            let (source, destination) = self.fields.split_at_mut(1);
+            (&source[0], &mut destination[0])
+        } else {
+            let (destination, source) = self.fields.split_at_mut(1);
+            (&source[0], &mut destination[0])
+        };
+        for y in 0..self.height {
+            let up = if y == 0 { self.height - 1 } else { y - 1 };
+            let down = if y + 1 == self.height { 0 } else { y + 1 };
+            for x in 0..self.width {
+                let left = if x == 0 { self.width - 1 } else { x - 1 };
+                let right = if x + 1 == self.width { 0 } else { x + 1 };
+                let index = x + y * self.width;
+                let pressure = source[index].pressure;
+                let mut velocity = source[index].velocity
+                    + (-2.0 * pressure
+                        + source[left + y * self.width].pressure
+                        + source[right + y * self.width].pressure)
+                        * 0.25
+                    + (-2.0 * pressure
+                        + source[x + up * self.width].pressure
+                        + source[x + down * self.width].pressure)
+                        * 0.25;
+                let pressure = (pressure + velocity) * 0.999;
+                velocity = (velocity - 0.005 * pressure) * 0.998;
+                destination[index] = WaterCell { pressure, velocity };
+            }
+        }
+        self.current = next;
+        self.render_source();
+    }
+
+    fn apply_drops(&mut self) {
+        let field = &mut self.fields[self.current];
+        // ponytail: SurrealEngine covers the wave step and emitters 0/1; the
+        // other HP1-used emitters are minimal semantic versions until a
+        // differential capture gives us their exact native behavior.
+        for drop in &mut self.drops {
+            let base_x = usize::from(drop.x) * self.width / 128;
+            let base_y = usize::from(drop.y) * self.height / 128;
+            let amplitude = (f32::from(drop.depth) - 128.0) / 255.0;
+            match drop.kind {
+                0 => set_pressure(field, self.width, self.height, base_x, base_y, amplitude),
+                1 => {
+                    drop.depth = drop.depth.wrapping_add(drop.bytes[3]);
+                    set_pressure(
+                        field,
+                        self.width,
+                        self.height,
+                        base_x,
+                        base_y,
+                        (f32::from(drop.depth) * std::f32::consts::PI / 128.0).sin(),
+                    );
+                }
+                2 => set_pressure(
+                    field,
+                    self.width,
+                    self.height,
+                    base_x,
+                    base_y,
+                    amplitude * 0.25,
+                ),
+                3 => {
+                    drop.depth = drop.depth.wrapping_add(drop.bytes[3]);
+                    set_pressure(
+                        field,
+                        self.width,
+                        self.height,
+                        base_x,
+                        base_y,
+                        0.5 * (f32::from(drop.depth) * std::f32::consts::PI / 128.0).sin(),
+                    );
+                }
+                6 | 7 => {
+                    drop.depth = drop.depth.wrapping_add(drop.bytes[3]);
+                    let angle = f32::from(drop.depth) * std::f32::consts::TAU / 256.0;
+                    let radius = if drop.kind == 6 { 4.0 } else { 10.0 };
+                    let x = (base_x as f32 + angle.cos() * radius).round() as isize;
+                    let y = (base_y as f32 + angle.sin() * radius).round() as isize;
+                    set_pressure(
+                        field,
+                        self.width,
+                        self.height,
+                        x.rem_euclid(self.width as isize) as usize,
+                        y.rem_euclid(self.height as isize) as usize,
+                        angle.sin() * if drop.kind == 6 { 0.5 } else { 1.0 },
+                    );
+                }
+                12 => {
+                    drop.depth = drop.depth.wrapping_add(drop.bytes[3]);
+                    let pressure =
+                        (f32::from(drop.depth) * std::f32::consts::PI / 128.0).sin() * 0.5;
+                    let y = base_y.min(self.height - 1);
+                    for x in 0..self.width {
+                        field[x + y * self.width].pressure = pressure;
+                    }
+                }
+                16 => {
+                    self.random = self
+                        .random
+                        .wrapping_mul(1_664_525)
+                        .wrapping_add(1_013_904_223);
+                    if (self.random >> 24) as u8 <= drop.bytes[3] {
+                        let x = (self.random as usize) % self.width;
+                        let y = ((self.random >> 16) as usize) % self.height;
+                        set_pressure(field, self.width, self.height, x, y, amplitude);
+                    }
+                }
+                _ => unreachable!("validated water drop type"),
+            }
+        }
+    }
+
+    fn render_source(&mut self) {
+        let field = &self.fields[self.current];
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let left = if x == 0 { self.width - 1 } else { x - 1 };
+                let right = if x + 1 == self.width { 0 } else { x + 1 };
+                let displacement = ((field[right + y * self.width].pressure
+                    - field[left + y * self.width].pressure)
+                    * 0.25
+                    * self.width as f32) as isize;
+                let source_x = (x as isize + displacement).clamp(0, self.width as isize - 1);
+                self.indices[x + y * self.width] = self.source[source_x as usize + y * self.width];
+            }
+        }
+    }
+}
+
+fn decode_water_drops(count: usize, serialized: Vec<(usize, WaterDrop)>) -> Result<Vec<WaterDrop>> {
+    if count > 256 {
+        return Err(Error::InvalidWaterDropCount { count });
+    }
+    let available = serialized
+        .iter()
+        .filter(|(index, _)| *index < count)
+        .count();
+    let mut drops = vec![None; count];
+    for (index, drop) in serialized {
+        if let Some(destination) = drops.get_mut(index) {
+            *destination = Some(drop);
+        }
+    }
+    drops
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or(Error::MissingWaterDrops { count, available })
+}
+
+fn set_pressure(
+    field: &mut [WaterCell],
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    pressure: f32,
+) {
+    field[x.min(width - 1) + y.min(height - 1) * width].pressure = pressure;
+}
+
+fn rgba(indices: &[u8], palette: &Palette, masked: bool) -> Result<Vec<u8>> {
+    let mut rgba = Vec::with_capacity(indices.len() * 4);
+    for &index in indices {
+        let color =
+            palette
+                .colors
+                .get(usize::from(index))
+                .ok_or(Error::PaletteIndexOutOfRange {
+                    index,
+                    color_count: palette.colors.len(),
+                })?;
+        if masked && index == 0 {
+            rgba.extend_from_slice(&[0; 4]);
+        } else {
+            rgba.extend_from_slice(&[color.red, color.green, color.blue, 255]);
+        }
+    }
+    Ok(rgba)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -349,6 +650,7 @@ mod tests {
                 height_bits: 0,
                 indices: vec![0, 1],
             }],
+            wet: None,
         };
         let palette = Palette {
             colors: vec![
@@ -400,5 +702,28 @@ mod tests {
         super::render_fire_snapshot(&mut second, &sparks, 223, true);
         assert_eq!(first, second);
         assert!(first.indices.iter().any(|index| *index != 0));
+    }
+
+    #[test]
+    fn wet_texture_advances_at_a_stable_rate_and_displaces_its_source() {
+        let wet = super::WetTexture {
+            source_texture: ObjectReference::None,
+            drops: vec![super::WaterDrop {
+                kind: 1,
+                depth: 64,
+                x: 64,
+                y: 64,
+                bytes: [0, 0, 0, 16],
+            }],
+        };
+        let source = (0..2048)
+            .map(|index| (index % 256) as u8)
+            .collect::<Vec<_>>();
+        let mut animation = wet.animate(256, 8, &source).unwrap();
+
+        assert!(!animation.tick(1.0 / 60.0));
+        assert!(animation.tick(1.0 / 60.0));
+        assert_ne!(animation.indices, source);
+        assert_eq!(animation.indices.len(), source.len());
     }
 }

@@ -48,6 +48,28 @@ pub enum Error {
     #[error("fire spark count {count} overflows the host address space")]
     InvalidFireSparkCount { count: usize },
 
+    #[error("water drop {index} has {actual} bytes, expected 8")]
+    InvalidWaterDropLength { index: usize, actual: usize },
+
+    #[error("water texture has {count} drops, maximum is 256")]
+    InvalidWaterDropCount { count: usize },
+
+    #[error("water texture declares {count} drops but only {available} were serialized")]
+    MissingWaterDrops { count: usize, available: usize },
+
+    #[error("water texture dimensions must be nonzero, got {width}x{height}")]
+    InvalidWaterDimensions { width: u32, height: u32 },
+
+    #[error("water source is {width}x{height} but contains {actual} palette indices")]
+    InvalidWaterSourceLength {
+        width: u32,
+        height: u32,
+        actual: usize,
+    },
+
+    #[error("unsupported water drop type {0}")]
+    UnsupportedWaterDropType(u8),
+
     #[error("mip {mip_index} is {width}x{height} but contains {actual} palette indices")]
     InvalidMipLength {
         mip_index: usize,

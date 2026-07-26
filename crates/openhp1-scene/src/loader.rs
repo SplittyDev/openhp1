@@ -14,7 +14,7 @@ use openhp1_map::{
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
 use openhp1_script::class_defaults_reader;
-use openhp1_texture::{Palette, Texture, TextureRenderFlags};
+use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
 
 use crate::{
@@ -44,6 +44,7 @@ pub struct LoadedScene {
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
+    water_animations: Vec<AnimatedWaterTexture>,
 }
 
 impl LoadedScene {
@@ -103,7 +104,9 @@ impl LoadedScene {
                 .sky_zone(&package)
                 .context("failed to decode the sky zone")?
         };
-        let (mut textures, mut surface_materials) = load_materials(&mut packages, &package, &model);
+        let mut water_animations = Vec::new();
+        let (mut textures, mut surface_materials) =
+            load_materials(&mut packages, &package, &model, &mut water_animations);
         let textured_surfaces = surface_materials
             .iter()
             .filter(|material| material.texture.is_some())
@@ -141,6 +144,7 @@ impl LoadedScene {
             &mut textures,
             &mut surface_materials,
             &mut animations,
+            &mut water_animations,
         );
         let actor_meshes = actors.iter().filter(|actor| actor.render.is_some()).count();
         let animated_actor_meshes = actors
@@ -163,6 +167,7 @@ impl LoadedScene {
             has_sky_zone = sky_zone.is_some(),
             actor_meshes,
             animated_actor_meshes,
+            animated_water_textures = water_animations.len(),
             "loaded map"
         );
         if fake_backdrop_surfaces != 0 && sky_zone.is_none() {
@@ -197,6 +202,7 @@ impl LoadedScene {
             zone_nodes: model.nodes.clone(),
             zone_count: model.zones.len(),
             animations,
+            water_animations,
         })
     }
 
@@ -341,6 +347,18 @@ impl LoadedScene {
         Ok(changed)
     }
 
+    pub fn tick_water(&mut self, delta_time: f32) -> Result<Vec<usize>> {
+        let mut changed = Vec::new();
+        for water in &mut self.water_animations {
+            if water.animation.tick(delta_time) {
+                self.render.textures[water.texture].rgba =
+                    water.animation.rgba(&water.palette, water.masked)?;
+                changed.push(water.texture);
+            }
+        }
+        Ok(changed)
+    }
+
     pub fn loop_actor_animation(
         &mut self,
         actor_index: usize,
@@ -427,6 +445,13 @@ struct AnimatedActorMesh {
     normal_transform: Mat3,
     lighting: ActorVertexLighting,
     unlit: bool,
+}
+
+struct AnimatedWaterTexture {
+    texture: usize,
+    masked: bool,
+    palette: Palette,
+    animation: WaterAnimation,
 }
 
 impl AnimatedActorMesh {
@@ -613,6 +638,7 @@ fn load_actors(
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> Vec<SceneActor> {
     let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
     let mut mesh_cache = HashMap::<SceneObjectId, Option<Arc<Mesh>>>::new();
@@ -799,6 +825,7 @@ fn load_actors(
             &mut decoded_textures,
             &mut images,
             animations,
+            water_animations,
         ) {
             Ok(Some(appended)) => {
                 scene_actor.render = Some(appended.render);
@@ -927,6 +954,7 @@ fn append_actor_mesh(
     decoded_textures: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
     animations: &mut Vec<AnimatedActorMesh>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> Result<Option<AppendedActorMesh>> {
     let mesh_textures = mesh
         .textures
@@ -1001,6 +1029,7 @@ fn append_actor_mesh(
                 textures,
                 decoded_textures,
                 images,
+                water_animations,
             );
             let surface = materials.len();
             materials.push(material);
@@ -1082,6 +1111,7 @@ fn select_actor_texture(
     mesh_texture.or_else(|| actor.texture.clone())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn actor_surface_material(
     packages: &mut PackageStore,
     texture: Option<&SceneObject>,
@@ -1090,6 +1120,7 @@ fn actor_surface_material(
     textures: &mut Vec<TextureImage>,
     decoded: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> SurfaceMaterial {
     flags |= match actor.style {
         2 => 0x0000_0002,
@@ -1127,10 +1158,8 @@ fn actor_surface_material(
     let image = if let Some(index) = images.get(&image_key) {
         Some(*index)
     } else {
-        match texture.image(material.masked) {
-            Ok(image) => {
-                let index = textures.len();
-                textures.push(image);
+        match append_texture_image(textures, water_animations, texture, material.masked) {
+            Ok(index) => {
                 images.insert(image_key, index);
                 Some(index)
             }
@@ -1155,6 +1184,7 @@ fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize), Option<DecodedTexture>>::new();
@@ -1212,16 +1242,19 @@ fn load_materials(
         let texture_index = if let Some(index) = images.get(&image_key) {
             *index
         } else {
-            let image = match decoded_texture.image(material.masked) {
-                Ok(image) => image,
+            let index = match append_texture_image(
+                &mut textures,
+                water_animations,
+                decoded_texture,
+                material.masked,
+            ) {
+                Ok(index) => index,
                 Err(error) => {
                     warn!(surface_index, %error, "could not expand surface texture");
                     materials.push(material);
                     continue;
                 }
             };
-            let index = textures.len();
-            textures.push(image);
             images.insert(image_key, index);
             index
         };
@@ -1248,12 +1281,38 @@ fn decode_texture(
         .resolve(&resolved.package, texture.palette)?
         .context("texture has no palette reference")?;
     let palette = Palette::decode(&palette.package, palette.export_index)?;
-    Ok(DecodedTexture { texture, palette })
+    let water = if let Some(wet) = &texture.wet {
+        let source = packages
+            .resolve(&resolved.package, wet.source_texture)?
+            .context("wet texture has no source texture")?;
+        let source = Texture::decode(&source.package, source.export_index)?;
+        let source = source
+            .mips
+            .first()
+            .context("wet texture source has no mip levels")?;
+        ensure!(
+            source.width == mip.width && source.height == mip.height,
+            "wet texture source is {}x{}, expected {}x{}",
+            source.width,
+            source.height,
+            mip.width,
+            mip.height,
+        );
+        Some(wet.animate(mip.width, mip.height, &source.indices)?)
+    } else {
+        None
+    };
+    Ok(DecodedTexture {
+        texture,
+        palette,
+        water,
+    })
 }
 
 struct DecodedTexture {
     texture: Texture,
     palette: Palette,
+    water: Option<WaterAnimation>,
 }
 
 impl DecodedTexture {
@@ -1266,9 +1325,31 @@ impl DecodedTexture {
         Ok(TextureImage {
             width: mip.width,
             height: mip.height,
-            rgba: self.texture.rgba(0, &self.palette, masked)?,
+            rgba: match &self.water {
+                Some(water) => water.rgba(&self.palette, masked)?,
+                None => self.texture.rgba(0, &self.palette, masked)?,
+            },
         })
     }
+}
+
+fn append_texture_image(
+    textures: &mut Vec<TextureImage>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+    decoded: &DecodedTexture,
+    masked: bool,
+) -> Result<usize> {
+    let index = textures.len();
+    textures.push(decoded.image(masked)?);
+    if let Some(animation) = &decoded.water {
+        water_animations.push(AnimatedWaterTexture {
+            texture: index,
+            masked,
+            palette: decoded.palette.clone(),
+            animation: animation.clone(),
+        });
+    }
+    Ok(index)
 }
 
 fn surface_material(

@@ -20,26 +20,33 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut animated_maps = 0;
     let mut animated_actors = 0;
+    let mut water_maps = 0;
+    let mut water_textures = 0;
     for path in paths {
         let mut scene = LoadedScene::load(path)?;
-        if scene.animated_actor_meshes == 0 {
-            continue;
-        }
         let before = scene.render.mesh.positions.clone();
         scene.tick_animations(1.0 / 60.0)?;
+        let water = scene.tick_water(1.0 / 30.0)?;
+        if scene.animated_actor_meshes == 0 && water.is_empty() {
+            continue;
+        }
         let moved = before
             .iter()
             .zip(&scene.render.mesh.positions)
             .filter(|(before, after)| *before != *after)
             .count();
         println!(
-            "{}: {} animated actors, {moved} moved vertices",
+            "{}: {} animated actors, {moved} moved vertices, {} animated water textures",
             scene.path.display(),
-            scene.animated_actor_meshes
+            scene.animated_actor_meshes,
+            water.len(),
         );
-        animated_maps += 1;
+        animated_maps += usize::from(scene.animated_actor_meshes != 0);
         animated_actors += scene.animated_actor_meshes;
+        water_maps += usize::from(!water.is_empty());
+        water_textures += water.len();
     }
     println!("{animated_maps} maps contain {animated_actors} animated actors");
+    println!("{water_maps} maps contain {water_textures} animated water textures");
     Ok(())
 }
