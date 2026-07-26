@@ -29,9 +29,9 @@ impl SkeletalAnimation {
 
         let rotations = read_vec(&mut reader, "packed animation rotations", |reader| {
             let vector = Vec3::new(
-                f32::from(reader.read_i16()?) / 32_767.0,
-                f32::from(reader.read_i16()?) / 32_767.0,
-                f32::from(reader.read_i16()?) / 32_767.0,
+                unpack_rotation_component(reader.read_i16()?),
+                unpack_rotation_component(reader.read_i16()?),
+                unpack_rotation_component(reader.read_i16()?),
             );
             let squared = vector.length_squared();
             if !squared.is_finite() || squared > 1.001 {
@@ -272,6 +272,10 @@ fn read_moves(reader: &mut ObjectReader<'_>, bone_count: usize) -> Result<Vec<Mo
     })
 }
 
+fn unpack_rotation_component(value: i16) -> f32 {
+    (f32::from(value) * (std::f32::consts::FRAC_PI_2 / 32_767.0)).sin()
+}
+
 fn validate_track(rotations: usize, positions: usize, times: usize) -> Result<()> {
     let keyed = |count| count <= 1 || count == times;
     if !keyed(rotations) || !keyed(positions) || (times == 0 && (rotations > 1 || positions > 1)) {
@@ -349,7 +353,7 @@ mod tests {
         payload.push(8);
         push_f32(&mut payload, 2.0);
         payload.push(2);
-        for value in [0_i16, 0, 0, 0, 0, 23_170] {
+        for value in [0_i16, 0, 0, 0, 0, 16_384] {
             payload.extend(value.to_le_bytes());
         }
         payload.push(1);
@@ -380,6 +384,6 @@ mod tests {
             }]],
         };
         let sampled = animation.sample(&mesh, 0, 0.5).unwrap();
-        assert!(sampled[0].abs_diff_eq(Vec3::new(1.707, 0.707, 0.0), 0.002));
+        assert!(sampled[0].abs_diff_eq(Vec3::new(1.707, -0.707, 0.0), 0.002));
     }
 }

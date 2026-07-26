@@ -260,6 +260,7 @@ impl SkeletalAnimation {
         let mut global = Vec::with_capacity(mesh.bones.len());
         for (index, bone) in mesh.bones.iter().enumerate() {
             let (orientation, position) = local[index];
+            let orientation = orientation.conjugate();
             let transform = Mat4::from_rotation_translation(orientation, position);
             global.push(if bone.parent == index {
                 transform

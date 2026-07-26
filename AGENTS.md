@@ -329,7 +329,10 @@ the existing scene animation path. `PlaySound` remains a nonfatal actor
 diagnostic until audio exists. A five-second scan across all 41 maps resumes
 5,934 state frames, applies 564 of 590 requested animations, performs 961 actor
 relocations and 60,600 actor rotations, and destroys 92 actors. All 381 local
-HP1 `Animation` exports and their 1,188 sequences decode and sample.
+HP1 `Animation` exports and their 1,188 sequences decode and sample. Their
+packed quaternion components use a signed `sin(value * pi / (2 * 32767))`
+mapping, and ActorX bone orientations, including animated root orientations,
+must be conjugated before hierarchy composition.
 This is not general gameplay support yet.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
