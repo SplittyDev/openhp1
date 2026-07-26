@@ -61,6 +61,10 @@ impl PackageStore {
             .map(PathBuf::as_path)
     }
 
+    pub fn package_paths(&self) -> impl Iterator<Item = &Path> {
+        self.paths.values().map(PathBuf::as_path)
+    }
+
     pub fn load(&mut self, name: &str) -> ResolveResult<Arc<Package>> {
         let key = name.to_ascii_lowercase();
         if let Some(package) = self.loaded.get(&key) {

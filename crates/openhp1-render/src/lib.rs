@@ -6,6 +6,6 @@ mod renderer;
 mod scene;
 
 pub use camera::{Camera, SceneBounds};
-pub use coordinates::unreal_to_render;
-pub use renderer::Renderer;
+pub use coordinates::{render_to_unreal, unreal_to_render};
+pub use renderer::{RenderStats, Renderer};
 pub use scene::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};

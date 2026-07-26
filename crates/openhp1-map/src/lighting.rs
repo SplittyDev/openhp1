@@ -353,26 +353,7 @@ impl Model {
     }
 
     pub fn zone_at(&self, point: Vec3) -> usize {
-        let mut node_index = 0;
-        loop {
-            let Some(node) = self.nodes.get(node_index) else {
-                return 0;
-            };
-            let side = plane_side(node.plane, point);
-            let child = if side >= 0.0 { node.front } else { node.back };
-            if let Ok(child) = usize::try_from(child) {
-                node_index = child;
-                continue;
-            }
-            return usize::try_from(if side >= 0.0 {
-                node.zones[1]
-            } else {
-                node.zones[0]
-            })
-            .ok()
-            .filter(|zone| *zone < self.zones.len())
-            .unwrap_or(0);
-        }
+        bsp_zone_at(&self.nodes, self.zones.len(), point)
     }
 
     fn blocks_light(&self, from: Vec3, to: Vec3) -> bool {
@@ -512,6 +493,29 @@ impl VertexLighting {
             scale_glow,
             lights,
         }
+    }
+}
+
+pub fn bsp_zone_at(nodes: &[crate::BspNode], zone_count: usize, point: Vec3) -> usize {
+    let mut node_index = 0;
+    loop {
+        let Some(node) = nodes.get(node_index) else {
+            return 0;
+        };
+        let side = plane_side(node.plane, point);
+        let child = if side >= 0.0 { node.front } else { node.back };
+        if let Ok(child) = usize::try_from(child) {
+            node_index = child;
+            continue;
+        }
+        return usize::try_from(if side >= 0.0 {
+            node.zones[1]
+        } else {
+            node.zones[0]
+        })
+        .ok()
+        .filter(|zone| *zone < zone_count)
+        .unwrap_or(0);
     }
 }
 
@@ -834,6 +838,28 @@ fn lightmap_image(width: usize, height: usize, pixels: &[Vec3]) -> LightmapImage
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_zone_on_each_side_of_a_bsp_leaf() {
+        let node = crate::BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: 0,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [2, 1],
+            vertex_count: 0,
+            leaves: [-1; 2],
+        };
+        let nodes = [node];
+        assert_eq!(bsp_zone_at(&nodes, 3, Vec3::X), 1);
+        assert_eq!(bsp_zone_at(&nodes, 3, -Vec3::X), 2);
+    }
 
     #[test]
     fn shadow_mask_uses_little_endian_bits_and_ue1_blur() {

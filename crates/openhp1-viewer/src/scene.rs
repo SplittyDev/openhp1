@@ -1,20 +1,28 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
-use openhp1_map::{Actor, ActorProperties, Level, Model, PolyFlags, Rotator, VertexLighting};
+use openhp1_map::{
+    Actor, ActorProperties, BspNode, Level, Model, PolyFlags, Rotator, VertexLighting, bsp_zone_at,
+};
 use openhp1_mesh::Mesh;
 use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, ResolvedObject};
-use openhp1_render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
+use openhp1_render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal};
 use openhp1_texture::{Palette, Texture, TextureRenderFlags};
 use tracing::{info, warn};
 
 pub(crate) struct LoadedScene {
     pub(crate) path: PathBuf,
+    pub(crate) levels: Vec<PathBuf>,
     pub(crate) render: RenderScene,
     pub(crate) points: usize,
     pub(crate) nodes: usize,
     pub(crate) surfaces: usize,
+    pub(crate) visible_bsp_surfaces: usize,
     pub(crate) textured_surfaces: usize,
     pub(crate) masked_surfaces: usize,
     pub(crate) translucent_surfaces: usize,
@@ -22,16 +30,36 @@ pub(crate) struct LoadedScene {
     pub(crate) fake_backdrop_surfaces: usize,
     pub(crate) has_sky_zone: bool,
     pub(crate) actor_meshes: usize,
+    zone_nodes: Vec<BspNode>,
+    zone_count: usize,
 }
 
 impl LoadedScene {
     pub(crate) fn load(path: PathBuf) -> Result<Self> {
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("failed to locate {}", path.display()))?;
         let game_root = path
             .parent()
             .and_then(|directory| directory.parent())
             .context("map path must be inside the game's Maps directory")?;
         let mut packages =
             PackageStore::scan_game_root(game_root).context("failed to discover game packages")?;
+        let map_directory = path.parent().expect("validated map path");
+        let mut levels = packages
+            .package_paths()
+            .filter_map(|candidate| candidate.canonicalize().ok())
+            .filter(|candidate| candidate.parent() == Some(map_directory))
+            .collect::<Vec<_>>();
+        if !levels.contains(&path) {
+            levels.push(path.clone());
+        }
+        levels.sort_by_cached_key(|level| {
+            level
+                .file_name()
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default()
+        });
         let package = packages
             .load_path(&path)
             .with_context(|| format!("failed to open {}", path.display()))?;
@@ -80,6 +108,13 @@ impl LoadedScene {
             .iter()
             .filter(|material| material.mode == SurfaceMode::Modulated)
             .count();
+        let visible_bsp_surfaces = mesh
+            .triangle_surfaces
+            .iter()
+            .copied()
+            .filter(|&surface| surface_materials[surface].mode != SurfaceMode::Hidden)
+            .collect::<HashSet<_>>()
+            .len();
         let actor_meshes = load_actor_meshes(
             &mut packages,
             &package,
@@ -115,6 +150,7 @@ impl LoadedScene {
         }
         Ok(Self {
             path,
+            levels,
             render: RenderScene {
                 mesh,
                 textures,
@@ -125,6 +161,7 @@ impl LoadedScene {
             points: model.points.len(),
             nodes: model.nodes.len(),
             surfaces: model.surfaces.len(),
+            visible_bsp_surfaces,
             textured_surfaces,
             masked_surfaces,
             translucent_surfaces,
@@ -132,7 +169,17 @@ impl LoadedScene {
             fake_backdrop_surfaces,
             has_sky_zone: sky_zone.is_some(),
             actor_meshes,
+            zone_nodes: model.nodes.clone(),
+            zone_count: model.zones.len(),
         })
+    }
+
+    pub(crate) fn zone_at(&self, render_position: Vec3) -> usize {
+        bsp_zone_at(
+            &self.zone_nodes,
+            self.zone_count,
+            render_to_unreal(render_position),
+        )
     }
 }
 

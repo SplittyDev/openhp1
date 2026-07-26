@@ -12,6 +12,13 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 24;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderStats {
+    pub draw_calls: usize,
+    pub texture_memory_bytes: usize,
+    pub lightmap_memory_bytes: usize,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
@@ -54,6 +61,7 @@ pub struct Renderer {
     sky_sampler: wgpu::Sampler,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
+    stats: RenderStats,
 }
 
 impl Renderer {
@@ -287,6 +295,16 @@ impl Renderer {
             &lightmap_atlas.image,
         );
         let checkerboard = checkerboard();
+        let stats = RenderStats {
+            draw_calls: 0,
+            texture_memory_bytes: scene
+                .textures
+                .iter()
+                .map(|texture| texture.rgba.len())
+                .sum::<usize>()
+                + checkerboard.rgba.len(),
+            lightmap_memory_bytes: lightmap_atlas.image.rgba.len(),
+        };
         let texture_bind_groups = scene
             .textures
             .iter()
@@ -370,6 +388,7 @@ impl Renderer {
             sky_sampler,
             lightmap_view,
             lightmap_sampler,
+            stats,
         }
     }
 
@@ -402,7 +421,8 @@ impl Renderer {
         camera: &Camera,
         viewport_size: [u32; 2],
         brightness: f32,
-    ) {
+    ) -> RenderStats {
+        let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
         let display_gamma = [display_gamma(brightness), 0.0, 0.0, 0.0];
         queue.write_buffer(
@@ -477,7 +497,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_scene(
+            draw_calls += self.draw_scene(
                 &mut pass,
                 sky_camera_bind_group,
                 sky_blended_index_buffer,
@@ -509,13 +529,17 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        self.draw_scene(
+        draw_calls += self.draw_scene(
             &mut pass,
             &self.camera_bind_group,
             &self.blended_index_buffer,
             &blended_batches,
             self.sky_target.as_ref().map(|target| &target.bind_group),
         );
+        RenderStats {
+            draw_calls,
+            ..self.stats
+        }
     }
 
     fn draw_scene<'pass>(
@@ -525,7 +549,8 @@ impl Renderer {
         blended_index_buffer: &'pass wgpu::Buffer,
         blended_batches: &[DrawBatch],
         backdrop_bind_group: Option<&'pass wgpu::BindGroup>,
-    ) {
+    ) -> usize {
+        let mut draw_calls = 0;
         pass.set_bind_group(0, camera_bind_group, &[]);
         if !self.opaque_batches.is_empty()
             || !blended_batches.is_empty()
@@ -542,6 +567,7 @@ impl Renderer {
                 pass.set_pipeline(&self.pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                draw_calls += 1;
             }
         }
         if let Some(backdrop_bind_group) = backdrop_bind_group
@@ -555,6 +581,7 @@ impl Renderer {
             for batch in &self.backdrop_batches {
                 pass.set_pipeline(&self.backdrop_pipelines[batch.pipeline]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                draw_calls += 1;
             }
         }
         if !blended_batches.is_empty() {
@@ -563,8 +590,10 @@ impl Renderer {
                 pass.set_pipeline(&self.pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                draw_calls += 1;
             }
         }
+        draw_calls
     }
 }
 
