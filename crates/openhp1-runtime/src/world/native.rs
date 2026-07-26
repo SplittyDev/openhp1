@@ -124,11 +124,12 @@ impl ScriptRuntime {
             && let [name, rest @ ..] = arguments
         {
             let name = runtime_name(source, name)?;
-            let rate = animation_rate("PlayAnim", rest)?;
+            let (rate, tween_time) = animation_parameters("PlayAnim", rest)?;
             actions.push(ActorAction::PlayAnimation {
                 actor,
                 sequence: name,
                 rate,
+                tween_time,
             });
             return Ok(Value::None);
         }
@@ -136,11 +137,12 @@ impl ScriptRuntime {
             && let [name, rest @ ..] = arguments
         {
             let name = runtime_name(source, name)?;
-            let rate = animation_rate("LoopAnim", rest)?;
+            let (rate, tween_time) = animation_parameters("LoopAnim", rest)?;
             actions.push(ActorAction::LoopAnimation {
                 actor,
                 sequence: name,
                 rate,
+                tween_time,
             });
             return Ok(Value::None);
         }
@@ -294,13 +296,20 @@ impl ScriptRuntime {
     }
 }
 
-fn animation_rate(name: &str, arguments: &[Value]) -> std::result::Result<f32, String> {
-    match arguments.first() {
-        Some(Value::Float(rate)) if rate.is_finite() => Ok(*rate),
-        Some(Value::Float(_)) => Err(format!("{name} rate is not finite")),
-        Some(Value::None) | None => Ok(1.0),
-        Some(value) => Err(format!("{name} rate is {}", value.kind())),
-    }
+pub(super) fn animation_parameters(
+    name: &str,
+    arguments: &[Value],
+) -> std::result::Result<(f32, f32), String> {
+    let parameter = |index, label, default| match arguments.get(index) {
+        Some(Value::Float(value)) if value.is_finite() => Ok(*value),
+        Some(Value::Float(_)) => Err(format!("{name} {label} is not finite")),
+        Some(Value::None) | None => Ok(default),
+        Some(value) => Err(format!("{name} {label} is {}", value.kind())),
+    };
+    Ok((
+        parameter(0, "rate", 1.0)?,
+        parameter(1, "tween time", 0.0)?.max(0.0),
+    ))
 }
 
 pub(super) fn runtime_name(source: &Package, value: &Value) -> std::result::Result<String, String> {

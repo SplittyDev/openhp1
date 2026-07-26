@@ -321,18 +321,30 @@ impl LoadedScene {
         let mut changed = false;
         let mut completed = Vec::new();
         for animation in &mut self.animations {
-            if !animation.playing || animation.rate == 0.0 {
+            if !animation.playing || animation.rate == 0.0 && animation.tween_from.is_none() {
                 continue;
             }
             changed = true;
-            let (phase, finished, playing) = advance_animation(
-                animation.phase,
-                animation.rate,
-                delta_time,
-                animation.looping,
-            );
-            animation.phase = phase;
-            animation.playing = playing;
+            let tween = animation.tween_from.as_ref().map(|_| {
+                animation.tween_elapsed =
+                    (animation.tween_elapsed + delta_time).min(animation.tween_duration);
+                animation.tween_elapsed / animation.tween_duration
+            });
+            let finished = if tween.is_none() {
+                let frame_count = animation.sequences()[animation.sequence].frame_count;
+                let (phase, finished, playing) = advance_animation(
+                    animation.phase,
+                    animation.rate,
+                    delta_time,
+                    animation.looping,
+                    frame_count,
+                );
+                animation.phase = phase;
+                animation.playing = playing;
+                finished
+            } else {
+                false
+            };
             if finished {
                 completed.push(animation.actor_index);
             }
@@ -350,16 +362,25 @@ impl LoadedScene {
                 triangles.len() * 3 == animation.vertices.len(),
                 "animation changed actor vertex count"
             );
-            for (destination, vertex) in animation
+            for (index, (destination, vertex)) in animation
                 .vertices
                 .clone()
                 .zip(triangles.into_iter().flat_map(|triangle| triangle.vertices))
+                .enumerate()
             {
-                let position = animation.transform.transform_point3(vertex.position);
+                let target = animation.transform.transform_point3(vertex.position);
+                let position = animation
+                    .tween_from
+                    .as_ref()
+                    .zip(tween)
+                    .map_or(target, |(from, tween)| from[index].lerp(target, tween));
                 let normal = (animation.normal_transform * vertex.normal).normalize_or_zero();
                 self.render.mesh.positions[destination] = position;
                 self.render.mesh.vertex_colors[destination] =
                     animation.lighting.color(position, normal, animation.unlit);
+            }
+            if tween == Some(1.0) {
+                animation.tween_from = None;
             }
         }
         Ok((changed, completed))
@@ -383,7 +404,17 @@ impl LoadedScene {
         sequence_name: &str,
         relative_rate: f32,
     ) -> Result<bool> {
-        self.set_actor_animation(actor_index, sequence_name, relative_rate, true)
+        self.loop_actor_animation_with_tween(actor_index, sequence_name, relative_rate, 0.0)
+    }
+
+    pub fn loop_actor_animation_with_tween(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+        tween_time: f32,
+    ) -> Result<bool> {
+        self.set_actor_animation(actor_index, sequence_name, relative_rate, tween_time, true)
     }
 
     pub fn play_actor_animation(
@@ -392,14 +423,36 @@ impl LoadedScene {
         sequence_name: &str,
         relative_rate: f32,
     ) -> Result<bool> {
-        self.set_actor_animation(actor_index, sequence_name, relative_rate, false)
+        self.play_actor_animation_with_tween(actor_index, sequence_name, relative_rate, 0.0)
+    }
+
+    pub fn play_actor_animation_with_tween(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+        tween_time: f32,
+    ) -> Result<bool> {
+        self.set_actor_animation(actor_index, sequence_name, relative_rate, tween_time, false)
     }
 
     pub fn actor_animation_playing(&self, actor_index: usize) -> bool {
         self.animations
             .iter()
             .find(|animation| animation.actor_index == actor_index)
-            .is_some_and(|animation| animation.playing && animation.rate != 0.0)
+            .is_some_and(|animation| {
+                animation.playing && (animation.rate != 0.0 || animation.tween_from.is_some())
+            })
+    }
+
+    pub fn finish_actor_animation(&mut self, actor_index: usize) {
+        if let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        {
+            animation.looping = false;
+        }
     }
 
     fn set_actor_animation(
@@ -407,9 +460,11 @@ impl LoadedScene {
         actor_index: usize,
         sequence_name: &str,
         relative_rate: f32,
+        tween_time: f32,
         looping: bool,
     ) -> Result<bool> {
         ensure!(relative_rate.is_finite(), "animation rate is not finite");
+        ensure!(tween_time.is_finite(), "animation tween time is not finite");
         let Some(animation) = self
             .animations
             .iter_mut()
@@ -424,10 +479,33 @@ impl LoadedScene {
         else {
             return Ok(false);
         };
+        if looping
+            && animation.sequence == sequence
+            && animation.looping
+            && animation.playing
+            && animation.rate != 0.0
+        {
+            let source = &animation.sequences()[sequence];
+            animation.rate = relative_rate * source.rate / source.frame_count.max(1) as f32;
+            if let Some(actor_animation) = self
+                .actors
+                .get_mut(actor_index)
+                .and_then(|actor| actor.animation.as_mut())
+            {
+                actor_animation.rate = animation.rate;
+            }
+            return Ok(true);
+        }
         let source = &animation.sequences()[sequence];
         let source_name = source.name.clone();
         let source_rate = source.rate;
         let source_frames = source.frame_count;
+        // ponytail: keep the displayed render-space pose until moving actors need
+        // concurrent root-motion tweening.
+        animation.tween_from = (tween_time > 0.0)
+            .then(|| self.render.mesh.positions[animation.vertices.clone()].to_vec());
+        animation.tween_elapsed = 0.0;
+        animation.tween_duration = tween_time;
         animation.sequence = sequence;
         animation.phase = 0.0;
         animation.rate = relative_rate * source_rate / source_frames.max(1) as f32;
@@ -450,15 +528,30 @@ impl LoadedScene {
     }
 }
 
-fn advance_animation(phase: f32, rate: f32, delta_time: f32, looping: bool) -> (f32, bool, bool) {
-    let phase = phase + rate * delta_time;
-    if phase < 1.0 {
-        return (phase.rem_euclid(1.0), false, true);
-    }
-    if looping {
-        (phase.rem_euclid(1.0), true, true)
+fn advance_animation(
+    phase: f32,
+    rate: f32,
+    delta_time: f32,
+    looping: bool,
+    frame_count: usize,
+) -> (f32, bool, bool) {
+    let last = if frame_count > 1 {
+        1.0 - 1.0 / frame_count as f32
     } else {
-        (1.0 - f32::EPSILON, true, false)
+        1.0 - f32::EPSILON
+    };
+    let next = phase + rate * delta_time;
+    if looping {
+        let finished = phase < last && next >= last || phase >= last && next >= 1.0 + last;
+        (
+            if finished { last } else { next.rem_euclid(1.0) },
+            finished,
+            true,
+        )
+    } else if next >= last {
+        (last, true, false)
+    } else {
+        (next.rem_euclid(1.0), false, true)
     }
 }
 
@@ -498,6 +591,9 @@ struct AnimatedActorMesh {
     rate: f32,
     playing: bool,
     looping: bool,
+    tween_from: Option<Vec<Vec3>>,
+    tween_elapsed: f32,
+    tween_duration: f32,
     vertices: Range<usize>,
     transform: Mat4,
     normal_transform: Mat3,
@@ -1136,6 +1232,9 @@ fn append_actor_mesh(
             rate: animation.as_ref().map_or(0.0, |animation| animation.rate),
             playing: animation.is_some(),
             looping: true,
+            tween_from: None,
+            tween_elapsed: 0.0,
+            tween_duration: 0.0,
             vertices: first_vertex..render_mesh.positions.len(),
             transform,
             normal_transform,
@@ -1531,11 +1630,14 @@ mod tests {
 
     #[test]
     fn one_shot_animations_finish_while_loops_wrap() {
-        let one_shot = super::advance_animation(0.75, 1.0, 0.5, false);
-        assert_eq!(one_shot, (1.0 - f32::EPSILON, true, false));
+        let one_shot = super::advance_animation(0.5, 1.0, 0.5, false, 4);
+        assert_eq!(one_shot, (0.75, true, false));
 
-        let looping = super::advance_animation(0.75, 1.0, 0.5, true);
-        assert_eq!(looping, (0.25, true, true));
+        let looping = super::advance_animation(0.5, 1.0, 0.3, true, 4);
+        assert_eq!(looping, (0.75, true, true));
+        let wrapped = super::advance_animation(0.75, 1.0, 0.3, true, 4);
+        assert!((wrapped.0 - 0.05).abs() < f32::EPSILON);
+        assert_eq!((wrapped.1, wrapped.2), (false, true));
     }
 
     #[test]

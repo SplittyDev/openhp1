@@ -571,8 +571,9 @@ fn apply_runtime_actions(
                 actor,
                 sequence,
                 rate,
+                tween_time,
             } => {
-                if scene.play_actor_animation(actor, &sequence, rate)? {
+                if scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
                     animations += 1;
                 } else {
                     scene.actors[actor]
@@ -584,8 +585,9 @@ fn apply_runtime_actions(
                 actor,
                 sequence,
                 rate,
+                tween_time,
             } => {
-                if scene.loop_actor_animation(actor, &sequence, rate)? {
+                if scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
                     animations += 1;
                 } else {
                     scene.actors[actor]
@@ -594,6 +596,7 @@ fn apply_runtime_actions(
                 }
             }
             ActorAction::AwaitAnimation { actor } => {
+                scene.finish_actor_animation(actor);
                 if !scene.actor_animation_playing(actor) {
                     actions.extend(runtime.animation_finished(actor)?);
                 }

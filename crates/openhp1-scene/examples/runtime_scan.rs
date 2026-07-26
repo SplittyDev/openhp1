@@ -182,9 +182,10 @@ fn apply_actions(
                 actor,
                 sequence,
                 rate,
+                tween_time,
             } => {
                 stats.animations_requested += 1;
-                if scene.play_actor_animation(actor, &sequence, rate)? {
+                if scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
                 } else {
@@ -195,9 +196,10 @@ fn apply_actions(
                 actor,
                 sequence,
                 rate,
+                tween_time,
             } => {
                 stats.animations_requested += 1;
-                if scene.loop_actor_animation(actor, &sequence, rate)? {
+                if scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
                 } else {
@@ -205,6 +207,7 @@ fn apply_actions(
                 }
             }
             ActorAction::AwaitAnimation { actor } => {
+                scene.finish_actor_animation(actor);
                 if !scene.actor_animation_playing(actor) {
                     actions.extend(runtime.animation_finished(actor)?);
                 }

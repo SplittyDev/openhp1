@@ -116,11 +116,13 @@ pub enum ActorAction {
         actor: usize,
         sequence: String,
         rate: f32,
+        tween_time: f32,
     },
     LoopAnimation {
         actor: usize,
         sequence: String,
         rate: f32,
+        tween_time: f32,
     },
     AwaitAnimation {
         actor: usize,
@@ -321,7 +323,9 @@ mod tests {
     use super::*;
     use super::{
         actor::advance_timer,
-        native::{collision_updates, random_float, random_int, scalar_native},
+        native::{
+            animation_parameters, collision_updates, random_float, random_int, scalar_native,
+        },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
 
@@ -430,6 +434,15 @@ mod tests {
             assert!((0.0..1.0).contains(&random_float(&mut state)));
         }
         assert_eq!(random_int(&mut state, 0), 0);
+    }
+
+    #[test]
+    fn animation_parameters_preserve_optional_tween_time() {
+        assert_eq!(
+            animation_parameters("LoopAnim", &[Value::None, Value::Float(0.5)]),
+            Ok((1.0, 0.5))
+        );
+        assert_eq!(animation_parameters("PlayAnim", &[]), Ok((1.0, 0.0)));
     }
 
     #[test]

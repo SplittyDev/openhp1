@@ -328,9 +328,13 @@ animation ticks. The viewer registers every actor, dispatches actor lifecycle,
 tick, timer, and persistent state code, and uploads supported runtime actions.
 State frames retain their instruction pointer and locals across `Sleep` and
 `FinishAnim`; `GotoState`, `GotoLabel`, `Stop`, `PlayAnim`, and `LoopAnim` use
-the existing scene animation path. `PlaySound` remains a nonfatal actor
-diagnostic until audio exists. A five-second scan across all 41 maps resumes
-7,108 state frames, applies 1,279 of 1,305 requested animations, performs 961 actor
+the existing scene animation path. Animation completion occurs at UE1's
+`AnimLast` frame rather than after the sampler wraps toward frame zero,
+repeated `LoopAnim` calls preserve phase, and `FinishAnim` ends the current
+loop. `PlayAnim` and `LoopAnim` honor their tween-time argument by blending
+from the displayed pose. `PlaySound` remains a nonfatal actor diagnostic until
+audio exists. A five-second scan across all 41 maps resumes 6,887 state frames,
+applies 1,183 of 1,209 requested animations, performs 961 actor
 relocations and 60,600 actor rotations, and destroys 92 actors. All 381 local
 HP1 `Animation` exports and their 1,188 sequences decode and sample. Their
 packed quaternion components use a signed `sin(value * pi / (2 * 32767))`
