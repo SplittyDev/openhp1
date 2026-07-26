@@ -305,8 +305,10 @@ actor. The viewer provides a searchable actor inspector, while visible vertex
 and skeletal meshes remain batched into the shared render mesh.
 All 6,816 script struct exports in the 248-package corpus decode into canonical
 UE1 execution bytecode. The initial runtime executes assignments, constants,
-branches, scalar natives, and final/virtual/global call dispatch with a checked
-step limit. Function arguments bind through decoded property metadata, actor
+branches, scalar/vector arithmetic natives, and final/virtual/global call
+dispatch with a checked step limit. Compound float/vector operators preserve
+and update their target lvalues. Function arguments bind through decoded
+property metadata, actor
 instance values persist across calls by resolved package/export field identity,
 and null or self object contexts execute safely. Vector/rotator struct-member
 reads and writes preserve lvalue behavior, including zero-initialized

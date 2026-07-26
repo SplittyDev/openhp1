@@ -452,15 +452,40 @@ impl<'a> Frame<'a> {
     ) -> Result<Value> {
         let mut arguments = Vec::new();
         while self.peek()? != 0x16 {
-            let argument = self.expression(host)?;
-            arguments.push(self.value(argument, host)?);
+            arguments.push(self.expression(host)?);
         }
         self.opcode()?;
+        if let FunctionCall::Native(index) = function
+            && is_compound_assignment(index)
+        {
+            let [target, operand] =
+                arguments
+                    .try_into()
+                    .map_err(|arguments: Vec<_>| Error::Call {
+                        call: function,
+                        message: format!(
+                            "compound assignment expects 2 arguments, found {}",
+                            arguments.len()
+                        ),
+                    })?;
+            let current = match &target {
+                Expression::Value(value) => value.clone(),
+                Expression::Slot(slot) => self.slot(slot, host)?.unwrap_or(Value::None),
+            };
+            let operand = self.value(operand, host)?;
+            let value = compound_assignment(index, &current, &operand)?;
+            self.assign(target, value.clone(), host)?;
+            return Ok(value);
+        }
+        let mut values = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            values.push(self.value(argument, host)?);
+        }
         host(
             FrameRequest::Call {
                 receiver: self.current_context,
                 function,
-                arguments,
+                arguments: values,
             },
             &mut self.instance,
         )
@@ -695,6 +720,41 @@ impl StructMember {
     }
 }
 
+fn is_compound_assignment(index: u16) -> bool {
+    matches!(index, 0xb6..=0xb9 | 0xdd..=0xe0)
+}
+
+fn compound_assignment(index: u16, left: &Value, right: &Value) -> Result<Value> {
+    Ok(match (index, left, right) {
+        (0xb6, Value::Float(left), Value::Float(right)) => Value::Float(left * right),
+        (0xb7, Value::Float(left), Value::Float(right)) => Value::Float(left / right),
+        (0xb8, Value::Float(left), Value::Float(right)) => Value::Float(left + right),
+        (0xb9, Value::Float(left), Value::Float(right)) => Value::Float(left - right),
+        (0xdd, Value::Vector(left), Value::Float(right)) => {
+            Value::Vector([left[0] * right, left[1] * right, left[2] * right])
+        }
+        (0xde, Value::Vector(left), Value::Float(right)) => {
+            Value::Vector([left[0] / right, left[1] / right, left[2] / right])
+        }
+        (0xdf, Value::Vector(left), Value::Vector(right)) => {
+            Value::Vector([left[0] + right[0], left[1] + right[1], left[2] + right[2]])
+        }
+        (0xe0, Value::Vector(left), Value::Vector(right)) => {
+            Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]])
+        }
+        (_, left, right) => {
+            return Err(Error::Type {
+                expected: "matching compound arithmetic operands",
+                actual: if left.kind() != "none" {
+                    left.kind()
+                } else {
+                    right.kind()
+                },
+            });
+        }
+    })
+}
+
 fn convert(opcode: u8, value: Value) -> Result<Value> {
     Ok(match (opcode, value) {
         (0x3a, Value::Byte(value)) => Value::Int(i32::from(value)),
@@ -813,6 +873,29 @@ mod tests {
             Value::Float(42.0)
         );
         assert_eq!(frame.local(7), Some(&Value::Vector([1.0, 2.0, 42.0])));
+    }
+
+    #[test]
+    fn compound_native_assignment_preserves_the_target_slot() {
+        let mut bytes = vec![0xb8, 0x00];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(2.5_f32.to_le_bytes());
+        bytes.extend([0x16, 0x04, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Float(1.5));
+        assert_eq!(
+            frame.execute(|_, _| unreachable!()).unwrap(),
+            Value::Float(4.0)
+        );
+        assert_eq!(frame.local(7), Some(&Value::Float(4.0)));
     }
 
     #[test]

@@ -1182,6 +1182,17 @@ fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Result<Value, 
         (0xaf, [Value::Float(left), Value::Float(right)]) => Value::Float(left - right),
         (0xb0, [Value::Float(left), Value::Float(right)]) => Value::Bool(left < right),
         (0xb1, [Value::Float(left), Value::Float(right)]) => Value::Bool(left > right),
+        (0xd3, [Value::Vector(value)]) => Value::Vector([-value[0], -value[1], -value[2]]),
+        (0xd4, [Value::Vector(value), Value::Float(scale)])
+        | (0xd5, [Value::Float(scale), Value::Vector(value)]) => {
+            Value::Vector([value[0] * scale, value[1] * scale, value[2] * scale])
+        }
+        (0xd6, [Value::Vector(value), Value::Float(divisor)]) => {
+            Value::Vector([value[0] / divisor, value[1] / divisor, value[2] / divisor])
+        }
+        (0xd7, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Vector([left[0] + right[0], left[1] + right[1], left[2] + right[2]])
+        }
         (0xd8, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]])
         }
@@ -1262,6 +1273,24 @@ mod tests {
         assert_eq!(
             scalar_native(0xf5, &[Value::Float(2.0), Value::Float(f32::NAN)]),
             Ok(Value::Float(2.0))
+        );
+    }
+
+    #[test]
+    fn basic_vector_arithmetic_matches_unreal_natives() {
+        assert_eq!(
+            scalar_native(
+                0xd7,
+                &[
+                    Value::Vector([1.0, 2.0, 3.0]),
+                    Value::Vector([4.0, 5.0, 6.0])
+                ]
+            ),
+            Ok(Value::Vector([5.0, 7.0, 9.0]))
+        );
+        assert_eq!(
+            scalar_native(0xd4, &[Value::Vector([1.0, 2.0, 3.0]), Value::Float(2.0)]),
+            Ok(Value::Vector([2.0, 4.0, 6.0]))
         );
     }
 }
