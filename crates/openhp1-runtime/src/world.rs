@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::{Frame, FrameRequest, FunctionCall, StructMember, Value};
 
 const LOOP_ANIM: u16 = 0x104;
+const SET_COLLISION: u16 = 0x106;
 const SET_TIMER: u16 = 0x118;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
@@ -317,9 +318,11 @@ impl ScriptRuntime {
             return self
                 .native(
                     actor,
+                    actor_class,
                     &function.package,
                     metadata.native_index,
                     arguments,
+                    instance,
                     actions,
                 )
                 .map_err(|message| crate::Error::Call {
@@ -396,7 +399,15 @@ impl ScriptRuntime {
     ) -> DispatchResult<Value> {
         match call {
             FunctionCall::Native(index) => self
-                .native(actor, source, index, arguments, actions)
+                .native(
+                    actor,
+                    actor_class,
+                    source,
+                    index,
+                    arguments,
+                    instance,
+                    actions,
+                )
                 .map_err(|message| crate::Error::Call { call, message }.into()),
             FunctionCall::Final(index) => {
                 let reference = object_reference(index);
@@ -585,12 +596,15 @@ impl ScriptRuntime {
             .ok_or(DispatchError::InvalidActorHandle { handle })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn native(
         &mut self,
         actor: usize,
+        actor_class: &ResolvedObject,
         source: &Arc<Package>,
         index: u16,
         arguments: &[Value],
+        instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<Value, String> {
         if index == LOOP_ANIM
@@ -641,6 +655,23 @@ impl ScriptRuntime {
                     looping,
                 },
             );
+            return Ok(Value::None);
+        }
+        if index == SET_COLLISION {
+            for (name, value) in ["bCollideActors", "bBlockActors", "bBlockPlayers"]
+                .into_iter()
+                .zip(collision_updates(arguments)?)
+            {
+                let Some(value) = value else {
+                    continue;
+                };
+                let field = self
+                    .find_property(actor_class, name, 0)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("SetCollision property {name} is missing"))?;
+                instance.insert(field, StoredValue::Value(Value::Bool(value)));
+            }
+            // ponytail: these flags become collision behavior when BSP movement exists.
             return Ok(Value::None);
         }
         scalar_native(index, arguments)
@@ -1075,7 +1106,38 @@ fn runtime_name(source: &Package, value: &Value) -> std::result::Result<String, 
     }
 }
 
+fn collision_updates(arguments: &[Value]) -> std::result::Result<[Option<bool>; 3], String> {
+    if arguments.len() > 3 {
+        return Err(format!(
+            "SetCollision expects at most 3 arguments, found {}",
+            arguments.len()
+        ));
+    }
+    let mut updates = [None; 3];
+    for (update, argument) in updates.iter_mut().zip(arguments) {
+        match argument {
+            Value::Bool(value) => *update = Some(*value),
+            Value::None => {}
+            value => return Err(format!("SetCollision flag is {}", value.kind())),
+        }
+    }
+    Ok(updates)
+}
+
 fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Result<Value, String> {
+    if index == 0xf5 {
+        let [Value::Float(left), Value::Float(right)] = arguments else {
+            return Err(format!(
+                "FMax expects two floats, found {}",
+                arguments
+                    .iter()
+                    .map(Value::kind)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        return Ok(Value::Float(if left < right { *right } else { *left }));
+    }
     if matches!(index, 0x72 | 0x77)
         && let [left, right] = arguments
         && let (Some(left), Some(right)) = (object_value(left), object_value(right))
@@ -1180,5 +1242,26 @@ mod tests {
             Ok(Value::Int(3))
         );
         assert!(scalar_native(0x91, &[Value::Int(1), Value::Int(0)]).is_err());
+    }
+
+    #[test]
+    fn collision_updates_preserve_omitted_flags() {
+        assert_eq!(
+            collision_updates(&[Value::Bool(true), Value::None]),
+            Ok([Some(true), None, None])
+        );
+        assert!(collision_updates(&[Value::Float(1.0)]).is_err());
+    }
+
+    #[test]
+    fn fmax_matches_unreal_native_ordering() {
+        assert_eq!(
+            scalar_native(0xf5, &[Value::Float(2.0), Value::Float(3.0)]),
+            Ok(Value::Float(3.0))
+        );
+        assert_eq!(
+            scalar_native(0xf5, &[Value::Float(2.0), Value::Float(f32::NAN)]),
+            Ok(Value::Float(2.0))
+        );
     }
 }

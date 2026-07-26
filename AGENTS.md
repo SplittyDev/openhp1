@@ -311,13 +311,16 @@ instance values persist across calls by resolved package/export field identity,
 and null or self object contexts execute safely. Vector/rotator struct-member
 reads and writes preserve lvalue behavior, including zero-initialized
 `StructProperty` fields. Class defaults followed by actor tagged-property
-overrides initialize persistent actor state; remote object contexts remain
-unsupported. The viewer registers every actor, dispatches `PostBeginPlay`,
-retains the runtime across frames, advances `SetTimer` callbacks, and applies
-supported `LoopAnim` calls to first-class actors; unsupported calls remain
-explicit actor diagnostics. A five-second scan across all 41 maps reaches 45
-`Timer` callbacks, all of which complete without deferred actions. All 381
-local HP1 `Animation` exports and
+overrides initialize persistent actor state. Remote actor contexts resolve
+registered actor handles and persist cross-actor field reads, writes, and
+calls. `SetCollision` persists its three actor flags; actual BSP collision
+behavior waits for movement. The viewer registers every actor, dispatches
+`PostBeginPlay`, retains the runtime across frames, advances `SetTimer`
+callbacks, and applies supported `LoopAnim` calls to first-class actors;
+unsupported calls remain explicit actor diagnostics. A five-second scan
+across all 41 maps reaches 45 `Timer` callbacks, all of which complete without
+deferred actions, and applies 62 runtime animations. All 381 local HP1
+`Animation` exports and
 their 1,188 sequences decode and sample. In `Lev5_FlyKeys.unr`, one of seven
 script-selected animations currently targets a rendered actor and visibly
 changes its CPU vertices. The others expose hidden actor state or unmatched
