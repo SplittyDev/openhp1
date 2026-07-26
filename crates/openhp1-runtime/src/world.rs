@@ -16,6 +16,8 @@ use thiserror::Error;
 use crate::{Frame, FrameRequest, FrameResponse, FunctionCall, StructMember, Value};
 
 const GOTO_STATE: u16 = 0x071;
+const ENABLE: u16 = 0x075;
+const DISABLE: u16 = 0x076;
 const DESTROY: u16 = 0x117;
 const ALL_ACTORS: u16 = 0x130;
 const LOOP_ANIM: u16 = 0x104;
@@ -26,6 +28,72 @@ const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
 const STATE_AUTO: u32 = 0x0000_0002;
+const PROBE_EVENTS: [&str; 64] = [
+    "Spawned",
+    "Destroyed",
+    "GainedChild",
+    "LostChild",
+    "Probe4",
+    "Probe5",
+    "Trigger",
+    "UnTrigger",
+    "Timer",
+    "HitWall",
+    "Falling",
+    "Landed",
+    "ZoneChange",
+    "Touch",
+    "UnTouch",
+    "Bump",
+    "BeginState",
+    "EndState",
+    "BaseChange",
+    "Attach",
+    "Detach",
+    "ActorEntered",
+    "ActorLeaving",
+    "KillCredit",
+    "AnimEnd",
+    "EndedRotation",
+    "InterpolateEnd",
+    "EncroachingOn",
+    "EncroachedBy",
+    "FootZoneChange",
+    "HeadZoneChange",
+    "PainTimer",
+    "SpeechTimer",
+    "MayFall",
+    "Probe34",
+    "Die",
+    "Tick",
+    "PlayerTick",
+    "Expired",
+    "Probe39",
+    "SeePlayer",
+    "EnemyNotVisible",
+    "HearNoise",
+    "UpdateEyeHeight",
+    "SeeMonster",
+    "SeeFriend",
+    "SpecialHandling",
+    "BotDesireability",
+    "Probe48",
+    "Probe49",
+    "Probe50",
+    "Probe51",
+    "Probe52",
+    "Probe53",
+    "Probe54",
+    "Probe55",
+    "Probe56",
+    "Probe57",
+    "Probe58",
+    "Probe59",
+    "Probe60",
+    "Probe61",
+    "Probe62",
+    "All",
+];
 
 pub type DispatchResult<T> = std::result::Result<T, DispatchError>;
 
@@ -103,6 +171,7 @@ pub struct ScriptRuntime {
     actor_classes: HashMap<usize, ObjectId>,
     // ponytail: store state identity only; add label/IP state frames when state code ticks.
     actor_states: HashMap<usize, Option<String>>,
+    disabled_events: HashMap<(usize, String), HashSet<String>>,
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,
     destroyed: HashSet<usize>,
@@ -146,6 +215,7 @@ impl ScriptRuntime {
             fields: HashMap::new(),
             actor_classes: HashMap::new(),
             actor_states: HashMap::new(),
+            disabled_events: HashMap::new(),
             object_actors: HashMap::new(),
             actor_objects: HashMap::new(),
             destroyed: HashSet::new(),
@@ -185,8 +255,8 @@ impl ScriptRuntime {
 
         let mut instance = self.load_class_defaults(&class, 0)?;
         let mut reader = actor_package.export_reader(actor_export)?;
-        let state = reader
-            .read_object_stack(actor_entry.object_flags)?
+        let stack = reader.read_object_stack(actor_entry.object_flags)?;
+        let state = stack
             .and_then(|stack| {
                 (stack.function != ObjectReference::None)
                     .then_some(stack.function)
@@ -202,6 +272,19 @@ impl ScriptRuntime {
                     .name(state.package.summary().exports[state.export_index].object_name)
                     .to_owned()
             });
+        if let Some(stack) = stack {
+            for (index, event) in PROBE_EVENTS.iter().enumerate() {
+                if stack.probe_mask & (1_u64 << index) != 0 {
+                    set_event_disabled(
+                        &mut self.disabled_events,
+                        actor,
+                        state.as_deref(),
+                        event,
+                        true,
+                    );
+                }
+            }
+        }
         self.actor_states.insert(actor, state);
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
         self.instances.insert(actor, instance);
@@ -283,6 +366,17 @@ impl ScriptRuntime {
             package: Arc::clone(&class.package),
             export_index: class.export_index,
         };
+        if event_disabled(
+            &self.disabled_events,
+            actor,
+            self.actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref()),
+            event,
+        ) || self.state_ignores_event(actor, &class, event)?
+        {
+            return Ok(Vec::new());
+        }
         let Some(function) = self.find_actor_function(actor, class, event, 0)? else {
             return Ok(Vec::new());
         };
@@ -440,6 +534,28 @@ impl ScriptRuntime {
             Some(name),
             0,
         )
+    }
+
+    fn state_ignores_event(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        event: &str,
+    ) -> DispatchResult<bool> {
+        let Some(index) = probe_event_index(event) else {
+            return Ok(false);
+        };
+        let Some(state_name) = self.actor_states.get(&actor).and_then(Clone::clone) else {
+            return Ok(false);
+        };
+        let Some(state) = self.find_state(class, &state_name)? else {
+            return Ok(false);
+        };
+        let metadata = ScriptExport::decode(&state.package, state.export_index)?;
+        Ok(matches!(
+            metadata.metadata,
+            ScriptMetadata::State(state) if state.ignore_mask & (1_u64 << index) == 0
+        ))
     }
 
     fn find_matching_state(
@@ -961,6 +1077,28 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<Value, String> {
+        if matches!(index, ENABLE | DISABLE) {
+            let [event] = arguments else {
+                return Err(format!(
+                    "{} expects one name, found {}",
+                    if index == ENABLE { "Enable" } else { "Disable" },
+                    arguments.len()
+                ));
+            };
+            let event = runtime_name(source, event)?;
+            let state = self
+                .actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref());
+            set_event_disabled(
+                &mut self.disabled_events,
+                actor,
+                state,
+                &event,
+                index == DISABLE,
+            );
+            return Ok(Value::None);
+        }
         if index == DESTROY {
             for name in ["bStatic", "bNoDelete"] {
                 let field = self
@@ -1550,6 +1688,43 @@ fn runtime_name(source: &Package, value: &Value) -> std::result::Result<String, 
     }
 }
 
+fn probe_event_index(event: &str) -> Option<usize> {
+    PROBE_EVENTS
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(event))
+}
+
+fn event_key(actor: usize, state: Option<&str>) -> (usize, String) {
+    (actor, state.unwrap_or_default().to_ascii_lowercase())
+}
+
+fn set_event_disabled(
+    disabled_events: &mut HashMap<(usize, String), HashSet<String>>,
+    actor: usize,
+    state: Option<&str>,
+    event: &str,
+    disabled: bool,
+) {
+    let events = disabled_events.entry(event_key(actor, state)).or_default();
+    let event = event.to_ascii_lowercase();
+    if disabled {
+        events.insert(event);
+    } else {
+        events.remove(&event);
+    }
+}
+
+fn event_disabled(
+    disabled_events: &HashMap<(usize, String), HashSet<String>>,
+    actor: usize,
+    state: Option<&str>,
+    event: &str,
+) -> bool {
+    disabled_events
+        .get(&event_key(actor, state))
+        .is_some_and(|events| events.contains(&event.to_ascii_lowercase()))
+}
+
 fn collision_updates(arguments: &[Value]) -> std::result::Result<[Option<bool>; 3], String> {
     if arguments.len() > 3 {
         return Err(format!(
@@ -1706,6 +1881,20 @@ mod tests {
             Ok([Some(true), None, None])
         );
         assert!(collision_updates(&[Value::Float(1.0)]).is_err());
+    }
+
+    #[test]
+    fn disabled_events_are_case_insensitive_and_scoped_to_actor_state() {
+        let mut disabled = HashMap::new();
+        set_event_disabled(&mut disabled, 2, Some("Beano"), "Tick", true);
+
+        assert!(event_disabled(&disabled, 2, Some("beano"), "TICK"));
+        assert!(!event_disabled(&disabled, 2, Some("KillBean"), "Tick"));
+        assert!(!event_disabled(&disabled, 3, Some("Beano"), "Tick"));
+
+        set_event_disabled(&mut disabled, 2, Some("BEANO"), "tick", false);
+        assert!(!event_disabled(&disabled, 2, Some("Beano"), "Tick"));
+        assert_eq!(probe_event_index("tick"), Some(36));
     }
 
     #[test]
