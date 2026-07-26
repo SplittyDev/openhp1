@@ -107,6 +107,12 @@ impl Mesh {
             frame_vertices,
             animation_frames,
         );
+        if reader.remaining() != 0 {
+            return Err(Error::TrailingData {
+                object: "mesh",
+                remaining: reader.remaining(),
+            });
+        }
 
         Ok(Self {
             triangles: geometry.triangles,
@@ -117,9 +123,16 @@ impl Mesh {
             scale,
             origin,
             rotation_origin,
+            default_animation: geometry
+                .skeletal
+                .as_ref()
+                .map_or(openhp1_package::ObjectReference::None, |mesh| {
+                    mesh.default_animation
+                }),
             vertices,
             normals,
             face_vertices: geometry.face_vertices,
+            skeletal: geometry.skeletal.map(|mesh| mesh.mesh),
         })
     }
 }
@@ -143,7 +156,9 @@ fn skip_sphere(reader: &mut ObjectReader<'_>) -> Result<()> {
     Ok(())
 }
 
-fn read_anim_sequences(reader: &mut ObjectReader<'_>) -> Result<Vec<MeshAnimationSequence>> {
+pub(crate) fn read_anim_sequences(
+    reader: &mut ObjectReader<'_>,
+) -> Result<Vec<MeshAnimationSequence>> {
     read_vec(reader, "animation sequences", |reader| {
         let name = read_name(reader, "animation sequence name")?;
         let group = read_name(reader, "animation sequence group")?;
@@ -166,7 +181,7 @@ fn read_anim_sequences(reader: &mut ObjectReader<'_>) -> Result<Vec<MeshAnimatio
     })
 }
 
-fn read_name(reader: &mut ObjectReader<'_>, field: &'static str) -> Result<String> {
+pub(crate) fn read_name(reader: &mut ObjectReader<'_>, field: &'static str) -> Result<String> {
     let index = reader.read_name_index(field)?;
     Ok(reader.summary().name(index).to_owned())
 }
@@ -315,9 +330,8 @@ fn unpack_vertex(packed: i32) -> Vec3 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
+    use crate::test_support::{package, push_f32, push_i32, push_u32};
 
     #[test]
     fn unpacks_signed_ue1_vertex_components() {
@@ -358,17 +372,6 @@ mod tests {
         let names = [
             "None", "Core", "Class", "Mesh", "TestMesh", "Idle", "Movement", "Step",
         ];
-        let mut name_table = Vec::new();
-        for name in names {
-            name_table.extend(name.as_bytes());
-            name_table.push(0);
-            push_u32(&mut name_table, 0);
-        }
-
-        let mut import_table = vec![1, 2];
-        push_i32(&mut import_table, 0);
-        import_table.push(3);
-
         let mut payload = vec![0];
         payload.extend([0; 25 + 12]);
         payload.push(6);
@@ -407,83 +410,10 @@ mod tests {
         }
         payload.extend([0; 20]);
 
-        const HEADER_SIZE: usize = 44;
-        let name_offset = HEADER_SIZE;
-        let import_offset = name_offset + name_table.len();
-        let export_offset = import_offset + import_table.len();
-        let mut export_prefix = vec![0x81, 0];
-        push_i32(&mut export_prefix, 0);
-        export_prefix.push(4);
-        push_u32(&mut export_prefix, 0);
-        export_prefix.extend(compact_index(payload.len() as i32));
-        let mut payload_offset = export_offset + export_prefix.len() + 1;
-        loop {
-            let encoded = compact_index(payload_offset as i32);
-            let next = export_offset + export_prefix.len() + encoded.len();
-            if next == payload_offset {
-                export_prefix.extend(encoded);
-                break;
-            }
-            payload_offset = next;
-        }
-
-        let mut bytes = Vec::new();
-        push_u32(&mut bytes, openhp1_package::PACKAGE_MAGIC);
-        bytes.extend(61_u16.to_le_bytes());
-        bytes.extend(0_u16.to_le_bytes());
-        push_u32(&mut bytes, 0);
-        for value in [
-            names.len(),
-            name_offset,
-            1,
-            export_offset,
-            1,
-            import_offset,
-            0,
-            0,
-        ] {
-            push_i32(&mut bytes, value as i32);
-        }
-        bytes.extend(name_table);
-        bytes.extend(import_table);
-        bytes.extend(export_prefix);
-        assert_eq!(bytes.len(), payload_offset);
-        bytes.extend(payload);
-        Package::parse("synthetic mesh", Arc::from(bytes)).unwrap()
-    }
-
-    fn compact_index(value: i32) -> Vec<u8> {
-        let negative = value < 0;
-        let mut value = value.unsigned_abs();
-        let mut bytes = vec![(value as u8 & 0x3f) | if negative { 0x80 } else { 0 }];
-        value >>= 6;
-        if value != 0 {
-            bytes[0] |= 0x40;
-        }
-        while value != 0 {
-            let mut byte = value as u8 & 0x7f;
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            bytes.push(byte);
-        }
-        bytes
+        package("synthetic mesh", &names, 3, 4, payload)
     }
 
     fn pack_vertex(x: i32, y: i32, z: i32) -> i32 {
         ((z & 0x3ff) << 22) | ((y & 0x7ff) << 11) | (x & 0x7ff)
-    }
-
-    fn push_i32(bytes: &mut Vec<u8>, value: i32) {
-        bytes.extend(value.to_le_bytes());
-    }
-
-    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-        bytes.extend(value.to_le_bytes());
-    }
-
-    fn push_f32(bytes: &mut Vec<u8>, value: f32) {
-        bytes.extend(value.to_le_bytes());
     }
 }

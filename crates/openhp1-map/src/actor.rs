@@ -17,6 +17,7 @@ pub struct ActorProperties {
     pub draw_scale: Option<f32>,
     pub draw_type: Option<u8>,
     pub mesh: Option<ObjectReference>,
+    pub skeletal_animation: Option<ObjectReference>,
     pub skin: Option<ObjectReference>,
     pub texture: Option<ObjectReference>,
     pub multi_skins: Vec<Option<ObjectReference>>,
@@ -72,6 +73,9 @@ impl ActorProperties {
                 }
                 ("Mesh", PropertyKind::Object, _) => {
                     properties.mesh = Some(value.read_object_reference()?);
+                }
+                ("SkelAnim", PropertyKind::Object, _) => {
+                    properties.skeletal_animation = Some(value.read_object_reference()?);
                 }
                 ("Skin", PropertyKind::Object, _) => {
                     properties.skin = Some(value.read_object_reference()?);

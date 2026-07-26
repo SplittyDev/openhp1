@@ -86,6 +86,8 @@ crates/
   openhp1-texture/  Palette, Texture, mipmaps, and pixel conversion
   openhp1-scene/    Package-backed CPU scene assembly and render-ready data
   openhp1-render/   wgpu renderer and camera
+  openhp1-script/   Class/function metadata and checked bytecode decoding
+  openhp1-runtime/  Script frames, event dispatch, and actor runtime actions
   openhp1-viewer/   eframe application and egui inspection UI
 ```
 
@@ -94,28 +96,27 @@ Keep the dependency direction acyclic:
 ```text
 openhp1-package ──┬── openhp1-map ─────┐
                   ├── openhp1-mesh ────┼── openhp1-scene ── openhp1-render
-                  └── openhp1-texture ─┘                         │
-                                                                └── openhp1-viewer
+                  ├── openhp1-texture ─┘            │            │
+                  └── openhp1-script ── openhp1-runtime          │
+                             └───────────────────────┴────────────┴── openhp1-viewer
 ```
 
 Add these only when their implementation begins:
 
-- `openhp1-script`: class metadata, bytecode decoding, and the UnrealScript VM
 - `openhp1-audio`: sound/music extraction, decoding, and playback integration
-- `openhp1-animation`: reusable skeleton/sequence playback, pose sampling, and
-  animation state once animated actors are implemented; package-specific mesh
-  and sequence decoding remains in `openhp1-mesh`
-- `openhp1-runtime`: object lifecycle, ticking, gameplay, collision, and game state
+- `openhp1-animation`: reusable playback and animation state if those
+  responsibilities gain another consumer; package-specific mesh, sequence,
+  and pose decoding remains in `openhp1-mesh`
 - A separate game executable that owns the real game loop
 
 Do not create empty crates or abstraction layers for speculative future work.
 Split an existing crate when it has a real independent responsibility or
 dependency boundary, not merely because it has grown.
 
-Vertex-mesh sequence sampling currently belongs to `openhp1-mesh`, while the
-single viewer playback loop remains private to `openhp1-scene`. Split
-`openhp1-animation` only when skeletal animation or another consumer creates a
-genuinely reusable playback responsibility.
+Mesh sequence and pose sampling currently belong to `openhp1-mesh`, while the
+single playback loop remains private to `openhp1-scene`. Split
+`openhp1-animation` only when another consumer creates a genuinely reusable
+playback responsibility.
 
 The renderer consumes decoded render data. It must not know about package
 paths, byte offsets, import/export tables, or filesystem resolution.
@@ -127,10 +128,12 @@ current internal responsibility split is:
 | --- | --- |
 | `openhp1-package` | checked archive cursor, object properties, package owner, configured package resolver, public summary types, index-table decoding, errors |
 | `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, static lightmaps, actor vertex lighting, errors |
-| `openhp1-mesh` | classic, LOD, and skeletal mesh records, decoding, and geometry conversion |
+| `openhp1-mesh` | classic, LOD, and skeletal mesh records, HP1 animation decoding, pose sampling, and geometry conversion |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
 | `openhp1-scene` | package-backed scene loading, first-class actor records, actor/material assembly, coordinate conversion, render-ready CPU scene data |
 | `openhp1-render` | camera/bounds, GPU batching, pipelines, lightmap atlas, render targets, wgpu renderer |
+| `openhp1-script` | script struct/class/function/state metadata, canonical bytecode decoding, token inspection |
+| `openhp1-runtime` | checked script frames, stable actor state, function/event resolution, timers, native call boundary, actor actions |
 | `openhp1-viewer` | executable startup, egui application/input/diagnostics, scene selection, offscreen color target |
 
 Prefer a module for a substantial data structure and its behavior. Keep small
@@ -189,7 +192,7 @@ decoded in isolation.
   lightmaps are reconstructed from zone ambient colors, light actors, and BSP
   shadow masks, then packed into a shared GPU atlas.
 - Remaining UE1 rendering work includes zones and portals, movers, sprites,
-  coronas, skeletal animation, animated textures, and HP-specific particles.
+  coronas, animated textures, and HP-specific particles.
   Do not implement these before the current milestone needs them.
 - BSP collision and original movement semantics matter for compatibility. Do
   not substitute a generic physics engine before those semantics are understood.
@@ -293,13 +296,33 @@ inherits ambient settings from the active `LevelInfo` actor. The reconstruction
 successfully loads all 41 local maps. Base textures and lightmaps modulate
 directly in display space to match UE1's fixed-function renderer; do not insert
 an sRGB-to-linear conversion into that path. Procedural textures and light
-effects are static snapshots until runtime ticking exists.
+effects remain static snapshots; actor runtime ticking does not drive them yet.
 Level actors are retained as first-class CPU scene records keyed by package
 source and zero-based export index. Each record preserves its resolved class,
 transform, mesh and animation state, render ranges, and actor-local
 diagnostics. Duplicate references in a `Level` actor array resolve to one scene
 actor. The viewer provides a searchable actor inspector, while visible vertex
-meshes remain batched into the shared render mesh.
+and skeletal meshes remain batched into the shared render mesh.
+All 6,816 script struct exports in the 248-package corpus decode into canonical
+UE1 execution bytecode. The initial runtime executes assignments, constants,
+branches, scalar natives, and final/virtual/global call dispatch with a checked
+step limit. Function arguments bind through decoded property metadata, actor
+instance values persist across calls by resolved package/export field identity,
+and null or self object contexts execute safely. Vector/rotator struct-member
+reads and writes preserve lvalue behavior, including zero-initialized
+`StructProperty` fields. Class defaults followed by actor tagged-property
+overrides initialize persistent actor state; remote object contexts remain
+unsupported. The viewer registers every actor, dispatches `PostBeginPlay`,
+retains the runtime across frames, advances `SetTimer` callbacks, and applies
+supported `LoopAnim` calls to first-class actors; unsupported calls remain
+explicit actor diagnostics. A five-second scan across all 41 maps reaches 45
+`Timer` callbacks, all of which complete without deferred actions. All 381
+local HP1 `Animation` exports and
+their 1,188 sequences decode and sample. In `Lev5_FlyKeys.unr`, one of seven
+script-selected animations currently targets a rendered actor and visibly
+changes its CPU vertices. The others expose hidden actor state or unmatched
+sequence behavior that the intentionally incomplete VM does not yet reproduce.
+This is not general gameplay support yet.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

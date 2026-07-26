@@ -11,8 +11,9 @@ use openhp1_map::{
     Actor, ActorProperties, ActorVertexLighting, BspNode, Level, Model, PolyFlags, VertexLighting,
     bsp_zone_at,
 };
-use openhp1_mesh::Mesh;
-use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, ResolvedObject};
+use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
+use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
+use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags};
 use tracing::{info, warn};
 
@@ -140,7 +141,10 @@ impl LoadedScene {
             &mut animations,
         );
         let actor_meshes = actors.iter().filter(|actor| actor.render.is_some()).count();
-        let animated_actor_meshes = animations.len();
+        let animated_actor_meshes = actors
+            .iter()
+            .filter(|actor| actor.animation.is_some())
+            .count();
         info!(
             map = %path.display(),
             points = model.points.len(),
@@ -206,7 +210,12 @@ impl LoadedScene {
         if delta_time <= 0.0 || !delta_time.is_finite() {
             return Ok(false);
         }
+        let mut changed = false;
         for animation in &mut self.animations {
+            if !animation.playing || animation.rate == 0.0 {
+                continue;
+            }
+            changed = true;
             animation.phase = (animation.phase + animation.rate * delta_time).rem_euclid(1.0);
             let actor = self
                 .actors
@@ -217,8 +226,7 @@ impl LoadedScene {
                 .as_mut()
                 .context("animated scene actor has no animation state")?;
             actor_animation.phase = animation.phase;
-            let sequence = &animation.mesh.animation_sequences[animation.sequence];
-            let triangles = animation.mesh.sample_sequence(sequence, animation.phase)?;
+            let triangles = animation.sample()?;
             ensure!(
                 triangles.len() * 3 == animation.vertices.len(),
                 "animation changed actor vertex count"
@@ -235,21 +243,88 @@ impl LoadedScene {
                     animation.lighting.color(position, normal, animation.unlit);
             }
         }
-        Ok(!self.animations.is_empty())
+        Ok(changed)
+    }
+
+    pub fn loop_actor_animation(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+    ) -> Result<bool> {
+        ensure!(relative_rate.is_finite(), "animation rate is not finite");
+        let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        else {
+            return Ok(false);
+        };
+        let Some(sequence) = animation
+            .sequences()
+            .iter()
+            .position(|sequence| sequence.name.eq_ignore_ascii_case(sequence_name))
+        else {
+            return Ok(false);
+        };
+        let source = &animation.sequences()[sequence];
+        let source_name = source.name.clone();
+        let source_rate = source.rate;
+        let source_frames = source.frame_count;
+        animation.sequence = sequence;
+        animation.phase = 0.0;
+        animation.rate = relative_rate * source_rate / source_frames.max(1) as f32;
+        animation.playing = true;
+        let actor = self
+            .actors
+            .get_mut(actor_index)
+            .context("animation refers to a missing scene actor")?;
+        if actor.animation.is_none() {
+            self.animated_actor_meshes += 1;
+        }
+        actor.animation = Some(SceneActorAnimation {
+            sequence: source_name,
+            phase: 0.0,
+            rate: animation.rate,
+            frame_count: source_frames,
+        });
+        Ok(true)
     }
 }
 
 struct AnimatedActorMesh {
     actor_index: usize,
     mesh: Arc<Mesh>,
+    skeletal_animation: Option<Arc<SkeletalAnimation>>,
     sequence: usize,
     phase: f32,
     rate: f32,
+    playing: bool,
     vertices: Range<usize>,
     transform: Mat4,
     normal_transform: Mat3,
     lighting: ActorVertexLighting,
     unlit: bool,
+}
+
+impl AnimatedActorMesh {
+    fn sequences(&self) -> &[MeshAnimationSequence] {
+        self.skeletal_animation
+            .as_ref()
+            .map_or(self.mesh.animation_sequences.as_slice(), |animation| {
+                animation.sequences.as_slice()
+            })
+    }
+
+    fn sample(&self) -> openhp1_mesh::Result<Vec<openhp1_mesh::MeshTriangle>> {
+        if let Some(animation) = &self.skeletal_animation {
+            self.mesh
+                .sample_skeletal_sequence(animation, self.sequence, self.phase)
+        } else {
+            self.mesh
+                .sample_sequence(&self.mesh.animation_sequences[self.sequence], self.phase)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -291,6 +366,7 @@ struct ActorState {
     draw_scale: f32,
     draw_type: u8,
     mesh: Option<SceneObject>,
+    skeletal_animation: Option<SceneObject>,
     skin: Option<SceneObject>,
     texture: Option<SceneObject>,
     multi_skins: Vec<Option<SceneObject>>,
@@ -319,6 +395,7 @@ impl Default for ActorState {
             draw_scale: 1.0,
             draw_type: 0,
             mesh: None,
+            skeletal_animation: None,
             skin: None,
             texture: None,
             multi_skins: Vec::new(),
@@ -358,6 +435,9 @@ impl ActorState {
         }
         if let Some(reference) = properties.mesh {
             self.mesh = packages.resolve(source, reference)?.map(Into::into);
+        }
+        if let Some(reference) = properties.skeletal_animation {
+            self.skeletal_animation = packages.resolve(source, reference)?.map(Into::into);
         }
         if let Some(reference) = properties.skin {
             self.skin = packages.resolve(source, reference)?.map(Into::into);
@@ -414,6 +494,7 @@ fn load_actors(
 ) -> Vec<SceneActor> {
     let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
     let mut mesh_cache = HashMap::<SceneObjectId, Option<Arc<Mesh>>>::new();
+    let mut animation_cache = HashMap::<SceneObjectId, Option<Arc<SkeletalAnimation>>>::new();
     let mut decoded_textures = HashMap::<SceneObjectId, Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut actors = Vec::new();
@@ -538,11 +619,51 @@ fn load_actors(
             actors.push(scene_actor);
             continue;
         };
+        let animation_object = if let Some(animation) = state.skeletal_animation.clone() {
+            Some(animation)
+        } else {
+            match packages.resolve(&mesh_object.package, mesh.default_animation) {
+                Ok(animation) => animation.map(SceneObject::from),
+                Err(error) => {
+                    warn!(
+                        actor = %map.summary().name(export.object_name),
+                        %error,
+                        "could not resolve actor skeletal animation"
+                    );
+                    None
+                }
+            }
+        };
+        let skeletal_animation = match animation_object {
+            Some(animation_object) => {
+                let key = animation_object.id();
+                if !animation_cache.contains_key(&key) {
+                    let decoded = match SkeletalAnimation::decode(
+                        &animation_object.package,
+                        animation_object.export_index,
+                    ) {
+                        Ok(animation) => Some(Arc::new(animation)),
+                        Err(error) => {
+                            warn!(
+                                actor = %map.summary().name(export.object_name),
+                                %error,
+                                "could not decode actor skeletal animation"
+                            );
+                            None
+                        }
+                    };
+                    animation_cache.insert(key.clone(), decoded);
+                }
+                animation_cache.get(&key).and_then(Option::as_ref).cloned()
+            }
+            None => None,
+        };
         let actor_index = actors.len();
         match append_actor_mesh(
             packages,
             &mesh_object,
             &mesh,
+            skeletal_animation.as_ref(),
             &state,
             actor_index,
             model,
@@ -656,57 +777,8 @@ fn apply_scene_actor_state(actor: &mut SceneActor, state: &ActorState) {
 }
 
 fn decode_class_defaults(class: &SceneObject) -> Result<(ObjectReference, ActorProperties)> {
-    let mut reader = class.package.export_reader(class.export_index)?;
-    let base = reader.read_object_reference()?;
-    reader.read_object_reference()?; // next field
-    reader.read_object_reference()?; // script text
-    reader.read_object_reference()?; // children
-    reader.read_compact_index()?; // friendly name
-    reader.read_u32()?; // line
-    reader.read_u32()?; // text position
-    let script_size = reader.read_u32()?;
-    ensure!(
-        script_size == 0,
-        "class contains bytecode ({script_size} decoded bytes)"
-    );
-
-    reader.read_u64()?; // probe mask
-    reader.read_u64()?; // ignore mask
-    reader.read_u16()?; // label table
-    reader.read_u32()?; // state flags
-    if class.package.summary().header.version <= 61 {
-        reader.read_u32()?; // old class record size
-    }
-    reader.read_u32()?; // class flags
-    reader.read_bytes(16)?; // class GUID
-    skip_class_array(&mut reader, "class dependencies", |reader| {
-        reader.read_object_reference()?;
-        reader.read_u32()?;
-        reader.read_u32()?;
-        Ok(())
-    })?;
-    skip_class_array(&mut reader, "class package imports", |reader| {
-        reader.read_compact_index()?;
-        Ok(())
-    })?;
-    if class.package.summary().header.version >= 62 {
-        reader.read_compact_index()?; // class within
-        reader.read_compact_index()?; // config name
-    }
-    Ok((base, ActorProperties::decode(&mut reader)?))
-}
-
-fn skip_class_array(
-    reader: &mut ObjectReader<'_>,
-    field: &'static str,
-    mut element: impl FnMut(&mut ObjectReader<'_>) -> Result<()>,
-) -> Result<()> {
-    let count = reader.read_compact_index()?;
-    let count = usize::try_from(count).with_context(|| format!("{field} has negative count"))?;
-    for _ in 0..count {
-        element(reader)?;
-    }
-    Ok(())
+    let (metadata, mut defaults) = class_defaults_reader(&class.package, class.export_index)?;
+    Ok((metadata.base_field, ActorProperties::decode(&mut defaults)?))
 }
 
 struct AppendedActorMesh {
@@ -719,6 +791,7 @@ fn append_actor_mesh(
     packages: &mut PackageStore,
     mesh_object: &SceneObject,
     mesh: &Arc<Mesh>,
+    skeletal_animation: Option<&Arc<SkeletalAnimation>>,
     actor: &ActorState,
     actor_index: usize,
     model: &Model,
@@ -764,21 +837,26 @@ fn append_actor_mesh(
     let mut actor_materials = HashMap::<(u32, i32), usize>::new();
     let first_vertex = render_mesh.positions.len();
     let first_index = render_mesh.indices.len();
-    let sequence = mesh
-        .animation_sequences
-        .iter()
-        .position(|sequence| {
-            actor
-                .anim_sequence
-                .as_deref()
-                .is_some_and(|name| sequence.name.eq_ignore_ascii_case(name))
+    let sequences = skeletal_animation.map_or(mesh.animation_sequences.as_slice(), |animation| {
+        animation.sequences.as_slice()
+    });
+    let sequence = actor
+        .anim_sequence
+        .as_deref()
+        .and_then(|name| {
+            sequences
+                .iter()
+                .position(|sequence| sequence.name.eq_ignore_ascii_case(name))
         })
-        .or((!mesh.animation_sequences.is_empty()).then_some(0))
-        .filter(|&index| mesh.animation_sequences[index].frame_count != 0);
+        .filter(|&index| sequences[index].frame_count != 0);
     let phase = actor.anim_frame.max(0.0).rem_euclid(1.0);
     let sampled;
     let triangles = if let Some(sequence) = sequence {
-        sampled = mesh.sample_sequence(&mesh.animation_sequences[sequence], phase)?;
+        sampled = if let Some(animation) = skeletal_animation {
+            mesh.sample_skeletal_sequence(animation, sequence, phase)?
+        } else {
+            mesh.sample_sequence(&sequences[sequence], phase)?
+        };
         sampled.as_slice()
     } else {
         &mesh.triangles
@@ -830,29 +908,21 @@ fn append_actor_mesh(
             .extend_from_slice(&[base, base + 2, base + 1]);
         render_mesh.triangle_surfaces.push(surface);
     }
-    let animation = sequence.map(|sequence| {
-        let native_rate = mesh.animation_sequences[sequence].rate
-            / mesh.animation_sequences[sequence].frame_count as f32;
-        SceneActorAnimation {
-            sequence: mesh.animation_sequences[sequence].name.clone(),
-            phase,
-            rate: if actor.anim_rate > 0.0 {
-                actor.anim_rate
-            } else {
-                native_rate
-            },
-            frame_count: mesh.animation_sequences[sequence].frame_count,
-        }
+    let animation = sequence.map(|sequence| SceneActorAnimation {
+        sequence: sequences[sequence].name.clone(),
+        phase,
+        rate: actor.anim_rate,
+        frame_count: sequences[sequence].frame_count,
     });
-    if let Some(animation) = animation.as_ref()
-        && animation.frame_count > 1
-    {
+    if !sequences.is_empty() {
         animations.push(AnimatedActorMesh {
             actor_index,
             mesh: Arc::clone(mesh),
-            sequence: sequence.expect("animation state has a sequence"),
+            skeletal_animation: skeletal_animation.cloned(),
+            sequence: sequence.unwrap_or(0),
             phase,
-            rate: animation.rate,
+            rate: animation.as_ref().map_or(0.0, |animation| animation.rate),
+            playing: animation.is_some(),
             vertices: first_vertex..render_mesh.positions.len(),
             transform,
             normal_transform,

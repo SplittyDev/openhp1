@@ -1,7 +1,10 @@
-use glam::{IVec3, Vec2, Vec3};
+use glam::{IVec3, Mat4, Quat, Vec2, Vec3};
 use openhp1_package::ObjectReference;
 
-use crate::{Error, Result, geometry::sample_triangles};
+use crate::{
+    Error, Result,
+    geometry::{sample_triangles, vertex_normals},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
@@ -44,9 +47,11 @@ pub struct Mesh {
     pub scale: Vec3,
     pub origin: Vec3,
     pub rotation_origin: IVec3,
+    pub default_animation: ObjectReference,
     pub(crate) vertices: Vec<Vec3>,
     pub(crate) normals: Vec<Vec3>,
     pub(crate) face_vertices: Vec<[usize; 3]>,
+    pub(crate) skeletal: Option<SkeletalMesh>,
 }
 
 impl Mesh {
@@ -104,6 +109,21 @@ impl Mesh {
         sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
     }
 
+    pub fn sample_skeletal_sequence(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<Vec<MeshTriangle>> {
+        if !phase.is_finite() {
+            return Err(Error::InvalidAnimationPhase(phase));
+        }
+        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
+        let vertices = animation.sample(skeletal, sequence, phase)?;
+        let normals = vertex_normals(&vertices, &self.face_vertices);
+        sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
+    }
+
     fn frame_slice<'a>(&self, values: &'a [Vec3], frame: usize) -> Result<&'a [Vec3]> {
         let invalid_layout = || Error::InvalidAnimationLayout {
             frame_vertices: self.frame_vertices,
@@ -120,5 +140,187 @@ impl Mesh {
             frame,
             animation_frames: self.animation_frames,
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SkeletalAnimation {
+    pub sequences: Vec<MeshAnimationSequence>,
+    pub(crate) bones: Vec<AnimationBone>,
+    pub(crate) moves: Vec<AnimationMove>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationBone {
+    pub name: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationMove {
+    pub track_time: f32,
+    pub start_bone: usize,
+    pub bone_indices: Vec<usize>,
+    pub tracks: Vec<AnimationTrack>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationTrack {
+    pub rotations: Vec<Quat>,
+    pub positions: Vec<Vec3>,
+    pub times: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkeletalMesh {
+    pub points: Vec<Vec3>,
+    pub bones: Vec<SkeletalBone>,
+    pub influences: Vec<Vec<SkeletalInfluence>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkeletalBone {
+    pub name: String,
+    pub orientation: Quat,
+    pub position: Vec3,
+    pub parent: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SkeletalInfluence {
+    pub bone: usize,
+    pub weight: f32,
+    pub local_position: Vec3,
+}
+
+impl SkeletalAnimation {
+    pub(crate) fn sample(
+        &self,
+        mesh: &SkeletalMesh,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<Vec<Vec3>> {
+        let sequence_index = sequence;
+        let sequence = self
+            .sequences
+            .get(sequence_index)
+            .ok_or(Error::InvalidIndex {
+                field: "skeletal animation sequence",
+                index: sequence_index,
+                length: self.sequences.len(),
+            })?;
+        if sequence.frame_count == 0 {
+            return Err(Error::EmptyAnimationSequence {
+                name: sequence.name.clone(),
+            });
+        }
+        let movement =
+            self.moves
+                .get(sequence_index)
+                .ok_or(Error::InvalidSkeletalSequenceLayout {
+                    sequence_count: self.sequences.len(),
+                    move_count: self.moves.len(),
+                })?;
+        let time = phase.rem_euclid(1.0) * movement.track_time;
+        let mut local = mesh
+            .bones
+            .iter()
+            .map(|bone| (bone.orientation, bone.position))
+            .collect::<Vec<_>>();
+        for (track_index, track) in movement.tracks.iter().enumerate() {
+            let animation_bone = movement
+                .bone_indices
+                .get(track_index)
+                .copied()
+                .unwrap_or(movement.start_bone + track_index);
+            let animation_bone_index = animation_bone;
+            let Some(animation_bone) = self.bones.get(animation_bone_index) else {
+                return Err(Error::InvalidIndex {
+                    field: "animation bone",
+                    index: animation_bone_index,
+                    length: self.bones.len(),
+                });
+            };
+            let mesh_bone = mesh
+                .bones
+                .iter()
+                .position(|bone| bone.name.eq_ignore_ascii_case(&animation_bone.name))
+                .or_else(|| {
+                    (self.bones.len() == mesh.bones.len()
+                        && animation_bone_index < mesh.bones.len())
+                    .then_some(animation_bone_index)
+                })
+                .ok_or(Error::InvalidIndex {
+                    field: "mesh animation bone",
+                    index: track_index,
+                    length: mesh.bones.len(),
+                })?;
+            local[mesh_bone] = track.sample(time, movement.track_time, local[mesh_bone]);
+        }
+
+        let mut global = Vec::with_capacity(mesh.bones.len());
+        for (index, bone) in mesh.bones.iter().enumerate() {
+            let (orientation, position) = local[index];
+            let transform = Mat4::from_rotation_translation(orientation, position);
+            global.push(if bone.parent == index {
+                transform
+            } else {
+                global[bone.parent] * transform
+            });
+        }
+
+        let mut points = mesh.points.clone();
+        for (point, influences) in points.iter_mut().zip(&mesh.influences) {
+            if influences.is_empty() {
+                continue;
+            }
+            *point = influences.iter().fold(Vec3::ZERO, |position, influence| {
+                position
+                    + global[influence.bone].transform_point3(influence.local_position)
+                        * influence.weight
+            });
+        }
+        Ok(points)
+    }
+}
+
+impl AnimationTrack {
+    fn sample(&self, time: f32, duration: f32, fallback: (Quat, Vec3)) -> (Quat, Vec3) {
+        let (first, second, blend) = self.key_interval(time, duration);
+        let orientation = match self.rotations.as_slice() {
+            [] => fallback.0,
+            [orientation] => *orientation,
+            orientations => orientations[first]
+                .slerp(orientations[second], blend)
+                .normalize(),
+        };
+        let position = match self.positions.as_slice() {
+            [] => fallback.1,
+            [position] => *position,
+            positions => positions[first].lerp(positions[second], blend),
+        };
+        (orientation, position)
+    }
+
+    fn key_interval(&self, time: f32, duration: f32) -> (usize, usize, f32) {
+        if self.times.len() <= 1 {
+            return (0, 0, 0.0);
+        }
+        let first = self
+            .times
+            .partition_point(|key| *key <= time)
+            .saturating_sub(1)
+            .min(self.times.len() - 1);
+        let second = (first + 1) % self.times.len();
+        let end = if second == 0 {
+            duration
+        } else {
+            self.times[second]
+        };
+        let blend = if end > self.times[first] {
+            (time - self.times[first]) / (end - self.times[first])
+        } else {
+            0.0
+        };
+        (first, second, blend.clamp(0.0, 1.0))
     }
 }

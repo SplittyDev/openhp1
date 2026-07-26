@@ -18,8 +18,8 @@ on world BSP geometry.
 7. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
    Unreal rotator.
 8. `openhp1-scene` resolves actor defaults and instance properties, retains
-   first-class actor records, and appends visible vertex meshes with their
-   materials and render ranges.
+   first-class actor records, and appends visible vertex and skeletal meshes
+   with their materials and render ranges.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
    backend-neutral surface materials.
 10. `openhp1-render` packs lightmaps with replicated edge gutters into one
@@ -100,11 +100,11 @@ Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
 matters for sky-box cube faces.
 
 The renderer still uses only the first mip and does not cull by zones. Visible
-vertex-mesh actors are decoded, lit, and rendered, and placed actors can play
-their serialized vertex animation state. Sprite, brush/mover, corona,
-particle, and skeletal-animation actor paths remain unsupported.
-`WetTexture` and `FireTexture` previews are static; runtime procedural
-animation and time-varying light effects are not implemented. Unsupported
+vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
+serialized or runtime-selected animation sequences. Sprite, brush/mover,
+corona, and particle actor paths remain unsupported.
+`WetTexture` and `FireTexture` previews are static; actor runtime ticking does
+not yet drive procedural animation or time-varying light effects. Unsupported
 texture classes use a magenta checkerboard.
 
 Sky rendering clips at the fake-backdrop polygons rather than reproducing

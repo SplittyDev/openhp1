@@ -1892,6 +1892,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "openhp1-runtime"
+version = "0.1.0"
+dependencies = [
+ "openhp1-map",
+ "openhp1-package",
+ "openhp1-script",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "openhp1-scene"
 version = "0.1.0"
 dependencies = [
@@ -1900,8 +1910,18 @@ dependencies = [
  "openhp1-map",
  "openhp1-mesh",
  "openhp1-package",
+ "openhp1-runtime",
+ "openhp1-script",
  "openhp1-texture",
  "tracing",
+]
+
+[[package]]
+name = "openhp1-script"
+version = "0.1.0"
+dependencies = [
+ "openhp1-package",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1920,6 +1940,7 @@ dependencies = [
  "eframe",
  "glam",
  "openhp1-render",
+ "openhp1-runtime",
  "openhp1-scene",
  "tracing",
  "tracing-subscriber",

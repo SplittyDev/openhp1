@@ -89,8 +89,11 @@ impl PackageStore {
             .ok_or_else(|| ResolveError::InvalidPackagePath {
                 path: path.to_path_buf(),
             })?;
-        let package = Arc::new(Package::open(path)?);
         let key = name.to_ascii_lowercase();
+        if let Some(package) = self.loaded.get(&key) {
+            return Ok(Arc::clone(package));
+        }
+        let package = Arc::new(Package::open(path)?);
         self.paths
             .entry(key.clone())
             .or_insert_with(|| path.to_path_buf());

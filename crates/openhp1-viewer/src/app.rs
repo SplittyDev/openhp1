@@ -7,7 +7,9 @@ use eframe::{
 };
 use glam::Vec3;
 use openhp1_render::{Camera, RenderStats, Renderer};
+use openhp1_runtime::{ActorAction, ScriptRuntime};
 use openhp1_scene::{LoadedScene, SceneActor, SceneObjectId};
+use tracing::info;
 
 use crate::target::ColorTarget;
 
@@ -23,13 +25,18 @@ pub(crate) struct ViewerApp {
     actor_filter: String,
     selected_actor: Option<usize>,
     scene: LoadedScene,
+    runtime: ScriptRuntime,
     last_frame: Instant,
     render_stats: RenderStats,
     load_error: Option<String>,
 }
 
 impl ViewerApp {
-    pub(crate) fn new(context: &eframe::CreationContext<'_>, scene: LoadedScene) -> Result<Self> {
+    pub(crate) fn new(
+        context: &eframe::CreationContext<'_>,
+        mut scene: LoadedScene,
+    ) -> Result<Self> {
+        let runtime = apply_begin_play(&mut scene)?;
         let state = context
             .wgpu_render_state
             .clone()
@@ -61,6 +68,7 @@ impl ViewerApp {
             actor_filter: String::new(),
             selected_actor: None,
             scene,
+            runtime,
             last_frame: Instant::now(),
             render_stats: RenderStats::default(),
             load_error: None,
@@ -68,7 +76,10 @@ impl ViewerApp {
     }
 
     fn load_level(&mut self, path: PathBuf, viewport_size: [u32; 2]) {
-        let scene = match LoadedScene::load(path) {
+        let (scene, runtime) = match LoadedScene::load(path).and_then(|mut scene| {
+            let runtime = apply_begin_play(&mut scene)?;
+            Ok((scene, runtime))
+        }) {
             Ok(scene) => scene,
             Err(error) => {
                 self.load_error = Some(format!("{error:#}"));
@@ -89,6 +100,7 @@ impl ViewerApp {
         self.movement_speed = (radius * 0.35).max(200.0);
         self.renderer = renderer;
         self.scene = scene;
+        self.runtime = runtime;
         self.actor_filter.clear();
         self.selected_actor = None;
         self.render_stats = RenderStats::default();
@@ -408,6 +420,118 @@ impl ViewerApp {
             }
         }
     }
+
+    fn update_runtime(&mut self, delta_time: f32) {
+        let actions = match self.runtime.tick(delta_time) {
+            Ok(actions) => actions,
+            Err(error) => {
+                self.load_error = Some(format!("runtime tick failed: {error}"));
+                return;
+            }
+        };
+        if let Err(error) = apply_runtime_actions(&mut self.scene, actions) {
+            self.load_error = Some(format!("runtime action failed: {error:#}"));
+        }
+    }
+}
+
+fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
+    let game_root = scene
+        .path
+        .parent()
+        .and_then(|directory| directory.parent())
+        .context("map path must be inside the game's Maps directory")?;
+    let mut runtime = ScriptRuntime::new(game_root)?;
+    let classes = scene
+        .actors
+        .iter()
+        .enumerate()
+        .filter_map(|(actor, value)| {
+            value.class.as_ref().map(|class| {
+                (
+                    actor,
+                    value.id.package.clone(),
+                    value.id.export_index,
+                    class.package.clone(),
+                    class.export_index,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    for &(actor, ref actor_package, actor_export, ref class_package, class_export) in &classes {
+        if let Err(error) = runtime.register_actor(
+            actor,
+            actor_package,
+            actor_export,
+            class_package,
+            class_export,
+        ) {
+            scene.actors[actor]
+                .diagnostics
+                .push(format!("runtime registration failed: {error}"));
+        }
+    }
+    let mut events = 0;
+    let mut animations = 0;
+    let mut deferred = 0;
+    for (actor, _, _, package, export) in classes {
+        match runtime.dispatch_event(actor, package, export, "PostBeginPlay") {
+            Ok(actions) => {
+                events += 1;
+                let applied = apply_runtime_actions(scene, actions)?;
+                animations += applied.0;
+                deferred += applied.1;
+            }
+            Err(error) => {
+                deferred += 1;
+                scene.actors[actor]
+                    .diagnostics
+                    .push(format!("runtime deferred PostBeginPlay: {error}"));
+            }
+        }
+    }
+    info!(events, animations, deferred, "initialized script runtime");
+    Ok(runtime)
+}
+
+fn apply_runtime_actions(
+    scene: &mut LoadedScene,
+    actions: Vec<ActorAction>,
+) -> Result<(usize, usize)> {
+    let mut animations = 0;
+    let mut deferred = 0;
+    for action in actions {
+        match action {
+            ActorAction::LoopAnimation {
+                actor,
+                sequence,
+                rate,
+            } => {
+                if scene.loop_actor_animation(actor, &sequence, rate)? {
+                    animations += 1;
+                } else {
+                    scene.actors[actor]
+                        .diagnostics
+                        .push(format!("runtime could not play animation {sequence}"));
+                }
+            }
+            ActorAction::DeferredCall { actor, message } => {
+                deferred += 1;
+                if scene.actors[actor]
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.starts_with("runtime deferred"))
+                    .count()
+                    < 3
+                {
+                    scene.actors[actor]
+                        .diagnostics
+                        .push(format!("runtime deferred call: {message}"));
+                }
+            }
+        }
+    }
+    Ok((animations, deferred))
 }
 
 impl eframe::App for ViewerApp {
@@ -447,6 +571,7 @@ impl eframe::App for ViewerApp {
                     .maintain_aspect_ratio(false),
             );
             self.update_camera(ui, &response, delta_time);
+            self.update_runtime(delta_time);
             self.update_animations(delta_time);
 
             let mut encoder =

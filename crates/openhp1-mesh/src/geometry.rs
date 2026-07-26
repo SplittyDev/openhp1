@@ -1,9 +1,10 @@
-use glam::{Vec2, Vec3};
-use openhp1_package::ObjectReader;
+use glam::{Quat, Vec2, Vec3};
+use openhp1_package::{ObjectReader, ObjectReference};
 
 use crate::{
     Error, MeshTriangle, MeshVertex, Result,
     decode::{checked, checked_ref, read_vec, read_vec3, skip_vec},
+    types::{SkeletalBone, SkeletalInfluence, SkeletalMesh},
 };
 
 pub(crate) type SerializedTriangle = ([u16; 3], [[u8; 2]; 3], u32, i32);
@@ -11,6 +12,12 @@ pub(crate) type SerializedTriangle = ([u16; 3], [[u8; 2]; 3], u32, i32);
 pub(crate) struct DecodedGeometry {
     pub triangles: Vec<MeshTriangle>,
     pub face_vertices: Vec<[usize; 3]>,
+    pub skeletal: Option<DecodedSkeletalMesh>,
+}
+
+pub(crate) struct DecodedSkeletalMesh {
+    pub default_animation: ObjectReference,
+    pub mesh: SkeletalMesh,
 }
 
 pub(crate) fn classic_triangles(
@@ -55,6 +62,7 @@ pub(crate) fn classic_triangles(
     Ok(DecodedGeometry {
         triangles: decoded,
         face_vertices: faces,
+        skeletal: None,
     })
 }
 
@@ -105,17 +113,10 @@ pub(crate) fn lod_triangles(
     })?;
     reader.read_u32()?; // old frame vertices
 
-    let skeletal_points;
-    let vertices = if skeletal && vertices.is_empty() {
-        skip_vec(reader, "extended mesh wedges", |reader| {
-            reader.read_bytes(12)?;
-            Ok(())
-        })?;
-        skeletal_points = read_vec(reader, "skeletal mesh points", read_vec3)?;
-        &skeletal_points
-    } else {
-        vertices
-    };
+    let skeletal = skeletal.then(|| decode_skeletal_mesh(reader)).transpose()?;
+    let vertices = skeletal
+        .as_ref()
+        .map_or(vertices, |skeletal| skeletal.mesh.points.as_slice());
     let frame_vertices = if frame_vertices == 0 {
         vertices.len()
     } else {
@@ -173,6 +174,127 @@ pub(crate) fn lod_triangles(
     Ok(DecodedGeometry {
         triangles,
         face_vertices,
+        skeletal,
+    })
+}
+
+fn decode_skeletal_mesh(reader: &mut ObjectReader<'_>) -> Result<DecodedSkeletalMesh> {
+    skip_vec(reader, "extended mesh wedges", |reader| {
+        reader.read_u16()?;
+        reader.read_u16()?;
+        reader.read_f32()?;
+        reader.read_f32()?;
+        Ok(())
+    })?;
+    let points = read_vec(reader, "skeletal mesh points", read_vec3)?;
+    let bones = read_vec(reader, "reference skeleton", |reader| {
+        let name = crate::decode::read_name(reader, "reference skeleton bone")?;
+        reader.read_u32()?; // flags
+        let orientation = Quat::from_xyzw(
+            reader.read_f32()?,
+            reader.read_f32()?,
+            reader.read_f32()?,
+            reader.read_f32()?,
+        );
+        let position = read_vec3(reader)?;
+        reader.read_f32()?; // length
+        read_vec3(reader)?; // size
+        reader.read_u32()?; // children
+        let parent = usize::try_from(reader.read_u32()?).map_err(|_| Error::InvalidIndex {
+            field: "reference skeleton parent",
+            index: usize::MAX,
+            length: 0,
+        })?;
+        if !orientation.is_finite() || orientation.length_squared() <= f32::EPSILON {
+            return Err(Error::InvalidFloat {
+                field: "reference skeleton orientation",
+                value: orientation.length_squared(),
+            });
+        }
+        if !position.is_finite() {
+            return Err(Error::InvalidFloat {
+                field: "reference skeleton position",
+                value: f32::NAN,
+            });
+        }
+        Ok(SkeletalBone {
+            name,
+            orientation: orientation.normalize(),
+            position,
+            parent,
+        })
+    })?;
+    for (index, bone) in bones.iter().enumerate() {
+        if bone.parent > index || (index == 0 && bone.parent != 0) {
+            return Err(Error::InvalidIndex {
+                field: "reference skeleton parent",
+                index: bone.parent,
+                length: index + 1,
+            });
+        }
+    }
+    let weight_indices = read_vec(reader, "bone weight indices", |reader| {
+        let start = usize::from(reader.read_u16()?);
+        let count = usize::from(reader.read_u16()?);
+        reader.read_u16()?;
+        reader.read_u16()?;
+        Ok((start, count))
+    })?;
+    let weights = read_vec(reader, "bone weights", |reader| {
+        Ok((
+            usize::from(reader.read_u16()?),
+            f32::from(reader.read_u16()?) / 65_535.0,
+        ))
+    })?;
+    let local_points = read_vec(reader, "skeletal mesh local points", read_vec3)?;
+    reader.read_u32()?; // skeletal depth
+    let default_animation = reader.read_object_reference()?;
+    reader.read_u32()?; // weapon bone
+    for _ in 0..12 {
+        reader.read_f32()?;
+    }
+
+    if weight_indices.len() != bones.len() || weights.len() != local_points.len() {
+        return Err(Error::InvalidSkeletalWeights {
+            bones: bones.len(),
+            weight_indices: weight_indices.len(),
+            weights: weights.len(),
+            local_points: local_points.len(),
+        });
+    }
+    let mut influences = vec![Vec::new(); points.len()];
+    for (bone, &(start, count)) in weight_indices.iter().enumerate() {
+        let end = start.checked_add(count).ok_or(Error::InvalidIndex {
+            field: "bone weight",
+            index: usize::MAX,
+            length: weights.len(),
+        })?;
+        let selected = weights.get(start..end).ok_or(Error::InvalidIndex {
+            field: "bone weight",
+            index: end,
+            length: weights.len(),
+        })?;
+        for (offset, &(point, weight)) in selected.iter().enumerate() {
+            let local_position = checked(&local_points, start + offset, "skeletal local point")?;
+            let point_influences = influences.get_mut(point).ok_or(Error::InvalidIndex {
+                field: "skeletal point",
+                index: point,
+                length: points.len(),
+            })?;
+            point_influences.push(SkeletalInfluence {
+                bone,
+                weight,
+                local_position,
+            });
+        }
+    }
+    Ok(DecodedSkeletalMesh {
+        default_animation,
+        mesh: SkeletalMesh {
+            points,
+            bones,
+            influences,
+        },
     })
 }
 
@@ -194,18 +316,18 @@ pub(crate) fn sample_triangles(
         .zip(faces)
         .map(|(triangle, face)| {
             let mut triangle = *triangle;
-            for corner in 0..3 {
+            for (corner, &vertex) in face.iter().enumerate() {
                 triangle.vertices[corner].position =
-                    checked(vertices, face[corner], "mesh animation vertex")?;
+                    checked(vertices, vertex, "mesh animation vertex")?;
                 triangle.vertices[corner].normal =
-                    checked(normals, face[corner], "mesh animation normal")?;
+                    checked(normals, vertex, "mesh animation normal")?;
             }
             Ok(triangle)
         })
         .collect()
 }
 
-fn vertex_normals(vertices: &[Vec3], faces: &[[usize; 3]]) -> Vec<Vec3> {
+pub(crate) fn vertex_normals(vertices: &[Vec3], faces: &[[usize; 3]]) -> Vec<Vec3> {
     let mut normals = vec![Vec3::ZERO; vertices.len()];
     for &[a, b, c] in faces {
         let normal = (vertices[b] - vertices[a])

@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use openhp1_mesh::Mesh;
-use openhp1_package::{PACKAGE_MAGIC, Package};
+use openhp1_mesh::{Mesh, SkeletalAnimation};
+use openhp1_package::{ObjectReference, PACKAGE_MAGIC, Package};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let root = env::args_os()
@@ -21,9 +21,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut meshes = 0;
     let mut sequences = 0;
     let mut sampled = 0;
+    let mut skeletal_animations = 0;
+    let mut skeletal_sequences = 0;
+    let mut skeletal_sampled = 0;
     for path in paths {
         let package = Package::open(&path)?;
         for (export_index, export) in package.summary().exports.iter().enumerate() {
+            if package.summary().class_name(export) == Some("Animation") {
+                let animation = SkeletalAnimation::decode(&package, export_index)?;
+                skeletal_animations += 1;
+                skeletal_sequences += animation.sequences.len();
+                continue;
+            }
             if !matches!(
                 package.summary().class_name(export),
                 Some("Mesh" | "LodMesh" | "SkeletalMesh")
@@ -45,6 +54,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .join(", ")
                 );
             }
+            if let ObjectReference::Export(animation_index) = mesh.default_animation {
+                let animation = SkeletalAnimation::decode(&package, animation_index)?;
+                for sequence in 0..animation.sequences.len() {
+                    mesh.sample_skeletal_sequence(&animation, sequence, 0.375)
+                        .map_err(|error| {
+                            format!(
+                                "{}:{} sequence {}: {error}",
+                                path.display(),
+                                package.summary().name(export.object_name),
+                                animation.sequences[sequence].name
+                            )
+                        })?;
+                    skeletal_sampled += 1;
+                }
+            }
             if mesh.frame_vertices == 0 || mesh.animation_frames == 0 {
                 continue;
             }
@@ -55,7 +79,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("decoded {meshes} meshes and {sequences} sequences; sampled {sampled}");
+    println!(
+        "decoded {meshes} meshes and {sequences} vertex sequences; sampled {sampled}; \
+         decoded {skeletal_animations} skeletal animations and {skeletal_sequences} sequences; \
+         sampled {skeletal_sampled}"
+    );
     Ok(())
 }
 

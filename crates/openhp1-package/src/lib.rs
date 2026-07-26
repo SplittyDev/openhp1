@@ -14,7 +14,7 @@ mod summary;
 mod tables;
 
 pub use error::{Error, Result};
-pub use object::{ObjectReader, PropertyKind, PropertyTag};
+pub use object::{ObjectReader, ObjectStack, PropertyKind, PropertyTag};
 pub use package::Package;
 pub use resolver::{PackageStore, ResolveError, ResolveResult, ResolvedObject};
 pub use summary::{

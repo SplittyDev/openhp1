@@ -26,8 +26,8 @@ Each scene actor preserves its object and resolved class names, Unreal-space
 transform, draw state, resolved mesh, current animation state, and any
 actor-local diagnostics. Visible mesh actors also retain their vertex and index
 ranges inside the shared CPU render mesh. This keeps the current batching
-strategy while providing stable objects that a future runtime can inspect and
-mutate.
+strategy while letting the script runtime address an actor and change its
+active vertex- or skeletal-animation sequence without rebuilding the scene.
 
 Actor state is assembled from the decodable class-default chain followed by
 the actor export's tagged properties. A direct class-default failure contributes

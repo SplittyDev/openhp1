@@ -46,8 +46,41 @@ pub enum Error {
     InvalidAnimationPhase(f32),
     #[error("mesh has no vertex animation frames")]
     NoVertexAnimation,
+    #[error("mesh has no skeletal skinning data")]
+    NoSkeletalMesh,
+    #[error("skeletal animation has {sequence_count} sequences but {move_count} motion chunks")]
+    InvalidSkeletalSequenceLayout {
+        sequence_count: usize,
+        move_count: usize,
+    },
+    #[error("{field} has invalid floating-point value {value}")]
+    InvalidFloat { field: &'static str, value: f32 },
+    #[error(
+        "skeletal animation track has {quaternions} rotations, {positions} positions, and {times} times"
+    )]
+    InvalidSkeletalTrack {
+        quaternions: usize,
+        positions: usize,
+        times: usize,
+    },
+    #[error(
+        "skeletal mesh has {bones} bones, {weight_indices} weight-index records, {weights} weights, and {local_points} local points"
+    )]
+    InvalidSkeletalWeights {
+        bones: usize,
+        weight_indices: usize,
+        weights: usize,
+        local_points: usize,
+    },
+    #[error("{object} has {remaining} unparsed bytes")]
+    TrailingData {
+        object: &'static str,
+        remaining: usize,
+    },
     #[error("unsupported mesh class {0}")]
     UnsupportedClass(String),
+    #[error("unsupported animation class {0}")]
+    UnsupportedAnimationClass(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

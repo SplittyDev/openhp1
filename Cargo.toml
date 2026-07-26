@@ -4,7 +4,9 @@ members = [
     "crates/openhp1-mesh",
     "crates/openhp1-package",
     "crates/openhp1-render",
+    "crates/openhp1-runtime",
     "crates/openhp1-scene",
+    "crates/openhp1-script",
     "crates/openhp1-texture",
     "crates/openhp1-viewer",
 ]

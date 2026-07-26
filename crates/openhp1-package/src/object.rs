@@ -7,6 +7,18 @@ use crate::{
     tables::object_reference,
 };
 
+const HAS_STACK: u32 = 0x0200_0000;
+
+/// Serialized execution state stored before an object's tagged properties.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ObjectStack {
+    pub function: ObjectReference,
+    pub state: ObjectReference,
+    pub probe_mask: u64,
+    pub latent_action: i32,
+    pub bytecode_offset: Option<i32>,
+}
+
 /// The type nibble stored in an Unreal serialized property tag.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -84,6 +96,43 @@ mod tests {
             [0xaa, 0xbb, 0xcc]
         );
         assert!(reader.next_property().unwrap().is_none());
+    }
+
+    #[test]
+    fn reads_serialized_object_stack() {
+        let summary = PackageSummary {
+            source: Arc::from("test"),
+            header: PackageHeader {
+                version: 61,
+                licensee_version: 0,
+                package_flags: 0,
+                name_count: 0,
+                name_offset: 0,
+                export_count: 1,
+                export_offset: 0,
+                import_count: 0,
+                import_offset: 0,
+                history: HeaderHistory::Heritage {
+                    count: 0,
+                    offset: 0,
+                },
+            },
+            names: vec![],
+            imports: vec![],
+            exports: vec![],
+        };
+        let mut bytes = vec![1, 0];
+        bytes.extend(0x1234_u64.to_le_bytes());
+        bytes.extend((-7_i32).to_le_bytes());
+        bytes.push(0x2a);
+        let mut reader = ObjectReader::new(&bytes, &summary, 0x100);
+        let stack = reader.read_object_stack(0x0200_0000).unwrap().unwrap();
+        assert_eq!(stack.function, crate::ObjectReference::Export(0));
+        assert_eq!(stack.state, crate::ObjectReference::None);
+        assert_eq!(stack.probe_mask, 0x1234);
+        assert_eq!(stack.latent_action, -7);
+        assert_eq!(stack.bytecode_offset, Some(42));
+        assert_eq!(reader.remaining(), 0);
     }
 }
 
@@ -208,6 +257,27 @@ impl<'a> ObjectReader<'a> {
         let offset = self.absolute_position();
         let index = self.read_compact_index()?;
         object_reference(index, self.archive.source(), offset)
+    }
+
+    /// Reads the optional UObject state frame selected by `object_flags`.
+    pub fn read_object_stack(&mut self, object_flags: u32) -> Result<Option<ObjectStack>> {
+        if object_flags & HAS_STACK == 0 {
+            return Ok(None);
+        }
+        let function = self.read_object_reference()?;
+        let state = self.read_object_reference()?;
+        let probe_mask = self.read_u64()?;
+        let latent_action = self.read_i32()?;
+        let bytecode_offset = (function != ObjectReference::None)
+            .then(|| self.read_compact_index())
+            .transpose()?;
+        Ok(Some(ObjectStack {
+            function,
+            state,
+            probe_mask,
+            latent_action,
+            bytecode_offset,
+        }))
     }
 
     /// Reads the next tagged property and advances past its value.

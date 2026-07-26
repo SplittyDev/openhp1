@@ -30,9 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     for (index, export) in summary.exports.iter().enumerate() {
         println!(
-            "  export {index:>5}: {:<28} {:<20} size={:#x} offset={}",
+            "  export {index:>5}: {:<28} {:<20} outer={:<20} size={:#x} offset={}",
             summary.name(export.object_name),
             summary.class_name(export).unwrap_or("<class>"),
+            summary.object_name(export.outer).unwrap_or("-"),
             export.serial_size,
             export
                 .serial_offset
