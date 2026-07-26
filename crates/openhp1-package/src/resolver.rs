@@ -194,9 +194,10 @@ fn find_export(
         summary
             .name(export.object_name)
             .eq_ignore_ascii_case(object)
-            && summary
+            && (summary
                 .class_name(export)
                 .is_some_and(|actual| actual.eq_ignore_ascii_case(class))
+                || (class.eq_ignore_ascii_case("Class") && export.class == ObjectReference::None))
             && export_groups(summary, export).is_some_and(|actual| equal_names(&actual, groups))
     })
 }
@@ -466,6 +467,47 @@ mod tests {
             find_export(&summary, "texture", "stone", &["walls".into()]),
             Some(1)
         );
+    }
+
+    #[test]
+    fn resolves_class_exports_with_no_serialized_meta_class() {
+        let names = ["None", "LampPost"]
+            .into_iter()
+            .map(|value| NameEntry {
+                value: value.into(),
+                flags: 0,
+            })
+            .collect();
+        let summary = PackageSummary {
+            source: Arc::from("test"),
+            header: PackageHeader {
+                version: 76,
+                licensee_version: 0,
+                package_flags: 0,
+                name_count: 2,
+                name_offset: 0,
+                export_count: 1,
+                export_offset: 0,
+                import_count: 0,
+                import_offset: 0,
+                history: crate::HeaderHistory::Generations {
+                    guid: [0; 16],
+                    generations: Vec::new(),
+                },
+            },
+            names,
+            imports: vec![],
+            exports: vec![Export {
+                class: ObjectReference::None,
+                super_class: ObjectReference::None,
+                outer: ObjectReference::None,
+                object_name: 1,
+                object_flags: 0,
+                serial_size: 0,
+                serial_offset: None,
+            }],
+        };
+        assert_eq!(find_export(&summary, "Class", "lamppost", &[]), Some(0));
     }
 
     #[test]

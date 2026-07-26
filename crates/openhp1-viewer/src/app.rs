@@ -126,6 +126,9 @@ impl eframe::App for ViewerApp {
                     ui.label("Sky zone");
                     ui.label(if self.scene.has_sky_zone { "yes" } else { "no" });
                     ui.end_row();
+                    ui.label("Actor meshes");
+                    ui.label(self.scene.actor_meshes.to_string());
+                    ui.end_row();
                     ui.label("Triangles");
                     ui.label((self.scene.render.mesh.indices.len() / 3).to_string());
                     ui.end_row();

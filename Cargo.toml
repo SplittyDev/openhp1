@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/openhp1-map",
+    "crates/openhp1-mesh",
     "crates/openhp1-package",
     "crates/openhp1-render",
     "crates/openhp1-texture",

@@ -10,6 +10,7 @@ anyhow.workspace = true
 eframe.workspace = true
 glam.workspace = true
 openhp1-map = { path = "../openhp1-map" }
+openhp1-mesh = { path = "../openhp1-mesh" }
 openhp1-package = { path = "../openhp1-package" }
 openhp1-render = { path = "../openhp1-render" }
 openhp1-texture = { path = "../openhp1-texture" }

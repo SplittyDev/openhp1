@@ -82,6 +82,7 @@ crates/
   openhp1-package/  Package archive, header, names, imports, exports,
                     compact indices, object references, properties, resolver
   openhp1-map/      Level, Model, BSP, surfaces, vertices, and actors
+  openhp1-mesh/     Mesh, LodMesh, and SkeletalMesh geometry decoding
   openhp1-texture/  Palette, Texture, mipmaps, and pixel conversion
   openhp1-render/   wgpu renderer, render scene, and camera
   openhp1-viewer/   eframe application and egui inspection UI
@@ -91,6 +92,7 @@ Keep the dependency direction acyclic:
 
 ```text
 openhp1-package ──┬── openhp1-map ─────┐
+                  ├── openhp1-mesh ────┤
                   └── openhp1-texture ─┴── openhp1-render ── openhp1-viewer
 ```
 
@@ -115,6 +117,7 @@ current internal responsibility split is:
 | --- | --- |
 | `openhp1-package` | checked archive cursor, object properties, package owner, configured package resolver, public summary types, index-table decoding, errors |
 | `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, errors |
+| `openhp1-mesh` | classic, LOD, and skeletal mesh geometry decoding |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
 | `openhp1-render` | camera/bounds, coordinate conversion, decoded render scene, wgpu renderer |
 | `openhp1-viewer` | executable startup, package/texture scene loading, egui application, offscreen color target |
