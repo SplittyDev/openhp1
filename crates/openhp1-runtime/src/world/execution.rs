@@ -40,7 +40,6 @@ impl ScriptRuntime {
             return Err(DispatchError::CallDepth);
         }
         let script = self.script(function)?;
-        let frame_fields = self.frame_fields(function, &script.bytecode)?;
         if let ScriptMetadata::Function(metadata) = &script.metadata
             && script.bytecode.bytes.is_empty()
             && metadata.native_index != 0
@@ -65,73 +64,64 @@ impl ScriptRuntime {
         let mut frame = Frame::new(&script.bytecode);
         self.bind_struct_members(function, &script.bytecode, &mut frame)?;
         self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
-        let mut frame_instance = HashMap::new();
-        self.load_frame_instance(&frame_fields, instance, &mut frame_instance)?;
-        let result = frame.execute_with_instance(&mut frame_instance, |request, frame_instance| {
-            let synchronize = request_needs_instance_sync(&request);
-            if synchronize {
-                self.store_frame_instance(
-                    &function.package,
-                    &frame_fields,
-                    frame_instance,
-                    instance,
-                )
-                .map_err(|error| error.to_string())?;
-            }
-            let result = match request {
-                FrameRequest::Call {
-                    receiver,
-                    function: call,
-                    arguments,
-                } => self
-                    .dispatch_context_call(
-                        actor,
-                        actor_class,
+        frame
+            .execute_hosted(|request| {
+                let result = match request {
+                    FrameRequest::Call {
                         receiver,
-                        &function.package,
-                        call,
-                        &arguments,
-                        instance,
-                        actions,
-                        depth + 1,
-                    )
-                    .map(FrameResponse::Value),
-                FrameRequest::CallIterator {
-                    receiver,
-                    function: call,
-                    arguments,
-                } => self
-                    .dispatch_iterator_call(
-                        actor,
+                        function: call,
+                        arguments,
+                    } => self
+                        .dispatch_context_call(
+                            actor,
+                            actor_class,
+                            receiver,
+                            &function.package,
+                            call,
+                            &arguments,
+                            instance,
+                            actions,
+                            depth + 1,
+                        )
+                        .map(FrameResponse::Value),
+                    FrameRequest::CallIterator {
                         receiver,
-                        &function.package,
-                        call,
-                        &arguments,
-                        instance,
-                    )
-                    .map(FrameResponse::Iterator),
-                FrameRequest::GetInstance { receiver, field } => self
-                    .context_field_value(actor, receiver, &function.package, field, instance)
-                    .map(FrameResponse::Value),
-                FrameRequest::SetInstance {
-                    receiver,
-                    field,
-                    value,
-                } => self
-                    .set_context_field(actor, receiver, &function.package, field, value, instance)
-                    .map(|()| FrameResponse::Value(Value::None)),
-            };
-            if synchronize {
-                self.load_frame_instance(&frame_fields, instance, frame_instance)
-                    .map_err(|error| error.to_string())?;
-            }
-            result.map_err(|error| error.to_string())
-        });
-        self.store_frame_instance(&function.package, &frame_fields, &frame_instance, instance)?;
-        result.map_err(Into::into)
+                        function: call,
+                        arguments,
+                    } => self
+                        .dispatch_iterator_call(
+                            actor,
+                            receiver,
+                            &function.package,
+                            call,
+                            &arguments,
+                            instance,
+                        )
+                        .map(FrameResponse::Iterator),
+                    FrameRequest::GetInstance { receiver, field } => self
+                        .context_field_value(actor, receiver, &function.package, field, instance)
+                        .map(FrameResponse::Value),
+                    FrameRequest::SetInstance {
+                        receiver,
+                        field,
+                        value,
+                    } => self
+                        .set_context_field(
+                            actor,
+                            receiver,
+                            &function.package,
+                            field,
+                            value,
+                            instance,
+                        )
+                        .map(|()| FrameResponse::Value(Value::None)),
+                };
+                result.map_err(|error| error.to_string())
+            })
+            .map_err(Into::into)
     }
 
-    fn script(&mut self, object: &ResolvedObject) -> DispatchResult<Arc<ScriptExport>> {
+    pub(super) fn script(&mut self, object: &ResolvedObject) -> DispatchResult<Arc<ScriptExport>> {
         let id = object_id(&object.package, object.export_index);
         if let Some(script) = self.scripts.get(&id) {
             return Ok(Arc::clone(script));
@@ -139,29 +129,6 @@ impl ScriptRuntime {
         let script = Arc::new(ScriptExport::decode(&object.package, object.export_index)?);
         self.scripts.insert(id, Arc::clone(&script));
         Ok(script)
-    }
-
-    fn frame_fields(
-        &mut self,
-        function: &ResolvedObject,
-        bytecode: &Bytecode,
-    ) -> DispatchResult<Arc<Vec<(i32, ObjectId)>>> {
-        let key = object_id(&function.package, function.export_index);
-        if let Some(fields) = self.frame_fields.get(&key) {
-            return Ok(Arc::clone(fields));
-        }
-        let mut seen = HashSet::new();
-        let mut fields = Vec::new();
-        for field in instance_fields(bytecode) {
-            if seen.insert(field)
-                && let Some(id) = self.resolve_field(&function.package, field)?
-            {
-                fields.push((field, id));
-            }
-        }
-        let fields = Arc::new(fields);
-        self.frame_fields.insert(key, Arc::clone(&fields));
-        Ok(fields)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -457,23 +424,29 @@ impl ScriptRuntime {
         field: i32,
         current_instance: &InstanceState,
     ) -> DispatchResult<Value> {
-        let actor = self.actor_for_handle(receiver)?;
-        let Some(resolved) = self.packages.resolve(source, object_reference(field))? else {
+        let actor = if receiver == -1 {
+            current_actor
+        } else {
+            self.actor_for_handle(receiver)?
+        };
+        let Some(field) = self.resolve_field(source, field)? else {
             return Ok(Value::None);
         };
-        let id = object_id(&resolved.package, resolved.export_index);
         let value = if actor == current_actor {
-            current_instance.get(&id).cloned()
+            current_instance.get(&field).cloned()
         } else {
             self.instances
                 .get(&actor)
                 .ok_or(DispatchError::ActiveActorContext { actor })?
-                .get(&id)
+                .get(&field)
                 .cloned()
         };
         match value {
             Some(value) => self.frame_value(&value),
-            None => Ok(self.zero_field_value(&resolved)?.unwrap_or(Value::None)),
+            None => {
+                let field = self.resolved_object(&field)?;
+                Ok(self.zero_field_value(&field)?.unwrap_or(Value::None))
+            }
         }
     }
 
@@ -486,7 +459,11 @@ impl ScriptRuntime {
         value: Value,
         current_instance: &mut InstanceState,
     ) -> DispatchResult<()> {
-        let actor = self.actor_for_handle(receiver)?;
+        let actor = if receiver == -1 {
+            current_actor
+        } else {
+            self.actor_for_handle(receiver)?
+        };
         let Some(field) = self.resolve_field(source, field)? else {
             return Ok(());
         };
@@ -516,31 +493,6 @@ impl ScriptRuntime {
 
 pub(super) fn local_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
     fields(bytecode, 0x00)
-}
-
-fn request_needs_instance_sync(request: &FrameRequest) -> bool {
-    !matches!(
-        request,
-        FrameRequest::Call {
-            function: FunctionCall::Native(index),
-            ..
-        } if !matches!(
-            *index,
-            ENABLE
-                | DISABLE
-                | DESTROY
-                | GOTO_STATE
-                | LOOP_ANIM
-                | SET_COLLISION
-                | SET_LOCATION
-                | SET_TIMER
-                | SET_ROTATION
-        )
-    )
-}
-
-fn instance_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
-    fields(bytecode, 0x01)
 }
 
 pub(super) fn fields(bytecode: &Bytecode, opcode: u8) -> impl Iterator<Item = i32> + '_ {

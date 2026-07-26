@@ -165,47 +165,6 @@ impl ScriptRuntime {
         Ok(field)
     }
 
-    pub(super) fn load_frame_instance(
-        &mut self,
-        fields: &[(i32, ObjectId)],
-        instance: &InstanceState,
-        frame: &mut HashMap<i32, Value>,
-    ) -> DispatchResult<()> {
-        frame.clear();
-        for (field, id) in fields {
-            let value = match instance.get(id) {
-                Some(value) => Some(self.frame_value(value)?),
-                None => {
-                    let resolved = ResolvedObject {
-                        package: self.packages.load_path(Path::new(id.package.as_ref()))?,
-                        export_index: id.export_index,
-                    };
-                    self.zero_field_value(&resolved)?
-                }
-            };
-            if let Some(value) = value {
-                frame.insert(*field, value);
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn store_frame_instance(
-        &mut self,
-        source: &Arc<Package>,
-        fields: &[(i32, ObjectId)],
-        frame: &HashMap<i32, Value>,
-        instance: &mut InstanceState,
-    ) -> DispatchResult<()> {
-        for (field, id) in fields {
-            let Some(value) = frame.get(field) else {
-                continue;
-            };
-            instance.insert(id.clone(), self.stored_value(source, value)?);
-        }
-        Ok(())
-    }
-
     pub(super) fn frame_value(&mut self, value: &StoredValue) -> DispatchResult<Value> {
         Ok(match value {
             StoredValue::Value(value) => value.clone(),
@@ -313,6 +272,15 @@ impl ScriptRuntime {
         Ok(handle)
     }
 
+    pub(super) fn resolved_object(&mut self, object: &ObjectId) -> DispatchResult<ResolvedObject> {
+        Ok(ResolvedObject {
+            package: self
+                .packages
+                .load_path(Path::new(object.package.as_ref()))?,
+            export_index: object.export_index,
+        })
+    }
+
     pub(super) fn resolve_field(
         &mut self,
         source: &Arc<Package>,
@@ -389,14 +357,30 @@ impl ScriptRuntime {
         arguments: &[Value],
         frame: &mut Frame<'_>,
     ) -> DispatchResult<()> {
-        let parameters = self.function_parameters(source, function.children)?;
-        let arguments = parameters.iter().zip(arguments).collect::<HashMap<_, _>>();
-        for field in local_fields(&function.bytecode) {
-            let Some(id) = self.resolve_field(source, field)? else {
-                continue;
-            };
-            if let Some(value) = arguments.get(&id) {
-                frame.set_local(field, (*value).clone());
+        let key = ObjectId {
+            package: Arc::clone(&source.summary().source),
+            export_index: function.export_index,
+        };
+        let bindings = if let Some(bindings) = self.frame_arguments.get(&key) {
+            Arc::clone(bindings)
+        } else {
+            let parameters = self.function_parameters(source, function.children)?;
+            let mut bindings = Vec::new();
+            for field in local_fields(&function.bytecode) {
+                let Some(id) = self.resolve_field(source, field)? else {
+                    continue;
+                };
+                if let Some(argument) = parameters.iter().position(|parameter| *parameter == id) {
+                    bindings.push((field, argument));
+                }
+            }
+            let bindings = Arc::new(bindings);
+            self.frame_arguments.insert(key, Arc::clone(&bindings));
+            bindings
+        };
+        for &(field, argument) in bindings.iter() {
+            if let Some(value) = arguments.get(argument) {
+                frame.set_local(field, value.clone());
             }
         }
         Ok(())

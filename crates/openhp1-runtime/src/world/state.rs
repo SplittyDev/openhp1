@@ -7,6 +7,18 @@ impl ScriptRuntime {
         name: &str,
         mut depth: usize,
     ) -> DispatchResult<Option<ResolvedObject>> {
+        let lookup = FunctionLookup::new(
+            object_id(&class.package, class.export_index),
+            None,
+            name,
+            depth,
+        );
+        if let Some(function) = self.function_lookups.get(&lookup).cloned() {
+            return function
+                .as_ref()
+                .map(|function| self.resolved_object(function))
+                .transpose();
+        }
         loop {
             if depth >= MAX_CALL_DEPTH {
                 return Err(DispatchError::CallDepth);
@@ -24,13 +36,19 @@ impl ScriptRuntime {
                         .name(export.object_name)
                         .eq_ignore_ascii_case(name)
             }) {
-                return Ok(Some(ResolvedObject {
+                let function = ResolvedObject {
                     package: class.package,
                     export_index,
-                }));
+                };
+                self.function_lookups.insert(
+                    lookup,
+                    Some(object_id(&function.package, function.export_index)),
+                );
+                return Ok(Some(function));
             }
 
             let Some(base) = self.base_class(&class)? else {
+                self.function_lookups.insert(lookup, None);
                 return Ok(None);
             };
             class = base;
@@ -42,7 +60,7 @@ impl ScriptRuntime {
         &mut self,
         class: &ResolvedObject,
     ) -> DispatchResult<Option<ResolvedObject>> {
-        let metadata = ScriptExport::decode(&class.package, class.export_index)?;
+        let metadata = self.script(class)?;
         if !matches!(metadata.metadata, ScriptMetadata::Class(_)) {
             return Err(DispatchError::InvalidClass {
                 export_index: class.export_index,
@@ -58,20 +76,40 @@ impl ScriptRuntime {
         name: &str,
         depth: usize,
     ) -> DispatchResult<Option<ResolvedObject>> {
-        if let Some(state) = self.actor_states.get(&actor).and_then(Clone::clone)
+        let state = self.actor_states.get(&actor).and_then(Clone::clone);
+        let lookup = FunctionLookup::new(
+            object_id(&class.package, class.export_index),
+            state.as_deref(),
+            name,
+            depth,
+        );
+        if let Some(function) = self.function_lookups.get(&lookup).cloned() {
+            return function
+                .as_ref()
+                .map(|function| self.resolved_object(function))
+                .transpose();
+        }
+        let function = if let Some(state) = &state
             && let Some(function) = self.find_state_function(
                 ResolvedObject {
                     package: Arc::clone(&class.package),
                     export_index: class.export_index,
                 },
-                &state,
+                state,
                 name,
                 depth,
-            )?
-        {
-            return Ok(Some(function));
-        }
-        self.find_function(class, name, depth)
+            )? {
+            Some(function)
+        } else {
+            self.find_function(class, name, depth)?
+        };
+        self.function_lookups.insert(
+            lookup,
+            function
+                .as_ref()
+                .map(|function| object_id(&function.package, function.export_index)),
+        );
+        Ok(function)
     }
 
     fn find_state_function(

@@ -208,6 +208,7 @@ pub struct Frame<'a> {
     instance: HashMap<i32, Value>,
     defaults: HashMap<i32, Value>,
     struct_members: HashMap<i32, StructMember>,
+    hosted_instance: bool,
     creating_iterator: bool,
     pending_iterator: Option<PendingIterator>,
     iterators: Vec<ActiveIterator>,
@@ -226,6 +227,7 @@ impl<'a> Frame<'a> {
             instance: HashMap::new(),
             defaults: HashMap::new(),
             struct_members: HashMap::new(),
+            hosted_instance: false,
             creating_iterator: false,
             pending_iterator: None,
             iterators: Vec::new(),
@@ -277,6 +279,7 @@ impl<'a> Frame<'a> {
         })
     }
 
+    #[cfg(test)]
     fn execute_with_instance(
         &mut self,
         instance: &mut HashMap<i32, Value>,
@@ -288,6 +291,16 @@ impl<'a> Frame<'a> {
         std::mem::swap(&mut self.instance, instance);
         let result = self.execute_inner(&mut host);
         std::mem::swap(&mut self.instance, instance);
+        result
+    }
+
+    pub(crate) fn execute_hosted(
+        &mut self,
+        mut host: impl FnMut(FrameRequest) -> std::result::Result<FrameResponse, String>,
+    ) -> Result<Value> {
+        self.hosted_instance = true;
+        let result = self.execute_inner(&mut |request, _| host(request));
+        self.hosted_instance = false;
         result
     }
 
@@ -651,6 +664,21 @@ impl<'a> Frame<'a> {
             Slot::Instance {
                 receiver: -1,
                 field,
+            } if self.hosted_instance => {
+                host(
+                    FrameRequest::SetInstance {
+                        receiver: -1,
+                        field,
+                        value,
+                    },
+                    &mut self.instance,
+                )
+                .and_then(FrameResponse::into_value)
+                .map_err(|message| Error::Context { message })?;
+            }
+            Slot::Instance {
+                receiver: -1,
+                field,
             } => {
                 self.instance.insert(field, value);
             }
@@ -688,6 +716,20 @@ impl<'a> Frame<'a> {
     ) -> Result<Option<Value>> {
         Ok(match slot {
             Slot::Local(field) => self.locals.get(field).cloned(),
+            Slot::Instance {
+                receiver: -1,
+                field,
+            } if self.hosted_instance => Some(
+                host(
+                    FrameRequest::GetInstance {
+                        receiver: -1,
+                        field: *field,
+                    },
+                    &mut self.instance,
+                )
+                .and_then(FrameResponse::into_value)
+                .map_err(|message| Error::Context { message })?,
+            ),
             Slot::Instance {
                 receiver: -1,
                 field,
@@ -1224,6 +1266,46 @@ mod tests {
                 .unwrap(),
             Value::None
         );
+        assert_eq!(instance.get(&7), Some(&Value::Int(42)));
+    }
+
+    #[test]
+    fn hosted_instance_reads_and_writes_without_a_frame_copy() {
+        let mut bytes = vec![0x0f, 0x01];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(42_i32.to_le_bytes());
+        bytes.extend([0x04, 0x01]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut instance = HashMap::new();
+        let mut frame = Frame::new(&bytecode);
+        let result = frame
+            .execute_hosted(|request| match request {
+                FrameRequest::GetInstance {
+                    receiver: -1,
+                    field,
+                } => Ok(FrameResponse::Value(
+                    instance.get(&field).cloned().unwrap_or(Value::None),
+                )),
+                FrameRequest::SetInstance {
+                    receiver: -1,
+                    field,
+                    value,
+                } => {
+                    instance.insert(field, value);
+                    Ok(FrameResponse::Value(Value::None))
+                }
+                _ => unreachable!(),
+            })
+            .unwrap();
+
+        assert_eq!(result, Value::Int(42));
         assert_eq!(instance.get(&7), Some(&Value::Int(42)));
     }
 }

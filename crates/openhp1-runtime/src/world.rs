@@ -176,13 +176,14 @@ pub enum DispatchError {
 pub struct ScriptRuntime {
     packages: PackageStore,
     scripts: HashMap<ObjectId, Arc<ScriptExport>>,
+    function_lookups: HashMap<FunctionLookup, Option<ObjectId>>,
     instances: HashMap<usize, InstanceState>,
     class_defaults: HashMap<ObjectId, InstanceState>,
     class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
     resolved_fields: HashMap<(Arc<str>, i32), Option<ObjectId>>,
     zero_values: HashMap<ObjectId, Option<Value>>,
-    frame_fields: HashMap<ObjectId, Arc<Vec<(i32, ObjectId)>>>,
+    frame_arguments: HashMap<ObjectId, Arc<Vec<(i32, usize)>>>,
     struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
     actor_classes: HashMap<usize, ObjectId>,
     // ponytail: store state identity only; add label/IP state frames when state code ticks.
@@ -203,6 +204,25 @@ pub struct ScriptRuntime {
 struct ObjectId {
     package: Arc<str>,
     export_index: usize,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FunctionLookup {
+    class: ObjectId,
+    state: Option<String>,
+    function: String,
+    depth: usize,
+}
+
+impl FunctionLookup {
+    fn new(class: ObjectId, state: Option<&str>, function: &str, depth: usize) -> Self {
+        Self {
+            class,
+            state: state.map(str::to_ascii_lowercase),
+            function: function.to_ascii_lowercase(),
+            depth,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -326,5 +346,19 @@ mod tests {
             scalar_native(0xd4, &[Value::Vector([1.0, 2.0, 3.0]), Value::Float(2.0)]),
             Ok(Value::Vector([2.0, 4.0, 6.0]))
         );
+    }
+
+    #[test]
+    fn function_lookups_are_case_insensitive_and_state_scoped() {
+        let class = ObjectId {
+            package: Arc::from("Test.u"),
+            export_index: 7,
+        };
+        let lower = FunctionLookup::new(class.clone(), Some("patrol"), "tick", 2);
+        let upper = FunctionLookup::new(class.clone(), Some("PATROL"), "TICK", 2);
+        let other_state = FunctionLookup::new(class, Some("waiting"), "tick", 2);
+
+        assert_eq!(lower, upper);
+        assert_ne!(lower, other_state);
     }
 }
