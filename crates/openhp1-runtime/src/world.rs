@@ -13,10 +13,11 @@ use openhp1_script::{
 };
 use thiserror::Error;
 
-use crate::{Frame, FrameRequest, FunctionCall, StructMember, Value};
+use crate::{Frame, FrameRequest, FrameResponse, FunctionCall, StructMember, Value};
 
 const GOTO_STATE: u16 = 0x071;
 const DESTROY: u16 = 0x117;
+const ALL_ACTORS: u16 = 0x130;
 const LOOP_ANIM: u16 = 0x104;
 const SET_COLLISION: u16 = 0x106;
 const SET_LOCATION: u16 = 0x10b;
@@ -80,6 +81,9 @@ pub enum DispatchError {
     #[error("actor {actor} instance is already active")]
     ActiveActorContext { actor: usize },
 
+    #[error("runtime actor {actor} is not registered")]
+    UnregisteredActor { actor: usize },
+
     #[error("name `{name}` is missing from package `{package}`")]
     MissingName { package: Arc<str>, name: String },
 
@@ -94,11 +98,13 @@ pub struct ScriptRuntime {
     packages: PackageStore,
     instances: HashMap<usize, InstanceState>,
     class_defaults: HashMap<ObjectId, InstanceState>,
+    class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
     actor_classes: HashMap<usize, ObjectId>,
     // ponytail: store state identity only; add label/IP state frames when state code ticks.
     actor_states: HashMap<usize, Option<String>>,
     object_actors: HashMap<ObjectId, usize>,
+    actor_objects: HashMap<usize, ObjectId>,
     destroyed: HashSet<usize>,
     timers: HashMap<usize, ActorTimer>,
     timer_callbacks: usize,
@@ -136,10 +142,12 @@ impl ScriptRuntime {
             packages: PackageStore::scan_game_root(game_root)?,
             instances: HashMap::new(),
             class_defaults: HashMap::new(),
+            class_relations: HashMap::new(),
             fields: HashMap::new(),
             actor_classes: HashMap::new(),
             actor_states: HashMap::new(),
             object_actors: HashMap::new(),
+            actor_objects: HashMap::new(),
             destroyed: HashSet::new(),
             timers: HashMap::new(),
             timer_callbacks: 0,
@@ -171,6 +179,7 @@ impl ScriptRuntime {
         let object = object_id(&actor_package, actor_export);
         self.object_handle(object.clone())?;
         self.object_actors.insert(object.clone(), actor);
+        self.actor_objects.insert(actor, object.clone());
         self.actor_classes
             .insert(actor, object_id(&class.package, class.export_index));
 
@@ -541,27 +550,43 @@ impl ScriptRuntime {
                     receiver,
                     function: call,
                     arguments,
-                } => self.dispatch_context_call(
-                    actor,
-                    actor_class,
+                } => self
+                    .dispatch_context_call(
+                        actor,
+                        actor_class,
+                        receiver,
+                        &function.package,
+                        call,
+                        &arguments,
+                        instance,
+                        actions,
+                        depth + 1,
+                    )
+                    .map(FrameResponse::Value),
+                FrameRequest::CallIterator {
                     receiver,
-                    &function.package,
-                    call,
-                    &arguments,
-                    instance,
-                    actions,
-                    depth + 1,
-                ),
-                FrameRequest::GetInstance { receiver, field } => {
-                    self.context_field_value(actor, receiver, &function.package, field, instance)
-                }
+                    function: call,
+                    arguments,
+                } => self
+                    .dispatch_iterator_call(
+                        actor,
+                        receiver,
+                        &function.package,
+                        call,
+                        &arguments,
+                        instance,
+                    )
+                    .map(FrameResponse::Iterator),
+                FrameRequest::GetInstance { receiver, field } => self
+                    .context_field_value(actor, receiver, &function.package, field, instance)
+                    .map(FrameResponse::Value),
                 FrameRequest::SetInstance {
                     receiver,
                     field,
                     value,
                 } => self
                     .set_context_field(actor, receiver, &function.package, field, value, instance)
-                    .map(|()| Value::None),
+                    .map(|()| FrameResponse::Value(Value::None)),
             };
             self.load_frame_instance(
                 &function.package,
@@ -726,6 +751,139 @@ impl ScriptRuntime {
         );
         self.instances.insert(actor, instance);
         result
+    }
+
+    fn dispatch_iterator_call(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        call: FunctionCall,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<Value>> {
+        if receiver != -1 {
+            self.actor_for_handle(receiver)?;
+        }
+        let FunctionCall::Native(ALL_ACTORS) = call else {
+            return Err(crate::Error::Call {
+                call,
+                message: "iterator function is not implemented".to_owned(),
+            }
+            .into());
+        };
+        let [Value::Object(base_class), Value::None, rest @ ..] = arguments else {
+            return Err(crate::Error::Call {
+                call,
+                message: format!(
+                    "AllActors expects a class and output actor, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+            .into());
+        };
+        if rest.len() > 1 {
+            return Err(crate::Error::Call {
+                call,
+                message: format!(
+                    "AllActors expects at most 3 arguments, found {}",
+                    arguments.len()
+                ),
+            }
+            .into());
+        }
+        let base_class = self
+            .packages
+            .resolve(source, object_reference(*base_class))?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "AllActors base class is null".to_owned(),
+            })?;
+        let match_tag = rest
+            .first()
+            .filter(|value| !matches!(value, Value::None))
+            .map(|value| runtime_name(source, value))
+            .transpose()
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+            .filter(|tag| !tag.eq_ignore_ascii_case("None"));
+
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let tag_field = match match_tag {
+            Some(_) => Some(self.find_property(&base_class, "Tag", 0)?.ok_or_else(|| {
+                DispatchError::UnresolvedObject {
+                    message: "Actor.Tag is missing".to_owned(),
+                }
+            })?),
+            None => None,
+        };
+        let mut values = Vec::new();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = ResolvedObject {
+                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
+                export_index: class.export_index,
+            };
+            if !self.class_is_a(class, &base_class)? {
+                continue;
+            }
+            if let (Some(match_tag), Some(field)) = (&match_tag, &tag_field) {
+                let instance = if actor == current_actor {
+                    current_instance
+                } else {
+                    self.instances
+                        .get(&actor)
+                        .ok_or(DispatchError::ActiveActorContext { actor })?
+                };
+                if !matches!(
+                    instance.get(field),
+                    Some(StoredValue::Name(tag)) if tag.eq_ignore_ascii_case(match_tag)
+                ) {
+                    continue;
+                }
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(Value::Object(self.object_handle(object)?));
+        }
+        Ok(values)
+    }
+
+    fn class_is_a(
+        &mut self,
+        mut class: ResolvedObject,
+        base: &ResolvedObject,
+    ) -> DispatchResult<bool> {
+        let base = object_id(&base.package, base.export_index);
+        let key = (object_id(&class.package, class.export_index), base.clone());
+        if let Some(result) = self.class_relations.get(&key) {
+            return Ok(*result);
+        }
+        for _ in 0..MAX_CALL_DEPTH {
+            if object_id(&class.package, class.export_index) == base {
+                self.class_relations.insert(key, true);
+                return Ok(true);
+            }
+            let Some(parent) = self.base_class(&class)? else {
+                self.class_relations.insert(key, false);
+                return Ok(false);
+            };
+            class = parent;
+        }
+        Err(DispatchError::CallDepth)
     }
 
     fn context_field_value(

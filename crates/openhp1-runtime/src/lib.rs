@@ -96,6 +96,9 @@ pub enum Error {
     #[error("assignment target is not a variable")]
     NotAssignable,
 
+    #[error("iterator control flow has no active iterator")]
+    MissingIterator,
+
     #[error("struct member field {field} is not initialized")]
     MissingStructMember { field: i32 },
 
@@ -144,6 +147,11 @@ pub(crate) enum FrameRequest {
         function: FunctionCall,
         arguments: Vec<Value>,
     },
+    CallIterator {
+        receiver: i32,
+        function: FunctionCall,
+        arguments: Vec<Value>,
+    },
     GetInstance {
         receiver: i32,
         field: i32,
@@ -153,6 +161,39 @@ pub(crate) enum FrameRequest {
         field: i32,
         value: Value,
     },
+}
+
+pub(crate) enum FrameResponse {
+    Value(Value),
+    Iterator(Vec<Value>),
+}
+
+impl FrameResponse {
+    fn into_value(self) -> std::result::Result<Value, String> {
+        match self {
+            Self::Value(value) => Ok(value),
+            Self::Iterator(_) => Err("regular call returned an iterator".to_owned()),
+        }
+    }
+
+    fn into_iterator(self) -> std::result::Result<Vec<Value>, String> {
+        match self {
+            Self::Iterator(values) => Ok(values),
+            Self::Value(_) => Err("iterator call returned a regular value".to_owned()),
+        }
+    }
+}
+
+struct PendingIterator {
+    target: Slot,
+    values: Vec<Value>,
+}
+
+struct ActiveIterator {
+    target: Slot,
+    values: std::vec::IntoIter<Value>,
+    start: usize,
+    end: usize,
 }
 
 /// Mutable state for one UnrealScript frame.
@@ -167,6 +208,9 @@ pub struct Frame<'a> {
     instance: HashMap<i32, Value>,
     defaults: HashMap<i32, Value>,
     struct_members: HashMap<i32, StructMember>,
+    creating_iterator: bool,
+    pending_iterator: Option<PendingIterator>,
+    iterators: Vec<ActiveIterator>,
 }
 
 impl<'a> Frame<'a> {
@@ -182,6 +226,9 @@ impl<'a> Frame<'a> {
             instance: HashMap::new(),
             defaults: HashMap::new(),
             struct_members: HashMap::new(),
+            creating_iterator: false,
+            pending_iterator: None,
+            iterators: Vec::new(),
         }
     }
 
@@ -218,7 +265,10 @@ impl<'a> Frame<'a> {
                 receiver: -1,
                 function,
                 arguments,
-            } => call(function, &arguments),
+            } => call(function, &arguments).map(FrameResponse::Value),
+            FrameRequest::CallIterator { .. } => {
+                Err("standalone frames do not host iterators".to_owned())
+            }
             FrameRequest::Call { receiver, .. }
             | FrameRequest::GetInstance { receiver, .. }
             | FrameRequest::SetInstance { receiver, .. } => {
@@ -233,7 +283,7 @@ impl<'a> Frame<'a> {
         mut host: impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Value> {
         std::mem::swap(&mut self.instance, instance);
         let result = self.execute_inner(&mut host);
@@ -246,12 +296,15 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Value> {
         self.instruction_pointer = 0;
         self.steps = 0;
         self.expression_depth = 0;
         self.current_context = -1;
+        self.creating_iterator = false;
+        self.pending_iterator = None;
+        self.iterators.clear();
         while self.instruction_pointer < self.bytecode.bytes.len() {
             match self.peek()? {
                 0x04 => {
@@ -280,6 +333,30 @@ impl<'a> Frame<'a> {
                     self.opcode()?;
                     return Ok(Value::None);
                 }
+                0x2f => {
+                    self.opcode()?;
+                    self.creating_iterator = true;
+                    let result = self.expression(host);
+                    self.creating_iterator = false;
+                    self.value(result?, host)?;
+                    let end = usize::from(self.read_u16()?);
+                    let iterator = self.pending_iterator.take().ok_or(Error::MissingIterator)?;
+                    self.iterators.push(ActiveIterator {
+                        target: iterator.target,
+                        values: iterator.values.into_iter(),
+                        start: self.instruction_pointer,
+                        end,
+                    });
+                    self.next_iterator(host)?;
+                }
+                0x30 => {
+                    self.opcode()?;
+                    self.iterators.pop().ok_or(Error::MissingIterator)?;
+                }
+                0x31 => {
+                    self.opcode()?;
+                    self.next_iterator(host)?;
+                }
                 _ => {
                     let expression = self.expression(host)?;
                     self.value(expression, host)?;
@@ -294,7 +371,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Expression> {
         if self.expression_depth >= MAX_EXPRESSION_DEPTH {
             return Err(Error::ExpressionDepth {
@@ -312,7 +389,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Expression> {
         let offset = self.instruction_pointer;
         let opcode = self.opcode()?;
@@ -448,8 +525,9 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Value> {
+        let creating_iterator = std::mem::take(&mut self.creating_iterator);
         let mut arguments = Vec::new();
         while self.peek()? != 0x16 {
             arguments.push(self.expression(host)?);
@@ -477,6 +555,38 @@ impl<'a> Frame<'a> {
             self.assign(target, value.clone(), host)?;
             return Ok(value);
         }
+        if creating_iterator {
+            let target = match arguments.get(1) {
+                Some(Expression::Slot(target)) => target.clone(),
+                _ => return Err(Error::NotAssignable),
+            };
+            let mut values = Vec::with_capacity(arguments.len());
+            for (index, argument) in arguments.into_iter().enumerate() {
+                values.push(if index == 1 {
+                    Value::None
+                } else {
+                    self.value(argument, host)?
+                });
+            }
+            let iterator = host(
+                FrameRequest::CallIterator {
+                    receiver: self.current_context,
+                    function,
+                    arguments: values,
+                },
+                &mut self.instance,
+            )
+            .and_then(FrameResponse::into_iterator)
+            .map_err(|message| Error::Call {
+                call: function,
+                message,
+            })?;
+            self.pending_iterator = Some(PendingIterator {
+                target,
+                values: iterator,
+            });
+            return Ok(Value::None);
+        }
         let mut values = Vec::with_capacity(arguments.len());
         for argument in arguments {
             values.push(self.value(argument, host)?);
@@ -489,6 +599,7 @@ impl<'a> Frame<'a> {
             },
             &mut self.instance,
         )
+        .and_then(FrameResponse::into_value)
         .map_err(|message| Error::Call {
             call: function,
             message,
@@ -501,7 +612,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Value> {
         match expression {
             Expression::Value(value) => Ok(value),
@@ -516,7 +627,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<()> {
         let Expression::Slot(slot) = expression else {
             return Err(Error::NotAssignable);
@@ -531,7 +642,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<()> {
         match slot {
             Slot::Local(field) => {
@@ -552,6 +663,7 @@ impl<'a> Frame<'a> {
                     },
                     &mut self.instance,
                 )
+                .and_then(FrameResponse::into_value)
                 .map_err(|message| Error::Context { message })?;
             }
             Slot::Default(field) => {
@@ -572,7 +684,7 @@ impl<'a> Frame<'a> {
         host: &mut impl FnMut(
             FrameRequest,
             &mut HashMap<i32, Value>,
-        ) -> std::result::Result<Value, String>,
+        ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Option<Value>> {
         Ok(match slot {
             Slot::Local(field) => self.locals.get(field).cloned(),
@@ -588,6 +700,7 @@ impl<'a> Frame<'a> {
                     },
                     &mut self.instance,
                 )
+                .and_then(FrameResponse::into_value)
                 .map_err(|message| Error::Context { message })?,
             ),
             Slot::Default(field) => self.defaults.get(field).cloned(),
@@ -596,6 +709,30 @@ impl<'a> Frame<'a> {
                 .map(|value| member.get(value))
                 .transpose()?,
         })
+    }
+
+    fn next_iterator(
+        &mut self,
+        host: &mut impl FnMut(
+            FrameRequest,
+            &mut HashMap<i32, Value>,
+        ) -> std::result::Result<FrameResponse, String>,
+    ) -> Result<()> {
+        let (target, value, jump) = {
+            let iterator = self.iterators.last_mut().ok_or(Error::MissingIterator)?;
+            let value = iterator.values.next();
+            (
+                iterator.target.clone(),
+                value.clone().unwrap_or(Value::Object(0)),
+                if value.is_some() {
+                    iterator.start
+                } else {
+                    iterator.end
+                },
+            )
+        };
+        self.assign_slot(target, value, host)?;
+        self.jump(jump)
     }
 
     fn opcode(&mut self) -> Result<u8> {
@@ -833,6 +970,52 @@ mod tests {
     }
 
     #[test]
+    fn iterates_values_and_clears_the_output_slot() {
+        let mut bytes = vec![0x2f, 0x61, 0x30, 0x20];
+        bytes.extend(1_i32.to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x16);
+        let end_offset = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x0f, 0x00]);
+        bytes.extend(8_i32.to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x31);
+        let iterator_pop = u16::try_from(bytes.len()).unwrap();
+        bytes[end_offset..end_offset + 2].copy_from_slice(&iterator_pop.to_le_bytes());
+        bytes.extend([0x30, 0x04, 0x00]);
+        bytes.extend(8_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut instance = HashMap::new();
+        let mut frame = Frame::new(&bytecode);
+        let result = frame
+            .execute_with_instance(&mut instance, |request, _| match request {
+                FrameRequest::CallIterator {
+                    function: FunctionCall::Native(0x130),
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(arguments, vec![Value::Object(1), Value::None]);
+                    Ok(FrameResponse::Iterator(vec![
+                        Value::Object(11),
+                        Value::Object(22),
+                    ]))
+                }
+                _ => unreachable!(),
+            })
+            .unwrap();
+        assert_eq!(result, Value::Object(22));
+        assert_eq!(frame.local(7), Some(&Value::Object(0)));
+    }
+
+    #[test]
     fn converts_compact_int_constant_to_float() {
         let bytecode = Bytecode {
             version: 76,
@@ -946,16 +1129,16 @@ mod tests {
         let mut frame = Frame::new(&bytecode);
         let result = frame
             .execute_with_instance(&mut instance, |request, _| match request {
-                FrameRequest::GetInstance { receiver: 1, field } => {
-                    Ok(remote.get(&field).cloned().unwrap_or(Value::None))
-                }
+                FrameRequest::GetInstance { receiver: 1, field } => Ok(FrameResponse::Value(
+                    remote.get(&field).cloned().unwrap_or(Value::None),
+                )),
                 FrameRequest::SetInstance {
                     receiver: 1,
                     field,
                     value,
                 } => {
                     remote.insert(field, value);
-                    Ok(Value::None)
+                    Ok(FrameResponse::Value(Value::None))
                 }
                 _ => unreachable!(),
             })
