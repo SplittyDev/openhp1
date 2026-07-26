@@ -54,6 +54,31 @@ pub enum Error {
     #[error("world mesh has {point_count} points, too many for 32-bit GPU indices")]
     MeshTooLarge { point_count: usize },
 
+    #[error("lightmap {index} has invalid dimensions {width}x{height}")]
+    InvalidLightmapDimensions {
+        index: usize,
+        width: i32,
+        height: i32,
+    },
+
+    #[error("lightmap {index} has invalid scale {u}x{v}")]
+    InvalidLightmapScale { index: usize, u: f32, v: f32 },
+
+    #[error("lightmap {index} references light-list offset {offset} outside length {length}")]
+    InvalidLightList {
+        index: usize,
+        offset: i32,
+        length: usize,
+    },
+
+    #[error("lightmap {index} shadow mask range {start}..{end} exceeds light-bit length {length}")]
+    InvalidLightBits {
+        index: usize,
+        start: usize,
+        end: usize,
+        length: usize,
+    },
+
     #[error("model has {bytes} trailing bytes at {offset:#x}")]
     TrailingModelData { bytes: usize, offset: usize },
 

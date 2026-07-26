@@ -12,16 +12,19 @@ on world BSP geometry.
 4. `openhp1-texture` expands the first P8 mip and its palette to RGBA8.
    `WetTexture` and `FireTexture` exports produce static preview frames.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
-   coordinates.
-6. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
+   and lightmap coordinates.
+6. `openhp1-map` reconstructs static lightmap images from zone ambient colors,
+   light actors, and the model's blurred one-bit shadow masks.
+7. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
    Unreal rotator.
-7. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
+8. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
    surface materials.
-8. `openhp1-render` normalizes coordinates, batches opaque triangles, sorts
-   blended BSP surfaces, and draws them with repeat sampling and depth testing.
-   A sky map first renders to a separate color/depth target; fake-backdrop
-   polygons sample that target in screen space during the playable pass.
-9. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
+9. `openhp1-render` packs lightmaps with replicated edge gutters into one
+   atlas, normalizes coordinates, batches opaque triangles, sorts blended BSP
+   surfaces, and draws them with repeat sampling and depth testing. A sky map
+   first renders to a separate color/depth target; fake-backdrop polygons
+   sample that target in screen space during the playable pass.
+10. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
 
 The renderer does not know package paths or export indices. It accepts decoded
 CPU geometry and texture images plus a caller-provided wgpu device, queue,
@@ -44,9 +47,9 @@ The initial camera starts at the converted model-bounds center. UE1 maps are
 commonly subtractive worlds carved inside solid BSP; placing an overview camera
 outside the bounds only exposes an unhelpful outer hull.
 
-The shader currently derives a face normal from screen-space position
-derivatives and applies one directional light. This is diagnostic shading, not
-an attempt to reproduce the original game's lighting.
+Lit surfaces multiply their base texture by the reconstructed linear lightmap
+using UE1's 2x modulation. Unlit and lightmap-less surfaces bypass that
+multiply.
 
 ## Verified maps
 
@@ -87,18 +90,13 @@ then composites that image only over depth-tested fake-backdrop polygons.
 Backdrop depth prevents geometry outside the visible zone from leaking through
 until full BSP visibility traversal exists.
 
-Surfaces carrying UE1's `PF_Unlit` flag bypass the temporary diagnostic
-directional light. This matters for sky-box cube faces, whose texture edges
-otherwise become visible because each face receives a different brightness.
-
-Future rendering work, in order:
-
-1. Decode and multiply UE1 lightmaps.
+Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
+matters for sky-box cube faces.
 
 The renderer still uses only the first mip and does not cull by zones, render
 actors, or decode vertex meshes. `WetTexture` and `FireTexture` previews are
-static; runtime procedural animation is not implemented. Unsupported texture
-classes use a magenta checkerboard.
+static; runtime procedural animation and time-varying light effects are not
+implemented. Unsupported texture classes use a magenta checkerboard.
 
 Sky rendering clips at the fake-backdrop polygons rather than reproducing
 UE1's scanline BSP portal-span clipper. Full BSP zone/visibility traversal can

@@ -1,9 +1,29 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use openhp1_package::{ObjectReader, Package};
+use openhp1_package::{ObjectReader, ObjectReference, Package};
 
 use crate::{Error, PrimitiveBounds, Result};
+
+const HAS_STACK: u32 = 0x0200_0000;
+
+pub(crate) fn skip_object_stack(
+    package: &Package,
+    export_index: usize,
+    reader: &mut ObjectReader<'_>,
+) -> Result<()> {
+    if package.summary().exports[export_index].object_flags & HAS_STACK == 0 {
+        return Ok(());
+    }
+    let function = reader.read_object_reference()?;
+    reader.read_object_reference()?;
+    reader.read_u64()?;
+    reader.read_i32()?;
+    if function != ObjectReference::None {
+        reader.read_compact_index()?;
+    }
+    Ok(())
+}
 
 pub(crate) fn read_primitive_bounds(
     reader: &mut ObjectReader<'_>,

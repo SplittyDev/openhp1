@@ -168,8 +168,9 @@ decoded in isolation.
 - Base palettes/textures, UE texture coordinates, invisible/fake-backdrop
   filtering, masked cutouts, one-/two-sided rendering, material diagnostics,
   translucent/modulated passes, unlit surfaces, and fixed-view sky zones
-  composited through fake-backdrop polygons are implemented. Next add
-  lightmaps.
+  composited through fake-backdrop polygons are implemented. Static UE1
+  lightmaps are reconstructed from zone ambient colors, light actors, and BSP
+  shadow masks, then packed into a shared GPU atlas.
 - UE1 rendering will later require masked, translucent, and modulated surfaces,
   zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
   meshes, animated textures, and HP-specific particles. Do not implement these
@@ -269,12 +270,11 @@ shading, and surface/texture two-sided flags control culling. Translucent and
 modulated surfaces use their UE1 blend equations,
 depth-test without writing depth, and are sorted per BSP surface. `WetWater` in
 `Lev2_HogFront.unr` is visually verified without the fallback checkerboard.
-Procedural textures are static snapshots until runtime texture ticking exists.
-Lightmaps remain future work.
-
-The next renderer fidelity step is UE1 lightmaps. Until lightmaps exist,
-colored surfaces such as the outdoor water retain their raw source palette
-rather than the final in-game tint.
+Serialized palette colors are RGBA; do not swap the red and blue bytes.
+Static lightmaps reconstruct zone ambient and per-light shadow-mask
+contributions and use UE1's 2x modulation. The reconstruction successfully
+loads all 41 local maps. Procedural textures and light effects are static
+snapshots until runtime ticking exists.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

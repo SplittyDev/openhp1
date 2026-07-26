@@ -17,6 +17,8 @@ const PIPELINE_COUNT: usize = 24;
 struct Vertex {
     position: [f32; 3],
     texture_coordinates: [f32; 2],
+    lightmap_coordinates: [f32; 2],
+    has_lightmap: f32,
 }
 
 #[repr(C)]
@@ -48,6 +50,8 @@ pub struct Renderer {
     target_format: wgpu::TextureFormat,
     texture_layout: wgpu::BindGroupLayout,
     sky_sampler: wgpu::Sampler,
+    lightmap_view: wgpu::TextureView,
+    lightmap_sampler: wgpu::Sampler,
 }
 
 impl Renderer {
@@ -58,6 +62,8 @@ impl Renderer {
         scene: &RenderScene,
         viewport_size: [u32; 2],
     ) -> Self {
+        let lightmap_atlas =
+            build_lightmap_atlas(&scene.lightmaps, device.limits().max_texture_dimension_2d);
         let fallback_texture = scene.textures.len();
         let vertices: Vec<_> = scene
             .mesh
@@ -77,12 +83,38 @@ impl Renderer {
                     [texture.width as f32, texture.height as f32]
                 });
                 let coordinates = scene.mesh.texture_coordinates[vertex_index];
+                let lightmap_rectangle = scene
+                    .surface_materials
+                    .get(surface)
+                    .filter(|material| !material.unlit)
+                    .and_then(|_| {
+                        scene
+                            .mesh
+                            .vertex_lightmaps
+                            .get(vertex_index)
+                            .copied()
+                            .flatten()
+                    })
+                    .and_then(|lightmap| lightmap_atlas.rectangles.get(lightmap))
+                    .copied();
+                let lightmap_coordinates =
+                    lightmap_rectangle.map_or(lightmap_atlas.neutral_coordinates(), |rectangle| {
+                        let coordinates = scene.mesh.lightmap_coordinates[vertex_index];
+                        [
+                            (rectangle.x as f32 + coordinates.x)
+                                / lightmap_atlas.image.width as f32,
+                            (rectangle.y as f32 + coordinates.y)
+                                / lightmap_atlas.image.height as f32,
+                        ]
+                    });
                 Vertex {
                     position: position.to_array(),
                     texture_coordinates: [
                         coordinates.x / dimensions[0],
                         coordinates.y / dimensions[1],
                     ],
+                    lightmap_coordinates,
+                    has_lightmap: f32::from(lightmap_rectangle.is_some()),
                 }
             })
             .collect();
@@ -195,6 +227,22 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -214,12 +262,36 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let lightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("OpenHP1 lightmap sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let lightmap_view = texture_view(
+            device,
+            queue,
+            "OpenHP1 lightmap atlas",
+            &lightmap_atlas.image,
+        );
         let checkerboard = checkerboard();
         let texture_bind_groups = scene
             .textures
             .iter()
             .chain(std::iter::once(&checkerboard))
-            .map(|texture| texture_bind_group(device, queue, &texture_layout, &sampler, texture))
+            .map(|texture| {
+                texture_bind_group(
+                    device,
+                    queue,
+                    &texture_layout,
+                    &sampler,
+                    texture,
+                    &lightmap_view,
+                    &lightmap_sampler,
+                )
+            })
             .collect();
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -258,6 +330,8 @@ impl Renderer {
                 target_format,
                 &texture_layout,
                 &sky_sampler,
+                &lightmap_view,
+                &lightmap_sampler,
             )
         });
 
@@ -284,6 +358,8 @@ impl Renderer {
             target_format,
             texture_layout,
             sky_sampler,
+            lightmap_view,
+            lightmap_sampler,
         }
     }
 
@@ -301,6 +377,8 @@ impl Renderer {
                     self.target_format,
                     &self.texture_layout,
                     &self.sky_sampler,
+                    &self.lightmap_view,
+                    &self.lightmap_sampler,
                 ));
             }
         }
@@ -697,7 +775,12 @@ fn create_pipeline(
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x3,
+                    1 => Float32x2,
+                    2 => Float32x2,
+                    3 => Float32
+                ],
             }],
         },
         primitive: wgpu::PrimitiveState {
@@ -751,7 +834,12 @@ fn create_backdrop_pipeline(
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x3,
+                    1 => Float32x2,
+                    2 => Float32x2,
+                    3 => Float32
+                ],
             }],
         },
         primitive: wgpu::PrimitiveState {
@@ -824,29 +912,10 @@ fn texture_bind_group(
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     image: &TextureImage,
+    lightmap_view: &wgpu::TextureView,
+    lightmap_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
-    let texture = device.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: Some("OpenHP1 texture"),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // Keep palette bytes unconverted for UE1's brightness-based blend
-            // equations. Opaque shaders perform the sRGB conversion explicitly.
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        &image.rgba,
-    );
-    let view = texture.create_view(&Default::default());
+    let view = texture_view(device, queue, "OpenHP1 texture", image);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("OpenHP1 texture bind group"),
         layout,
@@ -859,8 +928,188 @@ fn texture_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(lightmap_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+            },
         ],
     })
+}
+
+fn texture_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    image: &TextureImage,
+) -> wgpu::TextureView {
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: image.width,
+                    height: image.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // Keep palette bytes unconverted for UE1's brightness-based blend
+                // equations. Opaque shaders perform the sRGB conversion explicitly.
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &image.rgba,
+        )
+        .create_view(&Default::default())
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AtlasRectangle {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+struct LightmapAtlas {
+    image: TextureImage,
+    rectangles: Vec<AtlasRectangle>,
+    neutral: AtlasRectangle,
+}
+
+impl LightmapAtlas {
+    fn neutral_coordinates(&self) -> [f32; 2] {
+        [
+            (self.neutral.x as f32 + 0.5) / self.image.width as f32,
+            (self.neutral.y as f32 + 0.5) / self.image.height as f32,
+        ]
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AtlasItem {
+    source: Option<usize>,
+    width: u32,
+    height: u32,
+}
+
+fn build_lightmap_atlas(
+    lightmaps: &[openhp1_map::LightmapImage],
+    maximum_dimension: u32,
+) -> LightmapAtlas {
+    let mut items = Vec::with_capacity(lightmaps.len() + 1);
+    items.push(AtlasItem {
+        source: None,
+        width: 1,
+        height: 1,
+    });
+    items.extend(
+        lightmaps
+            .iter()
+            .enumerate()
+            .map(|(source, image)| AtlasItem {
+                source: Some(source),
+                width: image.width,
+                height: image.height,
+            }),
+    );
+    items.sort_unstable_by_key(|item| std::cmp::Reverse(item.height));
+
+    let widest = items.iter().map(|item| item.width + 2).max().unwrap_or(3);
+    let mut atlas_width = widest.next_power_of_two().max(512).min(maximum_dimension);
+    let (placements, atlas_height) = loop {
+        if let Some(result) = pack_atlas(&items, atlas_width, maximum_dimension) {
+            break result;
+        }
+        assert!(
+            atlas_width < maximum_dimension,
+            "lightmaps exceed the GPU's {maximum_dimension}px texture limit"
+        );
+        atlas_width = (atlas_width * 2).min(maximum_dimension);
+    };
+
+    let mut rgba = vec![128; atlas_width as usize * atlas_height as usize * 4];
+    for alpha in rgba.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    let mut rectangles = vec![AtlasRectangle::default(); lightmaps.len()];
+    let mut neutral = AtlasRectangle::default();
+    for (item, rectangle) in items.iter().zip(placements) {
+        match item.source {
+            Some(source) => {
+                copy_with_gutter(&mut rgba, atlas_width, rectangle, &lightmaps[source].rgba);
+                rectangles[source] = rectangle;
+            }
+            None => neutral = rectangle,
+        }
+    }
+    LightmapAtlas {
+        image: TextureImage {
+            width: atlas_width,
+            height: atlas_height,
+            rgba,
+        },
+        rectangles,
+        neutral,
+    }
+}
+
+fn pack_atlas(
+    items: &[AtlasItem],
+    atlas_width: u32,
+    maximum_height: u32,
+) -> Option<(Vec<AtlasRectangle>, u32)> {
+    let mut placements = Vec::with_capacity(items.len());
+    let (mut x, mut y, mut row_height) = (0, 0, 0);
+    for item in items {
+        let padded_width = item.width + 2;
+        let padded_height = item.height + 2;
+        if padded_width > atlas_width {
+            return None;
+        }
+        if x + padded_width > atlas_width {
+            x = 0;
+            y += row_height;
+            row_height = 0;
+        }
+        if y + padded_height > maximum_height {
+            return None;
+        }
+        placements.push(AtlasRectangle {
+            x: x + 1,
+            y: y + 1,
+            width: item.width,
+            height: item.height,
+        });
+        x += padded_width;
+        row_height = row_height.max(padded_height);
+    }
+    Some((placements, (y + row_height).max(1)))
+}
+
+fn copy_with_gutter(atlas: &mut [u8], atlas_width: u32, rectangle: AtlasRectangle, source: &[u8]) {
+    for target_y in rectangle.y - 1..=rectangle.y + rectangle.height {
+        let source_y = target_y
+            .saturating_sub(rectangle.y)
+            .min(rectangle.height - 1);
+        for target_x in rectangle.x - 1..=rectangle.x + rectangle.width {
+            let source_x = target_x
+                .saturating_sub(rectangle.x)
+                .min(rectangle.width - 1);
+            let source_offset = ((source_y * rectangle.width + source_x) * 4) as usize;
+            let target_offset = ((target_y * atlas_width + target_x) * 4) as usize;
+            atlas[target_offset..target_offset + 4]
+                .copy_from_slice(&source[source_offset..source_offset + 4]);
+        }
+    }
 }
 
 fn checkerboard() -> TextureImage {
@@ -892,6 +1141,8 @@ impl SkyTarget {
         format: wgpu::TextureFormat,
         texture_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
+        lightmap_view: &wgpu::TextureView,
+        lightmap_sampler: &wgpu::Sampler,
     ) -> Self {
         let size = [size[0].max(1), size[1].max(1)];
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -920,6 +1171,14 @@ impl SkyTarget {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(lightmap_sampler),
                 },
             ],
         });
@@ -983,10 +1242,14 @@ mod tests {
             Vertex {
                 position: [-2.0, 3.0, 1.0],
                 texture_coordinates: [0.0; 2],
+                lightmap_coordinates: [0.0; 2],
+                has_lightmap: 0.0,
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
                 texture_coordinates: [0.0; 2],
+                lightmap_coordinates: [0.0; 2],
+                has_lightmap: 0.0,
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -1003,6 +1266,7 @@ mod tests {
                 ..Default::default()
             },
             textures: vec![checkerboard(), checkerboard()],
+            lightmaps: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
                     texture: Some(1),
@@ -1050,6 +1314,7 @@ mod tests {
                 ..Default::default()
             },
             textures: vec![checkerboard(), checkerboard()],
+            lightmaps: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
                     texture: Some(0),
@@ -1097,6 +1362,27 @@ mod tests {
     }
 
     #[test]
+    fn lightmap_atlas_replicates_edge_texels_into_gutters() {
+        let atlas = build_lightmap_atlas(
+            &[openhp1_map::LightmapImage {
+                width: 2,
+                height: 1,
+                rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+            }],
+            512,
+        );
+        let rectangle = atlas.rectangles[0];
+        let pixel = |x: u32, y: u32| {
+            let offset = ((y * atlas.image.width + x) * 4) as usize;
+            &atlas.image.rgba[offset..offset + 4]
+        };
+        assert_eq!(pixel(rectangle.x - 1, rectangle.y), [10, 20, 30, 255]);
+        assert_eq!(pixel(rectangle.x, rectangle.y), [10, 20, 30, 255]);
+        assert_eq!(pixel(rectangle.x + 1, rectangle.y), [40, 50, 60, 255]);
+        assert_eq!(pixel(rectangle.x + 2, rectangle.y), [40, 50, 60, 255]);
+    }
+
+    #[test]
     fn extracts_only_fake_backdrop_triangles() {
         let scene = RenderScene {
             mesh: TriangleMesh {
@@ -1105,6 +1391,7 @@ mod tests {
                 ..Default::default()
             },
             textures: vec![],
+            lightmaps: vec![],
             surface_materials: vec![
                 SurfaceMaterial::default(),
                 SurfaceMaterial {
@@ -1130,6 +1417,8 @@ mod tests {
         Vertex {
             position: [x, y, z],
             texture_coordinates: [0.0; 2],
+            lightmap_coordinates: [0.0; 2],
+            has_lightmap: 0.0,
         }
     }
 }

@@ -37,6 +37,9 @@ impl LoadedScene {
         let model =
             Model::decode(&package, model_export).context("failed to decode the world model")?;
         let mesh = model.triangulate().context("failed to triangulate BSP")?;
+        let lightmaps = model
+            .lightmap_images(&package)
+            .context("failed to reconstruct static lightmaps")?;
         let fake_backdrop_surfaces = model
             .surfaces
             .iter()
@@ -73,6 +76,7 @@ impl LoadedScene {
             surfaces = model.surfaces.len(),
             triangles = mesh.indices.len() / 3,
             textures = textures.len(),
+            lightmaps = lightmaps.len(),
             textured_surfaces,
             masked_surfaces,
             translucent_surfaces,
@@ -92,6 +96,7 @@ impl LoadedScene {
             render: RenderScene {
                 mesh,
                 textures,
+                lightmaps,
                 surface_materials,
                 sky_zone,
             },

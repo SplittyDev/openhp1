@@ -57,10 +57,27 @@ After the geometry arrays come the shared-side count, zone table, editor
 polygon object, lightmap metadata and bits, collision bounds, leaf hulls,
 convex leaves, light actors, and two final model flags.
 
+Each surface selects a lightmap index. A lightmap stores its shadow-bit offset,
+texture-space pan, U/V clamp dimensions, U/V scale, and an offset into the
+model's null-terminated light-actor list. One shadow mask follows for each
+actor in that list. Its rows use `(width + 7) / 8` bytes and the low bit
+represents the leftmost texel.
+
+For lightmap pan `LMPan` and scale `LMScale`, the raw lightmap coordinates are:
+
+```text
+u = (dot(U, P) - (dot(U, B) + LMPanU - 0.5 * LMScaleU)) / LMScaleU
+v = (dot(V, P) - (dot(V, B) + LMPanV - 0.5 * LMScaleV)) / LMScaleV
+```
+
+OpenHP1 reconstructs the original static lightmap pixels from zone ambient
+color, light actor properties, and the blurred one-bit shadow masks.
+
 ## Rendering boundary
 
 `openhp1-map` retains coordinates in Unreal's native convention. Axis or
 handedness conversion belongs in one renderer conversion module; loaders must
 not mutate positions to suit a particular graphics backend. Texture
 coordinates remain in raw UE texels until `openhp1-render` knows the decoded
-texture dimensions.
+texture dimensions. Lightmap coordinates likewise remain in raw lightmap
+texels until the renderer packs the decoded images into an atlas.

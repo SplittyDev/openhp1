@@ -11,27 +11,37 @@ var color_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var color_sampler: sampler;
 
+@group(1) @binding(2)
+var lightmap_texture: texture_2d<f32>;
+
+@group(1) @binding(3)
+var lightmap_sampler: sampler;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) texture_coordinates: vec2<f32>,
-    @location(1) world_position: vec3<f32>,
+    @location(1) lightmap_coordinates: vec2<f32>,
+    @location(2) has_lightmap: f32,
 };
 
 @vertex
 fn vertex_main(
     @location(0) position: vec3<f32>,
     @location(1) texture_coordinates: vec2<f32>,
+    @location(2) lightmap_coordinates: vec2<f32>,
+    @location(3) has_lightmap: f32,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
     output.texture_coordinates = texture_coordinates;
-    output.world_position = position;
+    output.lightmap_coordinates = lightmap_coordinates;
+    output.has_lightmap = has_lightmap;
     return output;
 }
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(input, linear_color(textureSample(color_texture, color_sampler, input.texture_coordinates)));
+    return apply_lightmap(input, linear_color(textureSample(color_texture, color_sampler, input.texture_coordinates)));
 }
 
 @fragment
@@ -40,7 +50,7 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return shade(input, linear_color(color));
+    return apply_lightmap(input, linear_color(color));
 }
 
 @fragment
@@ -59,7 +69,7 @@ fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(color_texture, color_sampler, input.texture_coordinates);
+    return apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
 }
 
 @fragment
@@ -68,7 +78,7 @@ fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return color;
+    return apply_lightmap(input, color);
 }
 
 @fragment
@@ -83,9 +93,11 @@ fn linear_color(color: vec4<f32>) -> vec4<f32> {
     return vec4(select(low, high, color.rgb > vec3(0.04045)), color.a);
 }
 
-fn shade(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
-    let normal = normalize(cross(dpdx(input.world_position), dpdy(input.world_position)));
-    let light = normalize(vec3(0.45, 0.8, 0.3));
-    let diffuse = 0.55 + 0.45 * abs(dot(normal, light));
-    return vec4(color.rgb * diffuse, 1.0);
+fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    let light = textureSample(
+        lightmap_texture,
+        lightmap_sampler,
+        input.lightmap_coordinates,
+    ).rgb * 2.0;
+    return vec4(color.rgb * mix(vec3(1.0), light, input.has_lightmap), color.a);
 }

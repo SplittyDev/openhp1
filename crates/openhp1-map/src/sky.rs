@@ -3,9 +3,7 @@ use std::f32::consts::TAU;
 use glam::Vec3;
 use openhp1_package::{ObjectReference, Package, PropertyKind};
 
-use crate::{Model, Result};
-
-const HAS_STACK: u32 = 0x0200_0000;
+use crate::{Model, Result, decode::skip_object_stack};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rotator {
@@ -45,17 +43,8 @@ impl Model {
 }
 
 fn decode_sky_zone(package: &Package, export_index: usize) -> Result<SkyZone> {
-    let export = &package.summary().exports[export_index];
     let mut reader = package.export_reader(export_index)?;
-    if export.object_flags & HAS_STACK != 0 {
-        let function = reader.read_object_reference()?;
-        reader.read_object_reference()?;
-        reader.read_u64()?;
-        reader.read_i32()?;
-        if function != ObjectReference::None {
-            reader.read_compact_index()?;
-        }
-    }
+    skip_object_stack(package, export_index, &mut reader)?;
 
     let mut sky = SkyZone::default();
     while let Some(property) = reader.next_property()? {

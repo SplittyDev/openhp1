@@ -1,4 +1,4 @@
-use openhp1_map::{SkyZone, TriangleMesh};
+use openhp1_map::{LightmapImage, SkyZone, TriangleMesh};
 
 #[derive(Clone, Debug)]
 pub struct TextureImage {
@@ -34,6 +34,7 @@ pub struct SurfaceMaterial {
 pub struct RenderScene {
     pub mesh: TriangleMesh,
     pub textures: Vec<TextureImage>,
+    pub lightmaps: Vec<LightmapImage>,
     /// Material for each BSP surface. Missing textures use the renderer's
     /// checkerboard.
     pub surface_materials: Vec<SurfaceMaterial>,

@@ -4,6 +4,7 @@ mod bsp;
 mod decode;
 mod error;
 mod level;
+mod lighting;
 mod mesh;
 mod model;
 mod sky;
@@ -13,6 +14,7 @@ pub use bsp::{
 };
 pub use error::{Error, Result};
 pub use level::{Level, world_model_export};
+pub use lighting::LightmapImage;
 pub use mesh::TriangleMesh;
 pub use model::Model;
 pub use sky::{Rotator, SkyZone};

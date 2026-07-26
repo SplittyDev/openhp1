@@ -6,7 +6,7 @@ OpenHP1 requires the original game files to run.
 
 The first development milestone can parse and display textured BSP world
 geometry from the original maps, including masked, translucent, and modulated
-surfaces and sky zones:
+surfaces, reconstructed static lightmaps, and sky zones:
 
 ```sh
 cargo run -p openhp1-viewer -- res/Maps/Quid_RavenA.unr
