@@ -1,0 +1,558 @@
+use super::native::runtime_name;
+use super::*;
+
+impl ScriptRuntime {
+    pub(super) fn execute_actor_function(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+    ) -> DispatchResult<Vec<ActorAction>> {
+        let mut actions = Vec::new();
+        let mut instance = self.instances.remove(&actor).unwrap_or_default();
+        let result = self.execute_function(
+            actor,
+            actor_class,
+            function,
+            arguments,
+            &mut instance,
+            &mut actions,
+            0,
+        );
+        self.instances.insert(actor, instance);
+        result?;
+        Ok(actions)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_function(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> DispatchResult<Value> {
+        if depth >= MAX_CALL_DEPTH {
+            return Err(DispatchError::CallDepth);
+        }
+        let script = self.script(function)?;
+        let frame_fields = self.frame_fields(function, &script.bytecode)?;
+        if let ScriptMetadata::Function(metadata) = &script.metadata
+            && script.bytecode.bytes.is_empty()
+            && metadata.native_index != 0
+        {
+            return self
+                .native(
+                    actor,
+                    actor_class,
+                    &function.package,
+                    metadata.native_index,
+                    arguments,
+                    instance,
+                    actions,
+                )
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(metadata.native_index),
+                    message,
+                })
+                .map_err(Into::into);
+        }
+
+        let mut frame = Frame::new(&script.bytecode);
+        self.bind_struct_members(function, &script.bytecode, &mut frame)?;
+        self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
+        let mut frame_instance = HashMap::new();
+        self.load_frame_instance(&frame_fields, instance, &mut frame_instance)?;
+        let result = frame.execute_with_instance(&mut frame_instance, |request, frame_instance| {
+            let synchronize = request_needs_instance_sync(&request);
+            if synchronize {
+                self.store_frame_instance(
+                    &function.package,
+                    &frame_fields,
+                    frame_instance,
+                    instance,
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            let result = match request {
+                FrameRequest::Call {
+                    receiver,
+                    function: call,
+                    arguments,
+                } => self
+                    .dispatch_context_call(
+                        actor,
+                        actor_class,
+                        receiver,
+                        &function.package,
+                        call,
+                        &arguments,
+                        instance,
+                        actions,
+                        depth + 1,
+                    )
+                    .map(FrameResponse::Value),
+                FrameRequest::CallIterator {
+                    receiver,
+                    function: call,
+                    arguments,
+                } => self
+                    .dispatch_iterator_call(
+                        actor,
+                        receiver,
+                        &function.package,
+                        call,
+                        &arguments,
+                        instance,
+                    )
+                    .map(FrameResponse::Iterator),
+                FrameRequest::GetInstance { receiver, field } => self
+                    .context_field_value(actor, receiver, &function.package, field, instance)
+                    .map(FrameResponse::Value),
+                FrameRequest::SetInstance {
+                    receiver,
+                    field,
+                    value,
+                } => self
+                    .set_context_field(actor, receiver, &function.package, field, value, instance)
+                    .map(|()| FrameResponse::Value(Value::None)),
+            };
+            if synchronize {
+                self.load_frame_instance(&frame_fields, instance, frame_instance)
+                    .map_err(|error| error.to_string())?;
+            }
+            result.map_err(|error| error.to_string())
+        });
+        self.store_frame_instance(&function.package, &frame_fields, &frame_instance, instance)?;
+        result.map_err(Into::into)
+    }
+
+    fn script(&mut self, object: &ResolvedObject) -> DispatchResult<Arc<ScriptExport>> {
+        let id = object_id(&object.package, object.export_index);
+        if let Some(script) = self.scripts.get(&id) {
+            return Ok(Arc::clone(script));
+        }
+        let script = Arc::new(ScriptExport::decode(&object.package, object.export_index)?);
+        self.scripts.insert(id, Arc::clone(&script));
+        Ok(script)
+    }
+
+    fn frame_fields(
+        &mut self,
+        function: &ResolvedObject,
+        bytecode: &Bytecode,
+    ) -> DispatchResult<Arc<Vec<(i32, ObjectId)>>> {
+        let key = object_id(&function.package, function.export_index);
+        if let Some(fields) = self.frame_fields.get(&key) {
+            return Ok(Arc::clone(fields));
+        }
+        let mut seen = HashSet::new();
+        let mut fields = Vec::new();
+        for field in instance_fields(bytecode) {
+            if seen.insert(field)
+                && let Some(id) = self.resolve_field(&function.package, field)?
+            {
+                fields.push((field, id));
+            }
+        }
+        let fields = Arc::new(fields);
+        self.frame_fields.insert(key, Arc::clone(&fields));
+        Ok(fields)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_call(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        source: &Arc<Package>,
+        call: FunctionCall,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> DispatchResult<Value> {
+        match call {
+            FunctionCall::Native(index) => self
+                .native(
+                    actor,
+                    actor_class,
+                    source,
+                    index,
+                    arguments,
+                    instance,
+                    actions,
+                )
+                .map_err(|message| crate::Error::Call { call, message }.into()),
+            FunctionCall::Final(index) => {
+                let reference = object_reference(index);
+                let Some(function) = self.packages.resolve(source, reference)? else {
+                    return Ok(Value::None);
+                };
+                match self.execute_function(
+                    actor,
+                    actor_class,
+                    &function,
+                    arguments,
+                    instance,
+                    actions,
+                    depth,
+                ) {
+                    Ok(value) => Ok(value),
+                    Err(error) => {
+                        // ponytail: keep bootstrapping the subclass while the VM is
+                        // incomplete; remove this deferral once the corpus executes.
+                        actions.push(ActorAction::DeferredCall {
+                            actor,
+                            message: error.to_string(),
+                        });
+                        Ok(Value::None)
+                    }
+                }
+            }
+            FunctionCall::Virtual(name) | FunctionCall::Global(name) => {
+                let Some(name) = usize::try_from(name)
+                    .ok()
+                    .filter(|name| *name < source.summary().names.len())
+                    .map(|name| source.summary().name(name).to_owned())
+                else {
+                    return Err(crate::Error::Call {
+                        call,
+                        message: "invalid function name".to_owned(),
+                    }
+                    .into());
+                };
+                let class = ResolvedObject {
+                    package: Arc::clone(&actor_class.package),
+                    export_index: actor_class.export_index,
+                };
+                let function = if matches!(call, FunctionCall::Virtual(_)) {
+                    self.find_actor_function(actor, class, &name, depth)?
+                } else {
+                    self.find_function(class, &name, depth)?
+                };
+                let Some(function) = function else {
+                    return Ok(Value::None);
+                };
+                self.execute_function(
+                    actor,
+                    actor_class,
+                    &function,
+                    arguments,
+                    instance,
+                    actions,
+                    depth,
+                )
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_context_call(
+        &mut self,
+        current_actor: usize,
+        current_class: &ResolvedObject,
+        receiver: i32,
+        source: &Arc<Package>,
+        call: FunctionCall,
+        arguments: &[Value],
+        current_instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> DispatchResult<Value> {
+        if receiver == -1 {
+            return self.dispatch_call(
+                current_actor,
+                current_class,
+                source,
+                call,
+                arguments,
+                current_instance,
+                actions,
+                depth,
+            );
+        }
+        let actor = self.actor_for_handle(receiver)?;
+        if actor == current_actor {
+            return self.dispatch_call(
+                current_actor,
+                current_class,
+                source,
+                call,
+                arguments,
+                current_instance,
+                actions,
+                depth,
+            );
+        }
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::InvalidActorHandle { handle: receiver })?;
+        let class = ResolvedObject {
+            package: self.packages.load_path(Path::new(class.package.as_ref()))?,
+            export_index: class.export_index,
+        };
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = self.dispatch_call(
+            actor,
+            &class,
+            source,
+            call,
+            arguments,
+            &mut instance,
+            actions,
+            depth,
+        );
+        self.instances.insert(actor, instance);
+        result
+    }
+
+    fn dispatch_iterator_call(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        call: FunctionCall,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<Value>> {
+        if receiver != -1 {
+            self.actor_for_handle(receiver)?;
+        }
+        let FunctionCall::Native(ALL_ACTORS) = call else {
+            return Err(crate::Error::Call {
+                call,
+                message: "iterator function is not implemented".to_owned(),
+            }
+            .into());
+        };
+        let [Value::Object(base_class), Value::None, rest @ ..] = arguments else {
+            return Err(crate::Error::Call {
+                call,
+                message: format!(
+                    "AllActors expects a class and output actor, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+            .into());
+        };
+        if rest.len() > 1 {
+            return Err(crate::Error::Call {
+                call,
+                message: format!(
+                    "AllActors expects at most 3 arguments, found {}",
+                    arguments.len()
+                ),
+            }
+            .into());
+        }
+        let base_class = self
+            .packages
+            .resolve(source, object_reference(*base_class))?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "AllActors base class is null".to_owned(),
+            })?;
+        let match_tag = rest
+            .first()
+            .filter(|value| !matches!(value, Value::None))
+            .map(|value| runtime_name(source, value))
+            .transpose()
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+            .filter(|tag| !tag.eq_ignore_ascii_case("None"));
+
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let tag_field = match match_tag {
+            Some(_) => Some(self.find_property(&base_class, "Tag", 0)?.ok_or_else(|| {
+                DispatchError::UnresolvedObject {
+                    message: "Actor.Tag is missing".to_owned(),
+                }
+            })?),
+            None => None,
+        };
+        let mut values = Vec::new();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = ResolvedObject {
+                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
+                export_index: class.export_index,
+            };
+            if !self.class_is_a(class, &base_class)? {
+                continue;
+            }
+            if let (Some(match_tag), Some(field)) = (&match_tag, &tag_field) {
+                let instance = if actor == current_actor {
+                    current_instance
+                } else {
+                    self.instances
+                        .get(&actor)
+                        .ok_or(DispatchError::ActiveActorContext { actor })?
+                };
+                if !matches!(
+                    instance.get(field),
+                    Some(StoredValue::Name(tag)) if tag.eq_ignore_ascii_case(match_tag)
+                ) {
+                    continue;
+                }
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(Value::Object(self.object_handle(object)?));
+        }
+        Ok(values)
+    }
+
+    fn class_is_a(
+        &mut self,
+        mut class: ResolvedObject,
+        base: &ResolvedObject,
+    ) -> DispatchResult<bool> {
+        let base = object_id(&base.package, base.export_index);
+        let key = (object_id(&class.package, class.export_index), base.clone());
+        if let Some(result) = self.class_relations.get(&key) {
+            return Ok(*result);
+        }
+        for _ in 0..MAX_CALL_DEPTH {
+            if object_id(&class.package, class.export_index) == base {
+                self.class_relations.insert(key, true);
+                return Ok(true);
+            }
+            let Some(parent) = self.base_class(&class)? else {
+                self.class_relations.insert(key, false);
+                return Ok(false);
+            };
+            class = parent;
+        }
+        Err(DispatchError::CallDepth)
+    }
+
+    fn context_field_value(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        field: i32,
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Value> {
+        let actor = self.actor_for_handle(receiver)?;
+        let Some(resolved) = self.packages.resolve(source, object_reference(field))? else {
+            return Ok(Value::None);
+        };
+        let id = object_id(&resolved.package, resolved.export_index);
+        let value = if actor == current_actor {
+            current_instance.get(&id).cloned()
+        } else {
+            self.instances
+                .get(&actor)
+                .ok_or(DispatchError::ActiveActorContext { actor })?
+                .get(&id)
+                .cloned()
+        };
+        match value {
+            Some(value) => self.frame_value(&value),
+            None => Ok(self.zero_field_value(&resolved)?.unwrap_or(Value::None)),
+        }
+    }
+
+    fn set_context_field(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        field: i32,
+        value: Value,
+        current_instance: &mut InstanceState,
+    ) -> DispatchResult<()> {
+        let actor = self.actor_for_handle(receiver)?;
+        let Some(field) = self.resolve_field(source, field)? else {
+            return Ok(());
+        };
+        let value = self.stored_value(source, &value)?;
+        if actor == current_actor {
+            current_instance.insert(field, value);
+        } else {
+            self.instances
+                .get_mut(&actor)
+                .ok_or(DispatchError::ActiveActorContext { actor })?
+                .insert(field, value);
+        }
+        Ok(())
+    }
+
+    fn actor_for_handle(&self, handle: i32) -> DispatchResult<usize> {
+        let index = usize::try_from(handle - 1)
+            .ok()
+            .filter(|index| *index < self.handle_objects.len())
+            .ok_or(DispatchError::InvalidObjectHandle { handle })?;
+        self.object_actors
+            .get(&self.handle_objects[index])
+            .copied()
+            .ok_or(DispatchError::InvalidActorHandle { handle })
+    }
+}
+
+pub(super) fn local_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
+    fields(bytecode, 0x00)
+}
+
+fn request_needs_instance_sync(request: &FrameRequest) -> bool {
+    !matches!(
+        request,
+        FrameRequest::Call {
+            function: FunctionCall::Native(index),
+            ..
+        } if !matches!(
+            *index,
+            ENABLE
+                | DISABLE
+                | DESTROY
+                | GOTO_STATE
+                | LOOP_ANIM
+                | SET_COLLISION
+                | SET_LOCATION
+                | SET_TIMER
+                | SET_ROTATION
+        )
+    )
+}
+
+fn instance_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
+    fields(bytecode, 0x01)
+}
+
+pub(super) fn fields(bytecode: &Bytecode, opcode: u8) -> impl Iterator<Item = i32> + '_ {
+    bytecode
+        .tokens
+        .iter()
+        .filter(move |token| token.opcode == opcode)
+        .filter_map(|token| {
+            bytecode
+                .bytes
+                .get(token.offset + 1..token.offset + 5)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map(i32::from_le_bytes)
+        })
+}
