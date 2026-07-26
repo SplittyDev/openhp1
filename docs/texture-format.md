@@ -29,7 +29,7 @@ skips the remaining tagged values by their declared sizes.
 After its tagged properties, a `Palette` export stores:
 
 1. a compact color count, normally 256;
-2. that many four-byte colors in blue, green, red, alpha byte order.
+2. that many four-byte colors in red, green, blue, alpha byte order.
 
 The stored alpha byte is normally not the surface transparency. Masked UE1
 surfaces conventionally make palette index zero transparent; ordinary surfaces
@@ -54,4 +54,3 @@ The lazy-array end equals the absolute stream position immediately after the
 palette indices. OpenHP1 validates this instead of treating it as padding.
 For the uncompressed P8 textures decoded so far, the index count equals
 `width * height`.
-

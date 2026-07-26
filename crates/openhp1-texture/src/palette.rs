@@ -5,7 +5,7 @@ use crate::{
     decode::{nonnegative, require_class},
 };
 
-/// A palette color converted from Unreal's serialized BGRA byte order.
+/// A palette color in Unreal's serialized RGBA byte order.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Color {
     pub red: u8,
@@ -17,12 +17,12 @@ pub struct Color {
 }
 
 impl Color {
-    fn from_bgra(bgra: &[u8]) -> Self {
+    fn from_rgba(rgba: &[u8]) -> Self {
         Self {
-            red: bgra[2],
-            green: bgra[1],
-            blue: bgra[0],
-            alpha: bgra[3],
+            red: rgba[0],
+            green: rgba[1],
+            blue: rgba[2],
+            alpha: rgba[3],
         }
     }
 }
@@ -46,7 +46,7 @@ impl Palette {
                 .ok_or(Error::InvalidPaletteCount { count })?,
         )?;
         Ok(Self {
-            colors: bytes.chunks_exact(4).map(Color::from_bgra).collect(),
+            colors: bytes.chunks_exact(4).map(Color::from_rgba).collect(),
         })
     }
 }
@@ -56,13 +56,13 @@ mod tests {
     use super::Color;
 
     #[test]
-    fn serialized_palette_color_is_bgra() {
+    fn serialized_palette_color_is_rgba() {
         assert_eq!(
-            Color::from_bgra(&[1, 2, 3, 4]),
+            Color::from_rgba(&[1, 2, 3, 4]),
             Color {
-                red: 3,
+                red: 1,
                 green: 2,
-                blue: 1,
+                blue: 3,
                 alpha: 4
             }
         );

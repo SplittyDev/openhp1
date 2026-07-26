@@ -104,7 +104,3 @@ Sky rendering clips at the fake-backdrop polygons rather than reproducing
 UE1's scanline BSP portal-span clipper. Full BSP zone/visibility traversal can
 replace that rasterized equivalent when it is needed for broader engine
 compatibility.
-
-The outdoor `WetWater` source palette is orange-brown. The original game turns
-it blue by multiplying it with a colored BSP lightmap before blending, so the
-viewer intentionally retains the source hue until lightmaps are implemented.
