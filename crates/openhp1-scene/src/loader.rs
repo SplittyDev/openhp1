@@ -16,7 +16,10 @@ use openhp1_package::{ObjectReader, ObjectReference, Package, PackageStore, Reso
 use openhp1_texture::{Palette, Texture, TextureRenderFlags};
 use tracing::{info, warn};
 
-use crate::{RenderScene, Rotator, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal};
+use crate::{
+    RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId,
+    SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
+};
 
 pub struct LoadedScene {
     pub path: PathBuf,
@@ -34,6 +37,7 @@ pub struct LoadedScene {
     pub has_sky_zone: bool,
     pub actor_meshes: usize,
     pub animated_actor_meshes: usize,
+    pub actors: Vec<SceneActor>,
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
@@ -124,7 +128,7 @@ impl LoadedScene {
         let vertex_lighting = model
             .vertex_lighting(&package)
             .context("failed to decode actor vertex lighting")?;
-        let actor_meshes = load_actor_meshes(
+        let actors = load_actors(
             &mut packages,
             &package,
             &level,
@@ -134,8 +138,8 @@ impl LoadedScene {
             &mut textures,
             &mut surface_materials,
             &mut animations,
-        )
-        .context("failed to load actor meshes")?;
+        );
+        let actor_meshes = actors.iter().filter(|actor| actor.render.is_some()).count();
         let animated_actor_meshes = animations.len();
         info!(
             map = %path.display(),
@@ -183,6 +187,7 @@ impl LoadedScene {
             has_sky_zone: sky_zone.is_some(),
             actor_meshes,
             animated_actor_meshes,
+            actors,
             zone_nodes: model.nodes.clone(),
             zone_count: model.zones.len(),
             animations,
@@ -203,6 +208,15 @@ impl LoadedScene {
         }
         for animation in &mut self.animations {
             animation.phase = (animation.phase + animation.rate * delta_time).rem_euclid(1.0);
+            let actor = self
+                .actors
+                .get_mut(animation.actor_index)
+                .context("animation refers to a missing scene actor")?;
+            let actor_animation = actor
+                .animation
+                .as_mut()
+                .context("animated scene actor has no animation state")?;
+            actor_animation.phase = animation.phase;
             let sequence = &animation.mesh.animation_sequences[animation.sequence];
             let triangles = animation.mesh.sample_sequence(sequence, animation.phase)?;
             ensure!(
@@ -226,6 +240,7 @@ impl LoadedScene {
 }
 
 struct AnimatedActorMesh {
+    actor_index: usize,
     mesh: Arc<Mesh>,
     sequence: usize,
     phase: f32,
@@ -237,8 +252,6 @@ struct AnimatedActorMesh {
     unlit: bool,
 }
 
-type ObjectKey = (String, usize);
-
 #[derive(Clone)]
 struct SceneObject {
     package: Arc<Package>,
@@ -246,8 +259,18 @@ struct SceneObject {
 }
 
 impl SceneObject {
-    fn key(&self) -> ObjectKey {
-        (self.package.summary().source.to_string(), self.export_index)
+    fn id(&self) -> SceneObjectId {
+        SceneObjectId {
+            package: self.package.summary().source.to_string(),
+            export_index: self.export_index,
+        }
+    }
+
+    fn name(&self) -> String {
+        self.package
+            .summary()
+            .name(self.package.summary().exports[self.export_index].object_name)
+            .to_owned()
     }
 }
 
@@ -279,6 +302,12 @@ struct ActorState {
     anim_rate: f32,
     hidden: bool,
     unlit: bool,
+}
+
+#[derive(Clone)]
+struct ClassState {
+    actor: ActorState,
+    diagnostics: Vec<String>,
 }
 
 impl Default for ActorState {
@@ -371,7 +400,8 @@ impl ActorState {
     }
 }
 
-fn load_actor_meshes(
+#[allow(clippy::too_many_arguments)]
+fn load_actors(
     packages: &mut PackageStore,
     map: &Arc<Package>,
     level: &Level,
@@ -381,45 +411,111 @@ fn load_actor_meshes(
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
-) -> Result<usize> {
-    let mut class_cache = HashMap::<ObjectKey, Option<ActorState>>::new();
-    let mut mesh_cache = HashMap::<ObjectKey, Option<Arc<Mesh>>>::new();
-    let mut decoded_textures = HashMap::<ObjectKey, Option<DecodedTexture>>::new();
+) -> Vec<SceneActor> {
+    let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
+    let mut mesh_cache = HashMap::<SceneObjectId, Option<Arc<Mesh>>>::new();
+    let mut decoded_textures = HashMap::<SceneObjectId, Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
-    let mut rendered = 0;
+    let mut actors = Vec::new();
+    let mut seen_exports = HashSet::new();
 
     for reference in &level.actors {
         let ObjectReference::Export(export_index) = *reference else {
             continue;
         };
+        if !seen_exports.insert(export_index) {
+            warn!(export_index, "level contains a duplicate actor reference");
+            continue;
+        }
         let export = &map.summary().exports[export_index];
+        let mut scene_actor = SceneActor {
+            id: SceneObjectId {
+                package: map.summary().source.to_string(),
+                export_index,
+            },
+            name: map.summary().name(export.object_name).to_owned(),
+            class: None,
+            class_name: map
+                .summary()
+                .object_name(export.class)
+                .unwrap_or("<no class>")
+                .to_owned(),
+            location: Vec3::ZERO,
+            rotation: Rotator::default(),
+            pre_pivot: Vec3::ZERO,
+            draw_scale: 1.0,
+            draw_type: 0,
+            hidden: false,
+            unlit: false,
+            mesh: None,
+            mesh_name: None,
+            animation: None,
+            render: None,
+            diagnostics: Vec::new(),
+        };
         let actor = match Actor::decode(map, export_index) {
             Ok(actor) => actor,
             Err(error) => {
                 warn!(export_index, %error, "could not decode actor");
+                scene_actor
+                    .diagnostics
+                    .push(format!("actor decode failed: {error}"));
+                actors.push(scene_actor);
                 continue;
             }
         };
         let class = match packages.resolve(map, export.class) {
-            Ok(Some(class)) => SceneObject::from(class),
-            Ok(None) => continue,
+            Ok(Some(class)) => {
+                let class = SceneObject::from(class);
+                scene_actor.class = Some(class.id());
+                scene_actor.class_name = class.name();
+                class
+            }
+            Ok(None) => {
+                scene_actor
+                    .diagnostics
+                    .push("actor has no resolvable class".to_owned());
+                actors.push(scene_actor);
+                continue;
+            }
             Err(error) => {
                 warn!(export_index, %error, "could not resolve actor class");
+                scene_actor
+                    .diagnostics
+                    .push(format!("class resolution failed: {error}"));
+                actors.push(scene_actor);
                 continue;
             }
         };
-        let mut state = class_state(packages, &class, &mut class_cache, 0).unwrap_or_default();
+        let class_state = class_state(packages, &class, &mut class_cache, 0);
+        scene_actor.diagnostics.extend(class_state.diagnostics);
+        let mut state = class_state.actor;
         if let Err(error) = state.apply(packages, map, &actor.properties) {
             warn!(export_index, %error, "could not resolve actor properties");
+            scene_actor
+                .diagnostics
+                .push(format!("actor property resolution failed: {error}"));
+            actors.push(scene_actor);
             continue;
         }
+        apply_scene_actor_state(&mut scene_actor, &state);
         if state.hidden || state.draw_type != 2 {
+            scene_actor.diagnostics.push(if state.hidden {
+                "hidden by actor state".to_owned()
+            } else {
+                format!("DrawType {} is not rendered as a mesh", state.draw_type)
+            });
+            actors.push(scene_actor);
             continue;
         }
         let Some(mesh_object) = state.mesh.clone() else {
+            scene_actor
+                .diagnostics
+                .push("mesh draw type has no mesh assigned".to_owned());
+            actors.push(scene_actor);
             continue;
         };
-        let mesh_key = mesh_object.key();
+        let mesh_key = mesh_object.id();
         if !mesh_cache.contains_key(&mesh_key) {
             let decoded = match Mesh::decode(&mesh_object.package, mesh_object.export_index) {
                 Ok(mesh) => Some(Arc::new(mesh)),
@@ -435,13 +531,20 @@ fn load_actor_meshes(
             mesh_cache.insert(mesh_key.clone(), decoded);
         }
         let Some(mesh) = mesh_cache.get(&mesh_key).and_then(Option::as_ref).cloned() else {
+            scene_actor.diagnostics.push(format!(
+                "mesh {} could not be decoded",
+                scene_actor.mesh_name.as_deref().unwrap_or("<unnamed>")
+            ));
+            actors.push(scene_actor);
             continue;
         };
+        let actor_index = actors.len();
         match append_actor_mesh(
             packages,
             &mesh_object,
             &mesh,
             &state,
+            actor_index,
             model,
             vertex_lighting,
             render_mesh,
@@ -451,30 +554,44 @@ fn load_actor_meshes(
             &mut images,
             animations,
         ) {
-            Ok(true) => rendered += 1,
-            Ok(false) => {}
+            Ok(Some(appended)) => {
+                scene_actor.render = Some(appended.render);
+                scene_actor.animation = appended.animation;
+            }
+            Ok(None) => {
+                scene_actor
+                    .diagnostics
+                    .push("mesh contains no renderable triangles".to_owned());
+            }
             Err(error) => {
                 warn!(
                     actor = %map.summary().name(export.object_name),
                     %error,
                     "could not append actor mesh"
                 );
+                scene_actor
+                    .diagnostics
+                    .push(format!("mesh assembly failed: {error}"));
             }
         }
+        actors.push(scene_actor);
     }
-    Ok(rendered)
+    actors
 }
 
 fn class_state(
     packages: &mut PackageStore,
     class: &SceneObject,
-    cache: &mut HashMap<ObjectKey, Option<ActorState>>,
+    cache: &mut HashMap<SceneObjectId, ClassState>,
     depth: usize,
-) -> Option<ActorState> {
+) -> ClassState {
     if depth > 32 {
-        return None;
+        return ClassState {
+            actor: ActorState::default(),
+            diagnostics: vec!["class inheritance exceeds 32 levels".to_owned()],
+        };
     }
-    let key = class.key();
+    let key = class.id();
     if let Some(cached) = cache.get(&key) {
         return cached.clone();
     }
@@ -488,24 +605,54 @@ fn class_state(
                 %error,
                 "could not decode actor class defaults"
             );
-            cache.insert(key, None);
-            return None;
+            let error = format!("class defaults failed for {}: {error}", class.name());
+            let state = ClassState {
+                actor: ActorState::default(),
+                diagnostics: vec![error],
+            };
+            cache.insert(key, state.clone());
+            return state;
         }
     };
-    let mut state = packages
-        .resolve(&class.package, base)
-        .ok()
-        .flatten()
-        .map(SceneObject::from)
-        .and_then(|base| class_state(packages, &base, cache, depth + 1))
-        .unwrap_or_default();
-    if let Err(error) = state.apply(packages, &class.package, &properties) {
+    let mut state = match packages.resolve(&class.package, base) {
+        Ok(Some(base)) => ClassState {
+            actor: class_state(packages, &SceneObject::from(base), cache, depth + 1).actor,
+            diagnostics: Vec::new(),
+        },
+        Ok(None) => ClassState {
+            actor: ActorState::default(),
+            diagnostics: Vec::new(),
+        },
+        Err(error) => {
+            let error = format!("base class resolution failed for {}: {error}", class.name());
+            ClassState {
+                actor: ActorState::default(),
+                diagnostics: vec![error],
+            }
+        }
+    };
+    if let Err(error) = state.actor.apply(packages, &class.package, &properties) {
         warn!(%error, "could not resolve actor class properties");
-        cache.insert(key, None);
-        return None;
+        let error = format!(
+            "class property resolution failed for {}: {error}",
+            class.name()
+        );
+        state.diagnostics.push(error);
     }
-    cache.insert(key, Some(state.clone()));
-    Some(state)
+    cache.insert(key, state.clone());
+    state
+}
+
+fn apply_scene_actor_state(actor: &mut SceneActor, state: &ActorState) {
+    actor.location = state.location;
+    actor.rotation = state.rotation;
+    actor.pre_pivot = state.pre_pivot;
+    actor.draw_scale = state.draw_scale;
+    actor.draw_type = state.draw_type;
+    actor.hidden = state.hidden;
+    actor.unlit = state.unlit;
+    actor.mesh = state.mesh.as_ref().map(SceneObject::id);
+    actor.mesh_name = state.mesh.as_ref().map(SceneObject::name);
 }
 
 fn decode_class_defaults(class: &SceneObject) -> Result<(ObjectReference, ActorProperties)> {
@@ -562,21 +709,27 @@ fn skip_class_array(
     Ok(())
 }
 
+struct AppendedActorMesh {
+    render: SceneActorRenderRange,
+    animation: Option<SceneActorAnimation>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_actor_mesh(
     packages: &mut PackageStore,
     mesh_object: &SceneObject,
     mesh: &Arc<Mesh>,
     actor: &ActorState,
+    actor_index: usize,
     model: &Model,
     vertex_lighting: &VertexLighting,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
-    decoded_textures: &mut HashMap<ObjectKey, Option<DecodedTexture>>,
+    decoded_textures: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
     animations: &mut Vec<AnimatedActorMesh>,
-) -> Result<bool> {
+) -> Result<Option<AppendedActorMesh>> {
     let mesh_textures = mesh
         .textures
         .iter()
@@ -610,6 +763,7 @@ fn append_actor_mesh(
     let unlit = actor.unlit || model.zone_at(center) == 0;
     let mut actor_materials = HashMap::<(u32, i32), usize>::new();
     let first_vertex = render_mesh.positions.len();
+    let first_index = render_mesh.indices.len();
     let sequence = mesh
         .animation_sequences
         .iter()
@@ -676,20 +830,29 @@ fn append_actor_mesh(
             .extend_from_slice(&[base, base + 2, base + 1]);
         render_mesh.triangle_surfaces.push(surface);
     }
-    if let Some(sequence) = sequence
-        && mesh.animation_sequences[sequence].frame_count > 1
-    {
+    let animation = sequence.map(|sequence| {
         let native_rate = mesh.animation_sequences[sequence].rate
             / mesh.animation_sequences[sequence].frame_count as f32;
-        animations.push(AnimatedActorMesh {
-            mesh: Arc::clone(mesh),
-            sequence,
+        SceneActorAnimation {
+            sequence: mesh.animation_sequences[sequence].name.clone(),
             phase,
             rate: if actor.anim_rate > 0.0 {
                 actor.anim_rate
             } else {
                 native_rate
             },
+            frame_count: mesh.animation_sequences[sequence].frame_count,
+        }
+    });
+    if let Some(animation) = animation.as_ref()
+        && animation.frame_count > 1
+    {
+        animations.push(AnimatedActorMesh {
+            actor_index,
+            mesh: Arc::clone(mesh),
+            sequence: sequence.expect("animation state has a sequence"),
+            phase,
+            rate: animation.rate,
             vertices: first_vertex..render_mesh.positions.len(),
             transform,
             normal_transform,
@@ -697,7 +860,15 @@ fn append_actor_mesh(
             unlit,
         });
     }
-    Ok(render_mesh.positions.len() != first_vertex)
+    Ok(
+        (render_mesh.positions.len() != first_vertex).then_some(AppendedActorMesh {
+            render: SceneActorRenderRange {
+                vertices: first_vertex..render_mesh.positions.len(),
+                indices: first_index..render_mesh.indices.len(),
+            },
+            animation,
+        }),
+    )
 }
 
 fn select_actor_texture(
@@ -722,7 +893,7 @@ fn actor_surface_material(
     mut flags: u32,
     actor: &ActorState,
     textures: &mut Vec<TextureImage>,
-    decoded: &mut HashMap<ObjectKey, Option<DecodedTexture>>,
+    decoded: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
 ) -> SurfaceMaterial {
     flags |= match actor.style {
@@ -738,7 +909,7 @@ fn actor_surface_material(
     let Some(texture) = texture else {
         return surface_material(flags, None, None);
     };
-    let key = texture.key();
+    let key = texture.id();
     if !decoded.contains_key(&key) {
         let resolved = ResolvedObject {
             package: Arc::clone(&texture.package),
@@ -757,7 +928,7 @@ fn actor_surface_material(
         return surface_material(flags, None, None);
     };
     let mut material = surface_material(flags, None, Some(texture.texture.render_flags));
-    let image_key = (key.0, key.1, material.masked);
+    let image_key = (key.package, key.export_index, material.masked);
     let image = if let Some(index) = images.get(&image_key) {
         Some(*index)
     } else {

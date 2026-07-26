@@ -17,14 +17,18 @@ on world BSP geometry.
    light actors, and the model's blurred one-bit shadow masks.
 7. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
    Unreal rotator.
-8. `openhp1-viewer` combines BSP and texture render flags into backend-neutral
-   surface materials.
-9. `openhp1-render` packs lightmaps with replicated edge gutters into one
+8. `openhp1-scene` resolves actor defaults and instance properties, retains
+   first-class actor records, and appends visible vertex meshes with their
+   materials and render ranges.
+9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
+   backend-neutral surface materials.
+10. `openhp1-render` packs lightmaps with replicated edge gutters into one
    atlas, normalizes coordinates, batches opaque triangles, sorts blended BSP
    surfaces, and draws them with repeat sampling and depth testing. A sky map
    first renders to a separate color/depth target; fake-backdrop polygons
    sample that target in screen space during the playable pass.
-10. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui.
+11. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui and
+    exposes searchable actor state and diagnostics.
 
 The renderer does not know package paths or export indices. It accepts decoded
 CPU geometry and texture images plus a caller-provided wgpu device, queue,
@@ -95,10 +99,13 @@ until full BSP visibility traversal exists.
 Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
 matters for sky-box cube faces.
 
-The renderer still uses only the first mip and does not cull by zones, render
-actors, or decode vertex meshes. `WetTexture` and `FireTexture` previews are
-static; runtime procedural animation and time-varying light effects are not
-implemented. Unsupported texture classes use a magenta checkerboard.
+The renderer still uses only the first mip and does not cull by zones. Visible
+vertex-mesh actors are decoded, lit, and rendered, and placed actors can play
+their serialized vertex animation state. Sprite, brush/mover, corona,
+particle, and skeletal-animation actor paths remain unsupported.
+`WetTexture` and `FireTexture` previews are static; runtime procedural
+animation and time-varying light effects are not implemented. Unsupported
+texture classes use a magenta checkerboard.
 
 Sky rendering clips at the fake-backdrop polygons rather than reproducing
 UE1's scanline BSP portal-span clipper. Full BSP zone/visibility traversal can

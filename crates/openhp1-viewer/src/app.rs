@@ -7,7 +7,7 @@ use eframe::{
 };
 use glam::Vec3;
 use openhp1_render::{Camera, RenderStats, Renderer};
-use openhp1_scene::LoadedScene;
+use openhp1_scene::{LoadedScene, SceneActor, SceneObjectId};
 
 use crate::target::ColorTarget;
 
@@ -20,6 +20,8 @@ pub(crate) struct ViewerApp {
     brightness: f32,
     animations_playing: bool,
     animation_speed: f32,
+    actor_filter: String,
+    selected_actor: Option<usize>,
     scene: LoadedScene,
     last_frame: Instant,
     render_stats: RenderStats,
@@ -56,6 +58,8 @@ impl ViewerApp {
             brightness: 0.625,
             animations_playing: true,
             animation_speed: 1.0,
+            actor_filter: String::new(),
+            selected_actor: None,
             scene,
             last_frame: Instant::now(),
             render_stats: RenderStats::default(),
@@ -85,6 +89,8 @@ impl ViewerApp {
         self.movement_speed = (radius * 0.35).max(200.0);
         self.renderer = renderer;
         self.scene = scene;
+        self.actor_filter.clear();
+        self.selected_actor = None;
         self.render_stats = RenderStats::default();
         self.last_frame = Instant::now();
         self.load_error = None;
@@ -116,6 +122,9 @@ impl ViewerApp {
                     ui.colored_label(egui::Color32::RED, error);
                 }
             });
+        egui::CollapsingHeader::new(format!("Actors ({})", self.scene.actors.len()))
+            .default_open(false)
+            .show(ui, |ui| self.actor_inspector(ui));
         egui::CollapsingHeader::new("Performance")
             .default_open(true)
             .show(ui, |ui| {
@@ -227,6 +236,125 @@ impl ViewerApp {
         (selected_level != current_level).then(|| self.scene.levels[selected_level].clone())
     }
 
+    fn actor_inspector(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.actor_filter)
+                .hint_text("Filter name, class, or mesh"),
+        );
+        let query = self.actor_filter.trim().to_ascii_lowercase();
+        let matching = self
+            .scene
+            .actors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, actor)| actor_matches(actor, &query).then_some(index))
+            .collect::<Vec<_>>();
+        let mut selected = self.selected_actor;
+        egui::ScrollArea::vertical()
+            .id_salt("actor list")
+            .max_height(220.0)
+            .show_rows(
+                ui,
+                ui.spacing().interact_size.y,
+                matching.len(),
+                |ui, rows| {
+                    for &index in &matching[rows] {
+                        let actor = &self.scene.actors[index];
+                        ui.selectable_value(
+                            &mut selected,
+                            Some(index),
+                            format!("{} — {}", actor.name, actor.class_name),
+                        );
+                    }
+                },
+            );
+        self.selected_actor = selected.filter(|index| matching.binary_search(index).is_ok());
+        ui.small(format!("{} matching", matching.len()));
+
+        let Some(actor) = self
+            .selected_actor
+            .and_then(|index| self.scene.actors.get(index))
+        else {
+            return;
+        };
+        ui.separator();
+        ui.strong(&actor.name);
+        egui::Grid::new("actor details")
+            .num_columns(2)
+            .show(ui, |ui| {
+                detail_row(ui, "Object", object_id_label(&actor.id));
+                detail_row(
+                    ui,
+                    "Class",
+                    actor.class.as_ref().map_or_else(
+                        || actor.class_name.clone(),
+                        |id| format!("{} ({})", actor.class_name, object_id_label(id)),
+                    ),
+                );
+                detail_row(ui, "Location (UE)", format_vec3(actor.location));
+                detail_row(
+                    ui,
+                    "Rotation",
+                    format!(
+                        "{}, {}, {}",
+                        actor.rotation.pitch, actor.rotation.yaw, actor.rotation.roll
+                    ),
+                );
+                detail_row(ui, "PrePivot", format_vec3(actor.pre_pivot));
+                detail_row(ui, "Draw scale", format!("{:.3}", actor.draw_scale));
+                detail_row(ui, "Draw type", actor.draw_type.to_string());
+                detail_row(ui, "Hidden", yes_no(actor.hidden));
+                detail_row(ui, "Unlit", yes_no(actor.unlit));
+                detail_row(
+                    ui,
+                    "Mesh",
+                    actor.mesh.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |id| {
+                            format!(
+                                "{} ({})",
+                                actor.mesh_name.as_deref().unwrap_or("<unnamed>"),
+                                object_id_label(id)
+                            )
+                        },
+                    ),
+                );
+                detail_row(
+                    ui,
+                    "Animation",
+                    actor.animation.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |animation| {
+                            format!(
+                                "{} · {:.3} · {:.3}/s · {} frames",
+                                animation.sequence,
+                                animation.phase,
+                                animation.rate,
+                                animation.frame_count
+                            )
+                        },
+                    ),
+                );
+                detail_row(
+                    ui,
+                    "Geometry",
+                    actor.render.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |render| {
+                            format!(
+                                "{} vertices · {} triangles",
+                                render.vertices.len(),
+                                render.indices.len() / 3
+                            )
+                        },
+                    ),
+                );
+            });
+        for diagnostic in &actor.diagnostics {
+            ui.label(format!("Diagnostic: {diagnostic}"));
+        }
+    }
+
     fn update_camera(&mut self, ui: &egui::Ui, response: &egui::Response, delta_time: f32) {
         if response.dragged() {
             let drag = ui.input(|input| input.pointer.delta());
@@ -294,7 +422,7 @@ impl eframe::App for ViewerApp {
             ui.set_min_height(full_height);
             let requested_level = ui
                 .vertical(|ui| {
-                    ui.set_width(240.0);
+                    ui.set_width(300.0);
                     egui::ScrollArea::vertical()
                         .show(ui, |ui| self.sidebar(ui, stable_delta_time))
                         .inner
@@ -349,4 +477,37 @@ fn level_name(path: &std::path::Path) -> String {
 
 fn mebibytes(bytes: usize) -> String {
     format!("{:.2} MiB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn actor_matches(actor: &SceneActor, query: &str) -> bool {
+    query.is_empty()
+        || actor.name.to_ascii_lowercase().contains(query)
+        || actor.class_name.to_ascii_lowercase().contains(query)
+        || actor
+            .mesh_name
+            .as_deref()
+            .is_some_and(|mesh| mesh.to_ascii_lowercase().contains(query))
+        || actor.id.export_index.to_string().contains(query)
+}
+
+fn detail_row(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+    ui.label(label);
+    ui.label(value);
+    ui.end_row();
+}
+
+fn object_id_label(id: &SceneObjectId) -> String {
+    let package = std::path::Path::new(&id.package)
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| id.package.as_str().into());
+    format!("{package}#{}", id.export_index)
+}
+
+fn format_vec3(value: Vec3) -> String {
+    format!("{:.2}, {:.2}, {:.2}", value.x, value.y, value.z)
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }

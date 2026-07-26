@@ -112,6 +112,11 @@ Do not create empty crates or abstraction layers for speculative future work.
 Split an existing crate when it has a real independent responsibility or
 dependency boundary, not merely because it has grown.
 
+Vertex-mesh sequence sampling currently belongs to `openhp1-mesh`, while the
+single viewer playback loop remains private to `openhp1-scene`. Split
+`openhp1-animation` only when skeletal animation or another consumer creates a
+genuinely reusable playback responsibility.
+
 The renderer consumes decoded render data. It must not know about package
 paths, byte offsets, import/export tables, or filesystem resolution.
 
@@ -124,7 +129,7 @@ current internal responsibility split is:
 | `openhp1-map` | BSP records, shared decode checks, `Level`, `Model`, sky-zone actors, triangulation, static lightmaps, actor vertex lighting, errors |
 | `openhp1-mesh` | classic, LOD, and skeletal mesh records, decoding, and geometry conversion |
 | `openhp1-texture` | palette decoding, texture/mip decoding, shared decode checks, errors |
-| `openhp1-scene` | package-backed scene loading, actor/material assembly, coordinate conversion, render-ready CPU scene data |
+| `openhp1-scene` | package-backed scene loading, first-class actor records, actor/material assembly, coordinate conversion, render-ready CPU scene data |
 | `openhp1-render` | camera/bounds, GPU batching, pipelines, lightmap atlas, render targets, wgpu renderer |
 | `openhp1-viewer` | executable startup, egui application/input/diagnostics, scene selection, offscreen color target |
 
@@ -183,10 +188,9 @@ decoded in isolation.
   composited through fake-backdrop polygons are implemented. Static UE1
   lightmaps are reconstructed from zone ambient colors, light actors, and BSP
   shadow masks, then packed into a shared GPU atlas.
-- UE1 rendering will later require masked, translucent, and modulated surfaces,
-  zones and portals, sky zones, movers, sprites, coronas, vertex/skeletal
-  meshes, animated textures, and HP-specific particles. Do not implement these
-  before the current milestone needs them.
+- Remaining UE1 rendering work includes zones and portals, movers, sprites,
+  coronas, skeletal animation, animated textures, and HP-specific particles.
+  Do not implement these before the current milestone needs them.
 - BSP collision and original movement semantics matter for compatibility. Do
   not substitute a generic physics engine before those semantics are understood.
 
@@ -290,6 +294,12 @@ successfully loads all 41 local maps. Base textures and lightmaps modulate
 directly in display space to match UE1's fixed-function renderer; do not insert
 an sRGB-to-linear conversion into that path. Procedural textures and light
 effects are static snapshots until runtime ticking exists.
+Level actors are retained as first-class CPU scene records keyed by package
+source and zero-based export index. Each record preserves its resolved class,
+transform, mesh and animation state, render ranges, and actor-local
+diagnostics. Duplicate references in a `Level` actor array resolve to one scene
+actor. The viewer provides a searchable actor inspector, while visible vertex
+meshes remain batched into the shared render mesh.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

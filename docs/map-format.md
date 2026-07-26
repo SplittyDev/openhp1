@@ -15,6 +15,25 @@ export after its actor array and travel URL fields.
 empty: it contains no points, nodes, surfaces, or triangles. Renderers must
 treat that as an empty scene rather than trying to bind zero-length buffers.
 
+## Level actors and scene identity
+
+The `Level` export stores an actor array of package object references. Null
+entries are empty slots, and inspected maps can repeat the same export
+reference. OpenHP1 therefore retains one `SceneActor` per distinct local actor
+export, identified by the package source and zero-based export index.
+
+Each scene actor preserves its object and resolved class names, Unreal-space
+transform, draw state, resolved mesh, current animation state, and any
+actor-local diagnostics. Visible mesh actors also retain their vertex and index
+ranges inside the shared CPU render mesh. This keeps the current batching
+strategy while providing stable objects that a future runtime can inspect and
+mutate.
+
+Actor state is assembled from the decodable class-default chain followed by
+the actor export's tagged properties. A direct class-default failure contributes
+an actor diagnostic; inherited failures remain logged once, while derived and
+instance properties stay usable.
+
 ## Primitive prefix
 
 `Model` inherits `Primitive`. After tagged UObject properties, it serializes:
