@@ -22,6 +22,8 @@ use crate::{
     SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
 };
 
+const NOT_FOR_SERVER: u32 = 0x0020_0000;
+
 pub struct LoadedScene {
     pub path: PathBuf,
     pub levels: Vec<PathBuf>,
@@ -548,6 +550,9 @@ fn load_actors(
             continue;
         }
         let export = &map.summary().exports[export_index];
+        if export.object_flags & NOT_FOR_SERVER != 0 {
+            continue;
+        }
         let mut scene_actor = SceneActor {
             id: SceneObjectId {
                 package: map.summary().source.to_string(),

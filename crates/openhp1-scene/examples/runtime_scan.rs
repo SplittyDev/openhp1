@@ -76,23 +76,31 @@ fn main() -> Result<()> {
         let mut applied_actors = Vec::new();
         let mut requested = 0;
         let mut actions = Vec::new();
-        for (actor, _, _, package, export) in classes {
-            match runtime.dispatch_event(actor, package, export, "PostBeginPlay") {
-                Ok(actor_actions) => actions.extend(actor_actions),
-                Err(error) => {
-                    let target = &scene.actors[actor];
-                    let sample = format!(
-                        "{} ({} from {})",
-                        target.name,
-                        target.class_name,
-                        target
-                            .class
-                            .as_ref()
-                            .map_or("unknown", |class| &class.package)
-                    );
-                    let entry = deferred.entry(error.to_string()).or_insert((0, sample));
-                    entry.0 += 1;
-                    continue;
+        for event in [
+            "PreBeginPlay",
+            "BeginPlay",
+            "PostBeginPlay",
+            "SetInitialState",
+        ] {
+            for &(actor, _, _, ref package, export) in &classes {
+                match runtime.dispatch_event(actor, package, export, event) {
+                    Ok(actor_actions) => actions.extend(actor_actions),
+                    Err(error) => {
+                        let target = &scene.actors[actor];
+                        let sample = format!(
+                            "{} ({} from {})",
+                            target.name,
+                            target.class_name,
+                            target
+                                .class
+                                .as_ref()
+                                .map_or("unknown", |class| &class.package)
+                        );
+                        let entry = deferred
+                            .entry(format!("{event}: {error}"))
+                            .or_insert((0, sample));
+                        entry.0 += 1;
+                    }
                 }
             }
         }

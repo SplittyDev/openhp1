@@ -484,19 +484,26 @@ fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
     let mut events = 0;
     let mut animations = 0;
     let mut deferred = 0;
-    for (actor, _, _, package, export) in classes {
-        match runtime.dispatch_event(actor, package, export, "PostBeginPlay") {
-            Ok(actions) => {
-                events += 1;
-                let applied = apply_runtime_actions(scene, actions)?;
-                animations += applied.0;
-                deferred += applied.1;
-            }
-            Err(error) => {
-                deferred += 1;
-                scene.actors[actor]
-                    .diagnostics
-                    .push(format!("runtime deferred PostBeginPlay: {error}"));
+    for event in [
+        "PreBeginPlay",
+        "BeginPlay",
+        "PostBeginPlay",
+        "SetInitialState",
+    ] {
+        for &(actor, _, _, ref package, export) in &classes {
+            match runtime.dispatch_event(actor, package, export, event) {
+                Ok(actions) => {
+                    events += 1;
+                    let applied = apply_runtime_actions(scene, actions)?;
+                    animations += applied.0;
+                    deferred += applied.1;
+                }
+                Err(error) => {
+                    deferred += 1;
+                    scene.actors[actor]
+                        .diagnostics
+                        .push(format!("runtime deferred {event}: {error}"));
+                }
             }
         }
     }
