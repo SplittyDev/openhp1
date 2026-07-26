@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use crate::{Frame, FrameRequest, FunctionCall, StructMember, Value};
 
+const GOTO_STATE: u16 = 0x071;
 const LOOP_ANIM: u16 = 0x104;
 const SET_COLLISION: u16 = 0x106;
 const SET_LOCATION: u16 = 0x10b;
@@ -18,6 +19,7 @@ const SET_TIMER: u16 = 0x118;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
+const STATE_AUTO: u32 = 0x0000_0002;
 
 pub type DispatchResult<T> = std::result::Result<T, DispatchError>;
 
@@ -86,6 +88,8 @@ pub struct ScriptRuntime {
     class_defaults: HashMap<ObjectId, InstanceState>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
     actor_classes: HashMap<usize, ObjectId>,
+    // ponytail: store state identity only; add label/IP state frames when state code ticks.
+    actor_states: HashMap<usize, Option<String>>,
     object_actors: HashMap<ObjectId, usize>,
     timers: HashMap<usize, ActorTimer>,
     timer_callbacks: usize,
@@ -125,6 +129,7 @@ impl ScriptRuntime {
             class_defaults: HashMap::new(),
             fields: HashMap::new(),
             actor_classes: HashMap::new(),
+            actor_states: HashMap::new(),
             object_actors: HashMap::new(),
             timers: HashMap::new(),
             timer_callbacks: 0,
@@ -161,7 +166,24 @@ impl ScriptRuntime {
 
         let mut instance = self.load_class_defaults(&class, 0)?;
         let mut reader = actor_package.export_reader(actor_export)?;
-        reader.read_object_stack(actor_entry.object_flags)?;
+        let state = reader
+            .read_object_stack(actor_entry.object_flags)?
+            .and_then(|stack| {
+                (stack.function != ObjectReference::None)
+                    .then_some(stack.function)
+                    .or((stack.state != ObjectReference::None).then_some(stack.state))
+            })
+            .map(|state| self.packages.resolve(&actor_package, state))
+            .transpose()?
+            .flatten()
+            .map(|state| {
+                state
+                    .package
+                    .summary()
+                    .name(state.package.summary().exports[state.export_index].object_name)
+                    .to_owned()
+            });
+        self.actor_states.insert(actor, state);
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
         self.instances.insert(actor, instance);
         Ok(())
@@ -239,7 +261,7 @@ impl ScriptRuntime {
             package: Arc::clone(&class.package),
             export_index: class.export_index,
         };
-        let Some(function) = self.find_function(class, event, 0)? else {
+        let Some(function) = self.find_actor_function(actor, class, event, 0)? else {
             return Ok(Vec::new());
         };
         let mut actions = Vec::new();
@@ -287,13 +309,164 @@ impl ScriptRuntime {
                 }));
             }
 
-            let metadata = ScriptExport::decode(&class.package, class.export_index)?;
-            if !matches!(metadata.metadata, ScriptMetadata::Class(_)) {
-                return Err(DispatchError::InvalidClass {
+            let Some(base) = self.base_class(&class)? else {
+                return Ok(None);
+            };
+            class = base;
+            depth += 1;
+        }
+    }
+
+    fn base_class(&mut self, class: &ResolvedObject) -> DispatchResult<Option<ResolvedObject>> {
+        let metadata = ScriptExport::decode(&class.package, class.export_index)?;
+        if !matches!(metadata.metadata, ScriptMetadata::Class(_)) {
+            return Err(DispatchError::InvalidClass {
+                export_index: class.export_index,
+            });
+        }
+        Ok(self.packages.resolve(&class.package, metadata.base_field)?)
+    }
+
+    fn find_actor_function(
+        &mut self,
+        actor: usize,
+        class: ResolvedObject,
+        name: &str,
+        depth: usize,
+    ) -> DispatchResult<Option<ResolvedObject>> {
+        if let Some(state) = self.actor_states.get(&actor).and_then(Clone::clone)
+            && let Some(function) = self.find_state_function(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
                     export_index: class.export_index,
-                });
+                },
+                &state,
+                name,
+                depth,
+            )?
+        {
+            return Ok(Some(function));
+        }
+        self.find_function(class, name, depth)
+    }
+
+    fn find_state_function(
+        &mut self,
+        mut class: ResolvedObject,
+        state_name: &str,
+        function_name: &str,
+        mut depth: usize,
+    ) -> DispatchResult<Option<ResolvedObject>> {
+        loop {
+            if depth >= MAX_CALL_DEPTH {
+                return Err(DispatchError::CallDepth);
             }
-            let Some(base) = self.packages.resolve(&class.package, metadata.base_field)? else {
+            let summary = class.package.summary();
+            if let Some(state) = summary.exports.iter().position(|export| {
+                export.outer == ObjectReference::Export(class.export_index)
+                    && summary
+                        .class_name(export)
+                        .is_some_and(|name| name.eq_ignore_ascii_case("State"))
+                    && summary
+                        .name(export.object_name)
+                        .eq_ignore_ascii_case(state_name)
+            }) && let Some(function) = summary.exports.iter().position(|export| {
+                export.outer == ObjectReference::Export(state)
+                    && summary
+                        .class_name(export)
+                        .is_some_and(|name| name.eq_ignore_ascii_case("Function"))
+                    && summary
+                        .name(export.object_name)
+                        .eq_ignore_ascii_case(function_name)
+            }) {
+                return Ok(Some(ResolvedObject {
+                    package: class.package,
+                    export_index: function,
+                }));
+            }
+
+            let Some(base) = self.base_class(&class)? else {
+                return Ok(None);
+            };
+            class = base;
+            depth += 1;
+        }
+    }
+
+    fn find_state(
+        &mut self,
+        class: &ResolvedObject,
+        name: &str,
+    ) -> DispatchResult<Option<ResolvedObject>> {
+        if name.eq_ignore_ascii_case("Auto")
+            && let Some(state) = self.find_matching_state(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                None,
+                0,
+            )?
+        {
+            return Ok(Some(state));
+        }
+        self.find_matching_state(
+            ResolvedObject {
+                package: Arc::clone(&class.package),
+                export_index: class.export_index,
+            },
+            Some(name),
+            0,
+        )
+    }
+
+    fn find_matching_state(
+        &mut self,
+        mut class: ResolvedObject,
+        name: Option<&str>,
+        mut depth: usize,
+    ) -> DispatchResult<Option<ResolvedObject>> {
+        loop {
+            if depth >= MAX_CALL_DEPTH {
+                return Err(DispatchError::CallDepth);
+            }
+            let states = class
+                .package
+                .summary()
+                .exports
+                .iter()
+                .enumerate()
+                .filter(|(_, export)| {
+                    export.outer == ObjectReference::Export(class.export_index)
+                        && class
+                            .package
+                            .summary()
+                            .class_name(export)
+                            .is_some_and(|name| name.eq_ignore_ascii_case("State"))
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            for export_index in states {
+                let state_name = class
+                    .package
+                    .summary()
+                    .name(class.package.summary().exports[export_index].object_name);
+                let matches = match name {
+                    Some(name) => state_name.eq_ignore_ascii_case(name),
+                    None => matches!(
+                        ScriptExport::decode(&class.package, export_index)?.metadata,
+                        ScriptMetadata::State(state) if state.flags & STATE_AUTO != 0
+                    ),
+                };
+                if matches {
+                    return Ok(Some(ResolvedObject {
+                        package: class.package,
+                        export_index,
+                    }));
+                }
+            }
+
+            let Some(base) = self.base_class(&class)? else {
                 return Ok(None);
             };
             class = base;
@@ -456,7 +629,12 @@ impl ScriptRuntime {
                     package: Arc::clone(&actor_class.package),
                     export_index: actor_class.export_index,
                 };
-                let Some(function) = self.find_function(class, &name, depth)? else {
+                let function = if matches!(call, FunctionCall::Virtual(_)) {
+                    self.find_actor_function(actor, class, &name, depth)?
+                } else {
+                    self.find_function(class, &name, depth)?
+                };
+                let Some(function) = function else {
                     return Ok(Value::None);
                 };
                 self.execute_function(
@@ -612,6 +790,42 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<Value, String> {
+        if index == GOTO_STATE {
+            if arguments.len() > 2 {
+                return Err(format!(
+                    "GotoState expects at most 2 arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            let state = match arguments.first() {
+                Some(Value::None) | None => self
+                    .actor_states
+                    .get(&actor)
+                    .and_then(Clone::clone)
+                    .unwrap_or_else(|| "None".to_owned()),
+                Some(state) => runtime_name(source, state)?,
+            };
+            if let Some(label) = arguments.get(1)
+                && !matches!(label, Value::None)
+            {
+                runtime_name(source, label)?;
+            }
+            let state = if state.eq_ignore_ascii_case("None") {
+                None
+            } else {
+                self.find_state(actor_class, &state)
+                    .map_err(|error| error.to_string())?
+                    .map(|state| {
+                        state
+                            .package
+                            .summary()
+                            .name(state.package.summary().exports[state.export_index].object_name)
+                            .to_owned()
+                    })
+            };
+            self.actor_states.insert(actor, state);
+            return Ok(Value::None);
+        }
         if index == LOOP_ANIM
             && let [name, rest @ ..] = arguments
         {
