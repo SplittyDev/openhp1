@@ -11,6 +11,7 @@ impl ScriptRuntime {
     ) -> DispatchResult<Vec<ActorAction>> {
         let mut actions = Vec::new();
         let mut instance = self.instances.remove(&actor).unwrap_or_default();
+        let state_revision = self.state_revision(actor);
         let result = self.execute_function(
             actor,
             actor_class,
@@ -20,9 +21,147 @@ impl ScriptRuntime {
             &mut actions,
             0,
         );
+        let state_result = if result.is_ok() && self.state_revision(actor) != state_revision {
+            self.execute_ready_state(actor, actor_class, &mut instance, &mut actions)
+        } else {
+            Ok(())
+        };
         self.instances.insert(actor, instance);
         result?;
+        state_result?;
         Ok(actions)
+    }
+
+    pub(super) fn execute_ready_state(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        for _ in 0..MAX_CALL_DEPTH {
+            let Some(mut state_frame) = self.state_frames.remove(&actor) else {
+                return Ok(());
+            };
+            match state_frame.latent {
+                LatentAction::Continue => {}
+                LatentAction::Sleep(remaining) if remaining <= 0.0 => {
+                    state_frame.latent = LatentAction::Continue;
+                }
+                LatentAction::Stop | LatentAction::Sleep(_) | LatentAction::FinishAnimation => {
+                    self.state_frames.insert(actor, state_frame);
+                    return Ok(());
+                }
+            }
+
+            let state = self.resolved_object(&state_frame.state)?;
+            let script = self.script(&state)?;
+            let mut frame = Frame::from_snapshot(&script.bytecode, state_frame.frame);
+            self.bind_struct_members(&state, &script.bytecode, &mut frame)?;
+            let revision = self.state_revision(actor);
+            self.state_resumes = self.state_resumes.saturating_add(1);
+            self.pending_latent = None;
+            self.active_state_actor = Some(actor);
+            let run = frame.resume_hosted(|request| {
+                let result = match request {
+                    FrameRequest::Call {
+                        receiver,
+                        function: call,
+                        arguments,
+                    } => self
+                        .dispatch_context_call(
+                            actor,
+                            actor_class,
+                            receiver,
+                            &state.package,
+                            call,
+                            &arguments,
+                            instance,
+                            actions,
+                            1,
+                        )
+                        .map(FrameResponse::Value),
+                    FrameRequest::CallIterator {
+                        receiver,
+                        function: call,
+                        arguments,
+                    } => self
+                        .dispatch_iterator_call(
+                            actor,
+                            receiver,
+                            &state.package,
+                            call,
+                            &arguments,
+                            instance,
+                        )
+                        .map(FrameResponse::Iterator),
+                    FrameRequest::GetInstance { receiver, field } => self
+                        .context_field_value(actor, receiver, &state.package, field, instance)
+                        .map(FrameResponse::Value),
+                    FrameRequest::SetInstance {
+                        receiver,
+                        field,
+                        value,
+                    } => self
+                        .set_context_field(actor, receiver, &state.package, field, value, instance)
+                        .map(|()| FrameResponse::Value(Value::None)),
+                };
+                result
+                    .map(|response| {
+                        if self.pending_latent.is_some() || self.state_revision(actor) != revision {
+                            match response {
+                                FrameResponse::Value(value) => FrameResponse::Suspend(value),
+                                response => response,
+                            }
+                        } else {
+                            response
+                        }
+                    })
+                    .map_err(|error| error.to_string())
+            });
+            self.active_state_actor = None;
+            let snapshot = frame.into_snapshot();
+
+            if self.state_revision(actor) != revision {
+                self.pending_latent = None;
+                run?;
+                continue;
+            }
+
+            state_frame.frame = snapshot;
+            state_frame.latent = match run? {
+                FrameRun::Complete(_) | FrameRun::Stopped => LatentAction::Stop,
+                FrameRun::Suspended => self.pending_latent.take().unwrap_or(LatentAction::Continue),
+                FrameRun::GotoLabel(label) => {
+                    let label = runtime_name(&state.package, &label)
+                        .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                    let state_name = self
+                        .actor_states
+                        .get(&actor)
+                        .and_then(|state| state.as_deref())
+                        .unwrap_or_default()
+                        .to_owned();
+                    if let Some((target_state, target)) =
+                        self.find_state_label(actor_class, &state_name, &label)?
+                    {
+                        state_frame.state =
+                            object_id(&target_state.package, target_state.export_index);
+                        state_frame.frame = FrameSnapshot::at(target);
+                        self.state_frames.insert(actor, state_frame);
+                        continue;
+                    }
+                    LatentAction::Stop
+                }
+            };
+            self.pending_latent = None;
+            self.state_frames.insert(actor, state_frame);
+            return Ok(());
+        }
+        Err(DispatchError::CallDepth)
+    }
+
+    fn state_revision(&self, actor: usize) -> u64 {
+        self.state_revisions.get(&actor).copied().unwrap_or(0)
     }
 
     #[allow(clippy::too_many_arguments)]

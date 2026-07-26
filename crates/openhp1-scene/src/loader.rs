@@ -308,16 +308,34 @@ impl LoadedScene {
     }
 
     pub fn tick_animations(&mut self, delta_time: f32) -> Result<bool> {
+        Ok(self.tick_animations_with_completions(delta_time)?.0)
+    }
+
+    pub fn tick_animations_with_completions(
+        &mut self,
+        delta_time: f32,
+    ) -> Result<(bool, Vec<usize>)> {
         if delta_time <= 0.0 || !delta_time.is_finite() {
-            return Ok(false);
+            return Ok((false, Vec::new()));
         }
         let mut changed = false;
+        let mut completed = Vec::new();
         for animation in &mut self.animations {
             if !animation.playing || animation.rate == 0.0 {
                 continue;
             }
             changed = true;
-            animation.phase = (animation.phase + animation.rate * delta_time).rem_euclid(1.0);
+            let (phase, finished, playing) = advance_animation(
+                animation.phase,
+                animation.rate,
+                delta_time,
+                animation.looping,
+            );
+            animation.phase = phase;
+            animation.playing = playing;
+            if finished {
+                completed.push(animation.actor_index);
+            }
             let actor = self
                 .actors
                 .get_mut(animation.actor_index)
@@ -344,7 +362,7 @@ impl LoadedScene {
                     animation.lighting.color(position, normal, animation.unlit);
             }
         }
-        Ok(changed)
+        Ok((changed, completed))
     }
 
     pub fn tick_water(&mut self, delta_time: f32) -> Result<Vec<usize>> {
@@ -364,6 +382,32 @@ impl LoadedScene {
         actor_index: usize,
         sequence_name: &str,
         relative_rate: f32,
+    ) -> Result<bool> {
+        self.set_actor_animation(actor_index, sequence_name, relative_rate, true)
+    }
+
+    pub fn play_actor_animation(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+    ) -> Result<bool> {
+        self.set_actor_animation(actor_index, sequence_name, relative_rate, false)
+    }
+
+    pub fn actor_animation_playing(&self, actor_index: usize) -> bool {
+        self.animations
+            .iter()
+            .find(|animation| animation.actor_index == actor_index)
+            .is_some_and(|animation| animation.playing && animation.rate != 0.0)
+    }
+
+    fn set_actor_animation(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+        looping: bool,
     ) -> Result<bool> {
         ensure!(relative_rate.is_finite(), "animation rate is not finite");
         let Some(animation) = self
@@ -388,6 +432,7 @@ impl LoadedScene {
         animation.phase = 0.0;
         animation.rate = relative_rate * source_rate / source_frames.max(1) as f32;
         animation.playing = true;
+        animation.looping = looping;
         let actor = self
             .actors
             .get_mut(actor_index)
@@ -402,6 +447,18 @@ impl LoadedScene {
             frame_count: source_frames,
         });
         Ok(true)
+    }
+}
+
+fn advance_animation(phase: f32, rate: f32, delta_time: f32, looping: bool) -> (f32, bool, bool) {
+    let phase = phase + rate * delta_time;
+    if phase < 1.0 {
+        return (phase.rem_euclid(1.0), false, true);
+    }
+    if looping {
+        (phase.rem_euclid(1.0), true, true)
+    } else {
+        (1.0 - f32::EPSILON, true, false)
     }
 }
 
@@ -440,6 +497,7 @@ struct AnimatedActorMesh {
     phase: f32,
     rate: f32,
     playing: bool,
+    looping: bool,
     vertices: Range<usize>,
     transform: Mat4,
     normal_transform: Mat3,
@@ -1077,6 +1135,7 @@ fn append_actor_mesh(
             phase,
             rate: animation.as_ref().map_or(0.0, |animation| animation.rate),
             playing: animation.is_some(),
+            looping: true,
             vertices: first_vertex..render_mesh.positions.len(),
             transform,
             normal_transform,
@@ -1468,6 +1527,15 @@ mod tests {
         let mut positions = [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z];
         assert!(super::collapse_positions(&mut positions));
         assert_eq!(positions, [glam::Vec3::X; 3]);
+    }
+
+    #[test]
+    fn one_shot_animations_finish_while_loops_wrap() {
+        let one_shot = super::advance_animation(0.75, 1.0, 0.5, false);
+        assert_eq!(one_shot, (1.0 - f32::EPSILON, true, false));
+
+        let looping = super::advance_animation(0.75, 1.0, 0.5, true);
+        assert_eq!(looping, (0.25, true, true));
     }
 
     #[test]

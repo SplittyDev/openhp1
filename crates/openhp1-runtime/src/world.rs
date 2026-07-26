@@ -13,7 +13,9 @@ use openhp1_script::{
 };
 use thiserror::Error;
 
-use crate::{Frame, FrameRequest, FrameResponse, FunctionCall, StructMember, Value};
+use crate::{
+    Frame, FrameRequest, FrameResponse, FrameRun, FrameSnapshot, FunctionCall, StructMember, Value,
+};
 
 mod actor;
 mod execution;
@@ -26,8 +28,12 @@ const ENABLE: u16 = 0x075;
 const DISABLE: u16 = 0x076;
 const DESTROY: u16 = 0x117;
 const ALL_ACTORS: u16 = 0x130;
+const SLEEP: u16 = 0x100;
+const PLAY_ANIM: u16 = 0x103;
 const LOOP_ANIM: u16 = 0x104;
+const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
+const PLAY_SOUND: u16 = 0x108;
 const SET_LOCATION: u16 = 0x10b;
 const SET_TIMER: u16 = 0x118;
 const SET_ROTATION: u16 = 0x12b;
@@ -106,10 +112,18 @@ pub type DispatchResult<T> = std::result::Result<T, DispatchError>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActorAction {
+    PlayAnimation {
+        actor: usize,
+        sequence: String,
+        rate: f32,
+    },
     LoopAnimation {
         actor: usize,
         sequence: String,
         rate: f32,
+    },
+    AwaitAnimation {
+        actor: usize,
     },
     SetLocation {
         actor: usize,
@@ -171,6 +185,16 @@ pub enum DispatchError {
 
     #[error("runtime delta time {value} is invalid")]
     InvalidDeltaTime { value: f32 },
+
+    #[error("state `{state}` has an invalid label table at execution offset {offset:#x}")]
+    InvalidStateLabelTable { state: String, offset: usize },
+
+    #[error("state `{state}` label `{label}` points outside {length} execution bytes")]
+    InvalidStateLabel {
+        state: String,
+        label: String,
+        length: usize,
+    },
 }
 
 pub struct ScriptRuntime {
@@ -186,8 +210,12 @@ pub struct ScriptRuntime {
     frame_arguments: HashMap<ObjectId, Arc<Vec<(i32, usize)>>>,
     struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
     actor_classes: HashMap<usize, ObjectId>,
-    // ponytail: store state identity only; add label/IP state frames when state code ticks.
     actor_states: HashMap<usize, Option<String>>,
+    state_frames: HashMap<usize, StateFrame>,
+    state_revisions: HashMap<usize, u64>,
+    active_state_actor: Option<usize>,
+    pending_latent: Option<LatentAction>,
+    state_resumes: usize,
     tick_functions: HashMap<usize, ResolvedObject>,
     failed_ticks: HashSet<usize>,
     disabled_events: HashMap<(usize, String), HashSet<String>>,
@@ -239,6 +267,20 @@ struct ActorTimer {
     remaining: f32,
     rate: f32,
     looping: bool,
+}
+
+struct StateFrame {
+    state: ObjectId,
+    frame: FrameSnapshot,
+    latent: LatentAction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LatentAction {
+    Continue,
+    Stop,
+    Sleep(f32),
+    FinishAnimation,
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;

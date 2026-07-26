@@ -17,6 +17,11 @@ impl ScriptRuntime {
             struct_members: HashMap::new(),
             actor_classes: HashMap::new(),
             actor_states: HashMap::new(),
+            state_frames: HashMap::new(),
+            state_revisions: HashMap::new(),
+            active_state_actor: None,
+            pending_latent: None,
+            state_resumes: 0,
             tick_functions: HashMap::new(),
             failed_ticks: HashSet::new(),
             disabled_events: HashMap::new(),
@@ -68,28 +73,60 @@ impl ScriptRuntime {
             })
             .map(|state| self.packages.resolve(&actor_package, state))
             .transpose()?
-            .flatten()
-            .map(|state| {
-                state
-                    .package
-                    .summary()
-                    .name(state.package.summary().exports[state.export_index].object_name)
-                    .to_owned()
-            });
+            .flatten();
+        let state_name = state.as_ref().map(|state| {
+            state
+                .package
+                .summary()
+                .name(state.package.summary().exports[state.export_index].object_name)
+                .to_owned()
+        });
+        if let (Some(stack), Some(state)) = (stack, state.as_ref())
+            && stack.function != ObjectReference::None
+            && matches!(self.script(state)?.metadata, ScriptMetadata::State(_))
+        {
+            let script = self.script(state)?;
+            let offset = stack
+                .bytecode_offset
+                .and_then(|offset| usize::try_from(offset).ok())
+                .filter(|offset| *offset <= script.bytecode.bytes.len())
+                .ok_or_else(|| DispatchError::InvalidStateLabel {
+                    state: state
+                        .package
+                        .summary()
+                        .name(state.package.summary().exports[state.export_index].object_name)
+                        .to_owned(),
+                    label: format!("#{}", stack.bytecode_offset.unwrap_or(-1)),
+                    length: script.bytecode.bytes.len(),
+                })?;
+            self.state_frames.insert(
+                actor,
+                StateFrame {
+                    state: object_id(&state.package, state.export_index),
+                    frame: FrameSnapshot::at(offset),
+                    latent: match stack.latent_action {
+                        0 => LatentAction::Continue,
+                        0x101 => LatentAction::Sleep(0.0),
+                        0x106 => LatentAction::FinishAnimation,
+                        _ => LatentAction::Stop,
+                    },
+                },
+            );
+        }
         if let Some(stack) = stack {
             for (index, event) in PROBE_EVENTS.iter().enumerate() {
                 if stack.probe_mask & (1_u64 << index) != 0 {
                     set_event_disabled(
                         &mut self.disabled_events,
                         actor,
-                        state.as_deref(),
+                        state_name.as_deref(),
                         event,
                         true,
                     );
                 }
             }
         }
-        self.actor_states.insert(actor, state);
+        self.actor_states.insert(actor, state_name);
         self.refresh_tick_actor(actor, &class)?;
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
         self.instances.insert(actor, instance);
@@ -159,6 +196,52 @@ impl ScriptRuntime {
             }
         }
 
+        let mut state_actors = self.state_frames.keys().copied().collect::<Vec<_>>();
+        state_actors.sort_unstable();
+        for actor in state_actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let ready = match self.state_frames.get_mut(&actor) {
+                Some(StateFrame {
+                    latent: LatentAction::Sleep(remaining),
+                    ..
+                }) => {
+                    *remaining = (*remaining - delta_time).max(0.0);
+                    if *remaining == 0.0 {
+                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Some(StateFrame {
+                    latent: LatentAction::Continue,
+                    ..
+                }) => true,
+                _ => false,
+            };
+            if !ready {
+                continue;
+            }
+            let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                continue;
+            };
+            let class = ResolvedObject {
+                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
+                export_index: class.export_index,
+            };
+            let mut instance = self.instances.remove(&actor).unwrap_or_default();
+            let result = self.execute_ready_state(actor, &class, &mut instance, &mut actions);
+            self.instances.insert(actor, instance);
+            if let Err(error) = result {
+                actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("State: {error}"),
+                });
+            }
+        }
+
         let mut due = Vec::new();
         let actors = self.timers.keys().copied().collect::<Vec<_>>();
         for actor in actors {
@@ -195,8 +278,29 @@ impl ScriptRuntime {
         Ok(actions)
     }
 
+    pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
+        if let Some(frame) = self.state_frames.get_mut(&actor)
+            && frame.latent == LatentAction::FinishAnimation
+        {
+            frame.latent = LatentAction::Continue;
+        }
+        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(Vec::new());
+        };
+        self.dispatch_event(
+            actor,
+            Path::new(class.package.as_ref()),
+            class.export_index,
+            "AnimEnd",
+        )
+    }
+
     pub fn timer_callbacks(&self) -> usize {
         self.timer_callbacks
+    }
+
+    pub fn state_resumes(&self) -> usize {
+        self.state_resumes
     }
 
     pub fn dispatch_event_with_arguments(

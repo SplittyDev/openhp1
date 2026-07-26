@@ -34,6 +34,11 @@ the actor export's tagged properties. A direct class-default failure contributes
 an actor diagnostic; inherited failures remain logged once, while derived and
 instance properties stay usable.
 
+Executable state code retains its decoded instruction pointer and local values
+across latent `Sleep` and `FinishAnim` calls. Runtime label lookup uses the
+final top-level `LabelTable` in canonical decoded bytecode; the serialized
+state metadata offset is not a canonical decoded-byte offset.
+
 ## Primitive prefix
 
 `Model` inherits `Primitive`. After tagged UObject properties, it serializes:

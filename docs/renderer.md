@@ -10,7 +10,8 @@ on world BSP geometry.
 3. `openhp1-package::PackageStore` discovers packages through the original
    `[Core.System] Paths` and resolves grouped imports case-insensitively.
 4. `openhp1-texture` expands the first P8 mip and its palette to RGBA8.
-   `WetTexture` and `FireTexture` exports produce static preview frames.
+   Water-backed `WetTexture` exports retain simulation state; `FireTexture`
+   exports currently produce static preview frames.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    and lightmap coordinates.
 6. `openhp1-map` reconstructs static lightmap images from zone ambient colors,
@@ -103,9 +104,9 @@ The renderer still uses only the first mip and does not cull by zones. Visible
 vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
 serialized or runtime-selected animation sequences. Sprite, brush/mover,
 corona, and particle actor paths remain unsupported.
-`WetTexture` and `FireTexture` previews are static; actor runtime ticking does
-not yet drive procedural animation or time-varying light effects. Unsupported
-texture classes use a magenta checkerboard.
+Water-backed `WetTexture` exports animate independently of actor scripts.
+`FireTexture` previews and time-varying light effects remain static.
+Unsupported texture classes use a magenta checkerboard.
 
 Sky rendering clips at the fake-backdrop polygons rather than reproducing
 UE1's scanline BSP portal-span clipper. Full BSP zone/visibility traversal can

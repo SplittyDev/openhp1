@@ -1,6 +1,171 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn set_actor_state(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        state: Option<ResolvedObject>,
+        label: &str,
+    ) -> DispatchResult<()> {
+        let state_name = state.as_ref().map(|state| {
+            state
+                .package
+                .summary()
+                .name(state.package.summary().exports[state.export_index].object_name)
+                .to_owned()
+        });
+        let frame = match (state, state_name.as_deref()) {
+            (Some(state), Some(state_name)) => {
+                Some(self.state_frame(class, state, state_name, label)?)
+            }
+            _ => None,
+        };
+        self.actor_states.insert(actor, state_name.clone());
+        *self.state_revisions.entry(actor).or_default() += 1;
+        self.pending_latent = None;
+
+        if let Some(frame) = frame {
+            self.state_frames.insert(actor, frame);
+        } else {
+            self.state_frames.remove(&actor);
+        }
+        self.failed_ticks.remove(&actor);
+        self.refresh_tick_actor(actor, class)
+    }
+
+    pub(super) fn state_frame(
+        &mut self,
+        class: &ResolvedObject,
+        state: ResolvedObject,
+        state_name: &str,
+        label: &str,
+    ) -> DispatchResult<StateFrame> {
+        let label = if label.eq_ignore_ascii_case("None") || label.is_empty() {
+            "Begin"
+        } else {
+            label
+        };
+        let target = self.find_state_label(class, state_name, label)?;
+        let found = target.is_some();
+        let (state, target) = target.unwrap_or((state, 0));
+        Ok(StateFrame {
+            state: object_id(&state.package, state.export_index),
+            frame: FrameSnapshot::at(target),
+            latent: if found {
+                LatentAction::Continue
+            } else {
+                LatentAction::Stop
+            },
+        })
+    }
+
+    pub(super) fn find_state_label(
+        &mut self,
+        class: &ResolvedObject,
+        state_name: &str,
+        label: &str,
+    ) -> DispatchResult<Option<(ResolvedObject, usize)>> {
+        let mut class = ResolvedObject {
+            package: Arc::clone(&class.package),
+            export_index: class.export_index,
+        };
+        for _ in 0..MAX_CALL_DEPTH {
+            let summary = class.package.summary();
+            if let Some(export_index) = summary.exports.iter().position(|export| {
+                export.outer == ObjectReference::Export(class.export_index)
+                    && summary
+                        .class_name(export)
+                        .is_some_and(|name| name.eq_ignore_ascii_case("State"))
+                    && summary
+                        .name(export.object_name)
+                        .eq_ignore_ascii_case(state_name)
+            }) {
+                let state = ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index,
+                };
+                if let Some(target) = self.state_label(&state, label)? {
+                    return Ok(Some((state, target)));
+                }
+            }
+            let Some(base) = self.base_class(&class)? else {
+                return Ok(None);
+            };
+            class = base;
+        }
+        Err(DispatchError::CallDepth)
+    }
+
+    fn state_label(
+        &mut self,
+        state: &ResolvedObject,
+        label: &str,
+    ) -> DispatchResult<Option<usize>> {
+        let script = self.script(state)?;
+        let ScriptMetadata::State(_) = &script.metadata else {
+            return Err(DispatchError::InvalidClass {
+                export_index: state.export_index,
+            });
+        };
+        if script.bytecode.bytes.is_empty() {
+            return Ok(None);
+        }
+        let state_name = state
+            .package
+            .summary()
+            .name(state.package.summary().exports[state.export_index].object_name)
+            .to_owned();
+        let Some(offset) = script
+            .bytecode
+            .tokens
+            .iter()
+            .rev()
+            .find(|token| token.depth == 0 && token.opcode == 0x0c)
+            .map(|token| token.offset)
+        else {
+            return Ok(None);
+        };
+        let mut cursor = offset + 1;
+        loop {
+            let Some(entry) = script.bytecode.bytes.get(cursor..cursor + 8) else {
+                return Err(DispatchError::InvalidStateLabelTable {
+                    state: state_name,
+                    offset: cursor,
+                });
+            };
+            let name = i32::from_le_bytes(entry[..4].try_into().unwrap());
+            let target = usize::try_from(u32::from_le_bytes(entry[4..].try_into().unwrap()))
+                .map_err(|_| DispatchError::InvalidStateLabel {
+                    state: state_name.clone(),
+                    label: label.to_owned(),
+                    length: script.bytecode.bytes.len(),
+                })?;
+            cursor += 8;
+            let name = usize::try_from(name)
+                .ok()
+                .filter(|name| *name < state.package.summary().names.len())
+                .map(|name| state.package.summary().name(name))
+                .ok_or_else(|| DispatchError::MissingName {
+                    package: Arc::clone(&state.package.summary().source),
+                    name: format!("#{name}"),
+                })?;
+            if name.eq_ignore_ascii_case("None") {
+                return Ok(None);
+            }
+            if name.eq_ignore_ascii_case(label) {
+                if target >= script.bytecode.bytes.len() {
+                    return Err(DispatchError::InvalidStateLabel {
+                        state: state_name,
+                        label: label.to_owned(),
+                        length: script.bytecode.bytes.len(),
+                    });
+                }
+                return Ok(Some(target));
+            }
+        }
+    }
+
     pub(super) fn find_function(
         &mut self,
         mut class: ResolvedObject,

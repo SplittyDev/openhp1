@@ -278,9 +278,9 @@ The map-viewer milestone is complete when it:
 
 The package inspector has scanned all 248 magic-detected packages in the local
 installation. The package, tagged-property, configured package resolver, P8
-palette/texture, static `WetTexture`/`FireTexture` preview, `Level`, and inline
-`Model` decoders are implemented. The eframe viewer renders base-textured BSP
-with depth and a free camera.
+palette/texture, animated `WetTexture`, static `FireTexture` preview, `Level`,
+and inline `Model` decoders are implemented. The eframe viewer renders
+base-textured BSP with depth and a free camera.
 `Lev5_Chess.unr` is visually verified with all 961 surfaces resolving to 15
 unique textures. Invisible surfaces are omitted, fake-backdrop surfaces
 screen-sample a separate BSP pass from the decoded `SkyZoneInfo` viewpoint,
@@ -295,8 +295,8 @@ contributions and use UE1's 2x modulation. Zone zero is valid: like UE1, it
 inherits ambient settings from the active `LevelInfo` actor. The reconstruction
 successfully loads all 41 local maps. Base textures and lightmaps modulate
 directly in display space to match UE1's fixed-function renderer; do not insert
-an sRGB-to-linear conversion into that path. Procedural textures and light
-effects remain static snapshots; actor runtime ticking does not drive them yet.
+an sRGB-to-linear conversion into that path. Water-backed `WetTexture` exports
+advance independently; fire textures and light effects remain static snapshots.
 Level actors are retained as first-class CPU scene records keyed by package
 source and zero-based export index. Each record preserves its resolved class,
 transform, mesh and animation state, render ranges, and actor-local
@@ -321,17 +321,15 @@ registered actor handles and persist cross-actor field reads, writes, and
 calls. `SetCollision` persists its three actor flags; actual BSP collision
 behavior waits for movement. `SetLocation` persists actor coordinates and
 relocates static or animated scene geometry without snapping on later
-animation ticks. The viewer registers every actor, dispatches `PostBeginPlay`,
-retains the runtime across frames, advances `SetTimer` callbacks, uploads
-runtime transform changes, and applies supported `LoopAnim` calls to
-first-class actors; unsupported calls remain explicit actor diagnostics. A
-five-second scan across all 41 maps reaches 45 `Timer` callbacks, all of which
-complete without deferred actions, applies 62 runtime animations, and performs
-961 actor relocations. All 381 local HP1 `Animation` exports and
-their 1,188 sequences decode and sample. In `Lev5_FlyKeys.unr`, one of seven
-script-selected animations currently targets a rendered actor and visibly
-changes its CPU vertices. The others expose hidden actor state or unmatched
-sequence behavior that the intentionally incomplete VM does not yet reproduce.
+animation ticks. The viewer registers every actor, dispatches actor lifecycle,
+tick, timer, and persistent state code, and uploads supported runtime actions.
+State frames retain their instruction pointer and locals across `Sleep` and
+`FinishAnim`; `GotoState`, `GotoLabel`, `Stop`, `PlayAnim`, and `LoopAnim` use
+the existing scene animation path. `PlaySound` remains a nonfatal actor
+diagnostic until audio exists. A five-second scan across all 41 maps resumes
+5,934 state frames, applies 564 of 590 requested animations, performs 961 actor
+relocations and 60,600 actor rotations, and destroys 92 actors. All 381 local
+HP1 `Animation` exports and their 1,188 sequences decode and sample.
 This is not general gameplay support yet.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.

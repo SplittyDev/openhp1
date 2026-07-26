@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Instant};
+use std::{collections::VecDeque, path::PathBuf, time::Instant};
 
 use anyhow::{Context, Result};
 use eframe::{
@@ -401,8 +401,8 @@ impl ViewerApp {
             return;
         }
         let delta_time = delta_time * self.animation_speed;
-        match self.scene.tick_animations(delta_time) {
-            Ok(true) => {
+        let completed = match self.scene.tick_animations_with_completions(delta_time) {
+            Ok((true, completed)) => {
                 if !self
                     .renderer
                     .update_vertices(&self.state.queue, &self.scene.render.mesh)
@@ -410,11 +410,38 @@ impl ViewerApp {
                     self.animations_playing = false;
                     self.load_error = Some("animation changed the scene vertex count".to_owned());
                 }
+                completed
             }
-            Ok(false) => {}
+            Ok((false, completed)) => completed,
             Err(error) => {
                 self.animations_playing = false;
                 self.load_error = Some(format!("animation failed: {error:#}"));
+                Vec::new()
+            }
+        };
+        for actor in completed {
+            let actions = match self.runtime.animation_finished(actor) {
+                Ok(actions) => actions,
+                Err(error) => {
+                    self.load_error = Some(format!("animation callback failed: {error}"));
+                    break;
+                }
+            };
+            match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
+                Ok((_, _, true))
+                    if !self
+                        .renderer
+                        .update_vertices(&self.state.queue, &self.scene.render.mesh) =>
+                {
+                    self.load_error =
+                        Some("animation callback changed the scene vertex count".to_owned());
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.load_error = Some(format!("animation callback failed: {error:#}"));
+                    break;
+                }
             }
         }
         if !self.animations_playing {
@@ -447,7 +474,7 @@ impl ViewerApp {
                 return;
             }
         };
-        match apply_runtime_actions(&mut self.scene, actions) {
+        match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
             Ok((_, _, true))
                 if !self
                     .renderer
@@ -512,7 +539,7 @@ fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
             match runtime.dispatch_event(actor, package, export, event) {
                 Ok(actions) => {
                     events += 1;
-                    let applied = apply_runtime_actions(scene, actions)?;
+                    let applied = apply_runtime_actions(scene, &mut runtime, actions)?;
                     animations += applied.0;
                     deferred += applied.1;
                 }
@@ -531,13 +558,28 @@ fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
 
 fn apply_runtime_actions(
     scene: &mut LoadedScene,
+    runtime: &mut ScriptRuntime,
     actions: Vec<ActorAction>,
 ) -> Result<(usize, usize, bool)> {
     let mut animations = 0;
     let mut deferred = 0;
     let mut transformed = false;
-    for action in actions {
+    let mut actions = VecDeque::from(actions);
+    while let Some(action) = actions.pop_front() {
         match action {
+            ActorAction::PlayAnimation {
+                actor,
+                sequence,
+                rate,
+            } => {
+                if scene.play_actor_animation(actor, &sequence, rate)? {
+                    animations += 1;
+                } else {
+                    scene.actors[actor]
+                        .diagnostics
+                        .push(format!("runtime could not play animation {sequence}"));
+                }
+            }
             ActorAction::LoopAnimation {
                 actor,
                 sequence,
@@ -549,6 +591,11 @@ fn apply_runtime_actions(
                     scene.actors[actor]
                         .diagnostics
                         .push(format!("runtime could not play animation {sequence}"));
+                }
+            }
+            ActorAction::AwaitAnimation { actor } => {
+                if !scene.actor_animation_playing(actor) {
+                    actions.extend(runtime.animation_finished(actor)?);
                 }
             }
             ActorAction::SetLocation { actor, location } => {
@@ -623,8 +670,8 @@ impl eframe::App for ViewerApp {
                     .maintain_aspect_ratio(false),
             );
             self.update_camera(ui, &response, delta_time);
-            self.update_runtime(delta_time);
             self.update_animations(delta_time);
+            self.update_runtime(delta_time);
 
             let mut encoder =
                 self.state

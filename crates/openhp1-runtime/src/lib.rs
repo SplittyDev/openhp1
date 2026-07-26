@@ -99,6 +99,9 @@ pub enum Error {
     #[error("iterator control flow has no active iterator")]
     MissingIterator,
 
+    #[error("state-only control flow was used in a function frame")]
+    UnexpectedStateControl,
+
     #[error("struct member field {field} is not initialized")]
     MissingStructMember { field: i32 },
 
@@ -166,12 +169,13 @@ pub(crate) enum FrameRequest {
 pub(crate) enum FrameResponse {
     Value(Value),
     Iterator(Vec<Value>),
+    Suspend(Value),
 }
 
 impl FrameResponse {
     fn into_value(self) -> std::result::Result<Value, String> {
         match self {
-            Self::Value(value) => Ok(value),
+            Self::Value(value) | Self::Suspend(value) => Ok(value),
             Self::Iterator(_) => Err("regular call returned an iterator".to_owned()),
         }
     }
@@ -179,7 +183,9 @@ impl FrameResponse {
     fn into_iterator(self) -> std::result::Result<Vec<Value>, String> {
         match self {
             Self::Iterator(values) => Ok(values),
-            Self::Value(_) => Err("iterator call returned a regular value".to_owned()),
+            Self::Value(_) | Self::Suspend(_) => {
+                Err("iterator call returned a regular value".to_owned())
+            }
         }
     }
 }
@@ -196,6 +202,29 @@ struct ActiveIterator {
     end: usize,
 }
 
+pub(crate) struct FrameSnapshot {
+    instruction_pointer: usize,
+    locals: HashMap<i32, Value>,
+    iterators: Vec<ActiveIterator>,
+}
+
+impl FrameSnapshot {
+    pub(crate) fn at(instruction_pointer: usize) -> Self {
+        Self {
+            instruction_pointer,
+            locals: HashMap::new(),
+            iterators: Vec::new(),
+        }
+    }
+}
+
+pub(crate) enum FrameRun {
+    Complete(Value),
+    Stopped,
+    Suspended,
+    GotoLabel(Value),
+}
+
 /// Mutable state for one UnrealScript frame.
 pub struct Frame<'a> {
     bytecode: &'a Bytecode,
@@ -210,6 +239,7 @@ pub struct Frame<'a> {
     struct_members: HashMap<i32, StructMember>,
     hosted_instance: bool,
     creating_iterator: bool,
+    suspend_requested: bool,
     pending_iterator: Option<PendingIterator>,
     iterators: Vec<ActiveIterator>,
 }
@@ -229,8 +259,25 @@ impl<'a> Frame<'a> {
             struct_members: HashMap::new(),
             hosted_instance: false,
             creating_iterator: false,
+            suspend_requested: false,
             pending_iterator: None,
             iterators: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(bytecode: &'a Bytecode, snapshot: FrameSnapshot) -> Self {
+        let mut frame = Self::new(bytecode);
+        frame.instruction_pointer = snapshot.instruction_pointer;
+        frame.locals = snapshot.locals;
+        frame.iterators = snapshot.iterators;
+        frame
+    }
+
+    pub(crate) fn into_snapshot(self) -> FrameSnapshot {
+        FrameSnapshot {
+            instruction_pointer: self.instruction_pointer,
+            locals: self.locals,
+            iterators: self.iterators,
         }
     }
 
@@ -304,6 +351,16 @@ impl<'a> Frame<'a> {
         result
     }
 
+    pub(crate) fn resume_hosted(
+        &mut self,
+        mut host: impl FnMut(FrameRequest) -> std::result::Result<FrameResponse, String>,
+    ) -> Result<FrameRun> {
+        self.hosted_instance = true;
+        let result = self.resume_inner(&mut |request, _| host(request));
+        self.hosted_instance = false;
+        result
+    }
+
     fn execute_inner(
         &mut self,
         host: &mut impl FnMut(
@@ -316,18 +373,50 @@ impl<'a> Frame<'a> {
         self.expression_depth = 0;
         self.current_context = -1;
         self.creating_iterator = false;
+        self.suspend_requested = false;
         self.pending_iterator = None;
         self.iterators.clear();
+        match self.run_inner(host)? {
+            FrameRun::Complete(value) => Ok(value),
+            FrameRun::Stopped => Ok(Value::None),
+            FrameRun::Suspended | FrameRun::GotoLabel(_) => Err(Error::UnexpectedStateControl),
+        }
+    }
+
+    fn resume_inner(
+        &mut self,
+        host: &mut impl FnMut(
+            FrameRequest,
+            &mut HashMap<i32, Value>,
+        ) -> std::result::Result<FrameResponse, String>,
+    ) -> Result<FrameRun> {
+        self.steps = 0;
+        self.expression_depth = 0;
+        self.current_context = -1;
+        self.creating_iterator = false;
+        self.suspend_requested = false;
+        self.pending_iterator = None;
+        self.run_inner(host)
+    }
+
+    fn run_inner(
+        &mut self,
+        host: &mut impl FnMut(
+            FrameRequest,
+            &mut HashMap<i32, Value>,
+        ) -> std::result::Result<FrameResponse, String>,
+    ) -> Result<FrameRun> {
         while self.instruction_pointer < self.bytecode.bytes.len() {
             match self.peek()? {
                 0x04 => {
                     self.opcode()?;
-                    return if self.bytecode.version > 61 {
+                    let value = if self.bytecode.version > 61 {
                         let value = self.expression(host)?;
                         self.value(value, host)
                     } else {
                         Ok(Value::None)
-                    };
+                    }?;
+                    return Ok(FrameRun::Complete(value));
                 }
                 0x06 => {
                     self.opcode()?;
@@ -344,7 +433,15 @@ impl<'a> Frame<'a> {
                 }
                 0x08 => {
                     self.opcode()?;
-                    return Ok(Value::None);
+                    return Ok(FrameRun::Stopped);
+                }
+                0x0c => {
+                    return Ok(FrameRun::Stopped);
+                }
+                0x0d => {
+                    self.opcode()?;
+                    let label = self.expression(host)?;
+                    return Ok(FrameRun::GotoLabel(self.value(label, host)?));
                 }
                 0x2f => {
                     self.opcode()?;
@@ -375,8 +472,11 @@ impl<'a> Frame<'a> {
                     self.value(expression, host)?;
                 }
             }
+            if self.suspend_requested {
+                return Ok(FrameRun::Suspended);
+            }
         }
-        Ok(Value::None)
+        Ok(FrameRun::Complete(Value::None))
     }
 
     fn expression(
@@ -604,7 +704,7 @@ impl<'a> Frame<'a> {
         for argument in arguments {
             values.push(self.value(argument, host)?);
         }
-        host(
+        let response = host(
             FrameRequest::Call {
                 receiver: self.current_context,
                 function,
@@ -612,11 +712,21 @@ impl<'a> Frame<'a> {
             },
             &mut self.instance,
         )
-        .and_then(FrameResponse::into_value)
         .map_err(|message| Error::Call {
             call: function,
             message,
-        })
+        })?;
+        match response {
+            FrameResponse::Value(value) => Ok(value),
+            FrameResponse::Suspend(value) => {
+                self.suspend_requested = true;
+                Ok(value)
+            }
+            FrameResponse::Iterator(_) => Err(Error::Call {
+                call: function,
+                message: "regular call returned an iterator".to_owned(),
+            }),
+        }
     }
 
     fn value(
@@ -1010,6 +1120,47 @@ mod tests {
             frame.execute(|_, _| unreachable!()).unwrap(),
             Value::Int(42)
         );
+    }
+
+    #[test]
+    fn resumes_state_frames_after_latent_calls() {
+        let mut bytes = vec![0x61, 0x00, 0x1e];
+        bytes.extend(0.5_f32.to_le_bytes());
+        bytes.push(0x16);
+        bytes.extend([0x0f, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(42_i32.to_le_bytes());
+        bytes.push(0x08);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        assert!(matches!(
+            frame
+                .resume_hosted(|request| match request {
+                    FrameRequest::Call {
+                        function: FunctionCall::Native(0x100),
+                        arguments,
+                        ..
+                    } if arguments == [Value::Float(0.5)] => {
+                        Ok(FrameResponse::Suspend(Value::None))
+                    }
+                    _ => unreachable!(),
+                })
+                .unwrap(),
+            FrameRun::Suspended
+        ));
+
+        let mut frame = Frame::from_snapshot(&bytecode, frame.into_snapshot());
+        assert!(matches!(
+            frame.resume_hosted(|_| unreachable!()).unwrap(),
+            FrameRun::Stopped
+        ));
+        assert_eq!(frame.local(7), Some(&Value::Int(42)));
     }
 
     #[test]

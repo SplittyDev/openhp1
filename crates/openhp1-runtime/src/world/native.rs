@@ -59,6 +59,7 @@ impl ScriptRuntime {
             }
             self.tick_functions.remove(&actor);
             self.failed_ticks.remove(&actor);
+            self.state_frames.remove(&actor);
             let field = self
                 .find_property(actor_class, "bDeleteMe", 0)
                 .map_err(|error| error.to_string())?
@@ -83,45 +84,89 @@ impl ScriptRuntime {
                     .unwrap_or_else(|| "None".to_owned()),
                 Some(state) => runtime_name(source, state)?,
             };
-            if let Some(label) = arguments.get(1)
-                && !matches!(label, Value::None)
-            {
-                runtime_name(source, label)?;
-            }
+            let label = arguments
+                .get(1)
+                .filter(|label| !matches!(label, Value::None))
+                .map(|label| runtime_name(source, label))
+                .transpose()?
+                .unwrap_or_default();
             let state = if state.eq_ignore_ascii_case("None") {
                 None
             } else {
                 self.find_state(actor_class, &state)
                     .map_err(|error| error.to_string())?
-                    .map(|state| {
-                        state
-                            .package
-                            .summary()
-                            .name(state.package.summary().exports[state.export_index].object_name)
-                            .to_owned()
-                    })
             };
-            self.actor_states.insert(actor, state);
-            self.failed_ticks.remove(&actor);
-            self.refresh_tick_actor(actor, actor_class)
+            self.set_actor_state(actor, actor_class, state, &label)
                 .map_err(|error| error.to_string())?;
+            return Ok(Value::None);
+        }
+        if index == SLEEP {
+            let [Value::Float(seconds)] = arguments else {
+                return Err(format!(
+                    "Sleep expects one float, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if self.active_state_actor != Some(actor) {
+                return Err("Sleep is only valid in state code".to_owned());
+            }
+            if !seconds.is_finite() {
+                return Err("Sleep duration is not finite".to_owned());
+            }
+            self.pending_latent = Some(LatentAction::Sleep(seconds.max(0.0)));
+            return Ok(Value::None);
+        }
+        if index == PLAY_ANIM
+            && let [name, rest @ ..] = arguments
+        {
+            let name = runtime_name(source, name)?;
+            let rate = animation_rate("PlayAnim", rest)?;
+            actions.push(ActorAction::PlayAnimation {
+                actor,
+                sequence: name,
+                rate,
+            });
             return Ok(Value::None);
         }
         if index == LOOP_ANIM
             && let [name, rest @ ..] = arguments
         {
             let name = runtime_name(source, name)?;
-            let rate = match rest.first() {
-                Some(Value::Float(rate)) => *rate,
-                Some(Value::None) | None => 1.0,
-                Some(value) => {
-                    return Err(format!("LoopAnim rate is {}", value.kind()));
-                }
-            };
+            let rate = animation_rate("LoopAnim", rest)?;
             actions.push(ActorAction::LoopAnimation {
                 actor,
                 sequence: name,
                 rate,
+            });
+            return Ok(Value::None);
+        }
+        if index == FINISH_ANIM {
+            if arguments.len() > 1 {
+                return Err(format!(
+                    "FinishAnim expects at most one name, found {} arguments",
+                    arguments.len()
+                ));
+            }
+            if let Some(root) = arguments.first()
+                && !matches!(root, Value::None)
+            {
+                runtime_name(source, root)?;
+            }
+            if self.active_state_actor != Some(actor) {
+                return Err("FinishAnim is only valid in state code".to_owned());
+            }
+            self.pending_latent = Some(LatentAction::FinishAnimation);
+            actions.push(ActorAction::AwaitAnimation { actor });
+            return Ok(Value::None);
+        }
+        if index == PLAY_SOUND {
+            actions.push(ActorAction::DeferredCall {
+                actor,
+                message: "PlaySound is not audible yet".to_owned(),
             });
             return Ok(Value::None);
         }
@@ -224,6 +269,15 @@ impl ScriptRuntime {
             return Ok(Value::Bool(true));
         }
         scalar_native(index, arguments)
+    }
+}
+
+fn animation_rate(name: &str, arguments: &[Value]) -> std::result::Result<f32, String> {
+    match arguments.first() {
+        Some(Value::Float(rate)) if rate.is_finite() => Ok(*rate),
+        Some(Value::Float(_)) => Err(format!("{name} rate is not finite")),
+        Some(Value::None) | None => Ok(1.0),
+        Some(value) => Err(format!("{name} rate is {}", value.kind())),
     }
 }
 
