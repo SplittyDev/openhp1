@@ -71,7 +71,10 @@ v = (dot(V, P) - (dot(V, B) + LMPanV - 0.5 * LMScaleV)) / LMScaleV
 ```
 
 OpenHP1 reconstructs the original static lightmap pixels from zone ambient
-color, light actor properties, and the blurred one-bit shadow masks.
+color, light actor properties, and the blurred one-bit shadow masks. Node
+`Zone1` supplies the ambient settings for the stored polygon winding. Zone
+zero is not “no zone”; it falls back to the active `LevelInfo` actor, matching
+UE1's `GetZoneActor`.
 
 ## Rendering boundary
 

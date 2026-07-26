@@ -25,6 +25,7 @@ struct Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
+    display_gamma: [f32; 4],
 }
 
 pub struct Renderer {
@@ -181,7 +182,7 @@ impl Renderer {
             label: Some("OpenHP1 camera layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -391,13 +392,16 @@ impl Renderer {
         target: &wgpu::TextureView,
         camera: &Camera,
         viewport_size: [u32; 2],
+        brightness: f32,
     ) {
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
+        let display_gamma = [display_gamma(brightness), 0.0, 0.0, 0.0];
         queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::bytes_of(&CameraUniform {
                 view_projection: camera.view_projection(aspect).to_cols_array_2d(),
+                display_gamma,
             }),
         );
         let (blended_indices, blended_batches) =
@@ -429,6 +433,7 @@ impl Renderer {
                 0,
                 bytemuck::bytes_of(&CameraUniform {
                     view_projection: sky_camera.view_projection(aspect).to_cols_array_2d(),
+                    display_gamma,
                 }),
             );
             let (sky_indices, sky_batches) =
@@ -552,6 +557,10 @@ impl Renderer {
             }
         }
     }
+}
+
+fn display_gamma(brightness: f32) -> f32 {
+    1.0 / (brightness * 2.0).clamp(0.05, 2.99)
 }
 
 fn clear_color() -> wgpu::Color {
@@ -959,8 +968,8 @@ fn texture_view(
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // Keep palette bytes unconverted for UE1's brightness-based blend
-                // equations. Opaque shaders perform the sRGB conversion explicitly.
+                // UE1's fixed-function path modulates palette and lightmap
+                // samples directly in display space.
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -1359,6 +1368,12 @@ mod tests {
             fragment_entry(SurfaceMode::Opaque, false, true),
             "fragment_unlit"
         );
+    }
+
+    #[test]
+    fn converts_ue1_screen_brightness_to_display_gamma() {
+        assert_eq!(display_gamma(0.5), 1.0);
+        assert_eq!(display_gamma(0.625), 0.8);
     }
 
     #[test]

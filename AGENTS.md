@@ -30,6 +30,9 @@ Windows first, while keeping Linux working where practical.
 - Reference implementations may be studied subject to their licenses:
   - SurrealEngine: <https://github.com/dpjudas/SurrealEngine>
   - UE Viewer: <https://github.com/gildor2/UEViewer>
+- A local SurrealEngine clone is available at
+  `/Users/splitty/Developer/SurrealEngine`; use it instead of repeatedly
+  downloading temporary copies.
 
 ## Local file-format facts
 
@@ -272,9 +275,12 @@ depth-test without writing depth, and are sorted per BSP surface. `WetWater` in
 `Lev2_HogFront.unr` is visually verified without the fallback checkerboard.
 Serialized palette colors are RGBA; do not swap the red and blue bytes.
 Static lightmaps reconstruct zone ambient and per-light shadow-mask
-contributions and use UE1's 2x modulation. The reconstruction successfully
-loads all 41 local maps. Procedural textures and light effects are static
-snapshots until runtime ticking exists.
+contributions and use UE1's 2x modulation. Zone zero is valid: like UE1, it
+inherits ambient settings from the active `LevelInfo` actor. The reconstruction
+successfully loads all 41 local maps. Base textures and lightmaps modulate
+directly in display space to match UE1's fixed-function renderer; do not insert
+an sRGB-to-linear conversion into that path. Procedural textures and light
+effects are static snapshots until runtime ticking exists.
 Do not replace the exact `Level` world-model reference with a largest-export
 heuristic.
 

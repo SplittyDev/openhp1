@@ -4,7 +4,7 @@ use glam::Vec3;
 use openhp1_package::{ObjectReference, Package, PropertyKind};
 
 use crate::{
-    Error, Model, Result, Rotator,
+    Error, Level, Model, Result, Rotator,
     decode::{index, skip_object_stack},
 };
 
@@ -83,11 +83,9 @@ impl Model {
                 });
             }
             lightmap_surfaces[lightmap_index].get_or_insert(surface_index);
-            let zone = if node.zones[1] > 0 {
-                node.zones[1]
-            } else {
-                node.zones[0]
-            };
+            // UE1 draws the stored polygon winding from Zone1. Zone zero is
+            // valid and inherits the active LevelInfo's ambient settings.
+            let zone = node.zones[1];
             if let Ok(zone) = usize::try_from(zone)
                 && zone < self.zones.len()
             {
@@ -95,6 +93,7 @@ impl Model {
             }
         }
 
+        let level_ambient = decode_level_ambient(package)?;
         let mut ambient_cache = HashMap::new();
         let mut light_cache = HashMap::new();
         let mut images = Vec::with_capacity(self.light_maps.len());
@@ -112,7 +111,7 @@ impl Model {
                         ambient
                     }
                 }
-                _ => AmbientLight::default(),
+                _ => level_ambient,
             };
             images.push(self.build_lightmap(
                 package,
@@ -260,6 +259,34 @@ impl Model {
                 length: self.light_bits.len(),
             })?;
         Ok(blur_shadow_bits(bits, width, height))
+    }
+}
+
+fn decode_level_ambient(package: &Package) -> Result<AmbientLight> {
+    let Some(level_index) = package
+        .summary()
+        .exports
+        .iter()
+        .position(|export| package.summary().class_name(export) == Some("Level"))
+    else {
+        return Err(Error::MissingLevel);
+    };
+    let level = Level::decode(package, level_index)?;
+    match level.actors.into_iter().find_map(|actor| match actor {
+        ObjectReference::Export(index)
+            if package
+                .summary()
+                .exports
+                .get(index)
+                .and_then(|export| package.summary().class_name(export))
+                == Some("LevelInfo") =>
+        {
+            Some(index)
+        }
+        _ => None,
+    }) {
+        Some(index) => decode_ambient(package, index),
+        None => Ok(AmbientLight::default()),
     }
 }
 

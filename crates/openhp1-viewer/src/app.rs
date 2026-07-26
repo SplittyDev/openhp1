@@ -16,6 +16,7 @@ pub(crate) struct ViewerApp {
     target: ColorTarget,
     camera: Camera,
     movement_speed: f32,
+    brightness: f32,
     scene: LoadedScene,
     last_frame: Instant,
 }
@@ -47,6 +48,7 @@ impl ViewerApp {
             target,
             camera,
             movement_speed: (radius * 0.35).max(200.0),
+            brightness: 0.625,
             scene,
             last_frame: Instant::now(),
         })
@@ -132,6 +134,8 @@ impl eframe::App for ViewerApp {
                     ui.colored_label(egui::Color32::YELLOW, "This map contains no BSP geometry.");
                 }
                 ui.separator();
+                ui.add(egui::Slider::new(&mut self.brightness, 0.2..=1.0).text("Brightness"));
+                ui.separator();
                 ui.label("Drag to look");
                 ui.label("WASD move · Q/E down/up");
                 ui.label("Hold Shift to move faster");
@@ -165,6 +169,7 @@ impl eframe::App for ViewerApp {
                 &self.target.view,
                 &self.camera,
                 size,
+                self.brightness,
             );
             self.state.queue.submit([encoder.finish()]);
         });

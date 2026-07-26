@@ -47,9 +47,11 @@ The initial camera starts at the converted model-bounds center. UE1 maps are
 commonly subtractive worlds carved inside solid BSP; placing an overview camera
 outside the bounds only exposes an unhelpful outer hull.
 
-Lit surfaces multiply their base texture by the reconstructed linear lightmap
-using UE1's 2x modulation. Unlit and lightmap-less surfaces bypass that
-multiply.
+Lit surfaces multiply their base texture by the reconstructed lightmap in
+display space using UE1's 2x modulation. This deliberately matches UE1's
+fixed-function rendering instead of applying modern linear-light sRGB math.
+Zone-zero surfaces inherit the active `LevelInfo` ambient color. Unlit and
+lightmap-less surfaces bypass that multiply.
 
 ## Verified maps
 
