@@ -1060,9 +1060,9 @@ fn actor_surface_material(
 
 fn rotation_matrix(rotation: Rotator) -> Mat4 {
     let radians = rotation.radians();
-    Mat4::from_rotation_x(radians.z)
-        * Mat4::from_rotation_y(radians.x)
-        * Mat4::from_rotation_z(-radians.y)
+    Mat4::from_rotation_z(radians.y)
+        * Mat4::from_rotation_y(-radians.x)
+        * Mat4::from_rotation_x(-radians.z)
 }
 
 fn load_materials(
@@ -1277,6 +1277,36 @@ mod tests {
                 glam::Vec3::new(2.0, 3.0, 4.0),
                 glam::Vec3::new(3.0, 4.0, 5.0)
             ]
+        );
+    }
+
+    #[test]
+    fn rotates_actor_axes_using_ue1_rotator_direction() {
+        let quarter_turn = 16_384;
+        let yaw = super::rotation_matrix(openhp1_map::Rotator {
+            yaw: quarter_turn,
+            ..Default::default()
+        });
+        let pitch = super::rotation_matrix(openhp1_map::Rotator {
+            pitch: quarter_turn,
+            ..Default::default()
+        });
+        let roll = super::rotation_matrix(openhp1_map::Rotator {
+            roll: quarter_turn,
+            ..Default::default()
+        });
+        assert!(
+            yaw.transform_vector3(glam::Vec3::X)
+                .abs_diff_eq(glam::Vec3::Y, 1.0e-6)
+        );
+        assert!(
+            pitch
+                .transform_vector3(glam::Vec3::X)
+                .abs_diff_eq(glam::Vec3::Z, 1.0e-6)
+        );
+        assert!(
+            roll.transform_vector3(glam::Vec3::Y)
+                .abs_diff_eq(-glam::Vec3::Z, 1.0e-6)
         );
     }
 }

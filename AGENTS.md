@@ -302,7 +302,10 @@ source and zero-based export index. Each record preserves its resolved class,
 transform, mesh and animation state, render ranges, and actor-local
 diagnostics. Duplicate references in a `Level` actor array resolve to one scene
 actor. The viewer provides a searchable actor inspector, while visible vertex
-and skeletal meshes remain batched into the shared render mesh.
+and skeletal meshes remain batched into the shared render mesh. Actor rotation
+and mesh `RotationOrigin` use UE1's positive-yaw, negative-pitch, negative-roll
+object transform in yaw/pitch/roll composition order; do not substitute the
+inverse view rotation.
 All 6,816 script struct exports in the 248-package corpus decode into canonical
 UE1 execution bytecode. The initial runtime executes assignments, constants,
 branches, scalar/vector arithmetic natives, and final/virtual/global call
