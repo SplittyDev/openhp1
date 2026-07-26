@@ -268,6 +268,28 @@ impl ScriptRuntime {
             // ponytail: accept rotations until UE1 collision rejection exists.
             return Ok(Value::Bool(true));
         }
+        if index == 0xa7 {
+            let [Value::Int(max)] = arguments else {
+                return Err(format!(
+                    "Rand expects one int, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            return Ok(Value::Int(random_int(&mut self.random_state, *max)));
+        }
+        if index == 0xc3 {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "FRand expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            return Ok(Value::Float(random_float(&mut self.random_state)));
+        }
         scalar_native(index, arguments)
     }
 }
@@ -372,6 +394,7 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (0xaf, [Value::Float(left), Value::Float(right)]) => Value::Float(left - right),
         (0xb0, [Value::Float(left), Value::Float(right)]) => Value::Bool(left < right),
         (0xb1, [Value::Float(left), Value::Float(right)]) => Value::Bool(left > right),
+        (0xba, [Value::Float(value)]) => Value::Float(value.abs()),
         (0xd3, [Value::Vector(value)]) => Value::Vector([-value[0], -value[1], -value[2]]),
         (0xd4, [Value::Vector(value), Value::Float(scale)])
         | (0xd5, [Value::Float(scale), Value::Vector(value)]) => {
@@ -389,8 +412,35 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (0xe1, [Value::Vector(value)]) => {
             Value::Float((value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
         }
+        (0xe2, [Value::Vector(value)]) => {
+            let length = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+            if length > f32::EPSILON {
+                Value::Vector([value[0] / length, value[1] / length, value[2] / length])
+            } else {
+                Value::Vector([0.0; 3])
+            }
+        }
+        (0xfb, [Value::Int(value), Value::Int(min), Value::Int(max)]) => {
+            Value::Int((*value).min(*max).max(*min))
+        }
         _ => return Err(format!("native {index:#05x} is not implemented")),
     })
+}
+
+fn next_random(state: &mut u32) -> u32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    *state
+}
+
+pub(super) fn random_int(state: &mut u32, max: i32) -> i32 {
+    let range = max.saturating_sub(1).clamp(0, 32_767) as u32 + 1;
+    ((u64::from(next_random(state)) * u64::from(range)) >> 32) as i32
+}
+
+pub(super) fn random_float(state: &mut u32) -> f32 {
+    (next_random(state) >> 8) as f32 / 16_777_216.0
 }
 
 fn object_value(value: &Value) -> Option<i32> {

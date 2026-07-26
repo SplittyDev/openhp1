@@ -25,6 +25,7 @@ pub enum Value {
     Object(i32),
     Vector([f32; 3]),
     Rotator([i32; 3]),
+    Array(Vec<Value>),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -64,6 +65,7 @@ impl Value {
             Self::Object(_) => "object",
             Self::Vector(_) => "vector",
             Self::Rotator(_) => "rotator",
+            Self::Array(_) => "array",
         }
     }
 }
@@ -95,6 +97,9 @@ pub enum Error {
 
     #[error("assignment target is not a variable")]
     NotAssignable,
+
+    #[error("array index {index} is outside array length {length}")]
+    ArrayIndex { index: i32, length: usize },
 
     #[error("iterator control flow has no active iterator")]
     MissingIterator,
@@ -136,6 +141,10 @@ enum Slot {
     StructMember {
         target: Box<Slot>,
         member: StructMember,
+    },
+    ArrayElement {
+        target: Box<Slot>,
+        index: i32,
     },
 }
 
@@ -555,6 +564,27 @@ impl<'a> Frame<'a> {
                     }
                 }
             }
+            0x1a => {
+                let index = self.expression(host)?;
+                let index = match self.value(index, host)? {
+                    Value::Byte(index) => i32::from(index),
+                    Value::Int(index) => index,
+                    value => {
+                        return Err(Error::Type {
+                            expected: "integer array index",
+                            actual: value.kind(),
+                        });
+                    }
+                };
+                let target = self.expression(host)?;
+                match target {
+                    Expression::Slot(target) => Expression::Slot(Slot::ArrayElement {
+                        target: Box::new(target),
+                        index,
+                    }),
+                    target => Expression::Value(array_element(&self.value(target, host)?, index)?),
+                }
+            }
             0x1b => {
                 let name = self.read_i32()?;
                 Expression::Value(self.call(FunctionCall::Virtual(name), host)?)
@@ -812,6 +842,22 @@ impl<'a> Frame<'a> {
                 member.set(&mut target_value, value)?;
                 self.assign_slot(*target, target_value, host)?;
             }
+            Slot::ArrayElement { target, index } => {
+                let mut target_value = self.slot(&target, host)?.unwrap_or(Value::None);
+                let Value::Array(values) = &mut target_value else {
+                    return Err(Error::Type {
+                        expected: "array",
+                        actual: target_value.kind(),
+                    });
+                };
+                let length = values.len();
+                let element = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| values.get_mut(index))
+                    .ok_or(Error::ArrayIndex { index, length })?;
+                *element = value;
+                self.assign_slot(*target, target_value, host)?;
+            }
         }
         Ok(())
     }
@@ -859,6 +905,10 @@ impl<'a> Frame<'a> {
             Slot::StructMember { target, member } => self
                 .slot(target, host)?
                 .map(|value| member.get(value))
+                .transpose()?,
+            Slot::ArrayElement { target, index } => self
+                .slot(target, host)?
+                .map(|value| array_element(&value, *index))
                 .transpose()?,
         })
     }
@@ -966,6 +1016,22 @@ impl<'a> Frame<'a> {
         self.instruction_pointer = end;
         Ok(bytes)
     }
+}
+
+fn array_element(value: &Value, index: i32) -> Result<Value> {
+    let Value::Array(values) = value else {
+        return Err(Error::Type {
+            expected: "array",
+            actual: value.kind(),
+        });
+    };
+    values
+        .get(usize::try_from(index).unwrap_or(usize::MAX))
+        .cloned()
+        .ok_or(Error::ArrayIndex {
+            index,
+            length: values.len(),
+        })
 }
 
 impl StructMember {
@@ -1250,6 +1316,33 @@ mod tests {
             Value::Float(42.0)
         );
         assert_eq!(frame.local(7), Some(&Value::Vector([1.0, 2.0, 42.0])));
+    }
+
+    #[test]
+    fn reads_and_writes_fixed_array_elements() {
+        let mut bytes = vec![0x0f, 0x1a, 0x26, 0x00];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(42_i32.to_le_bytes());
+        bytes.extend([0x04, 0x1a, 0x26, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+
+        assert_eq!(
+            frame.execute(|_, _| unreachable!()).unwrap(),
+            Value::Int(42)
+        );
+        assert_eq!(
+            frame.local(7),
+            Some(&Value::Array(vec![Value::Int(1), Value::Int(42)]))
+        );
     }
 
     #[test]

@@ -30,6 +30,7 @@ impl ScriptRuntime {
             destroyed: HashSet::new(),
             timers: HashMap::new(),
             timer_callbacks: 0,
+            random_state: 0x6d2b_79f5,
             object_handles: HashMap::new(),
             handle_objects: Vec::new(),
         })

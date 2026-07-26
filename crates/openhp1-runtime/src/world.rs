@@ -195,6 +195,19 @@ pub enum DispatchError {
         label: String,
         length: usize,
     },
+
+    #[error("script property export {export_index} has invalid array dimension {dimension}")]
+    InvalidArrayDimension { export_index: usize, dimension: i32 },
+
+    #[error("property `{property}` array index {index} is outside array length {length}")]
+    ArrayPropertyIndex {
+        property: String,
+        index: usize,
+        length: usize,
+    },
+
+    #[error("property `{property}` fixed-array storage is invalid")]
+    InvalidArrayProperty { property: String },
 }
 
 pub struct ScriptRuntime {
@@ -224,6 +237,7 @@ pub struct ScriptRuntime {
     destroyed: HashSet<usize>,
     timers: HashMap<usize, ActorTimer>,
     timer_callbacks: usize,
+    random_state: u32,
     object_handles: HashMap<ObjectId, i32>,
     handle_objects: Vec<ObjectId>,
 }
@@ -256,6 +270,7 @@ impl FunctionLookup {
 #[derive(Clone, Debug)]
 enum StoredValue {
     Value(Value),
+    Array(Vec<StoredValue>),
     Name(String),
     Object(Option<ObjectId>),
     UnresolvedObject(String),
@@ -306,7 +321,7 @@ mod tests {
     use super::*;
     use super::{
         actor::advance_timer,
-        native::{collision_updates, scalar_native},
+        native::{collision_updates, random_float, random_int, scalar_native},
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
 
@@ -388,6 +403,33 @@ mod tests {
             scalar_native(0xd4, &[Value::Vector([1.0, 2.0, 3.0]), Value::Float(2.0)]),
             Ok(Value::Vector([2.0, 4.0, 6.0]))
         );
+    }
+
+    #[test]
+    fn requested_core_math_and_random_natives_match_unreal_semantics() {
+        assert_eq!(
+            scalar_native(0xfb, &[Value::Int(12), Value::Int(-5), Value::Int(10)]),
+            Ok(Value::Int(10))
+        );
+        assert_eq!(
+            scalar_native(0xba, &[Value::Float(-2.5)]),
+            Ok(Value::Float(2.5))
+        );
+        assert_eq!(
+            scalar_native(0xe2, &[Value::Vector([3.0, 0.0, 4.0])]),
+            Ok(Value::Vector([0.6, 0.0, 0.8]))
+        );
+        assert_eq!(
+            scalar_native(0xe2, &[Value::Vector([0.0; 3])]),
+            Ok(Value::Vector([0.0; 3]))
+        );
+
+        let mut state = 0x6d2b_79f5;
+        for _ in 0..100 {
+            assert!((0..7).contains(&random_int(&mut state, 7)));
+            assert!((0.0..1.0).contains(&random_float(&mut state)));
+        }
+        assert_eq!(random_int(&mut state, 0), 0);
     }
 
     #[test]

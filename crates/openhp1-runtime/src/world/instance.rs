@@ -32,9 +32,6 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
     ) -> DispatchResult<()> {
         while let Some(property) = reader.next_property()? {
-            if property.array_index.is_some() {
-                continue;
-            }
             let name = reader.summary().name(property.name).to_owned();
             let Some(value) = self.read_property(source, reader, &property)? else {
                 continue;
@@ -42,7 +39,27 @@ impl ScriptRuntime {
             let Some(field) = self.find_property(class, &name, 0)? else {
                 continue;
             };
-            instance.insert(field, value);
+            let resolved = self.resolved_object(&field)?;
+            let zero = self.zero_field_value(&resolved)?.unwrap_or(Value::None);
+            let zero = self.stored_value(source, &zero)?;
+            if matches!(zero, StoredValue::Array(_)) {
+                let index = property.array_index.unwrap_or(0);
+                let stored = instance.entry(field).or_insert(zero);
+                let StoredValue::Array(values) = stored else {
+                    return Err(DispatchError::InvalidArrayProperty { property: name });
+                };
+                let length = values.len();
+                let element = values
+                    .get_mut(index)
+                    .ok_or(DispatchError::ArrayPropertyIndex {
+                        property: name,
+                        index,
+                        length,
+                    })?;
+                *element = value;
+            } else {
+                instance.insert(field, value);
+            }
         }
         Ok(())
     }
@@ -168,6 +185,13 @@ impl ScriptRuntime {
     pub(super) fn frame_value(&mut self, value: &StoredValue) -> DispatchResult<Value> {
         Ok(match value {
             StoredValue::Value(value) => value.clone(),
+            StoredValue::Array(values) => {
+                let mut result = Vec::with_capacity(values.len());
+                for value in values {
+                    result.push(self.frame_value(value)?);
+                }
+                Value::Array(result)
+            }
             StoredValue::Name(name) => Value::NameText(name.clone()),
             StoredValue::Object(None) => Value::Object(0),
             StoredValue::Object(Some(object)) => Value::Object(self.object_handle(object.clone())?),
@@ -186,6 +210,13 @@ impl ScriptRuntime {
         value: &Value,
     ) -> DispatchResult<StoredValue> {
         Ok(match value {
+            Value::Array(values) => {
+                let mut result = Vec::with_capacity(values.len());
+                for value in values {
+                    result.push(self.stored_value(source, value)?);
+                }
+                StoredValue::Array(result)
+            }
             Value::Name(name) => {
                 let name = usize::try_from(*name)
                     .ok()
@@ -218,6 +249,7 @@ impl ScriptRuntime {
         if let Some(value) = self.zero_values.get(&id) {
             return Ok(value.clone());
         }
+        let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
         let class = field
             .package
             .summary()
@@ -232,7 +264,6 @@ impl ScriptRuntime {
             "NameProperty" => Value::NameText("None".to_owned()),
             "StrProperty" | "StringProperty" => Value::String(String::new()),
             "StructProperty" => {
-                let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
                 if let Some(struct_type) = metadata.struct_type
                     && let Some(struct_type) = self.packages.resolve(&field.package, struct_type)?
                 {
@@ -256,6 +287,23 @@ impl ScriptRuntime {
                 self.zero_values.insert(id, None);
                 return Ok(None);
             }
+        };
+        let dimension = usize::try_from(metadata.array_dimension).map_err(|_| {
+            DispatchError::InvalidArrayDimension {
+                export_index: field.export_index,
+                dimension: metadata.array_dimension,
+            }
+        })?;
+        if dimension == 0 {
+            return Err(DispatchError::InvalidArrayDimension {
+                export_index: field.export_index,
+                dimension: metadata.array_dimension,
+            });
+        }
+        let value = if dimension > 1 {
+            Value::Array(vec![value; dimension])
+        } else {
+            value
         };
         self.zero_values.insert(id, Some(value.clone()));
         Ok(Some(value))
@@ -381,6 +429,28 @@ impl ScriptRuntime {
         for &(field, argument) in bindings.iter() {
             if let Some(value) = arguments.get(argument) {
                 frame.set_local(field, value.clone());
+            }
+        }
+        self.bind_frame_arrays(source, &function.bytecode, frame)?;
+        Ok(())
+    }
+
+    pub(super) fn bind_frame_arrays(
+        &mut self,
+        source: &Arc<Package>,
+        bytecode: &Bytecode,
+        frame: &mut Frame<'_>,
+    ) -> DispatchResult<()> {
+        for field in local_fields(bytecode) {
+            if frame.local(field).is_some() {
+                continue;
+            }
+            let Some(field_object) = self.resolve_field(source, field)? else {
+                continue;
+            };
+            let resolved = self.resolved_object(&field_object)?;
+            if let Some(value @ Value::Array(_)) = self.zero_field_value(&resolved)? {
+                frame.set_local(field, value);
             }
         }
         Ok(())

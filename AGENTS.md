@@ -315,8 +315,11 @@ property metadata, actor
 instance values persist across calls by resolved package/export field identity,
 and null or self object contexts execute safely. Vector/rotator struct-member
 reads and writes preserve lvalue behavior, including zero-initialized
-`StructProperty` fields. Class defaults followed by actor tagged-property
-overrides initialize persistent actor state. Remote actor contexts resolve
+`StructProperty` fields. Fixed arrays preserve their declared dimensions and
+tagged element defaults, and array-element reads and writes remain lvalues.
+`Clamp`, `Rand`, `FRand`, `Normal`, and `Abs` execute at their canonical native
+indices. Class defaults followed by actor tagged-property overrides initialize
+persistent actor state. Remote actor contexts resolve
 registered actor handles and persist cross-actor field reads, writes, and
 calls. `SetCollision` persists its three actor flags; actual BSP collision
 behavior waits for movement. `SetLocation` persists actor coordinates and
@@ -327,7 +330,7 @@ State frames retain their instruction pointer and locals across `Sleep` and
 `FinishAnim`; `GotoState`, `GotoLabel`, `Stop`, `PlayAnim`, and `LoopAnim` use
 the existing scene animation path. `PlaySound` remains a nonfatal actor
 diagnostic until audio exists. A five-second scan across all 41 maps resumes
-5,934 state frames, applies 564 of 590 requested animations, performs 961 actor
+7,108 state frames, applies 1,279 of 1,305 requested animations, performs 961 actor
 relocations and 60,600 actor rotations, and destroys 92 actors. All 381 local
 HP1 `Animation` exports and their 1,188 sequences decode and sample. Their
 packed quaternion components use a signed `sin(value * pi / (2 * 32767))`
