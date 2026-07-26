@@ -536,6 +536,9 @@ fn apply_runtime_actions(
             ActorAction::SetLocation { actor, location } => {
                 transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;
             }
+            ActorAction::DestroyActor { actor } => {
+                transformed |= scene.destroy_actor(actor)?;
+            }
             ActorAction::DeferredCall { actor, message } => {
                 deferred += 1;
                 if scene.actors[actor]

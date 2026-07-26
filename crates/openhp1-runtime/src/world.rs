@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+};
 
 use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
@@ -12,6 +16,7 @@ use thiserror::Error;
 use crate::{Frame, FrameRequest, FunctionCall, StructMember, Value};
 
 const GOTO_STATE: u16 = 0x071;
+const DESTROY: u16 = 0x117;
 const LOOP_ANIM: u16 = 0x104;
 const SET_COLLISION: u16 = 0x106;
 const SET_LOCATION: u16 = 0x10b;
@@ -33,6 +38,9 @@ pub enum ActorAction {
     SetLocation {
         actor: usize,
         location: [f32; 3],
+    },
+    DestroyActor {
+        actor: usize,
     },
     DeferredCall {
         actor: usize,
@@ -91,6 +99,7 @@ pub struct ScriptRuntime {
     // ponytail: store state identity only; add label/IP state frames when state code ticks.
     actor_states: HashMap<usize, Option<String>>,
     object_actors: HashMap<ObjectId, usize>,
+    destroyed: HashSet<usize>,
     timers: HashMap<usize, ActorTimer>,
     timer_callbacks: usize,
     object_handles: HashMap<ObjectId, i32>,
@@ -131,6 +140,7 @@ impl ScriptRuntime {
             actor_classes: HashMap::new(),
             actor_states: HashMap::new(),
             object_actors: HashMap::new(),
+            destroyed: HashSet::new(),
             timers: HashMap::new(),
             timer_callbacks: 0,
             object_handles: HashMap::new(),
@@ -252,6 +262,9 @@ impl ScriptRuntime {
         event: &str,
         arguments: &[Value],
     ) -> DispatchResult<Vec<ActorAction>> {
+        if self.destroyed.contains(&actor) && !event.eq_ignore_ascii_case("Destroyed") {
+            return Ok(Vec::new());
+        }
         let package = self.packages.load_path(class_package)?;
         let class = ResolvedObject {
             package,
@@ -790,6 +803,34 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<Value, String> {
+        if index == DESTROY {
+            for name in ["bStatic", "bNoDelete"] {
+                let field = self
+                    .find_property(actor_class, name, 0)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("Destroy property {name} is missing"))?;
+                match instance.get(&field) {
+                    Some(StoredValue::Value(Value::Bool(true))) => {
+                        return Ok(Value::Bool(false));
+                    }
+                    Some(StoredValue::Value(Value::Bool(false))) | None => {}
+                    Some(value) => {
+                        return Err(format!("Destroy property {name} is {value:?}"));
+                    }
+                }
+            }
+            if !self.destroyed.insert(actor) {
+                return Ok(Value::Bool(true));
+            }
+            let field = self
+                .find_property(actor_class, "bDeleteMe", 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
+            instance.insert(field, StoredValue::Value(Value::Bool(true)));
+            self.timers.remove(&actor);
+            actions.push(ActorAction::DestroyActor { actor });
+            return Ok(Value::Bool(true));
+        }
         if index == GOTO_STATE {
             if arguments.len() > 2 {
                 return Err(format!(

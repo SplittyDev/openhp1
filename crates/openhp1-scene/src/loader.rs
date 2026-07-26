@@ -241,6 +241,33 @@ impl LoadedScene {
         Ok(true)
     }
 
+    pub fn destroy_actor(&mut self, actor_index: usize) -> Result<bool> {
+        let actor = self
+            .actors
+            .get_mut(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        actor.hidden = true;
+        let render = actor.render.take();
+        let animated = actor.animation.take().is_some();
+        self.animations
+            .retain(|animation| animation.actor_index != actor_index);
+        if animated {
+            self.animated_actor_meshes = self.animated_actor_meshes.saturating_sub(1);
+        }
+        let Some(render) = render else {
+            return Ok(false);
+        };
+        ensure!(
+            render.vertices.start <= render.vertices.end
+                && render.vertices.end <= self.render.mesh.positions.len(),
+            "actor render range is outside the scene mesh"
+        );
+        self.actor_meshes = self.actor_meshes.saturating_sub(1);
+        Ok(collapse_positions(
+            &mut self.render.mesh.positions[render.vertices],
+        ))
+    }
+
     pub fn tick_animations(&mut self, delta_time: f32) -> Result<bool> {
         if delta_time <= 0.0 || !delta_time.is_finite() {
             return Ok(false);
@@ -331,6 +358,14 @@ fn translate_positions(positions: &mut [Vec3], delta: Vec3) {
     for position in positions {
         *position += delta;
     }
+}
+
+fn collapse_positions(positions: &mut [Vec3]) -> bool {
+    let Some(position) = positions.first().copied() else {
+        return false;
+    };
+    positions.fill(position);
+    true
 }
 
 struct AnimatedActorMesh {
@@ -1283,6 +1318,13 @@ mod tests {
                 glam::Vec3::new(3.0, 4.0, 5.0)
             ]
         );
+    }
+
+    #[test]
+    fn collapses_destroyed_actor_vertices() {
+        let mut positions = [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z];
+        assert!(super::collapse_positions(&mut positions));
+        assert_eq!(positions, [glam::Vec3::X; 3]);
     }
 
     #[test]

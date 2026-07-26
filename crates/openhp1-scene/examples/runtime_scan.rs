@@ -22,6 +22,7 @@ fn main() -> Result<()> {
     let mut total = 0;
     let mut locations = 0;
     let mut relocated = 0;
+    let mut destroyed = 0;
     let mut deferred = BTreeMap::<String, (usize, String)>::new();
 
     for path in paths {
@@ -143,6 +144,8 @@ fn main() -> Result<()> {
                 locations += 1;
                 relocated +=
                     usize::from(scene.set_actor_location(actor, Vec3::from_array(location))?);
+            } else if let ActorAction::DestroyActor { actor } = action {
+                destroyed += usize::from(scene.destroy_actor(actor)?);
             } else if let ActorAction::DeferredCall { actor, message } = action {
                 let target = &scene.actors[actor];
                 let sample = format!(
@@ -186,6 +189,7 @@ fn main() -> Result<()> {
     }
     println!("{total} runtime animations applied");
     println!("{locations} SetLocation actions, {relocated} actor relocations");
+    println!("{destroyed} actors destroyed");
     let mut deferred = deferred.into_iter().collect::<Vec<_>>();
     deferred.sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
     for (message, (count, sample)) in deferred.into_iter().take(20) {
