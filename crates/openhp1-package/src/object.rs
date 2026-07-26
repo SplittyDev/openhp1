@@ -274,7 +274,8 @@ impl<'a> ObjectReader<'a> {
         )
     }
 
-    fn read_name_index(&mut self, field: &'static str) -> Result<usize> {
+    /// Reads and validates a compact index into the package name table.
+    pub fn read_name_index(&mut self, field: &'static str) -> Result<usize> {
         let offset = self.absolute_position();
         let index = self.read_compact_index()?;
         usize::try_from(index)

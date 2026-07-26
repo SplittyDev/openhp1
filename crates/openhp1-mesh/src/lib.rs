@@ -6,4 +6,4 @@ mod geometry;
 mod types;
 
 pub use error::{Error, Result};
-pub use types::{Mesh, MeshTriangle, MeshVertex};
+pub use types::{Mesh, MeshAnimationNotify, MeshAnimationSequence, MeshTriangle, MeshVertex};
