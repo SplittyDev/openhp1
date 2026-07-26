@@ -13,6 +13,7 @@ use crate::{Frame, FrameRequest, FunctionCall, StructMember, Value};
 
 const LOOP_ANIM: u16 = 0x104;
 const SET_COLLISION: u16 = 0x106;
+const SET_LOCATION: u16 = 0x10b;
 const SET_TIMER: u16 = 0x118;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
@@ -26,6 +27,10 @@ pub enum ActorAction {
         actor: usize,
         sequence: String,
         rate: f32,
+    },
+    SetLocation {
+        actor: usize,
+        location: [f32; 3],
     },
     DeferredCall {
         actor: usize,
@@ -673,6 +678,32 @@ impl ScriptRuntime {
             }
             // ponytail: these flags become collision behavior when BSP movement exists.
             return Ok(Value::None);
+        }
+        if index == SET_LOCATION {
+            let [Value::Vector(location)] = arguments else {
+                return Err(format!(
+                    "SetLocation expects one vector, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if !location.iter().all(|value| value.is_finite()) {
+                return Err("SetLocation coordinates are not finite".to_owned());
+            }
+            let field = self
+                .find_property(actor_class, "Location", 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "SetLocation property Location is missing".to_owned())?;
+            instance.insert(field, StoredValue::Value(Value::Vector(*location)));
+            actions.push(ActorAction::SetLocation {
+                actor,
+                location: *location,
+            });
+            // ponytail: accept finite locations until UE1 BSP collision rejection exists.
+            return Ok(Value::Bool(true));
         }
         scalar_native(index, arguments)
     }

@@ -206,6 +206,39 @@ impl LoadedScene {
         )
     }
 
+    pub fn set_actor_location(&mut self, actor_index: usize, location: Vec3) -> Result<bool> {
+        ensure!(location.is_finite(), "actor location is not finite");
+        let actor = self
+            .actors
+            .get(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        let delta = location - actor.location;
+        if delta == Vec3::ZERO {
+            return Ok(false);
+        }
+        let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
+        if let Some(vertices) = &vertices {
+            ensure!(
+                vertices.start <= vertices.end && vertices.end <= self.render.mesh.positions.len(),
+                "actor render range is outside the scene mesh"
+            );
+        }
+
+        self.actors[actor_index].location = location;
+        if let Some(vertices) = vertices {
+            translate_positions(&mut self.render.mesh.positions[vertices], delta);
+        }
+        if let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        {
+            animation.transform = Mat4::from_translation(delta) * animation.transform;
+        }
+        // ponytail: retain baked actor lighting until moving lights/zones are observable.
+        Ok(true)
+    }
+
     pub fn tick_animations(&mut self, delta_time: f32) -> Result<bool> {
         if delta_time <= 0.0 || !delta_time.is_finite() {
             return Ok(false);
@@ -289,6 +322,12 @@ impl LoadedScene {
             frame_count: source_frames,
         });
         Ok(true)
+    }
+}
+
+fn translate_positions(positions: &mut [Vec3], delta: Vec3) {
+    for position in positions {
+        *position += delta;
     }
 }
 
@@ -1226,5 +1265,18 @@ mod tests {
         );
         assert_eq!(modulated.mode, SurfaceMode::Modulated);
         assert!(modulated.masked);
+    }
+
+    #[test]
+    fn translates_actor_vertices_in_unreal_space() {
+        let mut positions = [glam::Vec3::ZERO, glam::Vec3::ONE];
+        super::translate_positions(&mut positions, glam::Vec3::new(2.0, 3.0, 4.0));
+        assert_eq!(
+            positions,
+            [
+                glam::Vec3::new(2.0, 3.0, 4.0),
+                glam::Vec3::new(3.0, 4.0, 5.0)
+            ]
+        );
     }
 }

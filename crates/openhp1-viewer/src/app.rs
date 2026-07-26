@@ -429,8 +429,18 @@ impl ViewerApp {
                 return;
             }
         };
-        if let Err(error) = apply_runtime_actions(&mut self.scene, actions) {
-            self.load_error = Some(format!("runtime action failed: {error:#}"));
+        match apply_runtime_actions(&mut self.scene, actions) {
+            Ok((_, _, true))
+                if !self
+                    .renderer
+                    .update_vertices(&self.state.queue, &self.scene.render.mesh) =>
+            {
+                self.load_error = Some("runtime changed the scene vertex count".to_owned());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.load_error = Some(format!("runtime action failed: {error:#}"));
+            }
         }
     }
 }
@@ -497,9 +507,10 @@ fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
 fn apply_runtime_actions(
     scene: &mut LoadedScene,
     actions: Vec<ActorAction>,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize, bool)> {
     let mut animations = 0;
     let mut deferred = 0;
+    let mut transformed = false;
     for action in actions {
         match action {
             ActorAction::LoopAnimation {
@@ -514,6 +525,9 @@ fn apply_runtime_actions(
                         .diagnostics
                         .push(format!("runtime could not play animation {sequence}"));
                 }
+            }
+            ActorAction::SetLocation { actor, location } => {
+                transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;
             }
             ActorAction::DeferredCall { actor, message } => {
                 deferred += 1;
@@ -531,7 +545,7 @@ fn apply_runtime_actions(
             }
         }
     }
-    Ok((animations, deferred))
+    Ok((animations, deferred, transformed))
 }
 
 impl eframe::App for ViewerApp {

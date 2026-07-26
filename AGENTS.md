@@ -316,13 +316,15 @@ reads and writes preserve lvalue behavior, including zero-initialized
 overrides initialize persistent actor state. Remote actor contexts resolve
 registered actor handles and persist cross-actor field reads, writes, and
 calls. `SetCollision` persists its three actor flags; actual BSP collision
-behavior waits for movement. The viewer registers every actor, dispatches
-`PostBeginPlay`, retains the runtime across frames, advances `SetTimer`
-callbacks, and applies supported `LoopAnim` calls to first-class actors;
-unsupported calls remain explicit actor diagnostics. A five-second scan
-across all 41 maps reaches 45 `Timer` callbacks, all of which complete without
-deferred actions, and applies 62 runtime animations. All 381 local HP1
-`Animation` exports and
+behavior waits for movement. `SetLocation` persists actor coordinates and
+relocates static or animated scene geometry without snapping on later
+animation ticks. The viewer registers every actor, dispatches `PostBeginPlay`,
+retains the runtime across frames, advances `SetTimer` callbacks, uploads
+runtime transform changes, and applies supported `LoopAnim` calls to
+first-class actors; unsupported calls remain explicit actor diagnostics. A
+five-second scan across all 41 maps reaches 45 `Timer` callbacks, all of which
+complete without deferred actions, applies 62 runtime animations, and performs
+961 actor relocations. All 381 local HP1 `Animation` exports and
 their 1,188 sequences decode and sample. In `Lev5_FlyKeys.unr`, one of seven
 script-selected animations currently targets a rendered actor and visibly
 changes its CPU vertices. The others expose hidden actor state or unmatched

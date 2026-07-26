@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
+use glam::Vec3;
 use openhp1_runtime::{ActorAction, ScriptRuntime};
 use openhp1_scene::LoadedScene;
 
@@ -19,6 +20,8 @@ fn main() -> Result<()> {
     };
     paths.sort();
     let mut total = 0;
+    let mut locations = 0;
+    let mut relocated = 0;
     let mut deferred = BTreeMap::<String, (usize, String)>::new();
 
     for path in paths {
@@ -128,6 +131,10 @@ fn main() -> Result<()> {
                         println!("    {diagnostic}");
                     }
                 }
+            } else if let ActorAction::SetLocation { actor, location } = action {
+                locations += 1;
+                relocated +=
+                    usize::from(scene.set_actor_location(actor, Vec3::from_array(location))?);
             } else if let ActorAction::DeferredCall { actor, message } = action {
                 let target = &scene.actors[actor];
                 let sample = format!(
@@ -170,6 +177,7 @@ fn main() -> Result<()> {
         total += applied;
     }
     println!("{total} runtime animations applied");
+    println!("{locations} SetLocation actions, {relocated} actor relocations");
     let mut deferred = deferred.into_iter().collect::<Vec<_>>();
     deferred.sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
     for (message, (count, sample)) in deferred.into_iter().take(20) {
