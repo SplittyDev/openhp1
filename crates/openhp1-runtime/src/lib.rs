@@ -164,6 +164,10 @@ pub(crate) enum FrameRequest {
         function: FunctionCall,
         arguments: Vec<Value>,
     },
+    DynamicCast {
+        class: i32,
+        value: Value,
+    },
     GetInstance {
         receiver: i32,
         field: i32,
@@ -326,6 +330,9 @@ impl<'a> Frame<'a> {
             } => call(function, &arguments).map(FrameResponse::Value),
             FrameRequest::CallIterator { .. } => {
                 Err("standalone frames do not host iterators".to_owned())
+            }
+            FrameRequest::DynamicCast { .. } => {
+                Err("standalone frames do not host dynamic casts".to_owned())
             }
             FrameRequest::Call { receiver, .. }
             | FrameRequest::GetInstance { receiver, .. }
@@ -625,6 +632,19 @@ impl<'a> Frame<'a> {
                     Expression::Slot(slot) => Expression::Slot(slot),
                     value => Expression::Value(Value::Bool(self.value(value, host)?.truthy()?)),
                 }
+            }
+            0x2e => {
+                let class = self.read_i32()?;
+                let value = self.expression(host)?;
+                let value = self.value(value, host)?;
+                Expression::Value(
+                    host(
+                        FrameRequest::DynamicCast { class, value },
+                        &mut self.instance,
+                    )
+                    .and_then(FrameResponse::into_value)
+                    .map_err(|message| Error::Context { message })?,
+                )
             }
             0x36 => {
                 let field = self.read_i32()?;
@@ -1393,6 +1413,34 @@ mod tests {
             Value::Bool(false)
         );
         assert_eq!(instance.get(&7), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn dynamic_cast_uses_frame_host() {
+        let run = |result: Value| {
+            let mut bytes = vec![0x04, 0x2e];
+            bytes.extend(7_i32.to_le_bytes());
+            bytes.push(0x20);
+            bytes.extend(11_i32.to_le_bytes());
+            let bytecode = Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            };
+            Frame::new(&bytecode)
+                .execute_hosted(|request| match request {
+                    FrameRequest::DynamicCast {
+                        class: 7,
+                        value: Value::Object(11),
+                    } => Ok(FrameResponse::Value(result.clone())),
+                    _ => unreachable!(),
+                })
+                .unwrap()
+        };
+
+        assert_eq!(run(Value::Object(11)), Value::Object(11));
+        assert_eq!(run(Value::Object(0)), Value::Object(0));
     }
 
     #[test]

@@ -96,6 +96,9 @@ impl ScriptRuntime {
                             instance,
                         )
                         .map(FrameResponse::Iterator),
+                    FrameRequest::DynamicCast { class, value } => self
+                        .dynamic_cast(actor_class, &state.package, class, value)
+                        .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &state.package, field, instance)
                         .map(FrameResponse::Value),
@@ -238,6 +241,9 @@ impl ScriptRuntime {
                             instance,
                         )
                         .map(FrameResponse::Iterator),
+                    FrameRequest::DynamicCast { class, value } => self
+                        .dynamic_cast(actor_class, &function.package, class, value)
+                        .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &function.package, field, instance)
                         .map(FrameResponse::Value),
@@ -530,6 +536,67 @@ impl ScriptRuntime {
             values.push(Value::Object(self.object_handle(object)?));
         }
         Ok(values)
+    }
+
+    fn dynamic_cast(
+        &mut self,
+        actor_class: &ResolvedObject,
+        source: &Arc<Package>,
+        class: i32,
+        value: Value,
+    ) -> DispatchResult<Value> {
+        let value = match value {
+            Value::None | Value::Object(0) => return Ok(Value::Object(0)),
+            Value::Object(value) => value,
+            value => {
+                return Err(crate::Error::Type {
+                    expected: "object",
+                    actual: value.kind(),
+                }
+                .into());
+            }
+        };
+        let target = self
+            .packages
+            .resolve(source, object_reference(class))?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "dynamic cast class is null".to_owned(),
+            })?;
+        let (value, class) = if value == -1 {
+            (
+                Value::Object(-1),
+                ResolvedObject {
+                    package: Arc::clone(&actor_class.package),
+                    export_index: actor_class.export_index,
+                },
+            )
+        } else {
+            let index = usize::try_from(value - 1)
+                .ok()
+                .filter(|index| *index < self.handle_objects.len())
+                .ok_or(DispatchError::InvalidObjectHandle { handle: value })?;
+            let object = self.handle_objects[index].clone();
+            let value = Value::Object(value);
+            let class = if let Some(actor) = self.object_actors.get(&object)
+                && let Some(class) = self.actor_classes.get(actor).cloned()
+            {
+                self.resolved_object(&class)?
+            } else {
+                let object = self.resolved_object(&object)?;
+                let reference = object.package.summary().exports[object.export_index].class;
+                let Some(class) = self.packages.resolve(&object.package, reference)? else {
+                    return Ok(Value::Object(0));
+                };
+                class
+            };
+            (value, class)
+        };
+
+        Ok(if self.class_is_a(class, &target)? {
+            value
+        } else {
+            Value::Object(0)
+        })
     }
 
     fn class_is_a(
