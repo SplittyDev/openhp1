@@ -153,14 +153,7 @@ impl ScriptRuntime {
                 StateFrame {
                     state: object_id(&state.package, state.export_index),
                     frame: FrameSnapshot::at(offset),
-                    latent: match stack.latent_action {
-                        0 => LatentAction::Continue,
-                        0x101 => LatentAction::Sleep(0.0),
-                        0x106 => LatentAction::FinishAnimation,
-                        501 => LatentAction::MoveTo,
-                        509 => LatentAction::TurnTo,
-                        _ => LatentAction::Stop,
-                    },
+                    latent: decode_latent_action(stack.latent_action),
                 },
             );
         }
@@ -608,16 +601,26 @@ impl ScriptRuntime {
                 continue;
             }
             let latent = self.state_frames.get(&actor).map(|frame| frame.latent);
-            if matches!(latent, Some(LatentAction::MoveTo | LatentAction::TurnTo)) {
+            if matches!(
+                latent,
+                Some(
+                    LatentAction::FinishInterpolation | LatentAction::MoveTo | LatentAction::TurnTo
+                )
+            ) {
                 let Some(class) = self.actor_classes.get(&actor).cloned() else {
                     continue;
                 };
                 let class = self.resolved_object(&class)?;
                 let mut instance = self.instances.remove(&actor).unwrap_or_default();
-                let result = if latent == Some(LatentAction::MoveTo) {
-                    self.tick_move_to(&class, &mut instance, delta_time)
-                } else {
-                    self.tick_turn_to(&class, &mut instance)
+                let result = match latent {
+                    Some(LatentAction::FinishInterpolation) => self
+                        .actor_bool(&class, &instance, "bInterpolating")
+                        .map(|interpolating| !interpolating),
+                    Some(LatentAction::MoveTo) => {
+                        self.tick_move_to(&class, &mut instance, delta_time)
+                    }
+                    Some(LatentAction::TurnTo) => self.tick_turn_to(&class, &mut instance),
+                    _ => unreachable!(),
                 };
                 self.instances.insert(actor, instance);
                 match result {
@@ -877,6 +880,18 @@ impl ScriptRuntime {
         };
         update_touching_array(values, other, touching);
         Ok(())
+    }
+}
+
+pub(super) fn decode_latent_action(index: i32) -> LatentAction {
+    match index {
+        0 => LatentAction::Continue,
+        0x101 => LatentAction::Sleep(0.0),
+        0x106 => LatentAction::FinishAnimation,
+        0x12e => LatentAction::FinishInterpolation,
+        501 => LatentAction::MoveTo,
+        509 => LatentAction::TurnTo,
+        _ => LatentAction::Stop,
     }
 }
 

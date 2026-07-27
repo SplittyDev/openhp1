@@ -25,6 +25,8 @@ Persistent state frames retain their decoded instruction pointer and local
 values across latent `Sleep` and `FinishAnim` actions. `GotoState`,
 `GotoLabel`, and `Stop` operate on that retained frame rather than restarting
 the state body.
+`FinishInterpolation` resumes the retained frame when mover physics clears
+`bInterpolating`.
 
 Nested state execution restores the caller's active-state context. A
 Dispatcher may therefore trigger another actor and then enter `Sleep` without

@@ -251,6 +251,19 @@ impl ScriptRuntime {
             actions.push(ActorAction::AwaitAnimation { actor });
             return Ok(Value::None);
         }
+        if index == FINISH_INTERPOLATION {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "FinishInterpolation expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            if self.active_state_actor != Some(actor) {
+                return Err("FinishInterpolation is only valid in state code".to_owned());
+            }
+            self.pending_latent = Some(LatentAction::FinishInterpolation);
+            return Ok(Value::None);
+        }
         if index == PLAY_SOUND {
             actions.push(ActorAction::DeferredCall {
                 actor,

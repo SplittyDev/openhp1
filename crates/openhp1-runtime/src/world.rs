@@ -47,6 +47,7 @@ const GET_STATE_NAME: u16 = 0x11c;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
+const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const TURN_TO: u16 = 508;
@@ -419,6 +420,7 @@ enum LatentAction {
     Stop,
     Sleep(f32),
     FinishAnimation,
+    FinishInterpolation,
     MoveTo,
     TurnTo,
 }
@@ -455,6 +457,7 @@ mod tests {
     use super::{
         actor::advance_lifespan,
         actor::advance_timer,
+        actor::decode_latent_action,
         actor::update_touching_array,
         native::{
             animation_parameters, collision_updates, log_arguments, random_float, random_int,
@@ -484,6 +487,14 @@ mod tests {
         assert!(advance_lifespan(&mut lifespan, 0.07));
         assert_eq!(lifespan, 0.0);
         assert!(!advance_lifespan(&mut lifespan, 0.1));
+    }
+
+    #[test]
+    fn decodes_finish_interpolation_latent_state() {
+        assert_eq!(
+            decode_latent_action(0x12e),
+            LatentAction::FinishInterpolation
+        );
     }
 
     #[test]
