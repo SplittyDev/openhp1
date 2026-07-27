@@ -172,6 +172,30 @@ impl ScriptRuntime {
         Ok(Value::Bool(hit.fraction == 1.0))
     }
 
+    pub(super) fn spawn_location_is_clear(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        active_actor: usize,
+        active_instance: &InstanceState,
+    ) -> std::result::Result<bool, String> {
+        if !self.actor_bool(class, instance, "bCollideWorld")?
+            && !self.actor_bool(class, instance, "bCollideWhenPlacing")?
+        {
+            return Ok(true);
+        }
+        let candidate = self.collision_actor(usize::MAX, class, instance)?;
+        self.ensure_collision_actors(active_actor, active_instance)?;
+        // ponytail: authored spawn points are world-valid; add nearby BSP-aware
+        // placement search when arbitrary runtime spawn locations need it.
+        Ok(self
+            .collision_actors
+            .iter()
+            .flatten()
+            .filter(|other| !self.destroyed.contains(&other.actor.actor))
+            .all(|other| !placement_blocked(&candidate, &other.actor)))
+    }
+
     pub(super) fn try_move_actor(
         &mut self,
         actor: usize,
@@ -1026,6 +1050,18 @@ fn actors_block(first: &CollisionActor, second: &CollisionActor) -> bool {
     }
 }
 
+fn placement_blocked(first: &CollisionActor, second: &CollisionActor) -> bool {
+    actors_block(first, second)
+        && cylinders_overlap(
+            first.location,
+            first.height,
+            first.radius,
+            second.location,
+            second.height,
+            second.radius,
+        )
+}
+
 fn actor_pair(first: usize, second: usize) -> (usize, usize) {
     if first < second {
         (first, second)
@@ -1091,6 +1127,8 @@ mod tests {
             trigger.radius,
         ));
         assert!(actors_block(&player, &wall));
+        assert!(!placement_blocked(&player, &trigger));
+        assert!(placement_blocked(&player, &wall));
     }
 
     #[test]

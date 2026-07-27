@@ -749,7 +749,6 @@ impl ScriptRuntime {
             return Ok(Value::Object(0));
         }
         let class_name = class_name.to_owned();
-
         let default_location = match self
             .instance_property(actor_class, instance, "Location")
             .map_err(|error| error.to_string())?
@@ -796,22 +795,6 @@ impl ScriptRuntime {
             }
         };
 
-        let spawned = self.next_actor;
-        self.next_actor = self
-            .next_actor
-            .checked_add(1)
-            .ok_or_else(|| DispatchError::ObjectLimit.to_string())?;
-        let object = runtime_actor_id(spawned);
-        let handle = self
-            .object_handle(object.clone())
-            .map_err(|error| error.to_string())?;
-        self.object_actors.insert(object.clone(), spawned);
-        self.actor_objects.insert(spawned, object);
-        self.actor_classes
-            .insert(spawned, object_id(&class.package, class.export_index));
-        self.actor_states.insert(spawned, None);
-        self.destroyed.remove(&spawned);
-
         let mut spawned_instance = self
             .load_class_defaults(&class, 0)
             .map_err(|error| error.to_string())?;
@@ -849,7 +832,25 @@ impl ScriptRuntime {
                 self.set_spawn_property(&class, &mut spawned_instance, property, value)?;
             }
         }
+        if !self.spawn_location_is_clear(&class, &spawned_instance, actor, instance)? {
+            return Ok(Value::Object(0));
+        }
 
+        let spawned = self.next_actor;
+        self.next_actor = self
+            .next_actor
+            .checked_add(1)
+            .ok_or_else(|| DispatchError::ObjectLimit.to_string())?;
+        let object = runtime_actor_id(spawned);
+        let handle = self
+            .object_handle(object.clone())
+            .map_err(|error| error.to_string())?;
+        self.object_actors.insert(object.clone(), spawned);
+        self.actor_objects.insert(spawned, object);
+        self.actor_classes
+            .insert(spawned, object_id(&class.package, class.export_index));
+        self.actor_states.insert(spawned, None);
+        self.destroyed.remove(&spawned);
         self.refresh_tick_actor(spawned, &class)
             .map_err(|error| error.to_string())?;
         self.update_actor_base(spawned, None);
