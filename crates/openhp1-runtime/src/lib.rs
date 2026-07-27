@@ -42,9 +42,11 @@ enum Opcode {
     InstanceVariable,
     DefaultVariable,
     Return,
+    Switch,
     Jump,
     JumpIfNot,
     Stop,
+    Case,
     Nothing,
     LabelTable,
     GotoLabel,
@@ -93,9 +95,11 @@ impl From<u8> for Opcode {
             0x01 => Self::InstanceVariable,
             0x02 => Self::DefaultVariable,
             0x04 => Self::Return,
+            0x05 => Self::Switch,
             0x06 => Self::Jump,
             0x07 => Self::JumpIfNot,
             0x08 => Self::Stop,
+            0x0a => Self::Case,
             0x0b => Self::Nothing,
             0x0c => Self::LabelTable,
             0x0d => Self::GotoLabel,
@@ -226,6 +230,9 @@ pub enum Error {
 
     #[error("script jump target {target:#x} is outside {length} execution bytes")]
     InvalidJump { target: usize, length: usize },
+
+    #[error("expected Case at execution offset {offset:#x}, found opcode {opcode:#04x}")]
+    ExpectedCase { offset: usize, opcode: u8 },
 
     #[error("script exceeded its {limit}-instruction execution limit")]
     StepLimit { limit: usize },
@@ -579,6 +586,29 @@ impl<'a> Frame<'a> {
                         Ok(Value::None)
                     }?;
                     return Ok(FrameRun::Complete(value));
+                }
+                Opcode::Switch => {
+                    self.opcode()?;
+                    self.read_u8()?;
+                    let condition = self.expression(host)?;
+                    let condition = self.value(condition, host)?;
+                    loop {
+                        let offset = self.instruction_pointer;
+                        let opcode = self.opcode()?;
+                        if Opcode::from(opcode) != Opcode::Case {
+                            return Err(Error::ExpectedCase { offset, opcode });
+                        }
+                        let next = self.read_u16()?;
+                        if next == u16::MAX {
+                            break;
+                        }
+                        let case = self.expression(host)?;
+                        let case = self.value(case, host)?;
+                        if switch_values_equal(&condition, &case)? {
+                            break;
+                        }
+                        self.jump(usize::from(next))?;
+                    }
                 }
                 Opcode::Jump => {
                     self.opcode()?;
@@ -1266,6 +1296,32 @@ impl StructMember {
     }
 }
 
+fn switch_values_equal(condition: &Value, case: &Value) -> Result<bool> {
+    Ok(match (condition, case) {
+        (Value::None, Value::None | Value::Object(0))
+        | (Value::Object(0), Value::None)
+        | (Value::Object(0), Value::Object(0)) => true,
+        (Value::Byte(left), Value::Byte(right)) => left == right,
+        (Value::Byte(left), Value::Int(right)) => i32::from(*left) == *right,
+        (Value::Int(left), Value::Byte(right)) => *left == i32::from(*right),
+        (Value::Int(left), Value::Int(right)) => left == right,
+        (Value::Bool(left), Value::Bool(right)) => left == right,
+        (Value::Float(left), Value::Float(right)) => left == right,
+        (Value::String(left), Value::String(right)) => left == right,
+        (Value::Name(left), Value::Name(right)) => left == right,
+        (Value::NameText(left), Value::NameText(right)) => left.eq_ignore_ascii_case(right),
+        (Value::Object(left), Value::Object(right)) => left == right,
+        (Value::Vector(left), Value::Vector(right)) => left == right,
+        (Value::Rotator(left), Value::Rotator(right)) => left == right,
+        (_, case) => {
+            return Err(Error::Type {
+                expected: condition.kind(),
+                actual: case.kind(),
+            });
+        }
+    })
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum IncrementDecrement {
@@ -1503,6 +1559,49 @@ mod tests {
         assert_eq!(
             frame.execute(|_, _| unreachable!()).unwrap(),
             Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn switch_selects_matching_and_default_cases() {
+        let mut bytes = vec![0x05, 3, 0x00];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x0a);
+        let next_case = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x2c, 2, 0x0f, 0x00]);
+        bytes.extend(8_i32.to_le_bytes());
+        bytes.extend([0x2c, 20, 0x06]);
+        let end_jump = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        let default_case = u16::try_from(bytes.len()).unwrap();
+        bytes[next_case..next_case + 2].copy_from_slice(&default_case.to_le_bytes());
+        bytes.push(0x0a);
+        bytes.extend(u16::MAX.to_le_bytes());
+        bytes.extend([0x0f, 0x00]);
+        bytes.extend(8_i32.to_le_bytes());
+        bytes.extend([0x2c, 30]);
+        let end = u16::try_from(bytes.len()).unwrap();
+        bytes[end_jump..end_jump + 2].copy_from_slice(&end.to_le_bytes());
+        bytes.extend([0x04, 0x00]);
+        bytes.extend(8_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let run = |condition| {
+            let mut frame = Frame::new(&bytecode);
+            frame.set_local(7, Value::Int(condition));
+            frame.execute(|_, _| unreachable!()).unwrap()
+        };
+
+        assert_eq!(run(2), Value::Int(20));
+        assert_eq!(run(3), Value::Int(30));
+        assert_eq!(
+            switch_values_equal(&Value::Byte(2), &Value::Int(2)),
+            Ok(true)
         );
     }
 
