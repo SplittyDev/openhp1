@@ -34,7 +34,12 @@ impl ScriptRuntime {
             object_handles: HashMap::new(),
             handle_objects: Vec::new(),
             next_actor: 0,
+            collision: None,
         })
+    }
+
+    pub fn set_collision(&mut self, collision: Arc<BspCollision>) {
+        self.collision = Some(collision);
     }
 
     pub fn register_actor(

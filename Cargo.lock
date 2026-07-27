@@ -1905,8 +1905,10 @@ dependencies = [
 name = "openhp1-runtime"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "openhp1-map",
  "openhp1-package",
+ "openhp1-physics",
  "openhp1-script",
  "thiserror 2.0.19",
 ]
@@ -1920,6 +1922,7 @@ dependencies = [
  "openhp1-map",
  "openhp1-mesh",
  "openhp1-package",
+ "openhp1-physics",
  "openhp1-runtime",
  "openhp1-script",
  "openhp1-texture",

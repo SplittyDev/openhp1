@@ -8,6 +8,7 @@ use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
     ResolvedObject,
 };
+use openhp1_physics::BspCollision;
 use openhp1_script::{
     Bytecode, PropertyMetadata, ScriptExport, ScriptMetadata, class_defaults_reader,
 };
@@ -34,6 +35,7 @@ const LOOP_ANIM: u16 = 0x104;
 const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
 const PLAY_SOUND: u16 = 0x108;
+const MOVE: u16 = 0x10a;
 const SET_LOCATION: u16 = 0x10b;
 const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
@@ -281,6 +283,7 @@ pub struct ScriptRuntime {
     object_handles: HashMap<ObjectId, i32>,
     handle_objects: Vec<ObjectId>,
     next_actor: usize,
+    collision: Option<Arc<BspCollision>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

@@ -13,6 +13,7 @@ use openhp1_map::{
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
+use openhp1_physics::BspCollision;
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
@@ -41,6 +42,7 @@ pub struct LoadedScene {
     pub actor_meshes: usize,
     pub animated_actor_meshes: usize,
     pub actors: Vec<SceneActor>,
+    collision: Arc<BspCollision>,
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
@@ -88,6 +90,9 @@ impl LoadedScene {
         };
         let model =
             Model::decode(&package, model_export).context("failed to decode the world model")?;
+        let collision = Arc::new(
+            BspCollision::from_model(&model).context("failed to build BSP collision model")?,
+        );
         let mut mesh = model.triangulate().context("failed to triangulate BSP")?;
         let lightmaps = model
             .lightmap_images(&package)
@@ -199,11 +204,16 @@ impl LoadedScene {
             actor_meshes,
             animated_actor_meshes,
             actors,
+            collision,
             zone_nodes: model.nodes.clone(),
             zone_count: model.zones.len(),
             animations,
             water_animations,
         })
+    }
+
+    pub fn collision(&self) -> Arc<BspCollision> {
+        Arc::clone(&self.collision)
     }
 
     pub fn zone_at(&self, render_position: Vec3) -> usize {

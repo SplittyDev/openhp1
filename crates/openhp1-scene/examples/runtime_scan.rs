@@ -50,6 +50,7 @@ fn main() -> Result<()> {
             .and_then(|directory| directory.parent())
             .context("map must be inside the game's Maps directory")?;
         let mut runtime = ScriptRuntime::new(game_root)?;
+        runtime.set_collision(scene.collision());
         let classes = scene
             .actors
             .iter()
