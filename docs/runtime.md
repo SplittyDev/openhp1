@@ -106,3 +106,7 @@ Native class imports without serialized class exports remain opaque class
 handles so `DynamicLoadObject` can resolve qualified resources such as sounds.
 `GetSoundDuration` reads embedded WAV metadata or sums MPEG Layer II frames for
 dialogue timing without requiring audio playback.
+
+The release `runtime_scan` advances both world and player scripts every frame
+after `Possess`, matching the game loop closely enough to expose player-tick
+deferrals during local corpus scans.

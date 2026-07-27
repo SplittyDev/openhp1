@@ -118,7 +118,8 @@ fn main() -> Result<()> {
                 }
             }
         }
-        if let Some(player) = runtime.player_actor() {
+        let player = runtime.player_actor();
+        if let Some(player) = player {
             runtime.set_player_view_target_class("BaseCam")?;
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
@@ -151,6 +152,11 @@ fn main() -> Result<()> {
             let actions = runtime.tick(1.0 / 60.0)?;
             timer_actions += actions.len();
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            if player.is_some() {
+                let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
+                timer_actions += actions.len();
+                apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            }
         }
         let timer_callbacks = runtime.timer_callbacks() - timer_callbacks;
         let map_state_resumes = runtime.state_resumes() - map_state_resumes;
