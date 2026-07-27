@@ -9,7 +9,7 @@ use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
 use winit::{
     application::ApplicationHandler,
-    dpi::{PhysicalSize, Size},
+    dpi::{LogicalSize, PhysicalSize, Size},
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
@@ -42,7 +42,7 @@ impl ApplicationHandler for GameApp {
         };
         let attributes = WindowAttributes::default()
             .with_title("OpenHP1")
-            .with_inner_size(Size::Physical(PhysicalSize::new(1280, 960)));
+            .with_inner_size(Size::Logical(LogicalSize::new(1280.0, 800.0)));
         let result = event_loop
             .create_window(attributes)
             .context("failed to create the game window")
@@ -216,6 +216,11 @@ impl Graphics {
             .context("Lev_Tut1 has no registered PlayerPawn actor")?;
         let mut deferred_calls = 0;
         let mut last_error = None;
+        match runtime.set_player_view_target_class("BaseCam") {
+            Ok(Some(_)) => {}
+            Ok(None) => last_error = Some("the level has no BaseCam actor".to_owned()),
+            Err(error) => last_error = Some(format!("player camera setup deferred: {error}")),
+        }
         match runtime.dispatch_player_event("Possess", &[]) {
             Ok(actions) => {
                 deferred_calls += apply_runtime_actions(&mut scene, &mut runtime, actions)?.1;
@@ -227,14 +232,16 @@ impl Graphics {
             .actors
             .get(player)
             .context("the registered player is missing from the scene")?;
+        let player_location = player_actor.location.to_array();
+        let player_rotation = [
+            player_actor.rotation.pitch,
+            player_actor.rotation.yaw,
+            player_actor.rotation.roll,
+        ];
         let fallback_view = PlayerView {
             actor: player,
-            location: player_actor.location.to_array(),
-            rotation: [
-                player_actor.rotation.pitch,
-                player_actor.rotation.yaw,
-                player_actor.rotation.roll,
-            ],
+            location: player_location,
+            rotation: player_rotation,
             fov_degrees: 90.0,
         };
         let player_view = match runtime.player_view(fallback_view.location, fallback_view.rotation)
@@ -267,6 +274,14 @@ impl Graphics {
         let mut config = surface
             .get_default_config(&adapter, size.width, size.height)
             .context("the graphics adapter does not support this surface")?;
+        let linear_format = config.format.remove_srgb_suffix();
+        if surface
+            .get_capabilities(&adapter)
+            .formats
+            .contains(&linear_format)
+        {
+            config.format = linear_format;
+        }
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
         let renderer = Renderer::new(
@@ -545,12 +560,6 @@ impl Graphics {
         }
 
         let input = self.input.player_input(delta_time);
-        if input.jump {
-            match self.runtime.dispatch_player_event("Jump", &[]) {
-                Ok(actions) => self.apply_actions(actions),
-                Err(error) => self.last_error = Some(format!("jump failed: {error}")),
-            }
-        }
         match self.runtime.tick_player(input, delta_time) {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("player tick failed: {error}")),
