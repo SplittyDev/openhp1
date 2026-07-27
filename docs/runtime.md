@@ -75,6 +75,9 @@ without allocating an actor handle. Spawned pawns link themselves into
 used during `PreBeginPlay`.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
+Engine side effects without an OpenHP1 surface do not abort scripts:
+`SaveConfig` is read-only, `ConsoleCommand` returns an empty string, and decal
+detachment is a no-op until decals render.
 
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor

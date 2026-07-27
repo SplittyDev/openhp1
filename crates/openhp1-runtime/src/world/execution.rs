@@ -330,12 +330,14 @@ impl ScriptRuntime {
             if metadata.flags & FUNCTION_NATIVE != 0 {
                 let summary = function.package.summary();
                 let export = &summary.exports[function.export_index];
+                let class = summary.object_name(export.outer).unwrap_or("<unknown>");
+                let function_name = summary.name(export.object_name);
+                if let Some(value) = named_native(class, function_name, arguments) {
+                    return Ok(value);
+                }
                 return Err(DispatchError::UnimplementedNamedNative {
-                    class: summary
-                        .object_name(export.outer)
-                        .unwrap_or("<unknown>")
-                        .to_owned(),
-                    function: summary.name(export.object_name).to_owned(),
+                    class: class.to_owned(),
+                    function: function_name.to_owned(),
                 });
             }
         }
@@ -1148,6 +1150,25 @@ impl ScriptRuntime {
             .ok_or(DispatchError::InvalidObjectHandle { handle })?;
         Ok(self.handle_objects[index].clone())
     }
+}
+
+pub(super) fn named_native(class: &str, function: &str, arguments: &[Value]) -> Option<Value> {
+    if class.eq_ignore_ascii_case("PlayerPawn")
+        && function.eq_ignore_ascii_case("ConsoleCommand")
+        && matches!(arguments, [Value::String(_)])
+    {
+        // ponytail: the game only probes optional console values here; add
+        // command routing when an in-game console exists.
+        return Some(Value::String(String::new()));
+    }
+    if class.eq_ignore_ascii_case("Decal")
+        && function.eq_ignore_ascii_case("DetachDecal")
+        && arguments.is_empty()
+    {
+        // ponytail: decals are not rendered yet, so there is no attachment to remove.
+        return Some(Value::None);
+    }
+    None
 }
 
 fn concrete_self_value(value: &Value, self_handle: i32) -> Value {

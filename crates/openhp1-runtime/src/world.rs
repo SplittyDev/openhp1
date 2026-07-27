@@ -55,6 +55,7 @@ const TURN_TO: u16 = 508;
 const MAKE_NOISE: u16 = 512;
 const ADD_PAWN: u16 = 529;
 const CAN_SEE: u16 = 533;
+const SAVE_CONFIG: u16 = 536;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
@@ -549,6 +550,26 @@ mod tests {
         assert_eq!(
             scalar_native(0xffff, &[]),
             Err("native 0xffff is not implemented".to_owned())
+        );
+    }
+
+    #[test]
+    fn named_native_shims_validate_their_engine_calls() {
+        assert_eq!(
+            execution::named_native(
+                "PlayerPawn",
+                "ConsoleCommand",
+                &[Value::String("GETPING".to_owned())]
+            ),
+            Some(Value::String(String::new()))
+        );
+        assert_eq!(
+            execution::named_native("Decal", "DetachDecal", &[]),
+            Some(Value::None)
+        );
+        assert_eq!(
+            execution::named_native("PlayerPawn", "ConsoleCommand", &[]),
+            None
         );
     }
 

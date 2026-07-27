@@ -646,6 +646,17 @@ impl ScriptRuntime {
             self.add_pawn(actor, actor_class, instance)?;
             return Ok(Value::None);
         }
+        if index == SAVE_CONFIG {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "SaveConfig expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            // ponytail: runtime configuration is read-only; persist UObject
+            // config properties when settings need to survive process exit.
+            return Ok(Value::None);
+        }
         scalar_native(index, arguments)
     }
 
