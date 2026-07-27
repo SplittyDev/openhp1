@@ -45,6 +45,8 @@ pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
         }
         runtime.set_actor_animation_groups(actor, scene.actor_animation_groups(actor));
     }
+    let game_actions = runtime.initialize_game()?;
+    apply_runtime_actions(scene, &mut runtime, game_actions)?;
     let mut events = 0;
     let mut animations = 0;
     let mut deferred = 0;

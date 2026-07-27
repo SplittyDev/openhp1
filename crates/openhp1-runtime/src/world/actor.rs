@@ -102,7 +102,7 @@ impl ScriptRuntime {
         self.actor_objects.insert(actor, object.clone());
         self.actor_classes
             .insert(actor, object_id(&class.package, class.export_index));
-        if self.class_has_name(&class, "LevelInfo")? {
+        if self.level_info.is_none() && self.class_has_name(&class, "LevelInfo")? {
             self.level_info = Some(actor);
         }
         if self.player_actor.is_none() && self.class_has_name(&class, "PlayerPawn")? {
@@ -201,6 +201,134 @@ impl ScriptRuntime {
         self.player_actor
     }
 
+    pub fn initialize_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        let level = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
+        let level_class = self
+            .actor_classes
+            .get(&level)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: level })?;
+        let level_class = self.resolved_object(&level_class)?;
+        let game_package = self.packages.load("Engine")?;
+        let game_export = game_package
+            .summary()
+            .exports
+            .iter()
+            .position(|export| {
+                export.class == ObjectReference::None
+                    && game_package
+                        .summary()
+                        .name(export.object_name)
+                        .eq_ignore_ascii_case("GameInfo")
+            })
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "Engine.GameInfo class is missing".to_owned(),
+            })?;
+        let mut level_instance = self
+            .instances
+            .remove(&level)
+            .ok_or(DispatchError::ActiveActorContext { actor: level })?;
+        let mut actions = Vec::new();
+        let result = self
+            .spawn_actor(
+                level,
+                &level_class,
+                &game_package,
+                &[Value::Object(
+                    i32::try_from(game_export + 1).map_err(|_| DispatchError::ObjectLimit)?,
+                )],
+                &mut level_instance,
+                &mut actions,
+            )
+            .map_err(|message| DispatchError::UnresolvedObject { message });
+        self.instances.insert(level, level_instance);
+        let Value::Object(game_handle) = result? else {
+            return Err(DispatchError::UnresolvedObject {
+                message: "GameInfo spawn returned no actor".to_owned(),
+            });
+        };
+        let game = self.actor_for_handle(game_handle)?;
+        let game_object = self
+            .actor_objects
+            .get(&game)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: game })?;
+        let mut level_instance = self
+            .instances
+            .remove(&level)
+            .ok_or(DispatchError::ActiveActorContext { actor: level })?;
+        let result = self.set_actor_stored(
+            &level_class,
+            &mut level_instance,
+            "Game",
+            StoredValue::Object(Some(game_object)),
+        );
+        self.instances.insert(level, level_instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        actions.extend(self.dispatch_event_with_arguments(
+            game,
+            Path::new(game_package.summary().source.as_ref()),
+            game_export,
+            "InitGame",
+            &[Value::String(String::new()), Value::String(String::new())],
+        )?);
+        Ok(actions)
+    }
+
+    pub fn set_player_view_target_class(
+        &mut self,
+        class_name: &str,
+    ) -> DispatchResult<Option<usize>> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let mut target = None;
+        for actor in actors {
+            if actor == player || self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            if self.class_has_name(&class, class_name)? {
+                target = Some(actor);
+                break;
+            }
+        }
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        let target_object = self
+            .actor_objects
+            .get(&target)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: target })?;
+        let class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&player)
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let result = self
+            .set_actor_stored(
+                &class,
+                &mut instance,
+                "ViewTarget",
+                StoredValue::Object(Some(target_object)),
+            )
+            .map_err(|message| DispatchError::InvalidPlayerView { message });
+        self.instances.insert(player, instance);
+        result?;
+        Ok(Some(target))
+    }
+
     pub fn set_player_input(&mut self, input: PlayerInput) -> DispatchResult<()> {
         if ![
             input.base_x,
@@ -236,6 +364,7 @@ impl ScriptRuntime {
                 ("aMouseY", Value::Float(input.mouse_y)),
                 ("bAltFire", Value::Bool(input.alt_fire)),
                 ("bBroomAction", Value::Bool(input.jump)),
+                ("bPressedJump", Value::Bool(input.jump)),
             ] {
                 self.set_actor_value(&class, &mut instance, name, value)
                     .map_err(|message| DispatchError::InvalidPlayerInput { message })?;

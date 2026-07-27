@@ -46,9 +46,11 @@ const IS_IN_STATE: u16 = 0x119;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
+const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
+const MOVE_SMOOTH: u16 = 0xf81;
 const LOG: u16 = 0x0e7;
 const CLASS_ABSTRACT: u32 = 0x0000_0001;
 const MAX_CALL_DEPTH: usize = 64;
@@ -239,6 +241,9 @@ pub enum DispatchError {
     #[error("the level has no registered player pawn")]
     MissingPlayer,
 
+    #[error("the level has no registered LevelInfo")]
+    MissingLevelInfo,
+
     #[error("player input is invalid: {message}")]
     InvalidPlayerInput { message: String },
 
@@ -285,6 +290,12 @@ pub enum DispatchError {
 
     #[error("property `{property}` fixed-array storage is invalid")]
     InvalidArrayProperty { property: String },
+
+    #[error("struct property `{property}` has no struct type")]
+    MissingStructType { property: String },
+
+    #[error("struct field `{field}` has unsupported type `{kind}`")]
+    UnsupportedStructField { field: String, kind: String },
 }
 
 pub struct ScriptRuntime {
@@ -549,6 +560,31 @@ mod tests {
             Ok(Value::String("Harry Potter".to_owned()))
         );
         assert_eq!(
+            scalar_native(
+                0xa8,
+                &[
+                    Value::String("Hello".to_owned()),
+                    Value::String("world".to_owned())
+                ]
+            ),
+            Ok(Value::String("Hello world".to_owned()))
+        );
+        assert_eq!(
+            scalar_native(
+                0x7f,
+                &[
+                    Value::String("Hogwarts".to_owned()),
+                    Value::Int(3),
+                    Value::Int(4)
+                ]
+            ),
+            Ok(Value::String("wart".to_owned()))
+        );
+        assert_eq!(
+            scalar_native(0xea, &[Value::String("Hogwarts".to_owned()), Value::Int(4)]),
+            Ok(Value::String("arts".to_owned()))
+        );
+        assert_eq!(
             scalar_native(0xec, &[Value::Int(0x141)]),
             Ok(Value::String("A".to_owned()))
         );
@@ -634,6 +670,16 @@ mod tests {
         assert_eq!(
             scalar_native(0xd4, &[Value::Vector([1.0, 2.0, 3.0]), Value::Float(2.0)]),
             Ok(Value::Vector([2.0, 4.0, 6.0]))
+        );
+        assert_eq!(
+            scalar_native(
+                0xdb,
+                &[
+                    Value::Vector([1.0, 2.0, 3.0]),
+                    Value::Vector([4.0, 5.0, 6.0])
+                ]
+            ),
+            Ok(Value::Float(32.0))
         );
     }
 

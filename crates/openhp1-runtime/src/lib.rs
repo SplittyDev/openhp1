@@ -180,7 +180,24 @@ enum ConversionOpcode {
     FloatToBool,
     ObjectToBool,
     NameToBool,
+    StringToByte,
+    StringToInt,
+    StringToBool,
+    StringToFloat,
+    StringToVector,
+    StringToRotator,
+    VectorToBool,
+    VectorToRotator,
+    RotatorToBool,
+    ByteToString,
+    IntToString,
+    BoolToString,
+    FloatToString,
     ObjectToString,
+    NameToString,
+    VectorToString,
+    RotatorToString,
+    StringToName,
     Unsupported,
 }
 
@@ -202,7 +219,24 @@ impl From<u8> for ConversionOpcode {
             0x45 => Self::FloatToBool,
             0x47 => Self::ObjectToBool,
             0x48 => Self::NameToBool,
+            0x49 => Self::StringToByte,
+            0x4a => Self::StringToInt,
+            0x4b => Self::StringToBool,
+            0x4c => Self::StringToFloat,
+            0x4d => Self::StringToVector,
+            0x4e => Self::StringToRotator,
+            0x4f => Self::VectorToBool,
+            0x50 => Self::VectorToRotator,
+            0x51 => Self::RotatorToBool,
+            0x52 => Self::ByteToString,
+            0x53 => Self::IntToString,
+            0x54 => Self::BoolToString,
+            0x55 => Self::FloatToString,
             0x56 => Self::ObjectToString,
+            0x57 => Self::NameToString,
+            0x58 => Self::VectorToString,
+            0x59 => Self::RotatorToString,
+            0x5a => Self::StringToName,
             _ => Self::Unsupported,
         }
     }
@@ -650,6 +684,13 @@ impl<'a> Frame<'a> {
                             break;
                         }
                         self.jump(usize::from(next))?;
+                    }
+                }
+                Opcode::Case => {
+                    self.opcode()?;
+                    if self.read_u16()? != u16::MAX {
+                        let value = self.expression(host)?;
+                        self.value(value, host)?;
                     }
                 }
                 Opcode::Jump => {
@@ -1355,6 +1396,9 @@ impl StructMember {
             (Self::X, Value::Vector(value)) => Value::Float(value[0]),
             (Self::Y, Value::Vector(value)) => Value::Float(value[1]),
             (Self::Z, Value::Vector(value)) => Value::Float(value[2]),
+            (Self::X, Value::Struct(mut values)) => values.remove("X").unwrap_or(Value::Float(0.0)),
+            (Self::Y, Value::Struct(mut values)) => values.remove("Y").unwrap_or(Value::Float(0.0)),
+            (Self::Z, Value::Struct(mut values)) => values.remove("Z").unwrap_or(Value::Float(0.0)),
             (Self::Pitch, Value::Rotator(value)) => Value::Int(value[0]),
             (Self::Yaw, Value::Rotator(value)) => Value::Int(value[1]),
             (Self::Roll, Value::Rotator(value)) => Value::Int(value[2]),
@@ -1389,6 +1433,15 @@ impl StructMember {
             (Self::X, Value::Vector(target), Value::Float(value)) => target[0] = value,
             (Self::Y, Value::Vector(target), Value::Float(value)) => target[1] = value,
             (Self::Z, Value::Vector(target), Value::Float(value)) => target[2] = value,
+            (Self::X, Value::Struct(target), Value::Float(value)) => {
+                target.insert("X".to_owned(), Value::Float(value));
+            }
+            (Self::Y, Value::Struct(target), Value::Float(value)) => {
+                target.insert("Y".to_owned(), Value::Float(value));
+            }
+            (Self::Z, Value::Struct(target), Value::Float(value)) => {
+                target.insert("Z".to_owned(), Value::Float(value));
+            }
             (Self::Pitch, Value::Rotator(target), Value::Int(value)) => target[0] = value,
             (Self::Yaw, Value::Rotator(target), Value::Int(value)) => target[1] = value,
             (Self::Roll, Value::Rotator(target), Value::Int(value)) => target[2] = value,
@@ -1615,6 +1668,50 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
         (ConversionOpcode::NameToBool, Value::NameText(value)) => {
             Value::Bool(!value.eq_ignore_ascii_case("None"))
         }
+        (ConversionOpcode::StringToByte, Value::String(value)) => {
+            Value::Byte(value.trim().parse().unwrap_or_default())
+        }
+        (ConversionOpcode::StringToInt, Value::String(value)) => {
+            Value::Int(value.trim().parse().unwrap_or_default())
+        }
+        (ConversionOpcode::StringToBool, Value::String(value)) => {
+            Value::Bool(value.trim().parse::<i32>().unwrap_or_default() != 0)
+        }
+        (ConversionOpcode::StringToFloat, Value::String(value)) => {
+            Value::Float(value.trim().parse().unwrap_or_default())
+        }
+        (ConversionOpcode::StringToVector, Value::String(value)) => {
+            Value::Vector(parse_string_triplet(&value).unwrap_or([0.0; 3]))
+        }
+        (ConversionOpcode::StringToRotator, Value::String(value)) => Value::Rotator(
+            parse_string_triplet(&value)
+                .map(|value| [value[0] as i32, value[1] as i32, value[2] as i32])
+                .unwrap_or([0; 3]),
+        ),
+        (ConversionOpcode::VectorToBool, Value::Vector(value)) => Value::Bool(value != [0.0; 3]),
+        (ConversionOpcode::VectorToRotator, Value::Vector([x, y, z])) => {
+            let units = 65_536.0 / std::f32::consts::TAU;
+            Value::Rotator([
+                ((-z).atan2((x * x + y * y).sqrt()) * units) as i32,
+                (y.atan2(x) * units) as i32,
+                0,
+            ])
+        }
+        (ConversionOpcode::RotatorToBool, Value::Rotator(value)) => Value::Bool(value != [0; 3]),
+        (ConversionOpcode::ByteToString, Value::Byte(value)) => Value::String(value.to_string()),
+        (ConversionOpcode::IntToString, Value::Int(value)) => Value::String(value.to_string()),
+        (ConversionOpcode::BoolToString, Value::Bool(value)) => {
+            Value::String(if value { "True" } else { "False" }.to_owned())
+        }
+        (ConversionOpcode::FloatToString, Value::Float(value)) => Value::String(value.to_string()),
+        (ConversionOpcode::NameToString, Value::NameText(value)) => Value::String(value),
+        (ConversionOpcode::VectorToString, Value::Vector(value)) => {
+            Value::String(format!("{},{},{}", value[0], value[1], value[2]))
+        }
+        (ConversionOpcode::RotatorToString, Value::Rotator(value)) => {
+            Value::String(format!("{},{},{}", value[0], value[1], value[2]))
+        }
+        (ConversionOpcode::StringToName, Value::String(value)) => Value::NameText(value),
         (_, value) => {
             return Err(Error::Type {
                 expected: "supported conversion input",
@@ -1622,6 +1719,15 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
             });
         }
     })
+}
+
+fn parse_string_triplet(value: &str) -> Option<[f32; 3]> {
+    let mut values = value.split(',').map(|value| value.trim().parse::<f32>());
+    Some([
+        values.next()?.ok()?,
+        values.next()?.ok()?,
+        values.next()?.ok()?,
+    ])
 }
 
 fn rotator_axes([pitch, yaw, roll]: [i32; 3]) -> [[f32; 3]; 3] {
@@ -1736,6 +1842,38 @@ mod tests {
             switch_values_equal(&Value::Byte(2), &Value::Int(2)),
             Ok(true)
         );
+    }
+
+    #[test]
+    fn switch_allows_adjacent_fallthrough_cases() {
+        let mut bytes = vec![0x05, 3, 0x00];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x0a);
+        let second_case = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x2c, 2, 0x0a]);
+        let default_case = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x2c, 3, 0x04, 0x2c, 42]);
+        let default = u16::try_from(bytes.len()).unwrap();
+        bytes[second_case..second_case + 2]
+            .copy_from_slice(&u16::try_from(default_case - 1).unwrap().to_le_bytes());
+        bytes[default_case..default_case + 2].copy_from_slice(&default.to_le_bytes());
+        bytes.extend([0x0a, 0xff, 0xff, 0x04, 0x2c, 0]);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let run = |condition| {
+            let mut frame = Frame::new(&bytecode);
+            frame.set_local(7, Value::Int(condition));
+            frame.execute(|_, _| unreachable!()).unwrap()
+        };
+        assert_eq!(run(2), Value::Int(42));
+        assert_eq!(run(3), Value::Int(42));
+        assert_eq!(run(4), Value::Int(0));
     }
 
     #[test]
@@ -1871,6 +2009,14 @@ mod tests {
             convert(ConversionOpcode::ByteToInt, Value::None).unwrap(),
             Value::Int(0)
         );
+        assert_eq!(
+            convert(
+                ConversionOpcode::StringToVector,
+                Value::String("1.5, -2, 3".to_owned())
+            )
+            .unwrap(),
+            Value::Vector([1.5, -2.0, 3.0])
+        );
     }
 
     #[test]
@@ -1937,6 +2083,10 @@ mod tests {
             Value::Float(42.0)
         );
         assert_eq!(frame.local(7), Some(&Value::Vector([1.0, 2.0, 42.0])));
+
+        let mut plane = Value::Struct(HashMap::new());
+        StructMember::Z.set(&mut plane, Value::Float(42.0)).unwrap();
+        assert_eq!(StructMember::Z.get(plane).unwrap(), Value::Float(42.0));
     }
 
     #[test]

@@ -85,6 +85,8 @@ fn main() -> Result<()> {
                 );
             }
         }
+        let actions = runtime.initialize_game()?;
+        apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
 
         let map_animations = stats.animations_applied;
         let map_requested = stats.animations_requested;
@@ -108,6 +110,7 @@ fn main() -> Result<()> {
             }
         }
         if let Some(player) = runtime.player_actor() {
+            runtime.set_player_view_target_class("BaseCam")?;
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;

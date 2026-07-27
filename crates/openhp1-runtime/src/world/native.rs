@@ -41,6 +41,16 @@ impl ScriptRuntime {
             }
             return Ok(Value::None);
         }
+        if index == IS_A {
+            let [name] = arguments else {
+                return Err(format!("IsA expects one name, found {}", arguments.len()));
+            };
+            let name = runtime_name(source, name)?;
+            return self
+                .class_has_name(actor_class, &name)
+                .map(Value::Bool)
+                .map_err(|error| error.to_string());
+        }
         if index == DESTROY {
             for name in ["bStatic", "bNoDelete"] {
                 let field = self
@@ -351,10 +361,15 @@ impl ScriptRuntime {
             instance.insert(field, StoredValue::Value(Value::Byte(*physics)));
             return Ok(Value::None);
         }
-        if index == MOVE {
+        if matches!(index, MOVE | MOVE_SMOOTH) {
             let [Value::Vector(delta)] = arguments else {
                 return Err(format!(
-                    "Move expects one vector, found {}",
+                    "{} expects one vector, found {}",
+                    if index == MOVE_SMOOTH {
+                        "MoveSmooth"
+                    } else {
+                        "Move"
+                    },
                     arguments
                         .iter()
                         .map(Value::kind)
@@ -485,7 +500,7 @@ impl ScriptRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn spawn_actor(
+    pub(super) fn spawn_actor(
         &mut self,
         actor: usize,
         actor_class: &ResolvedObject,
@@ -837,10 +852,18 @@ pub(super) fn collision_updates(
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ScalarNative {
     Concat_StrStr,
+    At_StrStr,
     EqualEqual_ObjectObject,
     NotEqual_ObjectObject,
     EqualEqual_StrStr,
     NotEqual_StrStr,
+    ComplementEqual_StrStr,
+    Len,
+    InStr,
+    Mid,
+    Left,
+    Right,
+    Caps,
     Not_PreBool,
     AndAnd_BoolBool,
     XorXor_BoolBool,
@@ -877,14 +900,20 @@ enum ScalarNative {
     Subtract_VectorVector,
     EqualEqual_VectorVector,
     NotEqual_VectorVector,
+    Dot_VectorVector,
     VSize,
     Normal,
     FMin,
     FMax,
+    Min,
+    Max,
     Clamp,
     EqualEqual_BoolBool,
     NotEqual_BoolBool,
     Chr,
+    Multiply_RotatorFloat,
+    Multiply_FloatRotator,
+    Divide_RotatorFloat,
     Add_RotatorRotator,
     Subtract_RotatorRotator,
 }
@@ -895,10 +924,16 @@ impl TryFrom<u16> for ScalarNative {
     fn try_from(index: u16) -> std::result::Result<Self, Self::Error> {
         match index {
             0x70 => Ok(Self::Concat_StrStr),
+            0xa8 => Ok(Self::At_StrStr),
             0x72 => Ok(Self::EqualEqual_ObjectObject),
             0x77 => Ok(Self::NotEqual_ObjectObject),
             0x7a => Ok(Self::EqualEqual_StrStr),
             0x7b => Ok(Self::NotEqual_StrStr),
+            0x7c => Ok(Self::ComplementEqual_StrStr),
+            0x7d => Ok(Self::Len),
+            0x7e => Ok(Self::InStr),
+            0x7f => Ok(Self::Mid),
+            0x80 => Ok(Self::Left),
             0x81 => Ok(Self::Not_PreBool),
             0x82 => Ok(Self::AndAnd_BoolBool),
             0x83 => Ok(Self::XorXor_BoolBool),
@@ -935,14 +970,22 @@ impl TryFrom<u16> for ScalarNative {
             0xd8 => Ok(Self::Subtract_VectorVector),
             0xd9 => Ok(Self::EqualEqual_VectorVector),
             0xda => Ok(Self::NotEqual_VectorVector),
+            0xdb => Ok(Self::Dot_VectorVector),
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
+            0xea => Ok(Self::Right),
+            0xeb => Ok(Self::Caps),
             0xec => Ok(Self::Chr),
             0xf2 => Ok(Self::EqualEqual_BoolBool),
             0xf3 => Ok(Self::NotEqual_BoolBool),
             0xf4 => Ok(Self::FMin),
             0xf5 => Ok(Self::FMax),
+            0xf9 => Ok(Self::Min),
+            0xfa => Ok(Self::Max),
             0xfb => Ok(Self::Clamp),
+            0x11f => Ok(Self::Multiply_RotatorFloat),
+            0x120 => Ok(Self::Multiply_FloatRotator),
+            0x121 => Ok(Self::Divide_RotatorFloat),
             0x13c => Ok(Self::Add_RotatorRotator),
             0x13d => Ok(Self::Subtract_RotatorRotator),
             _ => Err(()),
@@ -971,6 +1014,15 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         };
         return Ok(Value::Float(value));
     }
+    if matches!(native, ScalarNative::Min | ScalarNative::Max)
+        && let [Value::Int(left), Value::Int(right)] = arguments
+    {
+        return Ok(Value::Int(if native == ScalarNative::Min {
+            (*left).min(*right)
+        } else {
+            (*left).max(*right)
+        }));
+    }
     if matches!(
         native,
         ScalarNative::EqualEqual_ObjectObject | ScalarNative::NotEqual_ObjectObject
@@ -992,6 +1044,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
     Ok(match (native, arguments) {
         (ScalarNative::Concat_StrStr, [Value::String(left), Value::String(right)]) => {
             Value::String(left.clone() + right)
+        }
+        (ScalarNative::At_StrStr, [Value::String(left), Value::String(right)]) => {
+            Value::String(format!("{left} {right}"))
         }
         (ScalarNative::Not_PreBool, [value]) => {
             Value::Bool(!value.truthy().map_err(|error| error.to_string())?)
@@ -1044,6 +1099,38 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::NotEqual_StrStr, [Value::String(left), Value::String(right)]) => {
             Value::Bool(!left.eq_ignore_ascii_case(right))
         }
+        (ScalarNative::ComplementEqual_StrStr, [Value::String(left), Value::String(right)]) => {
+            Value::Bool(left.eq_ignore_ascii_case(right))
+        }
+        (ScalarNative::Len, [Value::String(value)]) => Value::Int(value.chars().count() as i32),
+        (ScalarNative::InStr, [Value::String(value), Value::String(needle)]) => Value::Int(
+            value
+                .find(needle)
+                .map_or(-1, |index| value[..index].chars().count() as i32),
+        ),
+        (
+            ScalarNative::Mid,
+            [Value::String(value), Value::Int(start)]
+            | [Value::String(value), Value::Int(start), Value::None],
+        ) => {
+            let start = usize::try_from(*start).unwrap_or_default();
+            Value::String(value.chars().skip(start).collect())
+        }
+        (ScalarNative::Mid, [Value::String(value), Value::Int(start), Value::Int(length)]) => {
+            let start = usize::try_from(*start).unwrap_or_default();
+            let length = usize::try_from(*length).unwrap_or_default();
+            Value::String(value.chars().skip(start).take(length).collect())
+        }
+        (ScalarNative::Left, [Value::String(value), Value::Int(length)]) => {
+            let length = usize::try_from(*length).unwrap_or_default();
+            Value::String(value.chars().take(length).collect())
+        }
+        (ScalarNative::Right, [Value::String(value), Value::Int(length)]) => {
+            let length = usize::try_from(*length).unwrap_or_default();
+            let skip = value.chars().count().saturating_sub(length);
+            Value::String(value.chars().skip(skip).collect())
+        }
+        (ScalarNative::Caps, [Value::String(value)]) => Value::String(value.to_uppercase()),
         (ScalarNative::Subtract_PreFloat, [Value::Float(value)]) => Value::Float(-value),
         (ScalarNative::Multiply_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
             Value::Float(left * right)
@@ -1099,6 +1186,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::NotEqual_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Bool(left != right)
         }
+        (ScalarNative::Dot_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Float(left[0] * right[0] + left[1] * right[1] + left[2] * right[2])
+        }
         (ScalarNative::VSize, [Value::Vector(value)]) => {
             Value::Float((value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
         }
@@ -1121,6 +1211,21 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Chr, [Value::Int(value)]) => {
             Value::String(char::from(*value as u8).to_string())
+        }
+        (ScalarNative::Multiply_RotatorFloat, [Value::Rotator(value), Value::Float(scale)])
+        | (ScalarNative::Multiply_FloatRotator, [Value::Float(scale), Value::Rotator(value)]) => {
+            Value::Rotator([
+                (value[0] as f32 * scale) as i32,
+                (value[1] as f32 * scale) as i32,
+                (value[2] as f32 * scale) as i32,
+            ])
+        }
+        (ScalarNative::Divide_RotatorFloat, [Value::Rotator(value), Value::Float(scale)]) => {
+            Value::Rotator([
+                (value[0] as f32 / scale) as i32,
+                (value[1] as f32 / scale) as i32,
+                (value[2] as f32 / scale) as i32,
+            ])
         }
         (ScalarNative::Add_RotatorRotator, [Value::Rotator(left), Value::Rotator(right)]) => {
             Value::Rotator([

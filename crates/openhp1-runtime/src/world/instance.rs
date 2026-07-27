@@ -51,13 +51,13 @@ impl ScriptRuntime {
     ) -> DispatchResult<()> {
         while let Some(property) = reader.next_property()? {
             let name = reader.summary().name(property.name).to_owned();
-            let Some(value) = self.read_property(source, reader, &property)? else {
-                continue;
-            };
             let Some(field) = self.find_property(class, &name, 0)? else {
                 continue;
             };
             let resolved = self.resolved_object(&field)?;
+            let Some(value) = self.read_property(source, reader, &property, &resolved)? else {
+                continue;
+            };
             let zero = self.zero_field_value(&resolved)?.unwrap_or(Value::None);
             let zero = self.stored_value(source, &zero)?;
             if matches!(zero, StoredValue::Array(_)) {
@@ -87,6 +87,7 @@ impl ScriptRuntime {
         source: &Arc<Package>,
         reader: &ObjectReader<'_>,
         property: &openhp1_package::PropertyTag,
+        field: &ResolvedObject,
     ) -> DispatchResult<Option<StoredValue>> {
         let mut value = reader.property_reader(property);
         Ok(Some(match property.kind {
@@ -144,8 +145,174 @@ impl ScriptRuntime {
                     value.read_i32()?,
                 ]))
             }
+            PropertyKind::Struct => {
+                let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
+                let structure =
+                    metadata
+                        .struct_type
+                        .ok_or_else(|| DispatchError::MissingStructType {
+                            property: field
+                                .package
+                                .summary()
+                                .name(
+                                    field.package.summary().exports[field.export_index].object_name,
+                                )
+                                .to_owned(),
+                        })?;
+                let structure = self
+                    .packages
+                    .resolve(&field.package, structure)?
+                    .ok_or_else(|| DispatchError::MissingStructType {
+                        property: field
+                            .package
+                            .summary()
+                            .name(field.package.summary().exports[field.export_index].object_name)
+                            .to_owned(),
+                    })?;
+                StoredValue::Value(self.read_struct_value(source, &structure, &mut value, 0)?)
+            }
             _ => return Ok(None),
         }))
+    }
+
+    fn read_struct_value(
+        &mut self,
+        source: &Arc<Package>,
+        structure: &ResolvedObject,
+        reader: &mut ObjectReader<'_>,
+        depth: usize,
+    ) -> DispatchResult<Value> {
+        if depth >= MAX_CALL_DEPTH {
+            return Err(DispatchError::CallDepth);
+        }
+        let metadata = ScriptExport::decode(&structure.package, structure.export_index)?;
+        let mut values = HashMap::new();
+        if let Some(base) = self
+            .packages
+            .resolve(&structure.package, metadata.base_field)?
+        {
+            let Value::Struct(base_values) =
+                self.read_struct_value(source, &base, reader, depth + 1)?
+            else {
+                unreachable!();
+            };
+            values.extend(base_values);
+        }
+        let mut field = self
+            .packages
+            .resolve(&structure.package, metadata.children)?;
+        while let Some(current) = field {
+            let property = PropertyMetadata::decode(&current.package, current.export_index)?;
+            let name = current
+                .package
+                .summary()
+                .name(current.package.summary().exports[current.export_index].object_name)
+                .to_owned();
+            let dimension = usize::try_from(property.array_dimension).map_err(|_| {
+                DispatchError::InvalidArrayDimension {
+                    export_index: current.export_index,
+                    dimension: property.array_dimension,
+                }
+            })?;
+            if dimension == 0 {
+                return Err(DispatchError::InvalidArrayDimension {
+                    export_index: current.export_index,
+                    dimension: property.array_dimension,
+                });
+            }
+            let value = if dimension == 1 {
+                self.read_inline_property(source, &current, &property, reader, depth + 1)?
+            } else {
+                let mut elements = Vec::with_capacity(dimension);
+                for _ in 0..dimension {
+                    elements.push(self.read_inline_property(
+                        source,
+                        &current,
+                        &property,
+                        reader,
+                        depth + 1,
+                    )?);
+                }
+                Value::Array(elements)
+            };
+            values.insert(name, value);
+            field = self
+                .packages
+                .resolve(&current.package, property.next_field)?;
+        }
+        Ok(Value::Struct(values))
+    }
+
+    fn read_inline_property(
+        &mut self,
+        source: &Arc<Package>,
+        field: &ResolvedObject,
+        metadata: &PropertyMetadata,
+        reader: &mut ObjectReader<'_>,
+        depth: usize,
+    ) -> DispatchResult<Value> {
+        let export = &field.package.summary().exports[field.export_index];
+        let name = field.package.summary().name(export.object_name).to_owned();
+        let kind = field
+            .package
+            .summary()
+            .class_name(export)
+            .unwrap_or("<unknown>");
+        Ok(match kind {
+            "ByteProperty" => Value::Byte(reader.read_u8()?),
+            "IntProperty" => Value::Int(reader.read_i32()?),
+            "BoolProperty" => Value::Bool(reader.read_u8()? != 0),
+            "FloatProperty" => Value::Float(reader.read_f32()?),
+            "ObjectProperty" | "ClassProperty" => {
+                let object = self
+                    .packages
+                    .resolve(source, reader.read_object_reference()?)?;
+                Value::Object(match object {
+                    Some(object) => {
+                        self.object_handle(object_id(&object.package, object.export_index))?
+                    }
+                    None => 0,
+                })
+            }
+            "NameProperty" => {
+                let name = reader.read_name_index("runtime struct name property")?;
+                Value::NameText(reader.summary().name(name).to_owned())
+            }
+            "StrProperty" | "StringProperty" => Value::String(reader.read_string()?),
+            "StructProperty" => {
+                let structure =
+                    metadata
+                        .struct_type
+                        .ok_or_else(|| DispatchError::MissingStructType {
+                            property: name.clone(),
+                        })?;
+                let structure = self
+                    .packages
+                    .resolve(&field.package, structure)?
+                    .ok_or_else(|| DispatchError::MissingStructType {
+                        property: name.clone(),
+                    })?;
+                match structure
+                    .package
+                    .summary()
+                    .name(structure.package.summary().exports[structure.export_index].object_name)
+                {
+                    "Vector" => {
+                        Value::Vector([reader.read_f32()?, reader.read_f32()?, reader.read_f32()?])
+                    }
+                    "Rotator" => {
+                        Value::Rotator([reader.read_i32()?, reader.read_i32()?, reader.read_i32()?])
+                    }
+                    _ => self.read_struct_value(source, &structure, reader, depth + 1)?,
+                }
+            }
+            _ => {
+                return Err(DispatchError::UnsupportedStructField {
+                    field: name,
+                    kind: kind.to_owned(),
+                });
+            }
+        })
     }
 
     pub(super) fn find_property(
@@ -458,11 +625,11 @@ impl ScriptRuntime {
                 frame.set_local(field, value.clone());
             }
         }
-        self.bind_frame_arrays(source, &function.bytecode, frame)?;
+        self.bind_frame_zero_values(source, &function.bytecode, frame)?;
         Ok(bindings)
     }
 
-    pub(super) fn bind_frame_arrays(
+    pub(super) fn bind_frame_zero_values(
         &mut self,
         source: &Arc<Package>,
         bytecode: &Bytecode,
@@ -476,7 +643,7 @@ impl ScriptRuntime {
                 continue;
             };
             let resolved = self.resolved_object(&field_object)?;
-            if let Some(value @ Value::Array(_)) = self.zero_field_value(&resolved)? {
+            if let Some(value) = self.zero_field_value(&resolved)? {
                 frame.set_local(field, value);
             }
         }
