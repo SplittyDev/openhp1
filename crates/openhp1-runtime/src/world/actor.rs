@@ -379,7 +379,7 @@ impl ScriptRuntime {
                 ("aStrafe", Value::Float(input.strafe)),
                 ("aMouseX", Value::Float(input.mouse_x)),
                 ("aMouseY", Value::Float(input.mouse_y)),
-                ("bAltFire", Value::Bool(input.alt_fire)),
+                ("bAltFire", Value::Byte(u8::from(input.alt_fire))),
                 ("bBroomAction", Value::Bool(input.jump)),
                 ("bPressedJump", Value::Bool(input.jump)),
             ] {
