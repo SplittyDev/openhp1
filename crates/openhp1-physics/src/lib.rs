@@ -298,6 +298,9 @@ pub fn sweep_cylinder(
     if distance <= f32::EPSILON {
         return None;
     }
+    if cylinders_overlap(start, height, radius, target, target_height, target_radius) {
+        return None;
+    }
     let direction = delta / distance;
     let trace_distance = distance + TRACE_MARGIN;
     let combined_height = height + target_height;
@@ -606,6 +609,11 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn cylinder_sweep_allows_movement_out_of_an_existing_overlap() {
+        assert!(sweep_cylinder(Vec3::ZERO, Vec3::X * 10.0, 2.0, 2.0, Vec3::X, 2.0, 2.0,).is_none());
     }
 
     #[test]
