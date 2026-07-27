@@ -141,6 +141,7 @@ impl From<u8> for Opcode {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ConversionOpcode {
+    RotatorToVector,
     ByteToInt,
     ByteToBool,
     ByteToFloat,
@@ -161,6 +162,7 @@ enum ConversionOpcode {
 impl From<u8> for ConversionOpcode {
     fn from(opcode: u8) -> Self {
         match opcode {
+            0x39 => Self::RotatorToVector,
             0x3a => Self::ByteToInt,
             0x3b => Self::ByteToBool,
             0x3c => Self::ByteToFloat,
@@ -1329,6 +1331,12 @@ fn compound_assignment(
 
 fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
     Ok(match (opcode, value) {
+        (ConversionOpcode::RotatorToVector, Value::Rotator([pitch, yaw, _])) => {
+            let units_to_radians = std::f32::consts::TAU / 65_536.0;
+            let (pitch_sin, pitch_cos) = ((pitch as f32) * units_to_radians).sin_cos();
+            let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
+            Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
+        }
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
         (ConversionOpcode::ByteToFloat, Value::Byte(value)) => Value::Float(f32::from(value)),
@@ -1506,6 +1514,27 @@ mod tests {
             frame.execute(|_, _| unreachable!()).unwrap(),
             Value::Float(100.0)
         );
+    }
+
+    #[test]
+    fn converts_unreal_rotators_to_direction_vectors() {
+        let direction = |rotation| {
+            let Value::Vector(direction) =
+                convert(ConversionOpcode::RotatorToVector, Value::Rotator(rotation)).unwrap()
+            else {
+                unreachable!()
+            };
+            direction
+        };
+        let close = |left: [f32; 3], right: [f32; 3]| {
+            left.into_iter()
+                .zip(right)
+                .all(|(left, right)| (left - right).abs() < 1.0e-6)
+        };
+
+        assert!(close(direction([0, 0, 0]), [1.0, 0.0, 0.0]));
+        assert!(close(direction([0, 16_384, 0]), [0.0, 1.0, 0.0]));
+        assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, -1.0]));
     }
 
     #[test]
