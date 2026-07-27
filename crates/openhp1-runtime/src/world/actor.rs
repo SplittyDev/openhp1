@@ -251,6 +251,8 @@ impl ScriptRuntime {
             }
         }
 
+        self.tick_physics(delta_time, &mut actions)?;
+
         let mut due = Vec::new();
         let actors = self.timers.keys().copied().collect::<Vec<_>>();
         for actor in actors {

@@ -18,7 +18,15 @@ struct CollisionActor {
 struct ActorSweep {
     actor: usize,
     fraction: f32,
+    normal: Vec3,
     blocking: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MovementHit {
+    pub fraction: f32,
+    pub normal: Vec3,
+    pub actor: Option<usize>,
 }
 
 impl ScriptRuntime {
@@ -30,19 +38,39 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<Value, String> {
+        let hit = self.try_move_actor(actor, actor_class, delta, instance, actions)?;
+        Ok(Value::Bool(hit.fraction == 1.0))
+    }
+
+    pub(super) fn try_move_actor(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        delta: [f32; 3],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<MovementHit, String> {
         if self.actor_bool(actor_class, instance, "bStatic")?
             || !self.actor_bool(actor_class, instance, "bMovable")?
         {
-            return Ok(Value::Bool(false));
+            return Ok(MovementHit {
+                fraction: 0.0,
+                normal: Vec3::ZERO,
+                actor: None,
+            });
         }
 
         let delta = Vec3::from_array(delta);
         if delta.length_squared() < 0.00000001 {
-            return Ok(Value::Bool(true));
+            return Ok(MovementHit {
+                fraction: 1.0,
+                normal: Vec3::ZERO,
+                actor: None,
+            });
         }
         let current = self.collision_actor(actor, actor_class, instance)?;
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let mut blocking_fraction = if collide_world && !current.has_brush {
+        let world_hit = if collide_world && !current.has_brush {
             self.collision
                 .as_ref()
                 .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?
@@ -51,9 +79,21 @@ impl ScriptRuntime {
                     current.location + delta,
                     Vec3::new(current.radius, current.radius, current.height),
                 )
-                .map_or(1.0, |hit| hit.fraction)
         } else {
-            1.0
+            None
+        };
+        let mut blocking_hit = if let Some(hit) = world_hit {
+            MovementHit {
+                fraction: hit.fraction,
+                normal: hit.normal,
+                actor: None,
+            }
+        } else {
+            MovementHit {
+                fraction: 1.0,
+                normal: Vec3::ZERO,
+                actor: None,
+            }
         };
 
         let mut hits = if current.collide_actors && !current.has_brush {
@@ -68,13 +108,17 @@ impl ScriptRuntime {
         });
         let blocking_actor = hits
             .iter()
-            .find(|hit| hit.blocking && hit.fraction < blocking_fraction)
+            .find(|hit| hit.blocking && hit.fraction < blocking_hit.fraction)
             .map(|hit| {
-                blocking_fraction = hit.fraction;
+                blocking_hit = MovementHit {
+                    fraction: hit.fraction,
+                    normal: hit.normal,
+                    actor: Some(hit.actor),
+                };
                 hit.actor
             });
 
-        let location = current.location + delta * blocking_fraction;
+        let location = current.location + delta * blocking_hit.fraction;
         let field = self
             .find_property(actor_class, "Location", 0)
             .map_err(|error| error.to_string())?
@@ -98,7 +142,7 @@ impl ScriptRuntime {
         }
         for hit in hits
             .iter()
-            .take_while(|hit| hit.fraction < blocking_fraction)
+            .take_while(|hit| hit.fraction < blocking_hit.fraction)
             .filter(|hit| !hit.blocking)
         {
             let pair = actor_pair(actor, hit.actor);
@@ -109,7 +153,7 @@ impl ScriptRuntime {
         }
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
-        Ok(Value::Bool(blocking_fraction == 1.0))
+        Ok(blocking_hit)
     }
 
     fn actor_sweeps(
@@ -159,6 +203,7 @@ impl ScriptRuntime {
             hits.push(ActorSweep {
                 actor,
                 fraction: hit.fraction,
+                normal: hit.normal,
                 blocking,
             });
         }
@@ -324,7 +369,11 @@ impl ScriptRuntime {
         Err(DispatchError::CallDepth)
     }
 
-    fn class_has_name(&mut self, class: &ResolvedObject, name: &str) -> DispatchResult<bool> {
+    pub(super) fn class_has_name(
+        &mut self,
+        class: &ResolvedObject,
+        name: &str,
+    ) -> DispatchResult<bool> {
         let mut class = ResolvedObject {
             package: Arc::clone(&class.package),
             export_index: class.export_index,
@@ -345,7 +394,7 @@ impl ScriptRuntime {
         Err(DispatchError::CallDepth)
     }
 
-    fn required_actor_property(
+    pub(super) fn required_actor_property(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -356,7 +405,7 @@ impl ScriptRuntime {
             .ok_or_else(|| format!("actor property {name} is missing"))
     }
 
-    fn actor_bool(
+    pub(super) fn actor_bool(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -368,7 +417,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn actor_float(
+    pub(super) fn actor_float(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -382,7 +431,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn actor_vector(
+    pub(super) fn actor_vector(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -398,7 +447,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn actor_object(
+    pub(super) fn actor_object(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -406,6 +455,30 @@ impl ScriptRuntime {
     ) -> std::result::Result<Option<ObjectId>, String> {
         match self.required_actor_property(class, instance, name)? {
             StoredValue::Object(value) => Ok(value),
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
+    pub(super) fn actor_byte(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> std::result::Result<u8, String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Value(Value::Byte(value)) => Ok(value),
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
+    pub(super) fn actor_rotator(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> std::result::Result<[i32; 3], String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Value(Value::Rotator(value)) => Ok(value),
             value => Err(format!("actor property {name} is {value:?}")),
         }
     }

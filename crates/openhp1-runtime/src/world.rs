@@ -23,6 +23,7 @@ mod execution;
 mod instance;
 mod movement;
 mod native;
+mod physics;
 mod state;
 
 const GOTO_STATE: u16 = 0x071;

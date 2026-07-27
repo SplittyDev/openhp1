@@ -11,7 +11,13 @@ impl ScriptRuntime {
         let Some(field) = self.find_property(class, name, 0)? else {
             return Ok(None);
         };
-        Ok(instance.get(&field).cloned())
+        if let Some(value) = instance.get(&field) {
+            return Ok(Some(value.clone()));
+        }
+        let field = self.resolved_object(&field)?;
+        self.zero_field_value(&field)?
+            .map(|value| self.stored_value(&field.package, &value))
+            .transpose()
     }
 
     pub(super) fn load_class_defaults(
