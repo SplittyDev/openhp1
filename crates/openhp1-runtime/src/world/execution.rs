@@ -705,6 +705,42 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_field(source, field)? else {
             return Ok(Value::None);
         };
+        let intrinsic_name = {
+            let field = self.resolved_object(&field)?;
+            let summary = field.package.summary();
+            let export = &summary.exports[field.export_index];
+            summary
+                .name(export.object_name)
+                .eq_ignore_ascii_case("Name")
+                && summary
+                    .object_name(export.outer)
+                    .is_some_and(|owner| owner.eq_ignore_ascii_case("Object"))
+        };
+        if intrinsic_name {
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            if object.package.as_ref() == "<runtime>" {
+                let class = self
+                    .actor_classes
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::UnregisteredActor { actor })?;
+                let class = self.resolved_object(&class)?;
+                let summary = class.package.summary();
+                let class_name = summary.name(summary.exports[class.export_index].object_name);
+                return Ok(Value::NameText(format!("{class_name}{actor}")));
+            }
+            let object = self.resolved_object(&object)?;
+            let summary = object.package.summary();
+            return Ok(Value::NameText(
+                summary
+                    .name(summary.exports[object.export_index].object_name)
+                    .to_owned(),
+            ));
+        }
         let value = if actor == current_actor {
             current_instance.get(&field).cloned()
         } else {
