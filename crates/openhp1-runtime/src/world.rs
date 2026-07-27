@@ -37,6 +37,7 @@ const PLAY_SOUND: u16 = 0x108;
 const SET_LOCATION: u16 = 0x10b;
 const SET_TIMER: u16 = 0x118;
 const SET_ROTATION: u16 = 0x12b;
+const SET_PHYSICS: u16 = 0xf82;
 const LOG: u16 = 0x0e7;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;

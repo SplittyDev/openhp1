@@ -221,6 +221,24 @@ impl ScriptRuntime {
             // ponytail: these flags become collision behavior when BSP movement exists.
             return Ok(Value::None);
         }
+        if index == SET_PHYSICS {
+            let [Value::Byte(physics)] = arguments else {
+                return Err(format!(
+                    "SetPhysics expects one byte, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            let field = self
+                .find_property(actor_class, "Physics", 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "SetPhysics property Physics is missing".to_owned())?;
+            instance.insert(field, StoredValue::Value(Value::Byte(*physics)));
+            return Ok(Value::None);
+        }
         if index == SET_LOCATION {
             let [Value::Vector(location)] = arguments else {
                 return Err(format!(
