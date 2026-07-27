@@ -26,6 +26,11 @@ values across latent `Sleep` and `FinishAnim` actions. `GotoState`,
 `GotoLabel`, and `Stop` operate on that retained frame rather than restarting
 the state body.
 
+Nested state execution restores the caller's active-state context. A
+Dispatcher may therefore trigger another actor and then enter `Sleep` without
+the nested state making that latent call appear to come from ordinary function
+code.
+
 Label lookup uses the final top-level `LabelTable` in canonical decoded
 bytecode. Serialized state metadata offsets are not canonical decoded-byte
 offsets.
@@ -49,11 +54,17 @@ Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
 Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
+`MoveSmooth` first attempts the requested movement and then slides the
+untraveled delta along the collision plane; it is not an alias for `Move`.
 
 Runtime-spawned actors use the same class-default mesh, material, lighting, and
 animation assembly as actors serialized in the map. Adding their geometry may
 grow the scene topology, so render consumers reload their GPU scene resources
 when an in-place vertex update no longer fits.
+Spawning a collision-enabled actor at an occupied blocking location fails
+without allocating an actor handle. Spawned pawns link themselves into
+`Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping
+used during `PreBeginPlay`.
 
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor
