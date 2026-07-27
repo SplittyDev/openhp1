@@ -75,6 +75,9 @@ impl ScriptRuntime {
                 continue;
             }
             match mode {
+                PHYS_WALKING => {
+                    self.tick_walking(actor, class, instance, elapsed, actions)?;
+                }
                 PHYS_FALLING => {
                     self.tick_falling(actor, class, instance, elapsed, actions)?;
                 }
@@ -98,6 +101,242 @@ impl ScriptRuntime {
             self.tick_rotating(actor, class, instance, elapsed, actions)?;
         }
         Ok(())
+    }
+
+    fn tick_walking(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        if !self
+            .class_has_name(class, "Pawn")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
+        let old_location = self.actor_vector(class, instance, "Location")?;
+        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
+        if zone.number == 0 {
+            self.call_actor_event(
+                actor,
+                class,
+                instance,
+                "FellOutOfWorld",
+                Vec::new(),
+                actions,
+            )?;
+            return Ok(());
+        }
+        self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
+        self.set_actor_value(class, instance, "bJustTeleported", Value::Bool(false))?;
+
+        let player = self
+            .class_has_name(class, "PlayerPawn")
+            .map_err(|error| error.to_string())?;
+        let player_walking = player
+            && self
+                .optional_actor_bool(class, instance, "bIsWalking")?
+                .unwrap_or(false);
+        let mut velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
+        velocity.z = 0.0;
+        let mut acceleration =
+            Vec3::from_array(self.actor_vector(class, instance, "Acceleration")?);
+        if acceleration.length_squared() > 0.0001 {
+            let mut acceleration_rate = self.actor_float(class, instance, "AccelRate")?;
+            if player_walking {
+                acceleration_rate *= 0.3;
+            }
+            let acceleration_speed = acceleration.length();
+            let acceleration_direction = acceleration / acceleration_speed;
+            if acceleration_speed > acceleration_rate {
+                acceleration = acceleration_direction * acceleration_rate;
+                self.set_actor_value(
+                    class,
+                    instance,
+                    "Acceleration",
+                    Value::Vector(acceleration.to_array()),
+                )?;
+            }
+            let speed = velocity.length();
+            velocity -=
+                (velocity - acceleration_direction * speed) * (zone.ground_friction * elapsed);
+        } else {
+            let speed = velocity.length();
+            if speed > 0.0 {
+                let new_speed = (speed - speed * zone.ground_friction * 2.0 * elapsed).max(0.0);
+                velocity *= new_speed / speed;
+            }
+        }
+        velocity += acceleration * elapsed;
+
+        let mut maximum_speed = self.actor_float(class, instance, "GroundSpeed")?;
+        if !player {
+            maximum_speed *= self.actor_float(class, instance, "DesiredSpeed")?;
+        } else if player_walking {
+            maximum_speed *= 0.3;
+        }
+        let speed = velocity.length();
+        if speed > maximum_speed && speed > 0.0 {
+            velocity *= maximum_speed / speed;
+        }
+        velocity.z = 0.0;
+        self.set_actor_value(
+            class,
+            instance,
+            "Velocity",
+            Value::Vector(velocity.to_array()),
+        )?;
+
+        let gravity_direction = if zone.gravity.z > 0.0 { 1.0 } else { -1.0 };
+        let step_height = self.actor_float(class, instance, "MaxStepHeight")?;
+        let step_up = Vec3::new(0.0, 0.0, -gravity_direction * step_height);
+        let step_down = Vec3::new(0.0, 0.0, gravity_direction * step_height * STEP_DOWN_FACTOR);
+        let movement_velocity = velocity + zone.velocity * (elapsed * 25.0);
+        if movement_velocity.x != 0.0 && movement_velocity.y != 0.0 {
+            let mut time_left = elapsed;
+            for _ in 0..5 {
+                if time_left <= 0.0 {
+                    break;
+                }
+                let mut move_delta = movement_velocity * time_left;
+                self.try_move_actor(actor, class, step_up.to_array(), instance, actions)?;
+                let mut hit =
+                    self.try_move_actor(actor, class, move_delta.to_array(), instance, actions)?;
+                time_left -= time_left * hit.fraction;
+                move_delta = movement_velocity * time_left;
+                self.try_move_actor(actor, class, (-step_up).to_array(), instance, actions)?;
+
+                if hit.fraction < f32::EPSILON {
+                    hit = self.try_move_actor(
+                        actor,
+                        class,
+                        move_delta.to_array(),
+                        instance,
+                        actions,
+                    )?;
+                    time_left -= time_left * hit.fraction;
+                }
+                if hit.fraction < 1.0 {
+                    if let (true, Some(other)) = (player, hit.actor) {
+                        if self
+                            .actor_has_class(other, "Decoration")
+                            .map_err(|error| error.to_string())?
+                            && self.other_actor_bool(other, "bPushable")?
+                            && hit.normal.dot(move_delta) < -0.9
+                        {
+                            let mass = self.actor_float(class, instance, "Mass")?;
+                            let other_mass = self.other_actor_float(other, "Mass")?;
+                            self.set_actor_value(
+                                class,
+                                instance,
+                                "bJustTeleported",
+                                Value::Bool(true),
+                            )?;
+                            velocity *= mass / (mass + other_mass);
+                            self.set_actor_value(
+                                class,
+                                instance,
+                                "Velocity",
+                                Value::Vector(velocity.to_array()),
+                            )?;
+                            self.call_hit_wall(
+                                actor, class, instance, hit.normal, hit.actor, actions,
+                            )?;
+                            time_left = 0.0;
+                        }
+                    } else if hit.normal.z < 0.2 && hit.normal.z > -0.2 {
+                        self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
+                        let aligned = (move_delta - hit.normal * move_delta.dot(hit.normal))
+                            * (1.0 - hit.fraction);
+                        if move_delta.dot(aligned) >= 0.0 {
+                            hit = self.try_move_actor(
+                                actor,
+                                class,
+                                aligned.to_array(),
+                                instance,
+                                actions,
+                            )?;
+                            time_left -= time_left * hit.fraction;
+                            if hit.fraction < 1.0 {
+                                self.call_hit_wall(
+                                    actor, class, instance, hit.normal, hit.actor, actions,
+                                )?;
+                            }
+                        } else {
+                            time_left = 0.0;
+                        }
+                    }
+                }
+
+                if self.actor_byte(class, instance, "Physics")? != PHYS_WALKING {
+                    return Ok(());
+                }
+                if !self.walk_to_floor(actor, class, instance, step_down, actions)? {
+                    return Ok(());
+                }
+            }
+        } else {
+            // ponytail: the BSP is static, so recheck an idle world-supported pawn
+            // only after its location changes; moving bases will invalidate this.
+            if self.grounded_world.get(&actor) != Some(&old_location) {
+                let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
+                if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
+                    self.grounded_world.remove(&actor);
+                    self.start_falling(class, instance)?;
+                } else if floor.actor.is_none() {
+                    self.grounded_world.insert(actor, old_location);
+                }
+            }
+        }
+
+        if !self.actor_bool(class, instance, "bJustTeleported")? {
+            let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            velocity = (location - Vec3::from_array(old_location)) / elapsed;
+        }
+        velocity.z = 0.0;
+        self.set_actor_value(
+            class,
+            instance,
+            "Velocity",
+            Value::Vector(velocity.to_array()),
+        )?;
+        Ok(())
+    }
+
+    fn walk_to_floor(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        step_down: Vec3,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
+        if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
+            self.grounded_world.remove(&actor);
+            self.start_falling(class, instance)?;
+            return Ok(false);
+        }
+        let floor = self.try_move_actor(actor, class, step_down.to_array(), instance, actions)?;
+        if floor.fraction != 1.0 {
+            let base = floor
+                .actor
+                .and_then(|actor| self.actor_objects.get(&actor).cloned());
+            self.set_actor_stored(class, instance, "Base", StoredValue::Object(base))?;
+        }
+        Ok(true)
+    }
+
+    fn start_falling(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+    ) -> std::result::Result<(), String> {
+        self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
+        self.set_actor_stored(class, instance, "Base", StoredValue::Object(None))
     }
 
     fn tick_falling(
@@ -698,6 +937,10 @@ impl ScriptRuntime {
         )?;
         let base = hit_actor.and_then(|actor| self.actor_objects.get(&actor).cloned());
         self.set_actor_stored(class, instance, "Base", StoredValue::Object(base))?;
+        if pawn && hit_actor.is_none() {
+            let location = self.actor_vector(class, instance, "Location")?;
+            self.grounded_world.insert(actor, location);
+        }
         if !pawn {
             self.set_actor_value(class, instance, "Velocity", Value::Vector([0.0; 3]))?;
         }

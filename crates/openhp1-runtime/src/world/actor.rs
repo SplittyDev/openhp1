@@ -37,6 +37,8 @@ impl ScriptRuntime {
             collision: None,
             level_package: None,
             level_info: None,
+            collision_fields: HashMap::new(),
+            grounded_world: HashMap::new(),
             touching: HashSet::new(),
         })
     }

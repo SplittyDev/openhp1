@@ -22,6 +22,18 @@ struct ActorSweep {
     blocking: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct CollisionFields {
+    location: ObjectId,
+    height: ObjectId,
+    radius: ObjectId,
+    collide_actors: ObjectId,
+    block_actors: ObjectId,
+    block_players: ObjectId,
+    brush: ObjectId,
+    player_collision: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MovementHit {
     pub fraction: f32,
@@ -313,22 +325,8 @@ impl ScriptRuntime {
         class: &ResolvedObject,
         instance: &InstanceState,
     ) -> std::result::Result<CollisionActor, String> {
-        Ok(CollisionActor {
-            actor,
-            location: Vec3::from_array(self.actor_vector(class, instance, "Location")?),
-            height: self.actor_float(class, instance, "CollisionHeight")?,
-            radius: self.actor_float(class, instance, "CollisionRadius")?,
-            collide_actors: self.actor_bool(class, instance, "bCollideActors")?,
-            block_actors: self.actor_bool(class, instance, "bBlockActors")?,
-            block_players: self.actor_bool(class, instance, "bBlockPlayers")?,
-            player_collision: self
-                .class_has_name(class, "PlayerPawn")
-                .map_err(|error| error.to_string())?
-                || self
-                    .class_has_name(class, "Projectile")
-                    .map_err(|error| error.to_string())?,
-            has_brush: self.actor_object(class, instance, "Brush")?.is_some(),
-        })
+        let fields = self.collision_fields(class)?;
+        collision_actor_from_fields(actor, instance, &fields)
     }
 
     fn collision_actor_by_index(
@@ -337,23 +335,57 @@ impl ScriptRuntime {
         current_actor: usize,
         current_instance: &InstanceState,
     ) -> std::result::Result<Option<CollisionActor>, String> {
-        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+        let Some(class_id) = self.actor_classes.get(&actor).cloned() else {
             return Ok(None);
         };
-        let class = self
-            .resolved_object(&class)
-            .map_err(|error| error.to_string())?;
+        let fields = if let Some(fields) = self.collision_fields.get(&class_id) {
+            fields.clone()
+        } else {
+            let class = self
+                .resolved_object(&class_id)
+                .map_err(|error| error.to_string())?;
+            self.collision_fields(&class)?
+        };
         if actor == current_actor {
-            return self
-                .collision_actor(actor, &class, current_instance)
-                .map(Some);
+            return collision_actor_from_fields(actor, current_instance, &fields).map(Some);
         }
         let instance = self
             .instances
             .get(&actor)
-            .cloned()
             .ok_or_else(|| format!("actor {actor} instance is active"))?;
-        self.collision_actor(actor, &class, &instance).map(Some)
+        collision_actor_from_fields(actor, instance, &fields).map(Some)
+    }
+
+    fn collision_fields(
+        &mut self,
+        class: &ResolvedObject,
+    ) -> std::result::Result<CollisionFields, String> {
+        let class_id = object_id(&class.package, class.export_index);
+        if let Some(fields) = self.collision_fields.get(&class_id) {
+            return Ok(fields.clone());
+        }
+        let mut field = |name| {
+            self.find_property(class, name, 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("actor property {name} is missing"))
+        };
+        let fields = CollisionFields {
+            location: field("Location")?,
+            height: field("CollisionHeight")?,
+            radius: field("CollisionRadius")?,
+            collide_actors: field("bCollideActors")?,
+            block_actors: field("bBlockActors")?,
+            block_players: field("bBlockPlayers")?,
+            brush: field("Brush")?,
+            player_collision: self
+                .class_has_name(class, "PlayerPawn")
+                .map_err(|error| error.to_string())?
+                || self
+                    .class_has_name(class, "Projectile")
+                    .map_err(|error| error.to_string())?,
+        };
+        self.collision_fields.insert(class_id, fields.clone());
+        Ok(fields)
     }
 
     fn actors_share_base_chain(
@@ -519,6 +551,50 @@ impl ScriptRuntime {
             value => Err(format!("actor property {name} is {value:?}")),
         }
     }
+}
+
+fn collision_actor_from_fields(
+    actor: usize,
+    instance: &InstanceState,
+    fields: &CollisionFields,
+) -> std::result::Result<CollisionActor, String> {
+    let vector = |field: &ObjectId, name| match instance.get(field) {
+        Some(StoredValue::Value(Value::Vector(value)))
+            if value.iter().all(|component| component.is_finite()) =>
+        {
+            Ok(Vec3::from_array(*value))
+        }
+        Some(value) => Err(format!("actor property {name} is {value:?}")),
+        None => Ok(Vec3::ZERO),
+    };
+    let float = |field: &ObjectId, name| match instance.get(field) {
+        Some(StoredValue::Value(Value::Float(value))) if value.is_finite() && *value >= 0.0 => {
+            Ok(*value)
+        }
+        Some(value) => Err(format!("actor property {name} is {value:?}")),
+        None => Ok(0.0),
+    };
+    let boolean = |field: &ObjectId, name| match instance.get(field) {
+        Some(StoredValue::Value(Value::Bool(value))) => Ok(*value),
+        Some(value) => Err(format!("actor property {name} is {value:?}")),
+        None => Ok(false),
+    };
+    let has_brush = match instance.get(&fields.brush) {
+        Some(StoredValue::Object(value)) => value.is_some(),
+        Some(value) => return Err(format!("actor property Brush is {value:?}")),
+        None => false,
+    };
+    Ok(CollisionActor {
+        actor,
+        location: vector(&fields.location, "Location")?,
+        height: float(&fields.height, "CollisionHeight")?,
+        radius: float(&fields.radius, "CollisionRadius")?,
+        collide_actors: boolean(&fields.collide_actors, "bCollideActors")?,
+        block_actors: boolean(&fields.block_actors, "bBlockActors")?,
+        block_players: boolean(&fields.block_players, "bBlockPlayers")?,
+        player_collision: fields.player_collision,
+        has_brush,
+    })
 }
 
 fn actor_pair(first: usize, second: usize) -> (usize, usize) {

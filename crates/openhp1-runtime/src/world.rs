@@ -294,6 +294,8 @@ pub struct ScriptRuntime {
     collision: Option<Arc<BspCollision>>,
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
+    collision_fields: HashMap<ObjectId, movement::CollisionFields>,
+    grounded_world: HashMap<usize, [f32; 3]>,
     touching: HashSet<(usize, usize)>,
 }
 
