@@ -84,3 +84,6 @@ visibility tests. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
 The game startup camera fallback is cleared when the player leaves the `Cut*`
 state family so normal `PlayerCalcView` output resumes with player control.
+
+Script `Name` comparisons treat a missing object/name value as UE's canonical
+`None` name.

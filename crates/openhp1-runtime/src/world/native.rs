@@ -1157,6 +1157,7 @@ pub(super) fn runtime_name(source: &Package, value: &Value) -> std::result::Resu
             .map(|index| source.summary().name(index).to_owned())
             .ok_or_else(|| format!("invalid name index {index}")),
         Value::NameText(name) => Ok(name.clone()),
+        Value::None => Ok("None".to_owned()),
         value => Err(format!("expected name, found {}", value.kind())),
     }
 }
