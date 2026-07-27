@@ -27,6 +27,7 @@ pub struct ActorCollisionHit {
 #[derive(Clone, Debug)]
 pub struct BspCollision {
     hulls: Vec<ConvexHull>,
+    hulls_by_min_x: Vec<usize>,
     zone_nodes: Vec<BspNode>,
     zone_actors: Vec<Option<usize>>,
 }
@@ -165,8 +166,18 @@ impl BspCollision {
                 _ => None,
             })
             .collect();
+        let mut hulls_by_min_x = (0..hulls.len()).collect::<Vec<_>>();
+        hulls_by_min_x.sort_unstable_by(|&left, &right| {
+            hulls[left]
+                .bounds
+                .minimum
+                .x
+                .total_cmp(&hulls[right].bounds.minimum.x)
+                .then_with(|| left.cmp(&right))
+        });
         Ok(Self {
             hulls,
+            hulls_by_min_x,
             zone_nodes: model.nodes.clone(),
             zone_actors,
         })
@@ -188,11 +199,25 @@ impl BspCollision {
         let direction = delta / distance;
         let trace_distance = distance + TRACE_MARGIN;
         let trace_end = start + direction * trace_distance;
+        let query_bounds = Aabb {
+            minimum: start.min(trace_end) - extents,
+            maximum: start.max(trace_end) + extents,
+        };
+        let candidate_count = self
+            .hulls_by_min_x
+            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= query_bounds.maximum.x);
         let mut nearest = None;
 
-        // ponytail: scan decoded hulls linearly until collision profiling justifies
-        // retaining the package BSP traversal alongside them.
-        for hull in &self.hulls {
+        for &hull_index in &self.hulls_by_min_x[..candidate_count] {
+            let hull = &self.hulls[hull_index];
+            if hull.bounds.maximum.x < query_bounds.minimum.x
+                || hull.bounds.maximum.y < query_bounds.minimum.y
+                || hull.bounds.minimum.y > query_bounds.maximum.y
+                || hull.bounds.maximum.z < query_bounds.minimum.z
+                || hull.bounds.minimum.z > query_bounds.maximum.z
+            {
+                continue;
+            }
             let bounds = Aabb {
                 minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
                 maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
@@ -227,11 +252,14 @@ impl BspCollision {
                 normal: cursor.hit_normal,
                 node: hull.node,
             };
-            if nearest.is_none_or(|current: CollisionHit| hit.fraction < current.fraction) {
-                nearest = Some(hit);
+            if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
+                hit.fraction < current.fraction
+                    || (hit.fraction == current.fraction && hull_index < current_index)
+            }) {
+                nearest = Some((hull_index, hit));
             }
         }
-        nearest
+        nearest.map(|(_, hit)| hit)
     }
 
     pub fn hull_count(&self) -> usize {
