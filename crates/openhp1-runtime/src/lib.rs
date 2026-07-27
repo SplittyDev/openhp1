@@ -1613,6 +1613,17 @@ fn compound_assignment(
     left: &Value,
     right: &Value,
 ) -> Result<Value> {
+    if matches!(left, Value::None) {
+        let zero = match assignment {
+            CompoundAssignment::AddEqual_IntInt => Value::Int(0),
+            CompoundAssignment::MultiplyEqual_FloatFloat
+            | CompoundAssignment::DivideEqual_FloatFloat
+            | CompoundAssignment::AddEqual_FloatFloat
+            | CompoundAssignment::SubtractEqual_FloatFloat => Value::Float(0.0),
+            _ => Value::Vector([0.0; 3]),
+        };
+        return compound_assignment(assignment, &zero, right);
+    }
     Ok(match (assignment, left, right) {
         (CompoundAssignment::AddEqual_IntInt, Value::Int(left), Value::Int(right)) => {
             Value::Int(left.wrapping_add(*right))
@@ -1659,6 +1670,46 @@ fn compound_assignment(
 }
 
 fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
+    let value = if matches!(value, Value::None) {
+        match opcode {
+            ConversionOpcode::RotatorToVector
+            | ConversionOpcode::RotatorToBool
+            | ConversionOpcode::RotatorToString => Value::Rotator([0; 3]),
+            ConversionOpcode::ByteToInt
+            | ConversionOpcode::ByteToBool
+            | ConversionOpcode::ByteToFloat
+            | ConversionOpcode::ByteToString => Value::Byte(0),
+            ConversionOpcode::IntToByte
+            | ConversionOpcode::IntToBool
+            | ConversionOpcode::IntToFloat
+            | ConversionOpcode::IntToString => Value::Int(0),
+            ConversionOpcode::BoolToByte
+            | ConversionOpcode::BoolToInt
+            | ConversionOpcode::BoolToFloat
+            | ConversionOpcode::BoolToString => Value::Bool(false),
+            ConversionOpcode::FloatToByte
+            | ConversionOpcode::FloatToInt
+            | ConversionOpcode::FloatToBool
+            | ConversionOpcode::FloatToString => Value::Float(0.0),
+            ConversionOpcode::ObjectToBool => Value::Object(0),
+            ConversionOpcode::NameToBool | ConversionOpcode::NameToString => {
+                Value::NameText("None".to_owned())
+            }
+            ConversionOpcode::StringToByte
+            | ConversionOpcode::StringToInt
+            | ConversionOpcode::StringToBool
+            | ConversionOpcode::StringToFloat
+            | ConversionOpcode::StringToVector
+            | ConversionOpcode::StringToRotator
+            | ConversionOpcode::StringToName => Value::String(String::new()),
+            ConversionOpcode::VectorToBool
+            | ConversionOpcode::VectorToRotator
+            | ConversionOpcode::VectorToString => Value::Vector([0.0; 3]),
+            ConversionOpcode::ObjectToString | ConversionOpcode::Unsupported => Value::None,
+        }
+    } else {
+        value
+    };
     Ok(match (opcode, value) {
         (ConversionOpcode::RotatorToVector, Value::Rotator([pitch, yaw, _])) => {
             let units_to_radians = std::f32::consts::TAU / 65_536.0;
@@ -1666,7 +1717,6 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
             let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
             Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
         }
-        (ConversionOpcode::ByteToInt, Value::None) => Value::Int(0),
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
         (ConversionOpcode::ByteToFloat, Value::Byte(value)) => Value::Float(f32::from(value)),
@@ -1679,7 +1729,6 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
         (ConversionOpcode::FloatToByte, Value::Float(value)) => Value::Byte(value as u8),
         (ConversionOpcode::FloatToInt, Value::Float(value)) => Value::Int(value as i32),
         (ConversionOpcode::FloatToBool, Value::Float(value)) => Value::Bool(value != 0.0),
-        (ConversionOpcode::ObjectToBool, Value::None) => Value::Bool(false),
         (ConversionOpcode::ObjectToBool, Value::Object(value)) => Value::Bool(value != 0),
         (ConversionOpcode::NameToBool, Value::Name(value)) => Value::Bool(value != 0),
         (ConversionOpcode::NameToBool, Value::NameText(value)) => {
@@ -2017,13 +2066,21 @@ mod tests {
     }
 
     #[test]
-    fn converts_missing_object_defaults_used_by_script_guards() {
+    fn converts_missing_typed_defaults_used_by_scripts() {
         assert_eq!(
             convert(ConversionOpcode::ObjectToBool, Value::None).unwrap(),
             Value::Bool(false)
         );
         assert_eq!(
             convert(ConversionOpcode::ByteToInt, Value::None).unwrap(),
+            Value::Int(0)
+        );
+        assert_eq!(
+            convert(ConversionOpcode::RotatorToVector, Value::None).unwrap(),
+            Value::Vector([1.0, 0.0, -0.0])
+        );
+        assert_eq!(
+            convert(ConversionOpcode::FloatToInt, Value::None).unwrap(),
             Value::Int(0)
         );
         assert_eq!(
@@ -2202,6 +2259,15 @@ mod tests {
             )
             .unwrap(),
             Value::Int(i32::MIN)
+        );
+        assert_eq!(
+            compound_assignment(
+                CompoundAssignment::SubtractEqual_FloatFloat,
+                &Value::None,
+                &Value::Float(1.0),
+            )
+            .unwrap(),
+            Value::Float(-1.0)
         );
     }
 

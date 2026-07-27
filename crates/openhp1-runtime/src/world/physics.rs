@@ -27,6 +27,33 @@ struct ZonePhysics {
 }
 
 impl ScriptRuntime {
+    pub(super) fn tick_turn_to(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let physics = self.actor_byte(class, instance, "Physics")?;
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let focus = Vec3::from_array(self.actor_vector(class, instance, "Focus")?);
+        let direction = focus - location;
+        let yaw = (direction.y.atan2(direction.x) * (65_536.0 / std::f32::consts::TAU)) as i32;
+        let pitch = if physics == PHYS_WALKING {
+            0
+        } else {
+            ((-direction.z).atan2(direction.x.hypot(direction.y))
+                * (65_536.0 / std::f32::consts::TAU)) as i32
+        };
+        self.set_actor_value(
+            class,
+            instance,
+            "DesiredRotation",
+            Value::Rotator([pitch, yaw, 0]),
+        )?;
+        let rotation = self.actor_rotator(class, instance, "Rotation")?;
+        let difference = yaw.wrapping_sub(rotation[1]) & 0xffff;
+        Ok(!(2_000..=0x1_0000 - 2_000).contains(&difference))
+    }
+
     pub(super) fn tick_move_to(
         &mut self,
         class: &ResolvedObject,
@@ -242,7 +269,7 @@ impl ScriptRuntime {
         let step_up = Vec3::new(0.0, 0.0, -gravity_direction * step_height);
         let step_down = Vec3::new(0.0, 0.0, gravity_direction * step_height * STEP_DOWN_FACTOR);
         let movement_velocity = velocity + zone.velocity * (elapsed * 25.0);
-        if movement_velocity.x != 0.0 && movement_velocity.y != 0.0 {
+        if has_horizontal_movement(movement_velocity) {
             let mut time_left = elapsed;
             for _ in 0..5 {
                 if time_left <= 0.0 {
@@ -627,7 +654,7 @@ impl ScriptRuntime {
         )?;
 
         let movement_velocity = velocity + zone.velocity * (elapsed * 25.0);
-        if movement_velocity.x != 0.0 && movement_velocity.y != 0.0 {
+        if has_movement(movement_velocity) {
             let mut time_left = elapsed;
             for _ in 0..5 {
                 if time_left <= 0.0 {
@@ -1212,14 +1239,19 @@ impl ScriptRuntime {
         hit_actor: Option<usize>,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
-        self.call_actor_event(
+        if let Err(message) = self.call_actor_event(
             actor,
             class,
             instance,
             "Landed",
             vec![Value::Vector(normal.to_array())],
             actions,
-        )?;
+        ) {
+            actions.push(ActorAction::DeferredCall {
+                actor,
+                message: format!("Landed: {message}"),
+            });
+        }
         if self.actor_byte(class, instance, "Physics")? != PHYS_FALLING {
             return Ok(());
         }
@@ -1614,6 +1646,14 @@ fn move_to_direction(physics: u8, mut delta: Vec3, velocity: Vec3, timer: f32) -
     }
 }
 
+fn has_horizontal_movement(velocity: Vec3) -> bool {
+    velocity.x != 0.0 || velocity.y != 0.0
+}
+
+fn has_movement(velocity: Vec3) -> bool {
+    velocity != Vec3::ZERO
+}
+
 fn spline_weights(alpha: f32) -> [f32; 4] {
     let weights = [
         spline_weight(alpha + 1.0),
@@ -1748,6 +1788,13 @@ mod tests {
 
     #[test]
     fn move_to_uses_horizontal_walking_distance_and_ue1_arrival_threshold() {
+        assert!(has_horizontal_movement(Vec3::X));
+        assert!(has_horizontal_movement(Vec3::Y));
+        assert!(!has_horizontal_movement(Vec3::Z));
+        assert!(has_movement(Vec3::X));
+        assert!(has_movement(Vec3::Y));
+        assert!(has_movement(Vec3::Z));
+        assert!(!has_movement(Vec3::ZERO));
         assert_eq!(
             move_to_direction(PHYS_WALKING, Vec3::new(3.0, 4.0, 100.0), Vec3::ZERO, 1.0),
             Some(Vec3::new(0.6, 0.8, 0.0))

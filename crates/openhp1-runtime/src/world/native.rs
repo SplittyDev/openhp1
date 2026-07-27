@@ -182,6 +182,7 @@ impl ScriptRuntime {
                 rate,
                 tween_time,
             });
+            self.animating.insert(actor);
             return Ok(Value::None);
         }
         if index == LOOP_ANIM
@@ -195,6 +196,40 @@ impl ScriptRuntime {
                 rate,
                 tween_time,
             });
+            self.animating.insert(actor);
+            return Ok(Value::None);
+        }
+        if index == IS_ANIMATING {
+            if arguments.len() > 1 {
+                return Err(format!(
+                    "IsAnimating expects at most one name, found {} arguments",
+                    arguments.len()
+                ));
+            }
+            if let Some(root) = arguments.first()
+                && !matches!(root, Value::None)
+            {
+                // ponytail: runtime animation has one channel per actor; distinguish
+                // root-bone channels when the sampler supports them.
+                runtime_name(source, root)?;
+            }
+            return Ok(Value::Bool(self.animating.contains(&actor)));
+        }
+        if index == TURN_TO {
+            let [Value::Vector(focus)] = arguments else {
+                return Err(format!(
+                    "TurnTo expects one vector, found {}",
+                    arguments.len()
+                ));
+            };
+            self.set_actor_stored(
+                actor_class,
+                instance,
+                "MoveTarget",
+                StoredValue::Object(None),
+            )?;
+            self.set_actor_value(actor_class, instance, "Focus", Value::Vector(*focus))?;
+            self.pending_latent = Some(LatentAction::TurnTo);
             return Ok(Value::None);
         }
         if index == FINISH_ANIM {
@@ -543,6 +578,24 @@ impl ScriptRuntime {
                 min + random_float(&mut self.random_state) * (max - min),
             ));
         }
+        if index == CAN_SEE {
+            let [other] = arguments else {
+                return Err(format!(
+                    "CanSee expects one actor, found {}",
+                    arguments.len()
+                ));
+            };
+            let other = match other {
+                Value::None | Value::Object(0) => return Ok(Value::Bool(false)),
+                Value::Object(handle) => self
+                    .actor_for_handle(*handle)
+                    .map_err(|error| error.to_string())?,
+                value => return Err(format!("CanSee actor is {}", value.kind())),
+            };
+            return self
+                .can_see(actor, actor_class, instance, other)
+                .map(Value::Bool);
+        }
         scalar_native(index, arguments)
     }
 
@@ -581,6 +634,7 @@ impl ScriptRuntime {
             .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
         instance.insert(field, StoredValue::Value(Value::Bool(true)));
         self.timers.remove(&actor);
+        self.animating.remove(&actor);
         actions.push(ActorAction::DestroyActor { actor });
         Ok(true)
     }
@@ -984,6 +1038,8 @@ enum ScalarNative {
     Divide_VectorFloat,
     Add_VectorVector,
     Subtract_VectorVector,
+    LessLess_VectorRotator,
+    GreaterGreater_VectorRotator,
     EqualEqual_VectorVector,
     NotEqual_VectorVector,
     Dot_VectorVector,
@@ -997,6 +1053,7 @@ enum ScalarNative {
     EqualEqual_BoolBool,
     NotEqual_BoolBool,
     Chr,
+    Asc,
     Multiply_RotatorFloat,
     Multiply_FloatRotator,
     Divide_RotatorFloat,
@@ -1054,6 +1111,8 @@ impl TryFrom<u16> for ScalarNative {
             0xd6 => Ok(Self::Divide_VectorFloat),
             0xd7 => Ok(Self::Add_VectorVector),
             0xd8 => Ok(Self::Subtract_VectorVector),
+            0x113 => Ok(Self::LessLess_VectorRotator),
+            0x114 => Ok(Self::GreaterGreater_VectorRotator),
             0xd9 => Ok(Self::EqualEqual_VectorVector),
             0xda => Ok(Self::NotEqual_VectorVector),
             0xdb => Ok(Self::Dot_VectorVector),
@@ -1062,6 +1121,7 @@ impl TryFrom<u16> for ScalarNative {
             0xea => Ok(Self::Right),
             0xeb => Ok(Self::Caps),
             0xec => Ok(Self::Chr),
+            0xed => Ok(Self::Asc),
             0xf2 => Ok(Self::EqualEqual_BoolBool),
             0xf3 => Ok(Self::NotEqual_BoolBool),
             0xf4 => Ok(Self::FMin),
@@ -1217,6 +1277,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             Value::String(value.chars().skip(skip).collect())
         }
         (ScalarNative::Caps, [Value::String(value)]) => Value::String(value.to_uppercase()),
+        (ScalarNative::Asc, [Value::String(value)]) => Value::Int(i32::from(
+            value.as_bytes().first().copied().unwrap_or_default(),
+        )),
         (ScalarNative::Subtract_PreFloat, [Value::Float(value)]) => Value::Float(-value),
         (ScalarNative::Multiply_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
             Value::Float(left * right)
@@ -1265,6 +1328,28 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Subtract_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]])
+        }
+        (
+            ScalarNative::LessLess_VectorRotator,
+            [Value::Vector(vector), Value::Rotator(rotation)],
+        ) => {
+            let [x, y, z] = crate::rotator_axes(*rotation);
+            Value::Vector([
+                x[0] * vector[0] + y[0] * vector[1] + z[0] * vector[2],
+                x[1] * vector[0] + y[1] * vector[1] + z[1] * vector[2],
+                x[2] * vector[0] + y[2] * vector[1] + z[2] * vector[2],
+            ])
+        }
+        (
+            ScalarNative::GreaterGreater_VectorRotator,
+            [Value::Vector(vector), Value::Rotator(rotation)],
+        ) => {
+            let [x, y, z] = crate::rotator_axes(*rotation);
+            Value::Vector([
+                x[0] * vector[0] + x[1] * vector[1] + x[2] * vector[2],
+                y[0] * vector[0] + y[1] * vector[1] + y[2] * vector[2],
+                z[0] * vector[0] + z[1] * vector[1] + z[2] * vector[2],
+            ])
         }
         (ScalarNative::EqualEqual_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Bool(left == right)

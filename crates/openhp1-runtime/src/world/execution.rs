@@ -1,5 +1,6 @@
 use super::native::runtime_name;
 use super::*;
+use glam::Vec3;
 
 struct CallOutput {
     value: Value,
@@ -127,7 +128,8 @@ impl ScriptRuntime {
                 LatentAction::Stop
                 | LatentAction::Sleep(_)
                 | LatentAction::FinishAnimation
-                | LatentAction::MoveTo => {
+                | LatentAction::MoveTo
+                | LatentAction::TurnTo => {
                     self.state_frames.insert(actor, state_frame);
                     return Ok(());
                 }
@@ -300,34 +302,26 @@ impl ScriptRuntime {
         let script = self.script(function)?;
         if let ScriptMetadata::Function(metadata) = &script.metadata {
             if metadata.native_index != 0 {
-                let value = self
-                    .native(
-                        actor,
-                        actor_class,
-                        &function.package,
-                        metadata.native_index,
-                        arguments,
-                        instance,
-                        actions,
-                        depth,
-                    )
-                    .map_err(|message| crate::Error::Call {
-                        call: FunctionCall::Native(metadata.native_index),
-                        message,
-                    })
-                    .map_err(DispatchError::from)?;
+                let output = self.dispatch_native_call(
+                    actor,
+                    actor_class,
+                    &function.package,
+                    metadata.native_index,
+                    arguments,
+                    instance,
+                    actions,
+                    depth,
+                )?;
                 if let Some(output_arguments) = output_arguments {
-                    copy_native_output_arguments(
-                        metadata.native_index,
-                        arguments,
-                        output_arguments,
-                    )
-                    .map_err(|message| crate::Error::Call {
-                        call: FunctionCall::Native(metadata.native_index),
-                        message,
-                    })?;
+                    output_arguments.clear();
+                    output_arguments.extend_from_slice(arguments);
+                    for (index, value) in &output.outputs {
+                        if let Some(argument) = output_arguments.get_mut(*index) {
+                            *argument = value.clone();
+                        }
+                    }
                 }
-                return Ok(value);
+                return Ok(output.value);
             }
             if metadata.flags & FUNCTION_NATIVE != 0 {
                 let summary = function.package.summary();
@@ -438,19 +432,16 @@ impl ScriptRuntime {
         depth: usize,
     ) -> DispatchResult<CallOutput> {
         match call {
-            FunctionCall::Native(index) => self
-                .native(
-                    actor,
-                    actor_class,
-                    source,
-                    index,
-                    arguments,
-                    instance,
-                    actions,
-                    depth,
-                )
-                .map_err(|message| crate::Error::Call { call, message }.into())
-                .map(CallOutput::value),
+            FunctionCall::Native(index) => self.dispatch_native_call(
+                actor,
+                actor_class,
+                source,
+                index,
+                arguments,
+                instance,
+                actions,
+                depth,
+            ),
             FunctionCall::Final(index) => {
                 let Some(function) = self.resolve_reference(source, index)? else {
                     return Ok(CallOutput::value(Value::None));
@@ -524,6 +515,114 @@ impl ScriptRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn dispatch_native_call(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        source: &Arc<Package>,
+        index: u16,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> DispatchResult<CallOutput> {
+        if index == TRACE {
+            return self
+                .trace_native(actor_class, arguments, instance)
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(index),
+                    message,
+                })
+                .map_err(DispatchError::from);
+        }
+        let value = self
+            .native(
+                actor,
+                actor_class,
+                source,
+                index,
+                arguments,
+                instance,
+                actions,
+                depth,
+            )
+            .map_err(|message| crate::Error::Call {
+                call: FunctionCall::Native(index),
+                message,
+            })
+            .map_err(DispatchError::from)?;
+        let mut output_arguments = Vec::new();
+        copy_native_output_arguments(index, arguments, &mut output_arguments).map_err(
+            |message| crate::Error::Call {
+                call: FunctionCall::Native(index),
+                message,
+            },
+        )?;
+        Ok(CallOutput::from_arguments(
+            value,
+            arguments,
+            output_arguments,
+        ))
+    }
+
+    fn trace_native(
+        &mut self,
+        actor_class: &ResolvedObject,
+        arguments: &[Value],
+        instance: &InstanceState,
+    ) -> std::result::Result<CallOutput, String> {
+        let [_, _, Value::Vector(end), rest @ ..] = arguments else {
+            return Err(format!(
+                "Trace expects hit location, hit normal, and trace end, found {} arguments",
+                arguments.len()
+            ));
+        };
+        if rest.len() > 3 {
+            return Err(format!(
+                "Trace expects at most 6 arguments, found {}",
+                arguments.len()
+            ));
+        }
+        let start = match rest.first() {
+            Some(Value::Vector(start)) => Vec3::from_array(*start),
+            Some(Value::None) | None => {
+                Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?)
+            }
+            Some(value) => return Err(format!("Trace start is {}", value.kind())),
+        };
+        match rest.get(1) {
+            Some(Value::Bool(_) | Value::None) | None => {}
+            Some(value) => return Err(format!("Trace actor flag is {}", value.kind())),
+        }
+        let extent = match rest.get(2) {
+            Some(Value::Vector(extent)) => Vec3::from_array(*extent).abs(),
+            Some(Value::None) | None => Vec3::ZERO,
+            Some(value) => return Err(format!("Trace extent is {}", value.kind())),
+        };
+        let end = Vec3::from_array(*end);
+        if !start.is_finite() || !end.is_finite() || !extent.is_finite() {
+            return Err("Trace coordinates are not finite".to_owned());
+        }
+        // ponytail: the cutscene camera only needs BSP hits; add actor hits when
+        // gameplay starts consuming Trace's returned actor.
+        let hit = self
+            .collision
+            .as_ref()
+            .and_then(|collision| collision.sweep_aabb(start, end, extent));
+        let (location, normal) = hit.map_or((end, Vec3::ZERO), |hit| {
+            (start + (end - start) * hit.fraction, hit.normal)
+        });
+        let mut output_arguments = arguments.to_vec();
+        output_arguments[0] = Value::Vector(location.to_array());
+        output_arguments[1] = Value::Vector(normal.to_array());
+        Ok(CallOutput::from_arguments(
+            Value::Object(0),
+            arguments,
+            output_arguments,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_context_call(
         &mut self,
         current_actor: usize,
@@ -580,21 +679,35 @@ impl ScriptRuntime {
             .iter()
             .map(|value| concrete_self_value(value, self_handle))
             .collect::<Vec<_>>();
-        let mut instance = self
-            .instances
-            .remove(&actor)
-            .ok_or(DispatchError::ActiveActorContext { actor })?;
-        let result = self.dispatch_call(
-            actor,
-            &class,
-            source,
-            call,
-            &arguments,
-            &mut instance,
-            actions,
-            depth,
-        );
-        self.instances.insert(actor, instance);
+        if self.instances.contains_key(&current_actor) {
+            return Err(DispatchError::ActiveActorContext {
+                actor: current_actor,
+            });
+        }
+        self.instances
+            .insert(current_actor, std::mem::take(current_instance));
+        let result = if let Some(mut instance) = self.instances.remove(&actor) {
+            let result = self.dispatch_call(
+                actor,
+                &class,
+                source,
+                call,
+                &arguments,
+                &mut instance,
+                actions,
+                depth,
+            );
+            self.instances.insert(actor, instance);
+            result
+        } else {
+            Err(DispatchError::ActiveActorContext { actor })
+        };
+        *current_instance =
+            self.instances
+                .remove(&current_actor)
+                .ok_or(DispatchError::ActiveActorContext {
+                    actor: current_actor,
+                })?;
         result
     }
 
@@ -610,13 +723,25 @@ impl ScriptRuntime {
         if receiver != -1 {
             self.actor_for_handle(receiver)?;
         }
-        let FunctionCall::Native(ALL_ACTORS) = call else {
+        let FunctionCall::Native(index) = call else {
             return Err(crate::Error::Call {
                 call,
                 message: "iterator function is not implemented".to_owned(),
             }
             .into());
         };
+        if index == TRACE_ACTORS {
+            // ponytail: BSP Trace handles the camera; return no actor hits until
+            // gameplay needs TraceActors output locations and normals.
+            return Ok(Vec::new());
+        }
+        if index != ALL_ACTORS {
+            return Err(crate::Error::Call {
+                call,
+                message: "iterator function is not implemented".to_owned(),
+            }
+            .into());
+        }
         let [Value::Object(base_class), Value::None, rest @ ..] = arguments else {
             return Err(crate::Error::Call {
                 call,

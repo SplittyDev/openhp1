@@ -40,6 +40,7 @@ impl ScriptRuntime {
             level_info: None,
             player_actor: None,
             animation_groups: HashMap::default(),
+            animating: HashSet::default(),
             player_probe_touching: HashSet::default(),
             collision_fields: HashMap::default(),
             collision_actors: Vec::new(),
@@ -157,6 +158,7 @@ impl ScriptRuntime {
                         0x101 => LatentAction::Sleep(0.0),
                         0x106 => LatentAction::FinishAnimation,
                         501 => LatentAction::MoveTo,
+                        509 => LatentAction::TurnTo,
                         _ => LatentAction::Stop,
                     },
                 },
@@ -605,17 +607,18 @@ impl ScriptRuntime {
             if self.destroyed.contains(&actor) {
                 continue;
             }
-            if self
-                .state_frames
-                .get(&actor)
-                .is_some_and(|frame| frame.latent == LatentAction::MoveTo)
-            {
+            let latent = self.state_frames.get(&actor).map(|frame| frame.latent);
+            if matches!(latent, Some(LatentAction::MoveTo | LatentAction::TurnTo)) {
                 let Some(class) = self.actor_classes.get(&actor).cloned() else {
                     continue;
                 };
                 let class = self.resolved_object(&class)?;
                 let mut instance = self.instances.remove(&actor).unwrap_or_default();
-                let result = self.tick_move_to(&class, &mut instance, delta_time);
+                let result = if latent == Some(LatentAction::MoveTo) {
+                    self.tick_move_to(&class, &mut instance, delta_time)
+                } else {
+                    self.tick_turn_to(&class, &mut instance)
+                };
                 self.instances.insert(actor, instance);
                 match result {
                     Ok(true) => {
@@ -626,7 +629,7 @@ impl ScriptRuntime {
                         self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Stop;
                         actions.push(ActorAction::DeferredCall {
                             actor,
-                            message: format!("MoveTo: {message}"),
+                            message: format!("latent movement: {message}"),
                         });
                     }
                 }
@@ -767,6 +770,7 @@ impl ScriptRuntime {
     }
 
     pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
+        self.animating.remove(&actor);
         if let Some(frame) = self.state_frames.get_mut(&actor)
             && frame.latent == LatentAction::FinishAnimation
         {

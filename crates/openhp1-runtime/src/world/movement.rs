@@ -599,6 +599,49 @@ impl ScriptRuntime {
             .map(|cached| cached.actor.clone()))
     }
 
+    pub(super) fn can_see(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        other: usize,
+    ) -> std::result::Result<bool, String> {
+        let Some(other) = self.collision_actor_by_index(other, actor, instance)? else {
+            return Ok(false);
+        };
+        let mut eye = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        eye.z += self.actor_float(class, instance, "BaseEyeHeight")?;
+        let sight_radius = self.actor_float(class, instance, "SightRadius")?;
+        let peripheral_vision =
+            match self.required_actor_property(class, instance, "PeripheralVision")? {
+                StoredValue::Value(Value::Float(value)) if value.is_finite() => value,
+                value => return Err(format!("actor property PeripheralVision is {value:?}")),
+            };
+        let forward = Vec3::from_array(
+            crate::rotator_axes(self.actor_rotator(class, instance, "Rotation")?)[0],
+        );
+        if !within_sight(
+            eye,
+            other.location,
+            forward,
+            sight_radius,
+            peripheral_vision,
+        ) {
+            return Ok(false);
+        }
+        Ok([
+            other.location,
+            other.location + Vec3::Z * (other.height * 0.5),
+            other.location - Vec3::Z * (other.height * 0.5),
+        ]
+        .into_iter()
+        .any(|target| {
+            self.collision
+                .as_ref()
+                .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())
+        }))
+    }
+
     fn ensure_collision_actors(
         &mut self,
         current_actor: usize,
@@ -974,6 +1017,21 @@ fn actor_pair(first: usize, second: usize) -> (usize, usize) {
     }
 }
 
+fn within_sight(
+    eye: Vec3,
+    target: Vec3,
+    forward: Vec3,
+    sight_radius: f32,
+    peripheral_vision: f32,
+) -> bool {
+    let direction = target - eye;
+    direction.length() <= sight_radius
+        && (peripheral_vision <= 0.0
+            || direction
+                .try_normalize()
+                .is_some_and(|direction| forward.dot(direction) >= peripheral_vision))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,5 +1066,24 @@ mod tests {
             trigger.radius,
         ));
         assert!(actors_block(&player, &wall));
+    }
+
+    #[test]
+    fn sight_rejects_targets_outside_radius_or_view_cone() {
+        assert!(within_sight(Vec3::ZERO, Vec3::X * 10.0, Vec3::X, 20.0, 0.5));
+        assert!(!within_sight(
+            Vec3::ZERO,
+            Vec3::Y * 10.0,
+            Vec3::X,
+            20.0,
+            0.5
+        ));
+        assert!(!within_sight(
+            Vec3::ZERO,
+            Vec3::X * 30.0,
+            Vec3::X,
+            20.0,
+            0.5
+        ));
     }
 }

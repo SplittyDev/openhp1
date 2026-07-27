@@ -29,6 +29,7 @@ const ENABLE: u16 = 0x075;
 const DISABLE: u16 = 0x076;
 const DESTROY: u16 = 0x117;
 const ALL_ACTORS: u16 = 0x130;
+const TRACE_ACTORS: u16 = 0x135;
 const SLEEP: u16 = 0x100;
 const PLAY_ANIM: u16 = 0x103;
 const LOOP_ANIM: u16 = 0x104;
@@ -38,14 +39,18 @@ const PLAY_SOUND: u16 = 0x108;
 const MOVE: u16 = 0x10a;
 const SET_LOCATION: u16 = 0x10b;
 const SPAWN: u16 = 0x116;
+const TRACE: u16 = 0x115;
 const SET_TIMER: u16 = 0x118;
 const IS_IN_STATE: u16 = 0x119;
+const IS_ANIMATING: u16 = 0x11a;
 const GET_STATE_NAME: u16 = 0x11c;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
+const TURN_TO: u16 = 508;
+const CAN_SEE: u16 = 533;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
@@ -333,6 +338,7 @@ pub struct ScriptRuntime {
     level_info: Option<usize>,
     player_actor: Option<usize>,
     animation_groups: HashMap<usize, HashMap<String, String>>,
+    animating: HashSet<usize>,
     player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
@@ -413,6 +419,7 @@ enum LatentAction {
     Sleep(f32),
     FinishAnimation,
     MoveTo,
+    TurnTo,
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;
@@ -612,6 +619,10 @@ mod tests {
             scalar_native(0xec, &[Value::Int(0x141)]),
             Ok(Value::String("A".to_owned()))
         );
+        assert_eq!(
+            scalar_native(0xed, &[Value::String("Alohomora".to_owned())]),
+            Ok(Value::Int(65))
+        );
     }
 
     #[test]
@@ -705,6 +716,21 @@ mod tests {
             ),
             Ok(Value::Float(32.0))
         );
+        let quarter_yaw = Value::Rotator([0, 16_384, 0]);
+        let Value::Vector(rotated) = scalar_native(
+            0x113,
+            &[Value::Vector([1.0, 0.0, 0.0]), quarter_yaw.clone()],
+        )
+        .unwrap() else {
+            panic!("expected vector rotation");
+        };
+        assert!(glam::Vec3::from_array(rotated).abs_diff_eq(glam::Vec3::Y, 1.0e-6));
+        let Value::Vector(unrotated) =
+            scalar_native(0x114, &[Value::Vector(rotated), quarter_yaw]).unwrap()
+        else {
+            panic!("expected inverse vector rotation");
+        };
+        assert!(glam::Vec3::from_array(unrotated).abs_diff_eq(glam::Vec3::X, 1.0e-6));
     }
 
     #[test]
