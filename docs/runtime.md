@@ -87,3 +87,6 @@ state family so normal `PlayerCalcView` output resumes with player control.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
+
+HP1 `CreateAnimChannel` creates the requested channel through the normal actor
+spawn lifecycle so scripts can retain and own the returned object.

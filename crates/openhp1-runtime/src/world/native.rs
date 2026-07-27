@@ -277,6 +277,34 @@ impl ScriptRuntime {
             // noise slots and dispatch HearNoise when AI hearing uses them.
             return Ok(Value::None);
         }
+        if index == CREATE_ANIM_CHANNEL {
+            let [class, Value::Byte(_), root_bone, rest @ ..] = arguments else {
+                return Err(format!(
+                    "CreateAnimChannel expects a class, type, root bone, and optional transient flag, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if rest.len() > 1
+                || rest
+                    .first()
+                    .is_some_and(|value| !matches!(value, Value::Bool(_) | Value::None))
+            {
+                return Err("CreateAnimChannel transient flag is not a bool".to_owned());
+            }
+            runtime_name(source, root_bone)?;
+            return self.spawn_actor(
+                actor,
+                actor_class,
+                source,
+                std::slice::from_ref(class),
+                instance,
+                actions,
+            );
+        }
         if index == GET_ANIM_GROUP {
             let [sequence] = arguments else {
                 return Err(format!(

@@ -36,6 +36,7 @@ const LOOP_ANIM: u16 = 0x104;
 const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
 const PLAY_SOUND: u16 = 0x108;
+const CREATE_ANIM_CHANNEL: u16 = 0x109;
 const SET_OWNER: u16 = 0x110;
 const MOVE: u16 = 0x10a;
 const SET_LOCATION: u16 = 0x10b;
