@@ -50,6 +50,99 @@ pub(super) struct MovementHit {
 }
 
 impl ScriptRuntime {
+    pub fn update_player_touches(
+        &mut self,
+        location: [f32; 3],
+    ) -> DispatchResult<Vec<ActorAction>> {
+        if !location.iter().all(|component| component.is_finite()) {
+            return Err(DispatchError::InvalidPlayerLocation { location });
+        }
+        let Some(player) = self.player_actor else {
+            return Ok(Vec::new());
+        };
+        let class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let mut current = self
+            .collision_actor(player, &class, &instance)
+            .map_err(DispatchError::PlayerTouchCollision)?;
+        current.location = Vec3::from_array(location);
+        self.ensure_collision_actors(player, &instance)
+            .map_err(DispatchError::PlayerTouchCollision)?;
+
+        let mut touching = HashSet::new();
+        if current.collide_actors && !current.has_brush {
+            let query_minimum =
+                current.location - Vec3::new(current.radius, current.radius, current.height);
+            let query_maximum =
+                current.location + Vec3::new(current.radius, current.radius, current.height);
+            let candidate_count = self.collision_actors_by_min_x.partition_point(|&actor| {
+                collision_actor_min_x(&self.collision_actors, actor) <= query_maximum.x
+            });
+            for &actor in &self.collision_actors_by_min_x[..candidate_count] {
+                if actor == player || self.destroyed.contains(&actor) {
+                    continue;
+                }
+                let other = &self.collision_actors[actor].as_ref().unwrap().actor;
+                if other.location.x + other.radius < query_minimum.x
+                    || other.location.y + other.radius < query_minimum.y
+                    || other.location.y - other.radius > query_maximum.y
+                    || other.location.z + other.height < query_minimum.z
+                    || other.location.z - other.height > query_maximum.z
+                    || actors_block(&current, other)
+                {
+                    continue;
+                }
+                if cylinders_overlap(
+                    current.location,
+                    current.height,
+                    current.radius,
+                    other.location,
+                    other.height,
+                    other.radius,
+                ) {
+                    touching.insert(actor);
+                }
+            }
+        }
+
+        let previous = std::mem::replace(&mut self.player_probe_touching, touching);
+        let mut entered = self
+            .player_probe_touching
+            .difference(&previous)
+            .copied()
+            .collect::<Vec<_>>();
+        let mut exited = previous
+            .difference(&self.player_probe_touching)
+            .copied()
+            .collect::<Vec<_>>();
+        entered.sort_unstable();
+        exited.sort_unstable();
+
+        let mut actions = Vec::with_capacity((entered.len() + exited.len()) * 2);
+        for actor in entered {
+            self.queue_pair_event(&mut actions, player, actor, "Touch")
+                .map_err(DispatchError::PlayerTouchCollision)?;
+            self.queue_pair_event(&mut actions, actor, player, "Touch")
+                .map_err(DispatchError::PlayerTouchCollision)?;
+        }
+        for actor in exited {
+            self.queue_pair_event(&mut actions, player, actor, "UnTouch")
+                .map_err(DispatchError::PlayerTouchCollision)?;
+            self.queue_pair_event(&mut actions, actor, player, "UnTouch")
+                .map_err(DispatchError::PlayerTouchCollision)?;
+        }
+        Ok(actions)
+    }
+
     pub(super) fn move_actor(
         &mut self,
         actor: usize,
@@ -412,17 +505,11 @@ impl ScriptRuntime {
             ) else {
                 continue;
             };
-            let use_block_players = current.player_collision || other.player_collision;
-            let blocking = if use_block_players {
-                current.block_players && other.block_players
-            } else {
-                current.block_actors && other.block_actors
-            };
             hits.push(ActorSweep {
                 actor,
                 fraction: hit.fraction,
                 normal: hit.normal,
-                blocking,
+                blocking: actors_block(current, other),
             });
         }
         Ok(hits)
@@ -871,10 +958,55 @@ fn collision_actor_min_x(actors: &[Option<CachedCollisionActor>], actor: usize) 
     actor.location.x - actor.radius
 }
 
+fn actors_block(first: &CollisionActor, second: &CollisionActor) -> bool {
+    if first.player_collision || second.player_collision {
+        first.block_players && second.block_players
+    } else {
+        first.block_actors && second.block_actors
+    }
+}
+
 fn actor_pair(first: usize, second: usize) -> (usize, usize) {
     if first < second {
         (first, second)
     } else {
         (second, first)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collision_actor(actor: usize, location: Vec3, block_players: bool) -> CollisionActor {
+        CollisionActor {
+            actor,
+            location,
+            height: 10.0,
+            radius: 10.0,
+            collide_actors: true,
+            block_actors: false,
+            block_players,
+            player_collision: actor == 0,
+            has_brush: false,
+        }
+    }
+
+    #[test]
+    fn player_probe_accepts_trigger_overlaps_but_not_blocking_actors() {
+        let player = collision_actor(0, Vec3::ZERO, true);
+        let trigger = collision_actor(1, Vec3::X * 5.0, false);
+        let wall = collision_actor(2, Vec3::X * 5.0, true);
+
+        assert!(!actors_block(&player, &trigger));
+        assert!(cylinders_overlap(
+            player.location,
+            player.height,
+            player.radius,
+            trigger.location,
+            trigger.height,
+            trigger.radius,
+        ));
+        assert!(actors_block(&player, &wall));
     }
 }

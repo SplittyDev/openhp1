@@ -37,6 +37,8 @@ impl ScriptRuntime {
             collision: None,
             level_package: None,
             level_info: None,
+            player_actor: None,
+            player_probe_touching: HashSet::new(),
             collision_fields: HashMap::new(),
             collision_actors: Vec::new(),
             collision_actors_by_min_x: Vec::new(),
@@ -87,6 +89,9 @@ impl ScriptRuntime {
             .insert(actor, object_id(&class.package, class.export_index));
         if self.class_has_name(&class, "LevelInfo")? {
             self.level_info = Some(actor);
+        }
+        if self.player_actor.is_none() && self.class_has_name(&class, "PlayerPawn")? {
+            self.player_actor = Some(actor);
         }
 
         let mut instance = self.load_class_defaults(&class, 0)?;
@@ -397,6 +402,7 @@ impl ScriptRuntime {
             package: Arc::clone(&class.package),
             export_index: class.export_index,
         };
+        self.update_touching(actor, &class, event, arguments)?;
         if event_disabled(
             &self.disabled_events,
             actor,
@@ -413,6 +419,52 @@ impl ScriptRuntime {
         };
         self.execute_actor_function(actor, &actor_class, &function, arguments)
     }
+
+    fn update_touching(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        event: &str,
+        arguments: &[Value],
+    ) -> DispatchResult<()> {
+        let touching = if event.eq_ignore_ascii_case("Touch") {
+            true
+        } else if event.eq_ignore_ascii_case("UnTouch") {
+            false
+        } else {
+            return Ok(());
+        };
+        let Some(Value::Object(handle)) = arguments.first() else {
+            return Ok(());
+        };
+        let other = match self.stored_value(&class.package, &Value::Object(*handle))? {
+            StoredValue::Object(Some(other)) => other,
+            _ => return Ok(()),
+        };
+        let Some(field) = self.find_property(class, "Touching", 0)? else {
+            return Ok(());
+        };
+        let resolved = self.resolved_object(&field)?;
+        let zero = self.zero_field_value(&resolved)?.ok_or_else(|| {
+            DispatchError::InvalidArrayProperty {
+                property: "Touching".to_owned(),
+            }
+        })?;
+        let zero = self.stored_value(&class.package, &zero)?;
+        let value = self
+            .instances
+            .get_mut(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?
+            .entry(field)
+            .or_insert(zero);
+        let StoredValue::Array(values) = value else {
+            return Err(DispatchError::InvalidArrayProperty {
+                property: "Touching".to_owned(),
+            });
+        };
+        update_touching_array(values, other, touching);
+        Ok(())
+    }
 }
 
 pub(super) fn advance_timer(timer: &mut ActorTimer, delta_time: f32) -> bool {
@@ -426,4 +478,21 @@ pub(super) fn advance_timer(timer: &mut ActorTimer, delta_time: f32) -> bool {
         timer.remaining = timer.rate - (-timer.remaining).rem_euclid(timer.rate);
     }
     true
+}
+
+pub(super) fn update_touching_array(values: &mut [StoredValue], other: ObjectId, touching: bool) {
+    let current = values
+        .iter()
+        .position(|value| matches!(value, StoredValue::Object(Some(value)) if value == &other));
+    if touching {
+        if current.is_none()
+            && let Some(slot) = values
+                .iter_mut()
+                .find(|value| matches!(value, StoredValue::Object(None)))
+        {
+            *slot = StoredValue::Object(Some(other));
+        }
+    } else if let Some(index) = current {
+        values[index] = StoredValue::Object(None);
+    }
 }

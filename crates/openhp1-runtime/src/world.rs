@@ -244,6 +244,12 @@ pub enum DispatchError {
     #[error("runtime delta time {value} is invalid")]
     InvalidDeltaTime { value: f32 },
 
+    #[error("player touch location {location:?} is invalid")]
+    InvalidPlayerLocation { location: [f32; 3] },
+
+    #[error("player touch collision failed: {0}")]
+    PlayerTouchCollision(String),
+
     #[error("state `{state}` has an invalid label table at execution offset {offset:#x}")]
     InvalidStateLabelTable { state: String, offset: usize },
 
@@ -302,6 +308,8 @@ pub struct ScriptRuntime {
     collision: Option<Arc<BspCollision>>,
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
+    player_actor: Option<usize>,
+    player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
     collision_actors_by_min_x: Vec<usize>,
@@ -398,6 +406,7 @@ mod tests {
     use super::*;
     use super::{
         actor::advance_timer,
+        actor::update_touching_array,
         native::{
             animation_parameters, collision_updates, log_arguments, random_float, random_int,
             scalar_native,
@@ -417,6 +426,34 @@ mod tests {
         assert!(!advance_timer(&mut timer, 0.04));
         assert!(advance_timer(&mut timer, 0.01));
         assert!((timer.remaining - 0.1).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn touch_events_keep_the_engine_touching_array_in_sync() {
+        let first = runtime_actor_id(1);
+        let second = runtime_actor_id(2);
+        let mut values = vec![
+            StoredValue::Object(None),
+            StoredValue::Object(None),
+            StoredValue::Object(None),
+            StoredValue::Object(None),
+        ];
+
+        update_touching_array(&mut values, first.clone(), true);
+        update_touching_array(&mut values, first.clone(), true);
+        update_touching_array(&mut values, second.clone(), true);
+        assert!(matches!(
+            &values[..],
+            [
+                StoredValue::Object(Some(value)),
+                StoredValue::Object(Some(other)),
+                StoredValue::Object(None),
+                StoredValue::Object(None),
+            ] if value == &first && other == &second
+        ));
+
+        update_touching_array(&mut values, first, false);
+        assert!(matches!(values[0], StoredValue::Object(None)));
     }
 
     #[test]

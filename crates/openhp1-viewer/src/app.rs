@@ -8,7 +8,7 @@ use eframe::{
 use glam::Vec3;
 use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, ScriptRuntime};
-use openhp1_scene::{LoadedScene, Rotator, SceneActor, SceneObjectId};
+use openhp1_scene::{LoadedScene, Rotator, SceneActor, SceneObjectId, render_to_unreal};
 use tracing::info;
 
 use crate::target::ColorTarget;
@@ -26,6 +26,7 @@ pub(crate) struct ViewerApp {
     selected_actor: Option<usize>,
     scene: LoadedScene,
     runtime: ScriptRuntime,
+    player_touch_position: Option<Vec3>,
     last_frame: Instant,
     render_stats: RenderStats,
     load_error: Option<String>,
@@ -69,6 +70,7 @@ impl ViewerApp {
             selected_actor: None,
             scene,
             runtime,
+            player_touch_position: None,
             last_frame: Instant::now(),
             render_stats: RenderStats::default(),
             load_error: None,
@@ -101,6 +103,7 @@ impl ViewerApp {
         self.renderer = renderer;
         self.scene = scene;
         self.runtime = runtime;
+        self.player_touch_position = None;
         self.actor_filter.clear();
         self.selected_actor = None;
         self.render_stats = RenderStats::default();
@@ -467,13 +470,25 @@ impl ViewerApp {
     }
 
     fn update_runtime(&mut self, delta_time: f32) {
-        let actions = match self.runtime.tick(delta_time) {
+        let mut actions = match self.runtime.tick(delta_time) {
             Ok(actions) => actions,
             Err(error) => {
                 self.load_error = Some(format!("runtime tick failed: {error}"));
                 return;
             }
         };
+        if self.player_touch_position != Some(self.camera.position) {
+            self.player_touch_position = Some(self.camera.position);
+            match self
+                .runtime
+                .update_player_touches(render_to_unreal(self.camera.position).to_array())
+            {
+                Ok(touch_actions) => actions.extend(touch_actions),
+                Err(error) => {
+                    self.load_error = Some(format!("player touch update failed: {error}"));
+                }
+            }
+        }
         match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
             Ok((_, _, true))
                 if !self
