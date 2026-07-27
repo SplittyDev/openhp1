@@ -462,7 +462,11 @@ impl ScriptRuntime {
             if !delta.iter().all(|value| value.is_finite()) {
                 return Err("Move delta is not finite".to_owned());
             }
-            return self.move_actor(actor, actor_class, *delta, instance, actions);
+            return if index == MOVE_SMOOTH {
+                self.move_actor_smooth(actor, actor_class, *delta, instance, actions)
+            } else {
+                self.move_actor(actor, actor_class, *delta, instance, actions)
+            };
         }
         if index == SET_LOCATION {
             let [Value::Vector(location)] = arguments else {

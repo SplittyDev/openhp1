@@ -155,6 +155,23 @@ impl ScriptRuntime {
         Ok(Value::Bool(hit.fraction == 1.0))
     }
 
+    pub(super) fn move_actor_smooth(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        delta: [f32; 3],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<Value, String> {
+        let delta = Vec3::from_array(delta);
+        let hit = self.try_move_actor(actor, actor_class, delta.to_array(), instance, actions)?;
+        let Some(aligned) = smooth_remaining_delta(delta, hit.normal, hit.fraction) else {
+            return Ok(Value::Bool(hit.fraction == 1.0));
+        };
+        let hit = self.try_move_actor(actor, actor_class, aligned.to_array(), instance, actions)?;
+        Ok(Value::Bool(hit.fraction == 1.0))
+    }
+
     pub(super) fn try_move_actor(
         &mut self,
         actor: usize,
@@ -1032,6 +1049,14 @@ fn within_sight(
                 .is_some_and(|direction| forward.dot(direction) >= peripheral_vision))
 }
 
+fn smooth_remaining_delta(delta: Vec3, normal: Vec3, fraction: f32) -> Option<Vec3> {
+    if fraction >= 1.0 {
+        return None;
+    }
+    let aligned = (delta - normal * delta.dot(normal)) * (1.0 - fraction);
+    (delta.dot(aligned) >= 0.0).then_some(aligned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,5 +1110,14 @@ mod tests {
             20.0,
             0.5
         ));
+    }
+
+    #[test]
+    fn smooth_move_slides_the_untraveled_distance_along_a_wall() {
+        assert_eq!(
+            smooth_remaining_delta(Vec3::new(2.0, 4.0, 0.0), -Vec3::X, 0.25),
+            Some(Vec3::new(0.0, 3.0, 0.0))
+        );
+        assert_eq!(smooth_remaining_delta(Vec3::X, -Vec3::X, 1.0), None);
     }
 }
