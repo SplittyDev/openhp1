@@ -1,0 +1,17 @@
+[package]
+name = "openhp1-game"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+glam.workspace = true
+openhp1-render = { path = "../openhp1-render" }
+openhp1-scene = { path = "../openhp1-scene" }
+pollster.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wgpu.workspace = true
+winit.workspace = true

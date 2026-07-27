@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/openhp1-game",
     "crates/openhp1-map",
     "crates/openhp1-mesh",
     "crates/openhp1-package",
@@ -23,7 +24,9 @@ anyhow = "1.0"
 bytemuck = { version = "1.24", features = ["derive"] }
 eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 glam = "0.30"
+pollster = "0.4"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "29"
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "x11"] }
