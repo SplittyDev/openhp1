@@ -11,6 +11,7 @@ const PHYS_FLYING: u8 = 4;
 const PHYS_PROJECTILE: u8 = 6;
 const PHYS_ROLLING: u8 = 7;
 const PHYS_INTERPOLATING: u8 = 8;
+const PHYS_MOVING_BRUSH: u8 = 9;
 const PHYS_TRAILER: u8 = 11;
 const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
@@ -96,6 +97,9 @@ impl ScriptRuntime {
                 }
                 PHYS_INTERPOLATING => {
                     self.tick_interpolating(actor, class, instance, elapsed, actions)?;
+                }
+                PHYS_MOVING_BRUSH => {
+                    self.tick_moving_brush(actor, class, instance, elapsed, actions)?;
                 }
                 PHYS_TRAILER => {
                     self.tick_trailer(actor, class, instance, actions)?;
@@ -1019,6 +1023,97 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    fn tick_moving_brush(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let old_location = self.actor_vector(class, instance, "Location")?;
+        self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
+        if !self
+            .class_has_name(class, "Mover")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
+
+        let mut time_left = elapsed;
+        while time_left > 0.0 {
+            if !self.actor_bool(class, instance, "bInterpolating")? {
+                break;
+            }
+            let rate = self.actor_float_any(class, instance, "PhysRate")?;
+            if rate <= 0.0 {
+                break;
+            }
+
+            let mut alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
+            alpha += rate * time_left;
+            if alpha > 1.0 {
+                time_left = (alpha - 1.0) / rate;
+                alpha = 1.0;
+            } else {
+                time_left = 0.0;
+            }
+            let blend = if self.actor_byte(class, instance, "MoverGlideType")? == 1 {
+                alpha * alpha * (3.0 - 2.0 * alpha)
+            } else {
+                alpha
+            };
+            let key = usize::from(self.actor_byte(class, instance, "KeyNum")?).min(7);
+            let old_position = Vec3::from_array(self.actor_vector(class, instance, "OldPos")?);
+            let base_position = Vec3::from_array(self.actor_vector(class, instance, "BasePos")?);
+            let key_position =
+                Vec3::from_array(self.actor_array_vector(class, instance, "KeyPos", key)?);
+            let old_rotation = self.actor_rotator(class, instance, "OldRot")?;
+            let base_rotation = self.actor_rotator(class, instance, "BaseRot")?;
+            let key_rotation = self.actor_array_rotator(class, instance, "KeyRot", key)?;
+            let target_position =
+                old_position + (base_position + key_position - old_position) * blend;
+            let target_rotation = mover_rotation(old_rotation, base_rotation, key_rotation, blend);
+            let current = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            let hit = self.try_move_actor(
+                actor,
+                class,
+                (target_position - current).to_array(),
+                instance,
+                actions,
+            )?;
+            if hit.fraction == 1.0 {
+                self.set_actor_value(class, instance, "Rotation", Value::Rotator(target_rotation))?;
+                actions.push(ActorAction::SetRotation {
+                    actor,
+                    rotation: target_rotation,
+                });
+                self.set_actor_value(class, instance, "PhysAlpha", Value::Float(alpha))?;
+                if alpha == 1.0 {
+                    self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;
+                    self.call_actor_event(
+                        actor,
+                        class,
+                        instance,
+                        "InterpolateEnd",
+                        vec![Value::Object(0)],
+                        actions,
+                    )?;
+                }
+            }
+        }
+        if elapsed > 0.0 {
+            let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            self.set_actor_value(
+                class,
+                instance,
+                "Velocity",
+                Value::Vector(((location - Vec3::from_array(old_location)) / elapsed).to_array()),
+            )?;
+        }
+        Ok(())
+    }
+
     fn tick_rotating(
         &mut self,
         actor: usize,
@@ -1349,6 +1444,50 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    fn actor_array_vector(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+        index: usize,
+    ) -> std::result::Result<[f32; 3], String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Array(values) => match values.get(index) {
+                Some(StoredValue::Value(Value::Vector(value)))
+                    if value.iter().all(|component| component.is_finite()) =>
+                {
+                    Ok(*value)
+                }
+                Some(value) => Err(format!("actor property {name}[{index}] is {value:?}")),
+                None => Err(format!(
+                    "actor property {name} has {} elements, requested {index}",
+                    values.len()
+                )),
+            },
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
+    fn actor_array_rotator(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+        index: usize,
+    ) -> std::result::Result<[i32; 3], String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Array(values) => match values.get(index) {
+                Some(StoredValue::Value(Value::Rotator(value))) => Ok(*value),
+                Some(value) => Err(format!("actor property {name}[{index}] is {value:?}")),
+                None => Err(format!(
+                    "actor property {name} has {} elements, requested {index}",
+                    values.len()
+                )),
+            },
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
     fn optional_actor_float(
         &mut self,
         class: &ResolvedObject,
@@ -1463,6 +1602,15 @@ fn spline_rotator(
     })
 }
 
+fn mover_rotation(old: [i32; 3], base: [i32; 3], key: [i32; 3], blend: f32) -> [i32; 3] {
+    std::array::from_fn(|index| {
+        let delta = base[index]
+            .wrapping_add(key[index])
+            .wrapping_sub(old[index]);
+        old[index].wrapping_add((delta as f32 * blend) as i32)
+    })
+}
+
 fn fall_velocity(
     old_velocity: Vec3,
     acceleration: Vec3,
@@ -1551,6 +1699,14 @@ mod tests {
         assert!(
             spline_vector(points[0], points[1], points[2], points[3], 1.0)
                 .abs_diff_eq(Vec3::new(4.5 / 17.0, 8.0 / 17.0, 4.5 / 17.0), 0.0001)
+        );
+    }
+
+    #[test]
+    fn mover_rotation_uses_wrapping_ue1_rotator_math() {
+        assert_eq!(
+            mover_rotation([100, -100, i32::MAX], [300, 100, i32::MIN], [0; 3], 0.5),
+            [200, 0, i32::MAX]
         );
     }
 }
