@@ -347,6 +347,7 @@ pub(super) fn collision_updates(
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ScalarNative {
+    Concat_StrStr,
     EqualEqual_ObjectObject,
     NotEqual_ObjectObject,
     EqualEqual_StrStr,
@@ -389,6 +390,7 @@ enum ScalarNative {
     Clamp,
     EqualEqual_BoolBool,
     NotEqual_BoolBool,
+    Chr,
 }
 
 impl TryFrom<u16> for ScalarNative {
@@ -396,6 +398,7 @@ impl TryFrom<u16> for ScalarNative {
 
     fn try_from(index: u16) -> std::result::Result<Self, Self::Error> {
         match index {
+            0x70 => Ok(Self::Concat_StrStr),
             0x72 => Ok(Self::EqualEqual_ObjectObject),
             0x77 => Ok(Self::NotEqual_ObjectObject),
             0x7a => Ok(Self::EqualEqual_StrStr),
@@ -434,9 +437,10 @@ impl TryFrom<u16> for ScalarNative {
             0xd8 => Ok(Self::Subtract_VectorVector),
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
-            0xf5 => Ok(Self::FMax),
+            0xec => Ok(Self::Chr),
             0xf2 => Ok(Self::EqualEqual_BoolBool),
             0xf3 => Ok(Self::NotEqual_BoolBool),
+            0xf5 => Ok(Self::FMax),
             0xfb => Ok(Self::Clamp),
             _ => Err(()),
         }
@@ -478,6 +482,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             .ok_or_else(|| "integer division by zero or overflow".to_owned());
     }
     Ok(match (native, arguments) {
+        (ScalarNative::Concat_StrStr, [Value::String(left), Value::String(right)]) => {
+            Value::String(left.clone() + right)
+        }
         (ScalarNative::Not_PreBool, [value]) => {
             Value::Bool(!value.truthy().map_err(|error| error.to_string())?)
         }
@@ -592,6 +599,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::NotEqual_BoolBool, [Value::Bool(left), Value::Bool(right)]) => {
             Value::Bool(left != right)
+        }
+        (ScalarNative::Chr, [Value::Int(value)]) => {
+            Value::String(char::from(*value as u8).to_string())
         }
         _ => {
             return Err(format!(

@@ -405,6 +405,24 @@ mod tests {
     }
 
     #[test]
+    fn observed_string_natives_match_unreal_semantics() {
+        assert_eq!(
+            scalar_native(
+                0x70,
+                &[
+                    Value::String("Harry".to_owned()),
+                    Value::String(" Potter".to_owned())
+                ]
+            ),
+            Ok(Value::String("Harry Potter".to_owned()))
+        );
+        assert_eq!(
+            scalar_native(0xec, &[Value::Int(0x141)]),
+            Ok(Value::String("A".to_owned()))
+        );
+    }
+
+    #[test]
     fn collision_updates_preserve_omitted_flags() {
         assert_eq!(
             collision_updates(&[Value::Bool(true), Value::None]),
