@@ -2,7 +2,7 @@ use std::{collections::HashSet, f32::consts::TAU, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use glam::Vec3;
-use openhp1_render::{Camera, Renderer};
+use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, PlayerInput, PlayerView, ScriptRuntime};
 use openhp1_scene::{LoadedScene, apply_runtime_actions, initialize_runtime, unreal_to_render};
 use tracing::error;
@@ -69,6 +69,19 @@ impl ApplicationHandler for GameApp {
             return;
         };
         if graphics.window.id() != window_id {
+            return;
+        }
+        let egui_response = graphics.egui.on_window_event(&graphics.window, &event);
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.physical_key == PhysicalKey::Code(KeyCode::F1)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            graphics.overlay_visible = !graphics.overlay_visible;
+            graphics.release_input();
+            return;
+        }
+        if egui_response.consumed {
             return;
         }
         match event {
@@ -187,6 +200,12 @@ struct Graphics {
     last_frame: Instant,
     last_error: Option<String>,
     deferred_calls: usize,
+    view_actor: usize,
+    render_stats: RenderStats,
+    frame_time_ms: f32,
+    overlay_visible: bool,
+    egui: egui_winit::State,
+    egui_renderer: egui_wgpu::Renderer,
 }
 
 impl Graphics {
@@ -259,6 +278,16 @@ impl Graphics {
         );
         let far = (renderer.bounds().radius().max(100.0) * 10.0).max(10_000.0);
         let camera = camera_from_player_view(player_view, size, far);
+        let egui_context = egui::Context::default();
+        let egui = egui_winit::State::new(
+            egui_context,
+            egui::ViewportId::ROOT,
+            window.as_ref(),
+            Some(window.scale_factor() as f32),
+            window.theme(),
+            Some(device.limits().max_texture_dimension_2d as usize),
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(&device, config.format, Default::default());
         Ok(Self {
             window,
             surface,
@@ -274,6 +303,12 @@ impl Graphics {
             last_frame: Instant::now(),
             last_error,
             deferred_calls,
+            view_actor: player_view.actor,
+            render_stats: RenderStats::default(),
+            frame_time_ms: 0.0,
+            overlay_visible: true,
+            egui,
+            egui_renderer,
         })
     }
 
@@ -331,6 +366,7 @@ impl Graphics {
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        self.frame_time_ms = delta_time * 1_000.0;
         self.renderer.advance_time(delta_time);
         self.update_animations(delta_time);
         self.update_runtime(delta_time);
@@ -352,12 +388,26 @@ impl Graphics {
             }
         };
         let view = frame.texture.create_view(&Default::default());
+        let egui_context = self.egui.egui_ctx().clone();
+        let egui_input = self.egui.take_egui_input(&self.window);
+        let egui_output = egui_context.run_ui(egui_input, |ui| self.debug_overlay(ui.ctx()));
+        self.egui
+            .handle_platform_output(&self.window, egui_output.platform_output);
+        for (id, delta) in &egui_output.textures_delta.set {
+            self.egui_renderer
+                .update_texture(&self.device, &self.queue, *id, delta);
+        }
+        let paint_jobs = egui_context.tessellate(egui_output.shapes, egui_output.pixels_per_point);
+        let screen = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: egui_output.pixels_per_point,
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("OpenHP1 game frame"),
             });
-        self.renderer.render(
+        self.render_stats = self.renderer.render(
             &self.queue,
             &mut encoder,
             &view,
@@ -365,8 +415,95 @@ impl Graphics {
             [self.config.width, self.config.height],
             0.625,
         );
-        self.queue.submit([encoder.finish()]);
+        let mut commands = self.egui_renderer.update_buffers(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &paint_jobs,
+            &screen,
+        );
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 diagnostics overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.egui_renderer
+                .render(&mut pass.forget_lifetime(), &paint_jobs, &screen);
+        }
+        commands.push(encoder.finish());
+        self.queue.submit(commands);
+        for id in &egui_output.textures_delta.free {
+            self.egui_renderer.free_texture(id);
+        }
         frame.present();
+    }
+
+    fn debug_overlay(&self, context: &egui::Context) {
+        if !self.overlay_visible {
+            return;
+        }
+        let player = self.scene.actors.get(self.player);
+        let player_name = player.map_or("<missing>", |actor| actor.name.as_str());
+        let location = player.map_or(Vec3::ZERO, |actor| actor.location);
+        let rotation = player.map_or([0; 3], |actor| {
+            [
+                actor.rotation.pitch,
+                actor.rotation.yaw,
+                actor.rotation.roll,
+            ]
+        });
+        egui::Window::new("OpenHP1 diagnostics")
+            .default_pos([12.0, 12.0])
+            .resizable(false)
+            .show(context, |ui| {
+                ui.monospace(format!(
+                    "{}  {:.1} ms ({:.0} fps)",
+                    self.scene
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
+                    self.frame_time_ms,
+                    1_000.0 / self.frame_time_ms.max(0.001),
+                ));
+                ui.separator();
+                ui.monospace(format!("player: {player_name} #{}", self.player));
+                ui.monospace(format!(
+                    "location: {:.1}, {:.1}, {:.1}",
+                    location.x, location.y, location.z
+                ));
+                ui.monospace(format!(
+                    "rotation: {}, {}, {}",
+                    rotation[0], rotation[1], rotation[2]
+                ));
+                ui.monospace(format!("camera actor: #{}", self.view_actor));
+                ui.separator();
+                ui.monospace(format!(
+                    "{} actors  {} triangles  {} draw calls",
+                    self.scene.actors.len(),
+                    self.scene.render.mesh.indices.len() / 3,
+                    self.render_stats.draw_calls
+                ));
+                ui.monospace(format!("{} deferred runtime calls", self.deferred_calls));
+                if let Some(error) = &self.last_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                ui.separator();
+                ui.label("WASD/arrows move · mouse looks · Ctrl/Space jumps");
+                ui.label("Left click casts · Esc releases mouse · F1 toggles diagnostics");
+            });
     }
 
     fn update_animations(&mut self, delta_time: f32) {
@@ -436,6 +573,7 @@ impl Graphics {
         match self.runtime.player_view(location, rotation) {
             Ok((view, actions)) => {
                 self.apply_actions(actions);
+                self.view_actor = view.actor;
                 self.camera = camera_from_player_view(
                     view,
                     PhysicalSize::new(self.config.width, self.config.height),

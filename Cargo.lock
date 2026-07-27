@@ -1860,6 +1860,9 @@ name = "openhp1-game"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
  "glam",
  "openhp1-render",
  "openhp1-runtime",
