@@ -58,6 +58,7 @@ impl ScriptRuntime {
             let script = self.script(&state)?;
             let mut frame = Frame::from_snapshot(&script.bytecode, state_frame.frame);
             self.bind_struct_members(&state, &script.bytecode, &mut frame)?;
+            self.bind_frame_defaults(actor_class, &state.package, &script.bytecode, &mut frame)?;
             self.bind_frame_arrays(&state.package, &script.bytecode, &mut frame)?;
             let revision = self.state_revision(actor);
             self.state_resumes = self.state_resumes.saturating_add(1);
@@ -216,6 +217,7 @@ impl ScriptRuntime {
 
         let mut frame = Frame::new(&script.bytecode);
         self.bind_struct_members(function, &script.bytecode, &mut frame)?;
+        self.bind_frame_defaults(actor_class, &function.package, &script.bytecode, &mut frame)?;
         self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
         frame
             .execute_hosted(|request| {

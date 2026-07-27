@@ -463,6 +463,10 @@ impl<'a> Frame<'a> {
         self.instance.insert(field, value);
     }
 
+    pub(crate) fn set_default(&mut self, field: i32, value: Value) {
+        self.defaults.insert(field, value);
+    }
+
     pub fn instance(&self, field: i32) -> Option<&Value> {
         self.instance.get(&field)
     }
@@ -1865,6 +1869,24 @@ mod tests {
             Value::Bool(false)
         );
         assert_eq!(instance.get(&7), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn default_variable_reads_bound_class_default() {
+        let mut bytes = vec![0x04, 0x02];
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_default(7, Value::Vector([0.0, 0.0, -512.0]));
+        assert_eq!(
+            frame.execute(|_, _| unreachable!()).unwrap(),
+            Value::Vector([0.0, 0.0, -512.0])
+        );
     }
 
     #[test]

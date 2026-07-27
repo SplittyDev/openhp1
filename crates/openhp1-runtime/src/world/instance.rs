@@ -474,6 +474,30 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    pub(super) fn bind_frame_defaults(
+        &mut self,
+        class: &ResolvedObject,
+        source: &Arc<Package>,
+        bytecode: &Bytecode,
+        frame: &mut Frame<'_>,
+    ) -> DispatchResult<()> {
+        let defaults = self.load_class_defaults(class, 0)?;
+        for field in fields(bytecode, 0x02) {
+            let Some(id) = self.resolve_field(source, field)? else {
+                continue;
+            };
+            let value = match defaults.get(&id) {
+                Some(value) => self.frame_value(value)?,
+                None => {
+                    let resolved = self.resolved_object(&id)?;
+                    self.zero_field_value(&resolved)?.unwrap_or(Value::None)
+                }
+            };
+            frame.set_default(field, value);
+        }
+        Ok(())
+    }
+
     fn function_parameters(
         &mut self,
         source: &Arc<Package>,
