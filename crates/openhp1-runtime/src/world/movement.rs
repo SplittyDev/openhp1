@@ -247,14 +247,24 @@ impl ScriptRuntime {
         let current = self.collision_actor(actor, actor_class, instance)?;
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
         let world_hit = if collide_world && !current.has_brush {
-            self.collision
+            let collision = self
+                .collision
                 .as_ref()
-                .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?
-                .sweep_aabb(
+                .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?;
+            if current.collide_type == COLLIDE_BOX {
+                collision.sweep_aabb(
                     current.location,
                     current.location + delta,
-                    Vec3::new(current.radius, current.radius, current.height),
+                    collision_actor_world_extents(&current),
                 )
+            } else {
+                collision.sweep_cylinder(
+                    current.location,
+                    current.location + delta,
+                    current.radius,
+                    current.height,
+                )
+            }
         } else {
             None
         };

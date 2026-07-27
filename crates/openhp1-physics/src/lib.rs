@@ -51,6 +51,30 @@ struct Plane {
     distance: f32,
 }
 
+#[derive(Clone, Copy)]
+enum SweepShape {
+    Aabb(Vec3),
+    Cylinder { radius: f32, height: f32 },
+}
+
+impl SweepShape {
+    fn bounds(self) -> Vec3 {
+        match self {
+            Self::Aabb(extents) => extents,
+            Self::Cylinder { radius, height } => Vec3::new(radius, radius, height),
+        }
+    }
+
+    fn support(self, normal: Vec3) -> f32 {
+        match self {
+            Self::Aabb(extents) => normal.abs().dot(extents),
+            Self::Cylinder { radius, height } => {
+                normal.truncate().length() * radius + normal.z.abs() * height
+            }
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("BSP node {node} collision hull starts outside the leaf-hull stream at {offset}")]
@@ -191,6 +215,30 @@ impl BspCollision {
         {
             return None;
         }
+        self.sweep_shape(start, end, SweepShape::Aabb(extents))
+    }
+
+    pub fn sweep_cylinder(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        radius: f32,
+        height: f32,
+    ) -> Option<CollisionHit> {
+        if !start.is_finite()
+            || !end.is_finite()
+            || !radius.is_finite()
+            || !height.is_finite()
+            || radius < 0.0
+            || height < 0.0
+        {
+            return None;
+        }
+        self.sweep_shape(start, end, SweepShape::Cylinder { radius, height })
+    }
+
+    fn sweep_shape(&self, start: Vec3, end: Vec3, shape: SweepShape) -> Option<CollisionHit> {
+        let extents = shape.bounds();
         let delta = end - start;
         let distance = delta.length();
         if distance <= f32::EPSILON {
@@ -222,7 +270,30 @@ impl BspCollision {
                 minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
                 maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
             };
-            let mut cursor = SweepCursor::new(start, trace_end, extents);
+            if let SweepShape::Cylinder { radius, height } = shape
+                && hull_is_axis_aligned_box(hull)
+            {
+                let target = (bounds.minimum + bounds.maximum) * 0.5;
+                let target_extents = (bounds.maximum - bounds.minimum) * 0.5;
+                let Some(hit) =
+                    sweep_cylinder_aabb(start, end, height, radius, target, target_extents)
+                else {
+                    continue;
+                };
+                let hit = CollisionHit {
+                    fraction: hit.fraction,
+                    normal: hit.normal,
+                    node: hull.node,
+                };
+                if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
+                    hit.fraction < current.fraction
+                        || (hit.fraction == current.fraction && hull_index < current_index)
+                }) {
+                    nearest = Some((hull_index, hit));
+                }
+                continue;
+            }
+            let mut cursor = SweepCursor::new(start, trace_end, shape);
             if !cursor.clip_box(bounds) {
                 continue;
             }
@@ -429,6 +500,113 @@ pub fn sweep_box(
     })
 }
 
+fn sweep_cylinder_aabb(
+    start: Vec3,
+    end: Vec3,
+    height: f32,
+    radius: f32,
+    target: Vec3,
+    target_extents: Vec3,
+) -> Option<ActorCollisionHit> {
+    let start = start - target;
+    let end = end - target;
+    let combined_height = height + target_extents.z;
+    let closest = start
+        .truncate()
+        .clamp(-target_extents.truncate(), target_extents.truncate());
+    if start.z.abs() < combined_height
+        && start.truncate().distance_squared(closest) < radius * radius
+    {
+        return None;
+    }
+
+    let delta = end - start;
+    let distance = delta.length();
+    if distance <= f32::EPSILON {
+        return None;
+    }
+    let direction = delta / distance;
+    let trace_distance = distance + TRACE_MARGIN;
+    let mut nearest = trace_distance;
+    let mut normal = Vec3::ZERO;
+    let mut consider = |candidate: f32, candidate_normal: Vec3| {
+        if candidate >= 0.0 && candidate < nearest {
+            nearest = candidate;
+            normal = candidate_normal;
+        }
+    };
+
+    if direction.x.abs() > f32::EPSILON {
+        for sign in [-1.0_f32, 1.0] {
+            let candidate = (sign * (target_extents.x + radius) - start.x) / direction.x;
+            let point = start + direction * candidate;
+            if point.y.abs() <= target_extents.y && point.z.abs() <= combined_height {
+                consider(candidate, Vec3::X * sign);
+            }
+        }
+    }
+    if direction.y.abs() > f32::EPSILON {
+        for sign in [-1.0_f32, 1.0] {
+            let candidate = (sign * (target_extents.y + radius) - start.y) / direction.y;
+            let point = start + direction * candidate;
+            if point.x.abs() <= target_extents.x && point.z.abs() <= combined_height {
+                consider(candidate, Vec3::Y * sign);
+            }
+        }
+    }
+
+    let horizontal_a = direction.x.mul_add(direction.x, direction.y * direction.y);
+    if horizontal_a > f32::EPSILON {
+        for x_sign in [-1.0_f32, 1.0] {
+            for y_sign in [-1.0_f32, 1.0] {
+                let corner = Vec3::new(x_sign * target_extents.x, y_sign * target_extents.y, 0.0);
+                let local = start - corner;
+                let horizontal_b = 2.0 * local.x.mul_add(direction.x, local.y * direction.y);
+                let horizontal_c = local.x.mul_add(local.x, local.y * local.y) - radius * radius;
+                let discriminant =
+                    horizontal_b.mul_add(horizontal_b, -4.0 * horizontal_a * horizontal_c);
+                if discriminant < 0.0 {
+                    continue;
+                }
+                let root = discriminant.sqrt();
+                for candidate in [
+                    (-horizontal_b - root) / (2.0 * horizontal_a),
+                    (-horizontal_b + root) / (2.0 * horizontal_a),
+                ] {
+                    let point = start + direction * candidate;
+                    if point.x * x_sign >= target_extents.x
+                        && point.y * y_sign >= target_extents.y
+                        && point.z.abs() <= combined_height
+                    {
+                        let radial = (point - corner).truncate().normalize_or_zero();
+                        consider(candidate, radial.extend(0.0));
+                    }
+                }
+            }
+        }
+    }
+
+    if direction.z.abs() > f32::EPSILON {
+        for sign in [-1.0_f32, 1.0] {
+            let candidate = (sign * combined_height - start.z) / direction.z;
+            let point = start + direction * candidate;
+            let closest = point
+                .truncate()
+                .clamp(-target_extents.truncate(), target_extents.truncate());
+            if point.truncate().distance_squared(closest) <= radius * radius {
+                consider(candidate, Vec3::Z * sign);
+            }
+        }
+    }
+    if nearest >= trace_distance {
+        return None;
+    }
+    Some(ActorCollisionHit {
+        fraction: ((nearest - TRACE_MARGIN).max(0.0) / distance).min(1.0),
+        normal,
+    })
+}
+
 pub fn boxes_overlap(
     first: Vec3,
     first_extents: Vec3,
@@ -450,6 +628,33 @@ pub fn boxes_overlap(
     let local_first = world_to_second * (first - second);
     let extents = second_extents + world_to_second.abs() * first_extents;
     local_first.abs().cmplt(extents).all()
+}
+
+fn hull_is_axis_aligned_box(hull: &ConvexHull) -> bool {
+    if hull.planes.len() != 6 {
+        return false;
+    }
+    let mut axes = 0_u8;
+    for plane in &hull.planes {
+        let normal = plane.normal;
+        let bit = if normal.abs_diff_eq(Vec3::X, 0.00001) {
+            0
+        } else if normal.abs_diff_eq(Vec3::NEG_X, 0.00001) {
+            1
+        } else if normal.abs_diff_eq(Vec3::Y, 0.00001) {
+            2
+        } else if normal.abs_diff_eq(Vec3::NEG_Y, 0.00001) {
+            3
+        } else if normal.abs_diff_eq(Vec3::Z, 0.00001) {
+            4
+        } else if normal.abs_diff_eq(Vec3::NEG_Z, 0.00001) {
+            5
+        } else {
+            return false;
+        };
+        axes |= 1 << bit;
+    }
+    axes == 0b11_1111
 }
 
 pub fn cylinders_overlap(
@@ -477,7 +682,7 @@ pub fn cylinders_overlap(
 struct SweepCursor {
     start: Vec3,
     end: Vec3,
-    extents: Vec3,
+    shape: SweepShape,
     start_fraction: f32,
     end_fraction: f32,
     hit_normal: Vec3,
@@ -485,11 +690,11 @@ struct SweepCursor {
 }
 
 impl SweepCursor {
-    fn new(start: Vec3, end: Vec3, extents: Vec3) -> Self {
+    fn new(start: Vec3, end: Vec3, shape: SweepShape) -> Self {
         Self {
             start,
             end,
-            extents,
+            shape,
             start_fraction: -1.0,
             end_fraction: 2.0,
             hit_normal: Vec3::ZERO,
@@ -498,7 +703,7 @@ impl SweepCursor {
     }
 
     fn clip_plane(&mut self, plane: Plane) -> bool {
-        let push_out = plane.normal.abs().dot(self.extents);
+        let push_out = self.shape.support(plane.normal);
         let start_distance = plane.normal.dot(self.start) - plane.distance;
         let end_distance = plane.normal.dot(self.end) - plane.distance;
         let front_face = start_distance - end_distance;
@@ -767,6 +972,22 @@ mod tests {
             Vec3::new(10.0, 2.0, 3.0),
             rotation,
         ));
+    }
+
+    #[test]
+    fn cylinder_sweep_rounds_horizontal_box_corners() {
+        let hit = sweep_cylinder_aabb(
+            Vec3::new(-200.0, -1188.0, -293.0),
+            Vec3::new(-550.0, -1188.0, -293.0),
+            42.0,
+            22.0,
+            Vec3::new(-304.0, -1544.0, -272.0),
+            Vec3::new(16.0, 344.0, 64.0),
+        )
+        .unwrap();
+
+        assert!(hit.normal.x > 0.0);
+        assert!(hit.normal.y > 0.0);
     }
 
     fn empty_model() -> Model {

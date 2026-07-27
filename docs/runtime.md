@@ -66,6 +66,8 @@ Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 `CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
 the default aligned cylinder. A sweep that starts inside an existing overlap
 may move out instead of treating the exit surface as a new impact.
+Aligned cylinders sweep BSP box corners as rounded corners so the resulting
+contact normal can slide a pawn through an adjacent opening.
 `MakeNoise` currently validates its loudness without populating pawn noise
 slots or dispatching `HearNoise`.
 
