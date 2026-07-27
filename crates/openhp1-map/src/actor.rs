@@ -14,6 +14,7 @@ pub struct ActorProperties {
     pub location: Option<Vec3>,
     pub rotation: Option<Rotator>,
     pub pre_pivot: Option<Vec3>,
+    pub collision_height: Option<f32>,
     pub draw_scale: Option<f32>,
     pub draw_type: Option<u8>,
     pub mesh: Option<ObjectReference>,
@@ -64,6 +65,9 @@ impl ActorProperties {
                 }
                 ("PrePivot", PropertyKind::Struct, Some("Vector")) => {
                     properties.pre_pivot = Some(read_vec3(&mut value)?);
+                }
+                ("CollisionHeight", PropertyKind::Float, _) => {
+                    properties.collision_height = Some(value.read_f32()?);
                 }
                 ("DrawScale", PropertyKind::Float, _) => {
                     properties.draw_scale = Some(value.read_f32()?);
