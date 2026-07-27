@@ -292,6 +292,8 @@ pub struct ScriptRuntime {
     handle_objects: Vec<ObjectId>,
     next_actor: usize,
     collision: Option<Arc<BspCollision>>,
+    level_package: Option<Arc<str>>,
+    level_info: Option<usize>,
     touching: HashSet<(usize, usize)>,
 }
 

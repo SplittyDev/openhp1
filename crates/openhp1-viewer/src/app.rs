@@ -497,7 +497,7 @@ fn apply_begin_play(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
         .and_then(|directory| directory.parent())
         .context("map path must be inside the game's Maps directory")?;
     let mut runtime = ScriptRuntime::new(game_root)?;
-    runtime.set_collision(scene.collision());
+    runtime.set_collision(scene.collision(), &scene.path)?;
     let classes = scene
         .actors
         .iter()

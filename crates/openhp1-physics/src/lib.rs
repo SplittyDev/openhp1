@@ -1,7 +1,8 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
 use glam::Vec3;
-use openhp1_map::Model;
+use openhp1_map::{BspNode, Model, bsp_zone_at};
+use openhp1_package::ObjectReference;
 use thiserror::Error;
 
 const HULL_FLIP: i32 = 0x4000_0000;
@@ -26,6 +27,8 @@ pub struct ActorCollisionHit {
 #[derive(Clone, Debug)]
 pub struct BspCollision {
     hulls: Vec<ConvexHull>,
+    zone_nodes: Vec<BspNode>,
+    zone_actors: Vec<Option<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -154,7 +157,19 @@ impl BspCollision {
                 planes,
             });
         }
-        Ok(Self { hulls })
+        let zone_actors = model
+            .zones
+            .iter()
+            .map(|zone| match zone.actor {
+                ObjectReference::Export(export) => Some(export),
+                _ => None,
+            })
+            .collect();
+        Ok(Self {
+            hulls,
+            zone_nodes: model.nodes.clone(),
+            zone_actors,
+        })
     }
 
     pub fn sweep_aabb(&self, start: Vec3, end: Vec3, extents: Vec3) -> Option<CollisionHit> {
@@ -221,6 +236,14 @@ impl BspCollision {
 
     pub fn hull_count(&self) -> usize {
         self.hulls.len()
+    }
+
+    pub fn zone_at(&self, point: Vec3) -> usize {
+        bsp_zone_at(&self.zone_nodes, self.zone_actors.len(), point)
+    }
+
+    pub fn zone_actor_export(&self, zone: usize) -> Option<usize> {
+        self.zone_actors.get(zone).copied().flatten()
     }
 }
 
@@ -461,10 +484,8 @@ fn opposite_axis_signs(first: Vec3, second: Vec3, axis: Vec3) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use openhp1_map::{BspNode, Model, PrimitiveBounds};
-    use openhp1_package::ObjectReference;
-
     use super::*;
+    use openhp1_map::{BspNode, Model, PrimitiveBounds};
 
     #[test]
     fn decodes_and_sweeps_serialized_leaf_hull() {

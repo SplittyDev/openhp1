@@ -35,12 +35,21 @@ impl ScriptRuntime {
             handle_objects: Vec::new(),
             next_actor: 0,
             collision: None,
+            level_package: None,
+            level_info: None,
             touching: HashSet::new(),
         })
     }
 
-    pub fn set_collision(&mut self, collision: Arc<BspCollision>) {
+    pub fn set_collision(
+        &mut self,
+        collision: Arc<BspCollision>,
+        level_package: impl AsRef<Path>,
+    ) -> DispatchResult<()> {
+        let package = self.packages.load_path(level_package)?;
         self.collision = Some(collision);
+        self.level_package = Some(Arc::clone(&package.summary().source));
+        Ok(())
     }
 
     pub fn register_actor(
@@ -70,6 +79,9 @@ impl ScriptRuntime {
         self.actor_objects.insert(actor, object.clone());
         self.actor_classes
             .insert(actor, object_id(&class.package, class.export_index));
+        if self.class_has_name(&class, "LevelInfo")? {
+            self.level_info = Some(actor);
+        }
 
         let mut instance = self.load_class_defaults(&class, 0)?;
         let mut reader = actor_package.export_reader(actor_export)?;
