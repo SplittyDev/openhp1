@@ -1115,6 +1115,7 @@ enum ScalarNative {
     Normal,
     FMin,
     FMax,
+    FClamp,
     Min,
     Max,
     Clamp,
@@ -1194,6 +1195,7 @@ impl TryFrom<u16> for ScalarNative {
             0xf3 => Ok(Self::NotEqual_BoolBool),
             0xf4 => Ok(Self::FMin),
             0xf5 => Ok(Self::FMax),
+            0xf6 => Ok(Self::FClamp),
             0xf9 => Ok(Self::Min),
             0xfa => Ok(Self::Max),
             0xfb => Ok(Self::Clamp),
@@ -1227,6 +1229,11 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             _ => *left,
         };
         return Ok(Value::Float(value));
+    }
+    if native == ScalarNative::FClamp
+        && let [Value::Float(value), Value::Float(min), Value::Float(max)] = arguments
+    {
+        return Ok(Value::Float(value.min(*max).max(*min)));
     }
     if matches!(native, ScalarNative::Min | ScalarNative::Max)
         && let [Value::Int(left), Value::Int(right)] = arguments

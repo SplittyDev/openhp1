@@ -679,6 +679,13 @@ mod tests {
             scalar_native(0xf5, &[Value::Float(2.0), Value::Float(f32::NAN)]),
             Ok(Value::Float(2.0))
         );
+        assert_eq!(
+            scalar_native(
+                0xf6,
+                &[Value::Float(5.0), Value::Float(1.0), Value::Float(3.0)]
+            ),
+            Ok(Value::Float(3.0))
+        );
     }
 
     #[test]
