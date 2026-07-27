@@ -553,7 +553,16 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::Clamp, [Value::Int(value), Value::Int(min), Value::Int(max)]) => {
             Value::Int((*value).min(*max).max(*min))
         }
-        _ => return Err(format!("native {index:#05x} is not implemented")),
+        _ => {
+            return Err(format!(
+                "{native:?} does not accept operands ({})",
+                arguments
+                    .iter()
+                    .map(Value::kind)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     })
 }
 

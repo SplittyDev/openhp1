@@ -357,6 +357,18 @@ mod tests {
     }
 
     #[test]
+    fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
+        assert_eq!(
+            scalar_native(0x97, &[Value::Byte(1), Value::Int(0)]),
+            Err("Greater_IntInt does not accept operands (byte, int)".to_owned())
+        );
+        assert_eq!(
+            scalar_native(0xffff, &[]),
+            Err("native 0xffff is not implemented".to_owned())
+        );
+    }
+
+    #[test]
     fn collision_updates_preserve_omitted_flags() {
         assert_eq!(
             collision_updates(&[Value::Bool(true), Value::None]),
