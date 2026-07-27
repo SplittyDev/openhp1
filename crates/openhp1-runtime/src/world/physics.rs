@@ -10,6 +10,7 @@ const PHYS_SWIMMING: u8 = 3;
 const PHYS_FLYING: u8 = 4;
 const PHYS_PROJECTILE: u8 = 6;
 const PHYS_ROLLING: u8 = 7;
+const PHYS_INTERPOLATING: u8 = 8;
 const PHYS_TRAILER: u8 = 11;
 const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
@@ -92,6 +93,9 @@ impl ScriptRuntime {
                 }
                 PHYS_ROLLING => {
                     self.tick_rolling(actor, class, instance, elapsed, actions)?;
+                }
+                PHYS_INTERPOLATING => {
+                    self.tick_interpolating(actor, class, instance, elapsed, actions)?;
                 }
                 PHYS_TRAILER => {
                     self.tick_trailer(actor, class, instance, actions)?;
@@ -859,6 +863,162 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    fn tick_interpolating(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let old_location = self.actor_vector(class, instance, "Location")?;
+        self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
+
+        let mut time_left = elapsed;
+        while time_left > 0.0 {
+            let rate = self.actor_float_any(class, instance, "PhysRate")?;
+            if rate == 0.0 || !self.actor_bool(class, instance, "bInterpolating")? {
+                break;
+            }
+            let Some(target) = self.actor_object(class, instance, "Target")? else {
+                break;
+            };
+            let Some(target_actor) = self.object_actors.get(&target).copied() else {
+                break;
+            };
+            let Some(next) = self.other_actor_object(target_actor, "Next")? else {
+                break;
+            };
+            let Some(next_actor) = self.object_actors.get(&next).copied() else {
+                break;
+            };
+
+            let mut alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
+            let rate_modifier = self.other_actor_float(target_actor, "RateModifier")?;
+            let adjusted_rate = rate * rate_modifier;
+            if adjusted_rate == 0.0 {
+                break;
+            }
+            let mut reached_start = false;
+            let mut reached_end = false;
+            alpha += adjusted_rate * time_left;
+            if adjusted_rate < 0.0 && alpha < 0.0 {
+                time_left = alpha / adjusted_rate;
+                alpha = 0.0;
+                reached_start = true;
+            } else if adjusted_rate > 0.0 && alpha > 1.0 {
+                time_left = (alpha - 1.0) / adjusted_rate;
+                alpha = 1.0;
+                reached_end = true;
+            } else {
+                time_left = 0.0;
+            }
+
+            let target_location =
+                Vec3::from_array(self.other_actor_vector(target_actor, "Location")?);
+            let next_location = Vec3::from_array(self.other_actor_vector(next_actor, "Location")?);
+            let target_rotation = self.other_actor_rotator(target_actor, "Rotation")?;
+            let next_rotation = self.other_actor_rotator(next_actor, "Rotation")?;
+            let previous = self
+                .other_actor_object(target_actor, "Prev")?
+                .and_then(|object| self.object_actors.get(&object).copied());
+            let next_next = self
+                .other_actor_object(next_actor, "Next")?
+                .and_then(|object| self.object_actors.get(&object).copied());
+            let (location, rotation) =
+                if let (Some(previous), Some(next_next)) = (previous, next_next) {
+                    (
+                        spline_vector(
+                            Vec3::from_array(self.other_actor_vector(previous, "Location")?),
+                            target_location,
+                            next_location,
+                            Vec3::from_array(self.other_actor_vector(next_next, "Location")?),
+                            alpha,
+                        ),
+                        spline_rotator(
+                            self.other_actor_rotator(previous, "Rotation")?,
+                            target_rotation,
+                            next_rotation,
+                            self.other_actor_rotator(next_next, "Rotation")?,
+                            alpha,
+                        ),
+                    )
+                } else {
+                    (
+                        target_location.lerp(next_location, alpha),
+                        lerp_rotator(target_rotation, next_rotation, alpha),
+                    )
+                };
+
+            self.set_actor_value(class, instance, "PhysAlpha", Value::Float(alpha))?;
+            let current = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            self.try_move_actor(
+                actor,
+                class,
+                (location - current).to_array(),
+                instance,
+                actions,
+            )?;
+            self.set_actor_value(class, instance, "Rotation", Value::Rotator(rotation))?;
+            actions.push(ActorAction::SetRotation { actor, rotation });
+            if self
+                .class_has_name(class, "PlayerPawn")
+                .map_err(|error| error.to_string())?
+            {
+                self.set_actor_value(class, instance, "ViewRotation", Value::Rotator(rotation))?;
+            }
+
+            if reached_start || reached_end {
+                let current_object = self
+                    .actor_objects
+                    .get(&actor)
+                    .cloned()
+                    .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+                let current_handle = self
+                    .object_handle(current_object)
+                    .map_err(|error| error.to_string())?;
+                self.call_other_actor_event(
+                    target_actor,
+                    "InterpolateEnd",
+                    vec![Value::Object(current_handle)],
+                    actions,
+                )?;
+                let target_handle = self
+                    .object_handle(target.clone())
+                    .map_err(|error| error.to_string())?;
+                self.call_actor_event(
+                    actor,
+                    class,
+                    instance,
+                    "InterpolateEnd",
+                    vec![Value::Object(target_handle)],
+                    actions,
+                )?;
+
+                let property = if reached_start { "Prev" } else { "Next" };
+                let target = self.other_actor_object(target_actor, property)?;
+                self.set_actor_stored(class, instance, "Target", StoredValue::Object(target))?;
+                self.set_actor_value(
+                    class,
+                    instance,
+                    "PhysAlpha",
+                    Value::Float(if reached_start { 1.0 } else { 0.0 }),
+                )?;
+            }
+        }
+
+        if elapsed > 0.0 {
+            let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            self.set_actor_value(
+                class,
+                instance,
+                "Velocity",
+                Value::Vector(((location - Vec3::from_array(old_location)) / elapsed).to_array()),
+            )?;
+        }
+        Ok(())
+    }
+
     fn tick_rotating(
         &mut self,
         actor: usize,
@@ -1110,6 +1270,29 @@ impl ScriptRuntime {
         }
     }
 
+    fn actor_float_any(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> std::result::Result<f32, String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Value(Value::Float(value)) if value.is_finite() => Ok(value),
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
+    fn other_actor_object(
+        &mut self,
+        actor: usize,
+        name: &str,
+    ) -> std::result::Result<Option<ObjectId>, String> {
+        match self.other_actor_property(actor, name)? {
+            StoredValue::Object(value) => Ok(value),
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
     fn other_actor_vector(
         &mut self,
         actor: usize,
@@ -1199,6 +1382,85 @@ impl ScriptRuntime {
             None => Ok(None),
         }
     }
+
+    fn call_other_actor_event(
+        &mut self,
+        actor: usize,
+        event: &str,
+        arguments: Vec<Value>,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })
+            .map_err(|error| error.to_string())?;
+        match self.dispatch_event_with_arguments(
+            actor,
+            Path::new(class.package.as_ref()),
+            class.export_index,
+            event,
+            &arguments,
+        ) {
+            Ok(event_actions) => actions.extend(event_actions),
+            Err(error) => actions.push(ActorAction::DeferredCall {
+                actor,
+                message: format!("{event}: {error}"),
+            }),
+        }
+        Ok(())
+    }
+}
+
+fn spline_weight(value: f32) -> f32 {
+    let squared = value * value;
+    squared * squared * (1.0 / 16.0) - squared * 0.5 + 1.0
+}
+
+fn spline_weights(alpha: f32) -> [f32; 4] {
+    let weights = [
+        spline_weight(alpha + 1.0),
+        spline_weight(alpha),
+        spline_weight(alpha - 1.0),
+        spline_weight(alpha - 2.0),
+    ];
+    let inverse = weights.iter().sum::<f32>().recip();
+    weights.map(|weight| weight * inverse)
+}
+
+fn spline_vector(first: Vec3, second: Vec3, third: Vec3, fourth: Vec3, alpha: f32) -> Vec3 {
+    let [first_weight, second_weight, third_weight, fourth_weight] = spline_weights(alpha);
+    first * first_weight + second * second_weight + third * third_weight + fourth * fourth_weight
+}
+
+fn lerp_rotator(first: [i32; 3], second: [i32; 3], alpha: f32) -> [i32; 3] {
+    std::array::from_fn(|index| {
+        (first[index] as f32 * (1.0 - alpha)) as i32 + (second[index] as f32 * alpha) as i32
+    })
+}
+
+fn spline_rotator(
+    first: [i32; 3],
+    second: [i32; 3],
+    third: [i32; 3],
+    fourth: [i32; 3],
+    alpha: f32,
+) -> [i32; 3] {
+    let weights = [
+        spline_weight(alpha + 1.0),
+        spline_weight(alpha),
+        spline_weight(alpha - 1.0),
+        spline_weight(alpha - 2.0),
+    ];
+    let inverse = weights.iter().sum::<f32>().recip();
+    std::array::from_fn(|index| {
+        let weighted = (first[index] as f32 * weights[0]) as i32
+            + (second[index] as f32 * weights[1]) as i32
+            + (third[index] as f32 * weights[2]) as i32
+            + (fourth[index] as f32 * weights[3]) as i32;
+        (weighted as f32 * inverse) as i32
+    })
 }
 
 fn fall_velocity(
@@ -1276,6 +1538,19 @@ mod tests {
                 0.02,
             ),
             Vec3::new(9.8, 0.0, -20.04)
+        );
+    }
+
+    #[test]
+    fn interpolation_spline_matches_ue1_weighting() {
+        let points = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+        assert!(
+            spline_vector(points[0], points[1], points[2], points[3], 0.0)
+                .abs_diff_eq(Vec3::new(8.0 / 17.0, 4.5 / 17.0, 0.0), 0.0001)
+        );
+        assert!(
+            spline_vector(points[0], points[1], points[2], points[3], 1.0)
+                .abs_diff_eq(Vec3::new(4.5 / 17.0, 8.0 / 17.0, 4.5 / 17.0), 0.0001)
         );
     }
 }
