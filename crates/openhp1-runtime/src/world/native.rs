@@ -528,6 +528,23 @@ impl ScriptRuntime {
             self.set_actor_base(actor, actor_class, instance, base, actions)?;
             return Ok(Value::None);
         }
+        if index == SET_OWNER {
+            let [owner] = arguments else {
+                return Err(format!(
+                    "SetOwner expects one object, found {}",
+                    arguments.len()
+                ));
+            };
+            let owner = match self
+                .stored_value(source, owner)
+                .map_err(|error| error.to_string())?
+            {
+                StoredValue::Object(owner) => owner,
+                value => return Err(format!("SetOwner object is {value:?}")),
+            };
+            self.set_actor_owner(actor, actor_class, instance, owner, actions)?;
+            return Ok(Value::None);
+        }
         if index == SET_ROTATION {
             let [Value::Rotator(rotation)] = arguments else {
                 return Err(format!(
@@ -684,6 +701,59 @@ impl ScriptRuntime {
         })();
         self.instances.insert(level_actor, level_instance);
         result
+    }
+
+    fn set_actor_owner(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        owner: Option<ObjectId>,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let current = self.actor_object(actor_class, instance, "Owner")?;
+        if current == owner {
+            return Ok(());
+        }
+        let actor_object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+        let actor_handle = self
+            .object_handle(actor_object)
+            .map_err(|error| error.to_string())?;
+        if let Some(old_owner) = current
+            .as_ref()
+            .and_then(|owner| self.object_actors.get(owner))
+            .copied()
+        {
+            self.call_other_actor_event(
+                old_owner,
+                "LostChild",
+                vec![Value::Object(actor_handle)],
+                actions,
+            )?;
+        }
+        self.set_actor_stored(
+            actor_class,
+            instance,
+            "Owner",
+            StoredValue::Object(owner.clone()),
+        )?;
+        if let Some(new_owner) = owner
+            .as_ref()
+            .and_then(|owner| self.object_actors.get(owner))
+            .copied()
+        {
+            self.call_other_actor_event(
+                new_owner,
+                "GainedChild",
+                vec![Value::Object(actor_handle)],
+                actions,
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn destroy_actor(

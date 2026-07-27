@@ -69,6 +69,8 @@ Spawning a collision-enabled actor at an occupied blocking location fails
 without allocating an actor handle. Spawned pawns link themselves into
 `Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping
 used during `PreBeginPlay`.
+`SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
+`GainedChild` to the old and new owners.
 
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor
