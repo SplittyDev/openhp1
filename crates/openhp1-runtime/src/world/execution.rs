@@ -183,25 +183,35 @@ impl ScriptRuntime {
             return Err(DispatchError::CallDepth);
         }
         let script = self.script(function)?;
-        if let ScriptMetadata::Function(metadata) = &script.metadata
-            && script.bytecode.bytes.is_empty()
-            && metadata.native_index != 0
-        {
-            return self
-                .native(
-                    actor,
-                    actor_class,
-                    &function.package,
-                    metadata.native_index,
-                    arguments,
-                    instance,
-                    actions,
-                )
-                .map_err(|message| crate::Error::Call {
-                    call: FunctionCall::Native(metadata.native_index),
-                    message,
-                })
-                .map_err(Into::into);
+        if let ScriptMetadata::Function(metadata) = &script.metadata {
+            if metadata.native_index != 0 {
+                return self
+                    .native(
+                        actor,
+                        actor_class,
+                        &function.package,
+                        metadata.native_index,
+                        arguments,
+                        instance,
+                        actions,
+                    )
+                    .map_err(|message| crate::Error::Call {
+                        call: FunctionCall::Native(metadata.native_index),
+                        message,
+                    })
+                    .map_err(Into::into);
+            }
+            if metadata.flags & FUNCTION_NATIVE != 0 {
+                let summary = function.package.summary();
+                let export = &summary.exports[function.export_index];
+                return Err(DispatchError::UnimplementedNamedNative {
+                    class: summary
+                        .object_name(export.outer)
+                        .unwrap_or("<unknown>")
+                        .to_owned(),
+                    function: summary.name(export.object_name).to_owned(),
+                });
+            }
         }
 
         let mut frame = Frame::new(&script.bytecode);

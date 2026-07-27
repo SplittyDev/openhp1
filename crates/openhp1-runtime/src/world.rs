@@ -41,6 +41,7 @@ const LOG: u16 = 0x0e7;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
+const FUNCTION_NATIVE: u32 = 0x0000_0400;
 const STATE_AUTO: u32 = 0x0000_0002;
 const PROBE_EVENTS: [&str; 64] = [
     "Spawned",
@@ -184,6 +185,9 @@ pub enum DispatchError {
 
     #[error("runtime actor {actor} is not registered")]
     UnregisteredActor { actor: usize },
+
+    #[error("named native function `{class}.{function}` is not implemented")]
+    UnimplementedNamedNative { class: String, function: String },
 
     #[error("name `{name}` is missing from package `{package}`")]
     MissingName { package: Arc<str>, name: String },
