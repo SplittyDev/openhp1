@@ -58,6 +58,8 @@ Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
+`MakeNoise` currently validates its loudness without populating pawn noise
+slots or dispatching `HearNoise`.
 
 Runtime-spawned actors use the same class-default mesh, material, lighting, and
 animation assembly as actors serialized in the map. Adding their geometry may

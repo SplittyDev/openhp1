@@ -51,6 +51,7 @@ const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const TURN_TO: u16 = 508;
+const MAKE_NOISE: u16 = 512;
 const ADD_PAWN: u16 = 529;
 const CAN_SEE: u16 = 533;
 const RAND_RANGE: u16 = 0x409;
@@ -460,8 +461,8 @@ mod tests {
         actor::decode_latent_action,
         actor::update_touching_array,
         native::{
-            animation_parameters, collision_updates, log_arguments, random_float, random_int,
-            scalar_native,
+            animation_parameters, collision_updates, log_arguments, noise_loudness, random_float,
+            random_int, scalar_native,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -656,6 +657,13 @@ mod tests {
         assert!(
             log_arguments(&[Value::String("hello".to_owned()), Value::None, Value::None]).is_err()
         );
+    }
+
+    #[test]
+    fn noise_loudness_must_be_a_finite_float() {
+        assert_eq!(noise_loudness(&[Value::Float(0.5)]), Ok(0.5));
+        assert!(noise_loudness(&[Value::Float(f32::NAN)]).is_err());
+        assert!(noise_loudness(&[]).is_err());
     }
 
     #[test]

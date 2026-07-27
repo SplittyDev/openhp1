@@ -271,6 +271,12 @@ impl ScriptRuntime {
             });
             return Ok(Value::None);
         }
+        if index == MAKE_NOISE {
+            noise_loudness(arguments)?;
+            // ponytail: movement only needs MakeNoise not to abort; populate pawn
+            // noise slots and dispatch HearNoise when AI hearing uses them.
+            return Ok(Value::None);
+        }
         if index == GET_ANIM_GROUP {
             let [sequence] = arguments else {
                 return Err(format!(
@@ -1020,6 +1026,23 @@ pub(super) fn log_arguments(
                 .join(", ")
         )),
     }
+}
+
+pub(super) fn noise_loudness(arguments: &[Value]) -> std::result::Result<f32, String> {
+    let [Value::Float(loudness)] = arguments else {
+        return Err(format!(
+            "MakeNoise expects one float, found {}",
+            arguments
+                .iter()
+                .map(Value::kind)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    if !loudness.is_finite() {
+        return Err("MakeNoise loudness is not finite".to_owned());
+    }
+    Ok(*loudness)
 }
 
 pub(super) fn animation_parameters(
