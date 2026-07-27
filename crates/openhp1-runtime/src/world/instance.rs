@@ -202,6 +202,18 @@ impl ScriptRuntime {
             .packages
             .resolve(&structure.package, metadata.children)?;
         while let Some(current) = field {
+            let summary = current.package.summary();
+            let class = summary
+                .class_name(&summary.exports[current.export_index])
+                .unwrap_or("<unknown>");
+            if !class.ends_with("Property") {
+                let metadata =
+                    openhp1_script::FieldMetadata::decode(&current.package, current.export_index)?;
+                field = self
+                    .packages
+                    .resolve(&current.package, metadata.next_field)?;
+                continue;
+            }
             let property = PropertyMetadata::decode(&current.package, current.export_index)?;
             let name = current
                 .package

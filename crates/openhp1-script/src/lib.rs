@@ -7,6 +7,6 @@ mod metadata;
 pub use bytecode::{Bytecode, CallTarget, Token, token_name};
 pub use error::{Error, Result};
 pub use metadata::{
-    ClassDependency, ClassMetadata, FunctionMetadata, PropertyMetadata, ScriptExport,
-    ScriptMetadata, StateMetadata, class_defaults_reader,
+    ClassDependency, ClassMetadata, FieldMetadata, FunctionMetadata, PropertyMetadata,
+    ScriptExport, ScriptMetadata, StateMetadata, class_defaults_reader,
 };

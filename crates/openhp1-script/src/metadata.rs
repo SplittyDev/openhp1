@@ -55,6 +55,12 @@ pub struct PropertyMetadata {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FieldMetadata {
+    pub base_field: ObjectReference,
+    pub next_field: ObjectReference,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScriptMetadata {
     Struct,
     Function(FunctionMetadata),
@@ -99,10 +105,7 @@ impl PropertyMetadata {
             return Err(unsupported(package, export_index, class_name));
         }
         let mut reader = package.export_reader(export_index)?;
-        reader.read_object_stack(export.object_flags)?;
-        while reader.next_property()?.is_some() {}
-        let base_field = reader.read_object_reference()?;
-        let next_field = reader.read_object_reference()?;
+        let field = read_field_metadata(export.object_flags, &mut reader)?;
         let array_dimension = reader.read_i32()?;
         let flags = reader.read_u32()?;
         let category = reader.read_name_index("property category")?;
@@ -112,14 +115,29 @@ impl PropertyMetadata {
             .then(|| reader.read_object_reference())
             .transpose()?;
         Ok(Self {
-            base_field,
-            next_field,
+            base_field: field.base_field,
+            next_field: field.next_field,
             array_dimension,
             flags,
             category,
             replication_offset,
             struct_type,
         })
+    }
+}
+
+impl FieldMetadata {
+    pub fn decode(package: &Package, export_index: usize) -> Result<Self> {
+        let summary = package.summary();
+        let export = summary.exports.get(export_index).ok_or_else(|| {
+            openhp1_package::Error::InvalidExportIndex {
+                package: summary.source.clone(),
+                index: export_index,
+                export_count: summary.exports.len(),
+            }
+        })?;
+        let mut reader = package.export_reader(export_index)?;
+        read_field_metadata(export.object_flags, &mut reader)
     }
 }
 
@@ -195,6 +213,15 @@ fn decode_reader(
         text_position,
         bytecode,
         metadata,
+    })
+}
+
+fn read_field_metadata(object_flags: u32, reader: &mut ObjectReader<'_>) -> Result<FieldMetadata> {
+    reader.read_object_stack(object_flags)?;
+    while reader.next_property()?.is_some() {}
+    Ok(FieldMetadata {
+        base_field: reader.read_object_reference()?,
+        next_field: reader.read_object_reference()?,
     })
 }
 
@@ -431,6 +458,18 @@ mod tests {
         let package = synthetic_package("StructProperty", "Value", payload);
         let property = PropertyMetadata::decode(&package, 0).unwrap();
         assert_eq!(property.struct_type, Some(ObjectReference::None));
+    }
+
+    #[test]
+    fn decodes_non_property_field_links() {
+        let package = synthetic_package("Enum", "Values", vec![0, 0, 0]);
+        assert_eq!(
+            FieldMetadata::decode(&package, 0).unwrap(),
+            FieldMetadata {
+                base_field: ObjectReference::None,
+                next_field: ObjectReference::None,
+            }
+        );
     }
 
     fn synthetic_package(class_name: &str, object_name: &str, payload: Vec<u8>) -> Package {
