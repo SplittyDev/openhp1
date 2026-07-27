@@ -31,8 +31,9 @@ pub(super) fn create_pipeline(
                     0 => Float32x3,
                     1 => Float32x2,
                     2 => Float32x2,
-                    3 => Float32,
-                    4 => Unorm8x4
+                    3 => Float32x2,
+                    4 => Float32,
+                    5 => Unorm8x4
                 ],
             }],
         },
@@ -91,8 +92,9 @@ pub(super) fn create_backdrop_pipeline(
                     0 => Float32x3,
                     1 => Float32x2,
                     2 => Float32x2,
-                    3 => Float32,
-                    4 => Unorm8x4
+                    3 => Float32x2,
+                    4 => Float32,
+                    5 => Unorm8x4
                 ],
             }],
         },

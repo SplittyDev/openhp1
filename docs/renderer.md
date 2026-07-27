@@ -22,12 +22,13 @@ on world BSP geometry.
    first-class actor records, and appends visible vertex and skeletal meshes
    with their materials and render ranges.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
-   backend-neutral surface materials.
+   backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
 10. `openhp1-render` packs lightmaps with replicated edge gutters into one
    atlas, normalizes coordinates, batches opaque triangles, sorts blended BSP
-   surfaces, and draws them with repeat sampling and depth testing. A sky map
-   first renders to a separate color/depth target; fake-backdrop polygons
-   sample that target in screen space during the playable pass.
+   surfaces, advances `PF_AutoUPan`/`PF_AutoVPan` texture coordinates, and draws
+   them with repeat sampling and depth testing. A sky map first renders to a
+   separate color/depth target; fake-backdrop polygons sample that target in
+   screen space during the playable pass.
 11. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui and
     exposes searchable actor state and diagnostics.
 
@@ -105,6 +106,8 @@ vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
 serialized or runtime-selected animation sequences. Sprite, brush/mover,
 corona, and particle actor paths remain unsupported.
 Water-backed `WetTexture` exports animate independently of actor scripts.
+Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
+`TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.
 `FireTexture` previews and time-varying light effects remain static.
 Unsupported texture classes use a magenta checkerboard.
 

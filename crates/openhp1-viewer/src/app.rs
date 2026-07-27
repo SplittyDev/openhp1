@@ -719,6 +719,7 @@ impl eframe::App for ViewerApp {
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        self.renderer.advance_time(delta_time);
         let stable_delta_time = ui.input(|input| input.stable_dt);
 
         let full_height = ui.available_height();

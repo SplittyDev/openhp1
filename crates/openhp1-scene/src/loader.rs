@@ -114,9 +114,17 @@ impl LoadedScene {
                 .sky_zone(&package)
                 .context("failed to decode the sky zone")?
         };
+        let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
+        let zone_pan_speeds =
+            load_zone_pan_speeds(&mut packages, &package, &model, &mut class_cache);
         let mut water_animations = Vec::new();
-        let (mut textures, mut surface_materials) =
-            load_materials(&mut packages, &package, &model, &mut water_animations);
+        let (mut textures, mut surface_materials) = load_materials(
+            &mut packages,
+            &package,
+            &model,
+            &zone_pan_speeds,
+            &mut water_animations,
+        );
         let textured_surfaces = surface_materials
             .iter()
             .filter(|material| material.texture.is_some())
@@ -150,6 +158,7 @@ impl LoadedScene {
             &level,
             &model,
             &vertex_lighting,
+            &mut class_cache,
             &mut mesh,
             &mut textures,
             &mut surface_materials,
@@ -831,6 +840,7 @@ struct ActorState {
     anim_sequence: Option<String>,
     anim_frame: f32,
     anim_rate: f32,
+    texture_pan_speed: Vec2,
     hidden: bool,
     unlit: bool,
 }
@@ -863,6 +873,7 @@ impl Default for ActorState {
             anim_sequence: None,
             anim_frame: 0.0,
             anim_rate: 0.0,
+            texture_pan_speed: Vec2::ONE,
             hidden: false,
             unlit: false,
         }
@@ -934,6 +945,12 @@ impl ActorState {
         if let Some(anim_rate) = properties.anim_rate {
             self.anim_rate = anim_rate;
         }
+        if let Some(speed) = properties.texture_u_pan_speed {
+            self.texture_pan_speed.x = speed;
+        }
+        if let Some(speed) = properties.texture_v_pan_speed {
+            self.texture_pan_speed.y = speed;
+        }
         if let Some(hidden) = properties.hidden {
             self.hidden = hidden;
         }
@@ -975,13 +992,13 @@ fn load_actors(
     level: &Level,
     model: &Model,
     vertex_lighting: &VertexLighting,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> Vec<SceneActor> {
-    let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
     let mut mesh_cache = HashMap::<SceneObjectId, Option<Arc<Mesh>>>::new();
     let mut animation_cache = HashMap::<SceneObjectId, Option<Arc<SkeletalAnimation>>>::new();
     let mut decoded_textures = HashMap::<SceneObjectId, Option<DecodedTexture>>::new();
@@ -1060,7 +1077,7 @@ fn load_actors(
                 continue;
             }
         };
-        let class_state = class_state(packages, &class, &mut class_cache, 0);
+        let class_state = class_state(packages, &class, class_cache, 0);
         scene_actor.diagnostics.extend(class_state.diagnostics);
         let is_pawn = class_state.is_pawn;
         let mut state = class_state.actor;
@@ -1572,14 +1589,38 @@ fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
+    zone_pan_speeds: &[Vec2],
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize), Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut materials = Vec::with_capacity(model.surfaces.len());
+    // ponytail: materials are surface-wide; carry pan speed per BSP node if a
+    // map gives one shared surface different front-zone speeds.
+    let mut surface_pan_speeds = vec![None; model.surfaces.len()];
+    let level_pan_speed = zone_pan_speeds.first().copied().unwrap_or(Vec2::ONE);
+    for node in &model.nodes {
+        let (Ok(surface), Ok(zone)) = (
+            usize::try_from(node.surface),
+            usize::try_from(node.zones[1]),
+        ) else {
+            continue;
+        };
+        if let Some(speed) = surface_pan_speeds.get_mut(surface)
+            && speed.is_none()
+        {
+            *speed = Some(
+                zone_pan_speeds
+                    .get(zone)
+                    .copied()
+                    .unwrap_or(level_pan_speed),
+            );
+        }
+    }
 
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
+        let pan_speed = surface_pan_speeds[surface_index].unwrap_or(level_pan_speed);
         if surface.poly_flags.contains(PolyFlags::INVISIBLE) {
             materials.push(SurfaceMaterial {
                 mode: SurfaceMode::Hidden,
@@ -1597,12 +1638,22 @@ fn load_materials(
         let resolved = match packages.resolve(map, surface.texture) {
             Ok(Some(resolved)) => resolved,
             Ok(None) => {
-                materials.push(surface_material(surface.poly_flags, None, None));
+                materials.push(bsp_surface_material(
+                    surface.poly_flags,
+                    None,
+                    None,
+                    pan_speed,
+                ));
                 continue;
             }
             Err(error) => {
                 warn!(surface_index, %error, "could not resolve surface texture");
-                materials.push(surface_material(surface.poly_flags, None, None));
+                materials.push(bsp_surface_material(
+                    surface.poly_flags,
+                    None,
+                    None,
+                    pan_speed,
+                ));
                 continue;
             }
         };
@@ -1621,11 +1672,17 @@ fn load_materials(
             decoded.insert(key.clone(), texture);
         }
         let Some(decoded_texture) = decoded.get(&key).and_then(Option::as_ref) else {
-            materials.push(surface_material(surface.poly_flags, None, None));
+            materials.push(bsp_surface_material(
+                surface.poly_flags,
+                None,
+                None,
+                pan_speed,
+            ));
             continue;
         };
         let texture_flags = decoded_texture.texture.render_flags;
-        let material = surface_material(surface.poly_flags, None, Some(texture_flags));
+        let material =
+            bsp_surface_material(surface.poly_flags, None, Some(texture_flags), pan_speed);
         let image_key = (key.0.clone(), key.1, material.masked);
         let texture_index = if let Some(index) = images.get(&image_key) {
             *index
@@ -1653,6 +1710,69 @@ fn load_materials(
     }
 
     (textures, materials)
+}
+
+fn load_zone_pan_speeds(
+    packages: &mut PackageStore,
+    map: &Arc<Package>,
+    model: &Model,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
+) -> Vec<Vec2> {
+    let level_pan_speed = map
+        .summary()
+        .exports
+        .iter()
+        .position(|export| map.summary().class_name(export) == Some("LevelInfo"))
+        .and_then(
+            |export_index| match actor_pan_speed(packages, map, export_index, class_cache) {
+                Ok(speed) => Some(speed),
+                Err(error) => {
+                    warn!(export_index, %error, "could not decode LevelInfo texture pan speed");
+                    None
+                }
+            },
+        )
+        .unwrap_or(Vec2::ONE);
+
+    model
+        .zones
+        .iter()
+        .enumerate()
+        .map(|(zone_index, zone)| {
+            let ObjectReference::Export(export_index) = zone.actor else {
+                return level_pan_speed;
+            };
+            actor_pan_speed(packages, map, export_index, class_cache).unwrap_or_else(|error| {
+                warn!(zone_index, export_index, %error, "could not decode zone texture pan speed");
+                level_pan_speed
+            })
+        })
+        .collect()
+}
+
+fn actor_pan_speed(
+    packages: &mut PackageStore,
+    map: &Arc<Package>,
+    export_index: usize,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
+) -> Result<Vec2> {
+    let actor = Actor::decode(map, export_index)?;
+    let export = map
+        .summary()
+        .exports
+        .get(export_index)
+        .context("zone actor export is missing")?;
+    let class = packages
+        .resolve(map, export.class)?
+        .map(SceneObject::from)
+        .context("zone actor class is missing")?;
+    let mut state = class_state(packages, &class, class_cache, 0).actor;
+    state.apply(packages, map, &actor.properties)?;
+    ensure!(
+        state.texture_pan_speed.is_finite(),
+        "zone texture pan speed is not finite"
+    );
+    Ok(state.texture_pan_speed)
 }
 
 fn decode_texture(
@@ -1766,7 +1886,30 @@ fn surface_material(
         masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
         unlit: flags.contains(PolyFlags::UNLIT),
+        texture_pan_speed: [0.0; 2],
     }
+}
+
+fn bsp_surface_material(
+    flags: PolyFlags,
+    texture: Option<usize>,
+    texture_flags: Option<TextureRenderFlags>,
+    zone_pan_speed: Vec2,
+) -> SurfaceMaterial {
+    let mut material = surface_material(flags, texture, texture_flags);
+    material.texture_pan_speed = [
+        if flags.contains(PolyFlags::AUTO_U_PAN) {
+            zone_pan_speed.x
+        } else {
+            0.0
+        },
+        if flags.contains(PolyFlags::AUTO_V_PAN) {
+            zone_pan_speed.y
+        } else {
+            0.0
+        },
+    ];
+    material
 }
 
 fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
@@ -1820,6 +1963,17 @@ mod tests {
         );
         assert_eq!(modulated.mode, SurfaceMode::Modulated);
         assert!(modulated.masked);
+    }
+
+    #[test]
+    fn applies_only_requested_zone_texture_pan_axes() {
+        let material = super::bsp_surface_material(
+            PolyFlags::AUTO_V_PAN,
+            Some(1),
+            None,
+            glam::Vec2::new(2.0, 3.5),
+        );
+        assert_eq!(material.texture_pan_speed, [0.0, 3.5]);
     }
 
     #[test]

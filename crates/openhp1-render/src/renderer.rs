@@ -29,6 +29,7 @@ use target::{DepthTarget, SkyTarget};
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 24;
+const AUTO_UV_PER_SECOND: f32 = 64.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderStats {
@@ -42,6 +43,7 @@ pub struct RenderStats {
 struct Vertex {
     position: [f32; 3],
     texture_coordinates: [f32; 2],
+    texture_pan_speed: [f32; 2],
     lightmap_coordinates: [f32; 2],
     has_lightmap: f32,
     vertex_color: [u8; 4],
@@ -52,6 +54,7 @@ struct Vertex {
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
     display_gamma: [f32; 4],
+    auto_uv: [f32; 4],
 }
 
 pub struct Renderer {
@@ -81,6 +84,7 @@ pub struct Renderer {
     sky_sampler: wgpu::Sampler,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
+    auto_uv: f32,
     stats: RenderStats,
 }
 
@@ -104,11 +108,12 @@ impl Renderer {
             .map(|(vertex_index, position)| {
                 let position = unreal_to_render(position);
                 let surface = scene.mesh.vertex_surfaces[vertex_index];
-                let texture = scene
+                let material = scene
                     .surface_materials
                     .get(surface)
-                    .and_then(|material| material.texture)
-                    .and_then(|index| scene.textures.get(index));
+                    .copied()
+                    .unwrap_or_default();
+                let texture = material.texture.and_then(|index| scene.textures.get(index));
                 let dimensions = texture.map_or([64.0, 64.0], |texture| {
                     [texture.width as f32, texture.height as f32]
                 });
@@ -142,6 +147,10 @@ impl Renderer {
                     texture_coordinates: [
                         coordinates.x / dimensions[0],
                         coordinates.y / dimensions[1],
+                    ],
+                    texture_pan_speed: [
+                        material.texture_pan_speed[0] / dimensions[0],
+                        material.texture_pan_speed[1] / dimensions[1],
                     ],
                     lightmap_coordinates,
                     has_lightmap: f32::from(lightmap_rectangle.is_some()),
@@ -414,6 +423,7 @@ impl Renderer {
             sky_sampler,
             lightmap_view,
             lightmap_sampler,
+            auto_uv: 0.0,
             stats,
         }
     }
@@ -497,6 +507,10 @@ impl Renderer {
         }
     }
 
+    pub fn advance_time(&mut self, delta_time: f32) {
+        self.auto_uv += delta_time * AUTO_UV_PER_SECOND;
+    }
+
     pub fn render(
         &self,
         queue: &wgpu::Queue,
@@ -515,6 +529,7 @@ impl Renderer {
             bytemuck::bytes_of(&CameraUniform {
                 view_projection: camera.view_projection(aspect).to_cols_array_2d(),
                 display_gamma,
+                auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
             }),
         );
         let (blended_indices, blended_batches) =
@@ -547,6 +562,7 @@ impl Renderer {
                 bytemuck::bytes_of(&CameraUniform {
                     view_projection: sky_camera.view_projection(aspect).to_cols_array_2d(),
                     display_gamma,
+                    auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                 }),
             );
             let (sky_indices, sky_batches) =
@@ -752,6 +768,7 @@ mod tests {
             Vertex {
                 position: [-2.0, 3.0, 1.0],
                 texture_coordinates: [0.0; 2],
+                texture_pan_speed: [0.0; 2],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
@@ -759,6 +776,7 @@ mod tests {
             Vertex {
                 position: [4.0, -1.0, 7.0],
                 texture_coordinates: [0.0; 2],
+                texture_pan_speed: [0.0; 2],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
@@ -943,6 +961,7 @@ mod tests {
         Vertex {
             position: [x, y, z],
             texture_coordinates: [0.0; 2],
+            texture_pan_speed: [0.0; 2],
             lightmap_coordinates: [0.0; 2],
             has_lightmap: 0.0,
             vertex_color: [255; 4],

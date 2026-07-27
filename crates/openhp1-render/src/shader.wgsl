@@ -1,6 +1,7 @@
 struct Camera {
     view_projection: mat4x4<f32>,
     display_gamma: vec4<f32>,
+    auto_uv: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -30,13 +31,14 @@ struct VertexOutput {
 fn vertex_main(
     @location(0) position: vec3<f32>,
     @location(1) texture_coordinates: vec2<f32>,
-    @location(2) lightmap_coordinates: vec2<f32>,
-    @location(3) has_lightmap: f32,
-    @location(4) vertex_color: vec4<f32>,
+    @location(2) texture_pan_speed: vec2<f32>,
+    @location(3) lightmap_coordinates: vec2<f32>,
+    @location(4) has_lightmap: f32,
+    @location(5) vertex_color: vec4<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
-    output.texture_coordinates = texture_coordinates;
+    output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;
     output.lightmap_coordinates = lightmap_coordinates;
     output.has_lightmap = has_lightmap;
     output.vertex_color = vertex_color.rgb;

@@ -19,7 +19,7 @@ pub enum SurfaceMode {
     Hidden,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SurfaceMaterial {
     pub texture: Option<usize>,
     pub mode: SurfaceMode,
@@ -28,6 +28,8 @@ pub struct SurfaceMaterial {
     pub masked: bool,
     pub two_sided: bool,
     pub unlit: bool,
+    /// UE1 zone multipliers for automatic U/V texture-coordinate panning.
+    pub texture_pan_speed: [f32; 2],
 }
 
 #[derive(Clone, Debug)]
