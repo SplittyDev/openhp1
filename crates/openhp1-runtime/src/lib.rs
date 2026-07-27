@@ -1596,6 +1596,7 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
             let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
             Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
         }
+        (ConversionOpcode::ByteToInt, Value::None) => Value::Int(0),
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
         (ConversionOpcode::ByteToFloat, Value::Byte(value)) => Value::Float(f32::from(value)),
@@ -1608,6 +1609,7 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
         (ConversionOpcode::FloatToByte, Value::Float(value)) => Value::Byte(value as u8),
         (ConversionOpcode::FloatToInt, Value::Float(value)) => Value::Int(value as i32),
         (ConversionOpcode::FloatToBool, Value::Float(value)) => Value::Bool(value != 0.0),
+        (ConversionOpcode::ObjectToBool, Value::None) => Value::Bool(false),
         (ConversionOpcode::ObjectToBool, Value::Object(value)) => Value::Bool(value != 0),
         (ConversionOpcode::NameToBool, Value::Name(value)) => Value::Bool(value != 0),
         (ConversionOpcode::NameToBool, Value::NameText(value)) => {
@@ -1857,6 +1859,18 @@ mod tests {
         assert!(close(direction([0, 0, 0]), [1.0, 0.0, 0.0]));
         assert!(close(direction([0, 16_384, 0]), [0.0, 1.0, 0.0]));
         assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, -1.0]));
+    }
+
+    #[test]
+    fn converts_missing_object_defaults_used_by_script_guards() {
+        assert_eq!(
+            convert(ConversionOpcode::ObjectToBool, Value::None).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            convert(ConversionOpcode::ByteToInt, Value::None).unwrap(),
+            Value::Int(0)
+        );
     }
 
     #[test]
