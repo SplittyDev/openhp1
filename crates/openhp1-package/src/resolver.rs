@@ -78,6 +78,30 @@ impl PackageStore {
         localization_value(&String::from_utf8_lossy(&bytes), section, key).unwrap_or_default()
     }
 
+    pub fn find_object(
+        &mut self,
+        qualified_name: &str,
+        class: &str,
+    ) -> ResolveResult<Option<ResolvedObject>> {
+        let mut parts = qualified_name.split('.');
+        let Some(package_name) = parts.next().filter(|part| !part.is_empty()) else {
+            return Ok(None);
+        };
+        let path = parts.map(str::to_owned).collect::<Vec<_>>();
+        let Some((object, groups)) = path.split_last() else {
+            return Ok(None);
+        };
+        let package = self.load(package_name)?;
+        Ok(
+            find_export(package.summary(), class, object, groups).map(|export_index| {
+                ResolvedObject {
+                    package,
+                    export_index,
+                }
+            }),
+        )
+    }
+
     pub fn load(&mut self, name: &str) -> ResolveResult<Arc<Package>> {
         let key = name.to_ascii_lowercase();
         if let Some(package) = self.loaded.get(&key) {

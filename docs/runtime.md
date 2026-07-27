@@ -96,3 +96,5 @@ spawn lifecycle so scripts can retain and own the returned object.
 fire direction and updates its `bestAim` and `bestDist` output parameters.
 `Object.Localize` reads case-insensitive section/key values from the package's
 English `.int` file and returns an empty string when no entry is available.
+Native class imports without serialized class exports remain opaque class
+handles so `DynamicLoadObject` can resolve qualified resources such as sounds.

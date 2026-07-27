@@ -348,6 +348,11 @@ impl ScriptRuntime {
                     };
                     return Ok(Value::String(self.packages.localize(package, section, key)));
                 }
+                if class.eq_ignore_ascii_case("Object")
+                    && function_name.eq_ignore_ascii_case("DynamicLoadObject")
+                {
+                    return self.dynamic_load_object(arguments);
+                }
                 if let Some(value) = named_native(class, function_name, arguments) {
                     return Ok(value);
                 }
@@ -887,12 +892,40 @@ impl ScriptRuntime {
                 .into());
             }
         };
-        let target = self
-            .packages
-            .resolve(source, object_reference(class))?
-            .ok_or_else(|| DispatchError::UnresolvedObject {
-                message: "dynamic cast class is null".to_owned(),
-            })?;
+        let target = match self.packages.resolve(source, object_reference(class)) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: "dynamic cast class is null".to_owned(),
+                });
+            }
+            Err(ResolveError::MissingObject { class, path, .. })
+                if class.eq_ignore_ascii_case("Class") =>
+            {
+                if value == -1 {
+                    return Ok(Value::Object(0));
+                }
+                let object = self.object_for_handle(value)?;
+                if self.object_actors.contains_key(&object) {
+                    return Ok(Value::Object(0));
+                }
+                let object = self.resolved_object(&object)?;
+                let export = &object.package.summary().exports[object.export_index];
+                return Ok(
+                    if object
+                        .package
+                        .summary()
+                        .class_name(export)
+                        .is_some_and(|class| class.eq_ignore_ascii_case(&path))
+                    {
+                        Value::Object(value)
+                    } else {
+                        Value::Object(0)
+                    },
+                );
+            }
+            Err(error) => return Err(error.into()),
+        };
         let (value, class) = if value == -1 {
             (
                 Value::Object(-1),
@@ -980,10 +1013,59 @@ impl ScriptRuntime {
         source: &Arc<Package>,
         reference: i32,
     ) -> DispatchResult<Value> {
-        let Some(object) = self.resolve_reference(source, reference)? else {
+        let object =
+            match self.resolve_reference(source, reference) {
+                Ok(Some(object)) => object,
+                Ok(None) => return Ok(Value::Object(0)),
+                Err(DispatchError::Resolve(ResolveError::MissingObject {
+                    class, path, ..
+                })) if class.eq_ignore_ascii_case("Class") => ObjectId {
+                    package: Arc::from(format!("<native-class:{path}>")),
+                    export_index: usize::MAX,
+                },
+                Err(error) => return Err(error),
+            };
+        self.object_handle(object).map(Value::Object)
+    }
+
+    fn dynamic_load_object(&mut self, arguments: &[Value]) -> DispatchResult<Value> {
+        let [Value::String(name), Value::Object(class), rest @ ..] = arguments else {
+            return Err(DispatchError::UnresolvedObject {
+                message: "DynamicLoadObject expects an object name and class".to_owned(),
+            });
+        };
+        if rest.len() > 1
+            || rest
+                .first()
+                .is_some_and(|value| !matches!(value, Value::Bool(_) | Value::None))
+        {
+            return Err(DispatchError::UnresolvedObject {
+                message: "DynamicLoadObject optional MayFail argument is not a bool".to_owned(),
+            });
+        }
+        let class = self.object_for_handle(*class)?;
+        let class_name = if class.export_index == usize::MAX {
+            class
+                .package
+                .strip_prefix("<native-class:")
+                .and_then(|name| name.strip_suffix('>'))
+                .ok_or_else(|| DispatchError::UnresolvedObject {
+                    message: "DynamicLoadObject class token is invalid".to_owned(),
+                })?
+                .to_owned()
+        } else {
+            let class = self.resolved_object(&class)?;
+            class
+                .package
+                .summary()
+                .name(class.package.summary().exports[class.export_index].object_name)
+                .to_owned()
+        };
+        let Some(object) = self.packages.find_object(name, &class_name)? else {
             return Ok(Value::Object(0));
         };
-        self.object_handle(object).map(Value::Object)
+        self.object_handle(object_id(&object.package, object.export_index))
+            .map(Value::Object)
     }
 
     fn class_is_a(
