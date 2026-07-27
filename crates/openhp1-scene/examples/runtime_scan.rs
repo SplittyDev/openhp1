@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use glam::Vec3;
-use openhp1_runtime::{ActorAction, ScriptRuntime};
+use openhp1_runtime::{ActorAction, PlayerInput, ScriptRuntime};
 use openhp1_scene::{LoadedScene, Rotator};
 
 #[derive(Default)]
@@ -106,6 +106,26 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        if let Some(player) = runtime.player_actor() {
+            let actions = runtime.dispatch_player_event("Possess", &[])?;
+            apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
+            apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            let actor = &scene.actors[player];
+            let (view, actions) = runtime.player_view(
+                actor.location.to_array(),
+                [
+                    actor.rotation.pitch,
+                    actor.rotation.yaw,
+                    actor.rotation.roll,
+                ],
+            )?;
+            anyhow::ensure!(
+                view.location.iter().all(|value| value.is_finite()),
+                "player camera location is invalid"
+            );
+            apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
         }
 
         let timer_callbacks = runtime.timer_callbacks();

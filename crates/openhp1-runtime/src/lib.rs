@@ -29,6 +29,25 @@ pub enum Value {
     Array(Vec<Value>),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerInput {
+    pub base_x: f32,
+    pub base_y: f32,
+    pub strafe: f32,
+    pub mouse_x: f32,
+    pub mouse_y: f32,
+    pub alt_fire: bool,
+    pub jump: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayerView {
+    pub actor: usize,
+    pub location: [f32; 3],
+    pub rotation: [i32; 3],
+    pub fov_degrees: f32,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FunctionCall {
     Native(u16),
@@ -307,6 +326,7 @@ enum Slot {
     },
 }
 
+#[derive(Clone)]
 enum Expression {
     Value(Value),
     Slot(Slot),
@@ -343,6 +363,10 @@ pub(crate) enum FrameRequest {
 
 pub(crate) enum FrameResponse {
     Value(Value),
+    ValueWithOutputs {
+        value: Value,
+        outputs: Vec<(usize, Value)>,
+    },
     Iterator(Vec<Value>),
     Suspend(Value),
 }
@@ -350,7 +374,9 @@ pub(crate) enum FrameResponse {
 impl FrameResponse {
     fn into_value(self) -> std::result::Result<Value, String> {
         match self {
-            Self::Value(value) | Self::Suspend(value) => Ok(value),
+            Self::Value(value) | Self::ValueWithOutputs { value, .. } | Self::Suspend(value) => {
+                Ok(value)
+            }
             Self::Iterator(_) => Err("regular call returned an iterator".to_owned()),
         }
     }
@@ -358,7 +384,7 @@ impl FrameResponse {
     fn into_iterator(self) -> std::result::Result<Vec<Value>, String> {
         match self {
             Self::Iterator(values) => Ok(values),
-            Self::Value(_) | Self::Suspend(_) => {
+            Self::Value(_) | Self::ValueWithOutputs { .. } | Self::Suspend(_) => {
                 Err("iterator call returned a regular value".to_owned())
             }
         }
@@ -944,6 +970,34 @@ impl<'a> Frame<'a> {
             self.assign(target, value.clone(), host)?;
             return Ok(value);
         }
+        if let FunctionCall::Native(index @ (0xe5 | 0xe6)) = function {
+            let [rotation, x, y, z] =
+                arguments
+                    .try_into()
+                    .map_err(|arguments: Vec<_>| Error::Call {
+                        call: function,
+                        message: format!("GetAxes expects 4 arguments, found {}", arguments.len()),
+                    })?;
+            let rotation = self.value(rotation, host)?;
+            let Value::Rotator(rotation) = rotation else {
+                return Err(Error::Type {
+                    expected: "rotator",
+                    actual: rotation.kind(),
+                });
+            };
+            let mut axes = rotator_axes(rotation);
+            if index == 0xe6 {
+                axes = [
+                    [axes[0][0], axes[1][0], axes[2][0]],
+                    [axes[0][1], axes[1][1], axes[2][1]],
+                    [axes[0][2], axes[1][2], axes[2][2]],
+                ];
+            }
+            self.assign(x, Value::Vector(axes[0]), host)?;
+            self.assign(y, Value::Vector(axes[1]), host)?;
+            self.assign(z, Value::Vector(axes[2]), host)?;
+            return Ok(Value::None);
+        }
         if creating_iterator {
             let target = match arguments.get(1) {
                 Some(Expression::Slot(target)) => target.clone(),
@@ -977,8 +1031,8 @@ impl<'a> Frame<'a> {
             return Ok(Value::None);
         }
         let mut values = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            values.push(self.value(argument, host)?);
+        for argument in &arguments {
+            values.push(self.value(argument.clone(), host)?);
         }
         let response = host(
             FrameRequest::Call {
@@ -994,6 +1048,19 @@ impl<'a> Frame<'a> {
         })?;
         match response {
             FrameResponse::Value(value) => Ok(value),
+            FrameResponse::ValueWithOutputs { value, outputs } => {
+                for (argument, output) in outputs {
+                    let target = arguments
+                        .get(argument)
+                        .cloned()
+                        .ok_or_else(|| Error::Call {
+                            call: function,
+                            message: format!("output argument {argument} is out of range"),
+                        })?;
+                    self.assign(target, output, host)?;
+                }
+                Ok(value)
+            }
             FrameResponse::Suspend(value) => {
                 self.suspend_requested = true;
                 Ok(value)
@@ -1555,6 +1622,26 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
     })
 }
 
+fn rotator_axes([pitch, yaw, roll]: [i32; 3]) -> [[f32; 3]; 3] {
+    let units_to_radians = std::f32::consts::TAU / 65_536.0;
+    let (pitch_sin, pitch_cos) = ((pitch as f32) * units_to_radians).sin_cos();
+    let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
+    let (roll_sin, roll_cos) = ((roll as f32) * units_to_radians).sin_cos();
+    [
+        [pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin],
+        [
+            -roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
+            -roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
+            -roll_sin * pitch_cos,
+        ],
+        [
+            roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
+            roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
+            roll_cos * pitch_cos,
+        ],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use openhp1_script::Bytecode;
@@ -1770,6 +1857,44 @@ mod tests {
         assert!(close(direction([0, 0, 0]), [1.0, 0.0, 0.0]));
         assert!(close(direction([0, 16_384, 0]), [0.0, 1.0, 0.0]));
         assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, -1.0]));
+    }
+
+    #[test]
+    fn get_axes_writes_its_vector_outputs() {
+        let mut bytes = vec![0xe5, 0x22];
+        for component in [0_i32, 16_384, 0] {
+            bytes.extend(component.to_le_bytes());
+        }
+        for field in [7_i32, 8, 9] {
+            bytes.push(0x00);
+            bytes.extend(field.to_le_bytes());
+        }
+        bytes.extend([0x16, 0x04, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let close = |left: [f32; 3], right: [f32; 3]| {
+            left.into_iter()
+                .zip(right)
+                .all(|(left, right)| (left - right).abs() < 1.0e-6)
+        };
+        let Value::Vector(x) = frame.execute(|_, _| unreachable!()).unwrap() else {
+            unreachable!()
+        };
+        assert!(close(x, [0.0, 1.0, 0.0]));
+        assert!(matches!(
+            frame.local(8),
+            Some(Value::Vector(y)) if close(*y, [-1.0, 0.0, 0.0])
+        ));
+        assert!(matches!(
+            frame.local(9),
+            Some(Value::Vector(z)) if close(*z, [0.0, 0.0, 1.0])
+        ));
     }
 
     #[test]

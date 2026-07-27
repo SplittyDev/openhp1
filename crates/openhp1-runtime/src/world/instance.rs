@@ -427,7 +427,7 @@ impl ScriptRuntime {
         function: &ScriptExport,
         arguments: &[Value],
         frame: &mut Frame<'_>,
-    ) -> DispatchResult<()> {
+    ) -> DispatchResult<ArgumentBindings> {
         let key = ObjectId {
             package: Arc::clone(&source.summary().source),
             export_index: function.export_index,
@@ -441,21 +441,25 @@ impl ScriptRuntime {
                 let Some(id) = self.resolve_field(source, field)? else {
                     continue;
                 };
-                if let Some(argument) = parameters.iter().position(|parameter| *parameter == id) {
-                    bindings.push((field, argument));
+                if let Some((argument, (_, output))) = parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (parameter, _))| *parameter == id)
+                {
+                    bindings.push((field, argument, *output));
                 }
             }
             let bindings = Arc::new(bindings);
             self.frame_arguments.insert(key, Arc::clone(&bindings));
             bindings
         };
-        for &(field, argument) in bindings.iter() {
+        for &(field, argument, _) in bindings.iter() {
             if let Some(value) = arguments.get(argument) {
                 frame.set_local(field, value.clone());
             }
         }
         self.bind_frame_arrays(source, &function.bytecode, frame)?;
-        Ok(())
+        Ok(bindings)
     }
 
     pub(super) fn bind_frame_arrays(
@@ -507,7 +511,7 @@ impl ScriptRuntime {
         &mut self,
         source: &Arc<Package>,
         mut field: ObjectReference,
-    ) -> DispatchResult<Vec<ObjectId>> {
+    ) -> DispatchResult<Vec<(ObjectId, bool)>> {
         let mut parameters = Vec::new();
         let mut field_source = Arc::clone(source);
         for _ in 0..MAX_CALL_DEPTH {
@@ -516,10 +520,13 @@ impl ScriptRuntime {
             };
             let metadata = PropertyMetadata::decode(&resolved.package, resolved.export_index)?;
             if metadata.flags & PROPERTY_PARAMETER != 0 && metadata.flags & PROPERTY_RETURN == 0 {
-                parameters.push(ObjectId {
-                    package: Arc::clone(&resolved.package.summary().source),
-                    export_index: resolved.export_index,
-                });
+                parameters.push((
+                    ObjectId {
+                        package: Arc::clone(&resolved.package.summary().source),
+                        export_index: resolved.export_index,
+                    },
+                    metadata.flags & PROPERTY_OUTPUT != 0,
+                ));
             }
             field = metadata.next_field;
             field_source = resolved.package;

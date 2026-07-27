@@ -1,6 +1,41 @@
 use super::native::runtime_name;
 use super::*;
 
+struct CallOutput {
+    value: Value,
+    outputs: Vec<(usize, Value)>,
+}
+
+impl CallOutput {
+    fn value(value: Value) -> Self {
+        Self {
+            value,
+            outputs: Vec::new(),
+        }
+    }
+
+    fn from_arguments(value: Value, arguments: &[Value], output_arguments: Vec<Value>) -> Self {
+        let outputs = arguments
+            .iter()
+            .zip(output_arguments)
+            .enumerate()
+            .filter_map(|(index, (input, output))| (input != &output).then_some((index, output)))
+            .collect();
+        Self { value, outputs }
+    }
+
+    fn into_response(self) -> FrameResponse {
+        if self.outputs.is_empty() {
+            FrameResponse::Value(self.value)
+        } else {
+            FrameResponse::ValueWithOutputs {
+                value: self.value,
+                outputs: self.outputs,
+            }
+        }
+    }
+}
+
 impl ScriptRuntime {
     pub(super) fn execute_actor_function(
         &mut self,
@@ -9,18 +44,59 @@ impl ScriptRuntime {
         function: &ResolvedObject,
         arguments: &[Value],
     ) -> DispatchResult<Vec<ActorAction>> {
-        let mut actions = Vec::new();
-        let mut instance = self.instances.remove(&actor).unwrap_or_default();
-        let state_revision = self.state_revision(actor);
-        let result = self.execute_function(
+        self.execute_actor_function_inner(actor, actor_class, function, arguments, None)
+    }
+
+    pub(super) fn execute_actor_function_with_outputs(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+        output_arguments: &mut Vec<Value>,
+    ) -> DispatchResult<Vec<ActorAction>> {
+        self.execute_actor_function_inner(
             actor,
             actor_class,
             function,
             arguments,
-            &mut instance,
-            &mut actions,
-            0,
-        );
+            Some(output_arguments),
+        )
+    }
+
+    fn execute_actor_function_inner(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+        output_arguments: Option<&mut Vec<Value>>,
+    ) -> DispatchResult<Vec<ActorAction>> {
+        let mut actions = Vec::new();
+        let mut instance = self.instances.remove(&actor).unwrap_or_default();
+        let state_revision = self.state_revision(actor);
+        let result = if let Some(output_arguments) = output_arguments {
+            self.execute_function_with_outputs(
+                actor,
+                actor_class,
+                function,
+                arguments,
+                &mut instance,
+                &mut actions,
+                0,
+                Some(output_arguments),
+            )
+        } else {
+            self.execute_function(
+                actor,
+                actor_class,
+                function,
+                arguments,
+                &mut instance,
+                &mut actions,
+                0,
+            )
+        };
         let state_result = if result.is_ok() && self.state_revision(actor) != state_revision {
             self.execute_ready_state(actor, actor_class, &mut instance, &mut actions)
         } else {
@@ -85,7 +161,7 @@ impl ScriptRuntime {
                             actions,
                             1,
                         )
-                        .map(FrameResponse::Value),
+                        .map(CallOutput::into_response),
                     FrameRequest::CallIterator {
                         receiver,
                         function: call,
@@ -194,13 +270,37 @@ impl ScriptRuntime {
         actions: &mut Vec<ActorAction>,
         depth: usize,
     ) -> DispatchResult<Value> {
+        self.execute_function_with_outputs(
+            actor,
+            actor_class,
+            function,
+            arguments,
+            instance,
+            actions,
+            depth,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_function_with_outputs(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+        output_arguments: Option<&mut Vec<Value>>,
+    ) -> DispatchResult<Value> {
         if depth >= MAX_CALL_DEPTH {
             return Err(DispatchError::CallDepth);
         }
         let script = self.script(function)?;
         if let ScriptMetadata::Function(metadata) = &script.metadata {
             if metadata.native_index != 0 {
-                return self
+                let value = self
                     .native(
                         actor,
                         actor_class,
@@ -214,7 +314,19 @@ impl ScriptRuntime {
                         call: FunctionCall::Native(metadata.native_index),
                         message,
                     })
-                    .map_err(Into::into);
+                    .map_err(DispatchError::from)?;
+                if let Some(output_arguments) = output_arguments {
+                    copy_native_output_arguments(
+                        metadata.native_index,
+                        arguments,
+                        output_arguments,
+                    )
+                    .map_err(|message| crate::Error::Call {
+                        call: FunctionCall::Native(metadata.native_index),
+                        message,
+                    })?;
+                }
+                return Ok(value);
             }
             if metadata.flags & FUNCTION_NATIVE != 0 {
                 let summary = function.package.summary();
@@ -232,8 +344,9 @@ impl ScriptRuntime {
         let mut frame = Frame::new(&script.bytecode);
         self.bind_struct_members(function, &script.bytecode, &mut frame)?;
         self.bind_frame_defaults(actor_class, &function.package, &script.bytecode, &mut frame)?;
-        self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
-        frame
+        let argument_bindings =
+            self.bind_frame_arguments(&function.package, &script, arguments, &mut frame)?;
+        let result = frame
             .execute_hosted(|request| {
                 let result = match request {
                     FrameRequest::Call {
@@ -252,7 +365,7 @@ impl ScriptRuntime {
                             actions,
                             depth + 1,
                         )
-                        .map(FrameResponse::Value),
+                        .map(CallOutput::into_response),
                     FrameRequest::CallIterator {
                         receiver,
                         function: call,
@@ -294,7 +407,11 @@ impl ScriptRuntime {
                 };
                 result.map_err(|error| error.to_string())
             })
-            .map_err(Into::into)
+            .map_err(DispatchError::from);
+        if let Some(output_arguments) = output_arguments {
+            copy_output_arguments(arguments, &argument_bindings, &frame, output_arguments);
+        }
+        result
     }
 
     pub(super) fn script(&mut self, object: &ResolvedObject) -> DispatchResult<Arc<ScriptExport>> {
@@ -318,7 +435,7 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
         depth: usize,
-    ) -> DispatchResult<Value> {
+    ) -> DispatchResult<CallOutput> {
         match call {
             FunctionCall::Native(index) => self
                 .native(
@@ -330,13 +447,15 @@ impl ScriptRuntime {
                     instance,
                     actions,
                 )
-                .map_err(|message| crate::Error::Call { call, message }.into()),
+                .map_err(|message| crate::Error::Call { call, message }.into())
+                .map(CallOutput::value),
             FunctionCall::Final(index) => {
                 let reference = object_reference(index);
                 let Some(function) = self.packages.resolve(source, reference)? else {
-                    return Ok(Value::None);
+                    return Ok(CallOutput::value(Value::None));
                 };
-                match self.execute_function(
+                let mut output_arguments = Vec::new();
+                match self.execute_function_with_outputs(
                     actor,
                     actor_class,
                     &function,
@@ -344,8 +463,13 @@ impl ScriptRuntime {
                     instance,
                     actions,
                     depth,
+                    Some(&mut output_arguments),
                 ) {
-                    Ok(value) => Ok(value),
+                    Ok(value) => Ok(CallOutput::from_arguments(
+                        value,
+                        arguments,
+                        output_arguments,
+                    )),
                     Err(error) => {
                         // ponytail: keep bootstrapping the subclass while the VM is
                         // incomplete; remove this deferral once the corpus executes.
@@ -353,7 +477,7 @@ impl ScriptRuntime {
                             actor,
                             message: error.to_string(),
                         });
-                        Ok(Value::None)
+                        Ok(CallOutput::value(Value::None))
                     }
                 }
             }
@@ -379,9 +503,10 @@ impl ScriptRuntime {
                     self.find_function(class, &name, depth)?
                 };
                 let Some(function) = function else {
-                    return Ok(Value::None);
+                    return Ok(CallOutput::value(Value::None));
                 };
-                self.execute_function(
+                let mut output_arguments = Vec::new();
+                self.execute_function_with_outputs(
                     actor,
                     actor_class,
                     &function,
@@ -389,7 +514,9 @@ impl ScriptRuntime {
                     instance,
                     actions,
                     depth,
+                    Some(&mut output_arguments),
                 )
+                .map(|value| CallOutput::from_arguments(value, arguments, output_arguments))
             }
         }
     }
@@ -406,7 +533,7 @@ impl ScriptRuntime {
         current_instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
         depth: usize,
-    ) -> DispatchResult<Value> {
+    ) -> DispatchResult<CallOutput> {
         if receiver == -1 {
             return self.dispatch_call(
                 current_actor,
@@ -828,7 +955,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    fn actor_for_handle(&self, handle: i32) -> DispatchResult<usize> {
+    pub(super) fn actor_for_handle(&self, handle: i32) -> DispatchResult<usize> {
         let index = usize::try_from(handle - 1)
             .ok()
             .filter(|index| *index < self.handle_objects.len())
@@ -838,6 +965,60 @@ impl ScriptRuntime {
             .copied()
             .ok_or(DispatchError::InvalidActorHandle { handle })
     }
+}
+
+fn copy_output_arguments(
+    arguments: &[Value],
+    bindings: &[(i32, usize, bool)],
+    frame: &Frame<'_>,
+    output_arguments: &mut Vec<Value>,
+) {
+    output_arguments.clear();
+    output_arguments.extend_from_slice(arguments);
+    for &(field, argument, output) in bindings {
+        if !output {
+            continue;
+        }
+        if let Some(value) = frame.local(field)
+            && let Some(output) = output_arguments.get_mut(argument)
+        {
+            *output = value.clone();
+        }
+    }
+}
+
+fn copy_native_output_arguments(
+    index: u16,
+    arguments: &[Value],
+    output_arguments: &mut Vec<Value>,
+) -> std::result::Result<(), String> {
+    output_arguments.clear();
+    output_arguments.extend_from_slice(arguments);
+    if !matches!(index, 0xe5 | 0xe6) {
+        return Ok(());
+    }
+    let [Value::Rotator(rotation), _, _, _] = arguments else {
+        return Err(format!(
+            "GetAxes expects a rotator and three vectors, found {}",
+            arguments
+                .iter()
+                .map(Value::kind)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    let mut axes = crate::rotator_axes(*rotation);
+    if index == 0xe6 {
+        axes = [
+            [axes[0][0], axes[1][0], axes[2][0]],
+            [axes[0][1], axes[1][1], axes[2][1]],
+            [axes[0][2], axes[1][2], axes[2][2]],
+        ];
+    }
+    for (output, axis) in output_arguments[1..].iter_mut().zip(axes) {
+        *output = Value::Vector(axis);
+    }
+    Ok(())
 }
 
 pub(super) fn local_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
@@ -856,4 +1037,41 @@ pub(super) fn fields(bytecode: &Bytecode, opcode: u8) -> impl Iterator<Item = i3
                 .and_then(|bytes| bytes.try_into().ok())
                 .map(i32::from_le_bytes)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn returns_mutated_event_arguments_to_the_engine_host() {
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: 1,
+            bytes: vec![0x08],
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(10, Value::Vector([4.0, 5.0, 6.0]));
+        frame.set_local(11, Value::Rotator([7, 8, 9]));
+        let mut output = Vec::new();
+        copy_output_arguments(
+            &[
+                Value::Object(1),
+                Value::Vector([1.0, 2.0, 3.0]),
+                Value::Rotator([1, 2, 3]),
+            ],
+            &[(10, 1, true), (11, 2, true)],
+            &frame,
+            &mut output,
+        );
+        assert_eq!(
+            output,
+            [
+                Value::Object(1),
+                Value::Vector([4.0, 5.0, 6.0]),
+                Value::Rotator([7, 8, 9]),
+            ]
+        );
+    }
 }

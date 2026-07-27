@@ -15,7 +15,8 @@ use openhp1_script::{
 use thiserror::Error;
 
 use crate::{
-    Frame, FrameRequest, FrameResponse, FrameRun, FrameSnapshot, FunctionCall, StructMember, Value,
+    Frame, FrameRequest, FrameResponse, FrameRun, FrameSnapshot, FunctionCall, PlayerInput,
+    PlayerView, StructMember, Value,
 };
 
 mod actor;
@@ -41,8 +42,10 @@ const MOVE: u16 = 0x10a;
 const SET_LOCATION: u16 = 0x10b;
 const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
+const IS_IN_STATE: u16 = 0x119;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
+const GET_ANIM_GROUP: u16 = 0x125;
 const MOVE_TO: u16 = 500;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
@@ -50,6 +53,7 @@ const LOG: u16 = 0x0e7;
 const CLASS_ABSTRACT: u32 = 0x0000_0001;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
+const PROPERTY_OUTPUT: u32 = 0x100;
 const PROPERTY_RETURN: u32 = 0x400;
 const FUNCTION_NATIVE: u32 = 0x0000_0400;
 const STATE_AUTO: u32 = 0x0000_0002;
@@ -232,6 +236,15 @@ pub enum DispatchError {
     #[error("runtime actor {actor} is not registered")]
     UnregisteredActor { actor: usize },
 
+    #[error("the level has no registered player pawn")]
+    MissingPlayer,
+
+    #[error("player input is invalid: {message}")]
+    InvalidPlayerInput { message: String },
+
+    #[error("player view is invalid: {message}")]
+    InvalidPlayerView { message: String },
+
     #[error("named native function `{class}.{function}` is not implemented")]
     UnimplementedNamedNative { class: String, function: String },
 
@@ -284,7 +297,7 @@ pub struct ScriptRuntime {
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
     resolved_fields: HashMap<(Arc<str>, i32), Option<ObjectId>>,
     zero_values: HashMap<ObjectId, Option<Value>>,
-    frame_arguments: HashMap<ObjectId, Arc<Vec<(i32, usize)>>>,
+    frame_arguments: HashMap<ObjectId, ArgumentBindings>,
     struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
     actor_classes: HashMap<usize, ObjectId>,
     actor_states: HashMap<usize, Option<String>>,
@@ -309,6 +322,7 @@ pub struct ScriptRuntime {
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
     player_actor: Option<usize>,
+    animation_groups: HashMap<usize, HashMap<String, String>>,
     player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
@@ -377,6 +391,7 @@ enum LatentAction {
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;
+type ArgumentBindings = Arc<Vec<(i32, usize, bool)>>;
 
 fn object_id(package: &Arc<Package>, export_index: usize) -> ObjectId {
     ObjectId {
@@ -484,6 +499,10 @@ mod tests {
     #[test]
     fn scalar_comparisons_cover_bool_int_and_float_families() {
         assert_eq!(
+            scalar_native(0x83, &[Value::Bool(true), Value::Bool(false)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
             scalar_native(0xf2, &[Value::Bool(true), Value::Bool(true)]),
             Ok(Value::Bool(true))
         );
@@ -571,7 +590,15 @@ mod tests {
     }
 
     #[test]
-    fn fmax_matches_unreal_native_ordering() {
+    fn float_min_max_match_unreal_native_ordering() {
+        assert_eq!(
+            scalar_native(0xf4, &[Value::Float(2.0), Value::Float(3.0)]),
+            Ok(Value::Float(2.0))
+        );
+        assert_eq!(
+            scalar_native(0xf4, &[Value::Float(2.0), Value::Float(f32::NAN)]),
+            Ok(Value::Float(2.0))
+        );
         assert_eq!(
             scalar_native(0xf5, &[Value::Float(2.0), Value::Float(3.0)]),
             Ok(Value::Float(3.0))
@@ -584,6 +611,16 @@ mod tests {
 
     #[test]
     fn basic_vector_arithmetic_matches_unreal_natives() {
+        assert_eq!(
+            scalar_native(
+                0xd9,
+                &[
+                    Value::Vector([1.0, 2.0, 3.0]),
+                    Value::Vector([1.0, 2.0, 3.0])
+                ]
+            ),
+            Ok(Value::Bool(true))
+        );
         assert_eq!(
             scalar_native(
                 0xd7,
@@ -612,10 +649,24 @@ mod tests {
             ),
             Ok(Value::Rotator([i32::MIN, 5, -9]))
         );
+        assert_eq!(
+            scalar_native(
+                0x13d,
+                &[
+                    Value::Rotator([i32::MIN, i32::MAX, 1]),
+                    Value::Rotator([1, -1, 2])
+                ]
+            ),
+            Ok(Value::Rotator([i32::MAX, i32::MIN, -1]))
+        );
     }
 
     #[test]
     fn requested_core_math_and_random_natives_match_unreal_semantics() {
+        assert_eq!(
+            scalar_native(0xc1, &[Value::Float(9.0)]),
+            Ok(Value::Float(3.0))
+        );
         assert_eq!(
             scalar_native(0xfb, &[Value::Int(12), Value::Int(-5), Value::Int(10)]),
             Ok(Value::Int(10))

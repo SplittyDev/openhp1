@@ -180,6 +180,22 @@ impl ScriptRuntime {
             });
             return Ok(Value::None);
         }
+        if index == GET_ANIM_GROUP {
+            let [sequence] = arguments else {
+                return Err(format!(
+                    "GetAnimGroup expects one name, found {}",
+                    arguments.len()
+                ));
+            };
+            let sequence = runtime_name(source, sequence)?.to_ascii_lowercase();
+            return Ok(Value::NameText(
+                self.animation_groups
+                    .get(&actor)
+                    .and_then(|groups| groups.get(&sequence))
+                    .cloned()
+                    .unwrap_or_else(|| "None".to_owned()),
+            ));
+        }
         if index == SPAWN {
             return self.spawn_actor(actor, actor_class, source, arguments, instance, actions);
         }
@@ -283,6 +299,21 @@ impl ScriptRuntime {
                 },
             );
             return Ok(Value::None);
+        }
+        if index == IS_IN_STATE {
+            let [state] = arguments else {
+                return Err(format!(
+                    "IsInState expects one name, found {}",
+                    arguments.len()
+                ));
+            };
+            let state = runtime_name(source, state)?;
+            return Ok(Value::Bool(
+                self.actor_states
+                    .get(&actor)
+                    .and_then(|current| current.as_deref())
+                    .is_some_and(|current| current.eq_ignore_ascii_case(&state)),
+            ));
         }
         if index == SET_COLLISION {
             for (name, value) in ["bCollideActors", "bBlockActors", "bBlockPlayers"]
@@ -812,6 +843,7 @@ enum ScalarNative {
     NotEqual_StrStr,
     Not_PreBool,
     AndAnd_BoolBool,
+    XorXor_BoolBool,
     OrOr_BoolBool,
     Multiply_IntInt,
     Divide_IntInt,
@@ -836,20 +868,25 @@ enum ScalarNative {
     EqualEqual_FloatFloat,
     NotEqual_FloatFloat,
     Abs,
+    Sqrt,
     Subtract_PreVector,
     Multiply_VectorFloat,
     Multiply_FloatVector,
     Divide_VectorFloat,
     Add_VectorVector,
     Subtract_VectorVector,
+    EqualEqual_VectorVector,
+    NotEqual_VectorVector,
     VSize,
     Normal,
+    FMin,
     FMax,
     Clamp,
     EqualEqual_BoolBool,
     NotEqual_BoolBool,
     Chr,
     Add_RotatorRotator,
+    Subtract_RotatorRotator,
 }
 
 impl TryFrom<u16> for ScalarNative {
@@ -864,6 +901,7 @@ impl TryFrom<u16> for ScalarNative {
             0x7b => Ok(Self::NotEqual_StrStr),
             0x81 => Ok(Self::Not_PreBool),
             0x82 => Ok(Self::AndAnd_BoolBool),
+            0x83 => Ok(Self::XorXor_BoolBool),
             0x84 => Ok(Self::OrOr_BoolBool),
             0x90 => Ok(Self::Multiply_IntInt),
             0x91 => Ok(Self::Divide_IntInt),
@@ -888,20 +926,25 @@ impl TryFrom<u16> for ScalarNative {
             0xb4 => Ok(Self::EqualEqual_FloatFloat),
             0xb5 => Ok(Self::NotEqual_FloatFloat),
             0xba => Ok(Self::Abs),
+            0xc1 => Ok(Self::Sqrt),
             0xd3 => Ok(Self::Subtract_PreVector),
             0xd4 => Ok(Self::Multiply_VectorFloat),
             0xd5 => Ok(Self::Multiply_FloatVector),
             0xd6 => Ok(Self::Divide_VectorFloat),
             0xd7 => Ok(Self::Add_VectorVector),
             0xd8 => Ok(Self::Subtract_VectorVector),
+            0xd9 => Ok(Self::EqualEqual_VectorVector),
+            0xda => Ok(Self::NotEqual_VectorVector),
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
             0xec => Ok(Self::Chr),
             0xf2 => Ok(Self::EqualEqual_BoolBool),
             0xf3 => Ok(Self::NotEqual_BoolBool),
+            0xf4 => Ok(Self::FMin),
             0xf5 => Ok(Self::FMax),
             0xfb => Ok(Self::Clamp),
             0x13c => Ok(Self::Add_RotatorRotator),
+            0x13d => Ok(Self::Subtract_RotatorRotator),
             _ => Err(()),
         }
     }
@@ -910,10 +953,10 @@ impl TryFrom<u16> for ScalarNative {
 pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Result<Value, String> {
     let native = ScalarNative::try_from(index)
         .map_err(|()| format!("native {index:#05x} is not implemented"))?;
-    if native == ScalarNative::FMax {
+    if matches!(native, ScalarNative::FMin | ScalarNative::FMax) {
         let [Value::Float(left), Value::Float(right)] = arguments else {
             return Err(format!(
-                "FMax expects two floats, found {}",
+                "{native:?} expects two floats, found {}",
                 arguments
                     .iter()
                     .map(Value::kind)
@@ -921,7 +964,12 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
                     .join(", ")
             ));
         };
-        return Ok(Value::Float(if left < right { *right } else { *left }));
+        let value = match native {
+            ScalarNative::FMin if right < left => *right,
+            ScalarNative::FMax if left < right => *right,
+            _ => *left,
+        };
+        return Ok(Value::Float(value));
     }
     if matches!(
         native,
@@ -951,6 +999,10 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::AndAnd_BoolBool, [left, right]) => Value::Bool(
             left.truthy().map_err(|error| error.to_string())?
                 && right.truthy().map_err(|error| error.to_string())?,
+        ),
+        (ScalarNative::XorXor_BoolBool, [left, right]) => Value::Bool(
+            left.truthy().map_err(|error| error.to_string())?
+                != right.truthy().map_err(|error| error.to_string())?,
         ),
         (ScalarNative::OrOr_BoolBool, [left, right]) => Value::Bool(
             left.truthy().map_err(|error| error.to_string())?
@@ -1024,6 +1076,7 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             Value::Bool(left != right)
         }
         (ScalarNative::Abs, [Value::Float(value)]) => Value::Float(value.abs()),
+        (ScalarNative::Sqrt, [Value::Float(value)]) => Value::Float(value.sqrt()),
         (ScalarNative::Subtract_PreVector, [Value::Vector(value)]) => {
             Value::Vector([-value[0], -value[1], -value[2]])
         }
@@ -1039,6 +1092,12 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Subtract_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]])
+        }
+        (ScalarNative::EqualEqual_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Bool(left == right)
+        }
+        (ScalarNative::NotEqual_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Bool(left != right)
         }
         (ScalarNative::VSize, [Value::Vector(value)]) => {
             Value::Float((value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
@@ -1068,6 +1127,13 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
                 left[0].wrapping_add(right[0]),
                 left[1].wrapping_add(right[1]),
                 left[2].wrapping_add(right[2]),
+            ])
+        }
+        (ScalarNative::Subtract_RotatorRotator, [Value::Rotator(left), Value::Rotator(right)]) => {
+            Value::Rotator([
+                left[0].wrapping_sub(right[0]),
+                left[1].wrapping_sub(right[1]),
+                left[2].wrapping_sub(right[2]),
             ])
         }
         _ => {

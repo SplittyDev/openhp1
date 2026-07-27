@@ -43,6 +43,7 @@ pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
                 .diagnostics
                 .push(format!("runtime registration failed: {error}"));
         }
+        runtime.set_actor_animation_groups(actor, scene.actor_animation_groups(actor));
     }
     let mut events = 0;
     let mut animations = 0;

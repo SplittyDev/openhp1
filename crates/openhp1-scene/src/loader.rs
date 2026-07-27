@@ -462,6 +462,20 @@ impl LoadedScene {
         Ok(self.tick_animations_with_completions(delta_time)?.0)
     }
 
+    pub(crate) fn actor_animation_groups(&self, actor: usize) -> Vec<(String, String)> {
+        self.animations
+            .iter()
+            .find(|animation| animation.actor_index == actor)
+            .map(|animation| {
+                animation
+                    .sequences()
+                    .iter()
+                    .map(|sequence| (sequence.name.clone(), sequence.group.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn tick_animations_with_completions(
         &mut self,
         delta_time: f32,
