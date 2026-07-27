@@ -33,6 +33,7 @@ impl ScriptRuntime {
             random_state: 0x6d2b_79f5,
             object_handles: HashMap::new(),
             handle_objects: Vec::new(),
+            next_actor: 0,
         })
     }
 
@@ -44,6 +45,7 @@ impl ScriptRuntime {
         class_package: impl AsRef<Path>,
         class_export: usize,
     ) -> DispatchResult<()> {
+        self.next_actor = self.next_actor.max(actor.saturating_add(1));
         let actor_package = self.packages.load_path(actor_package)?;
         let actor_entry = actor_package.summary().exports.get(actor_export).ok_or(
             openhp1_package::Error::InvalidExportIndex {

@@ -35,10 +35,12 @@ const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
 const PLAY_SOUND: u16 = 0x108;
 const SET_LOCATION: u16 = 0x10b;
+const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
 const SET_ROTATION: u16 = 0x12b;
 const SET_PHYSICS: u16 = 0xf82;
 const LOG: u16 = 0x0e7;
+const CLASS_ABSTRACT: u32 = 0x0000_0001;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
@@ -130,6 +132,15 @@ pub enum ActorAction {
     AwaitAnimation {
         actor: usize,
     },
+    SpawnActor {
+        actor: usize,
+        name: String,
+        class_package: Arc<str>,
+        class_export: usize,
+        class_name: String,
+        location: [f32; 3],
+        rotation: [i32; 3],
+    },
     SetLocation {
         actor: usize,
         location: [f32; 3],
@@ -150,6 +161,22 @@ pub enum ActorAction {
         actor: usize,
         message: String,
     },
+}
+
+impl ActorAction {
+    pub fn actor(&self) -> usize {
+        match self {
+            Self::PlayAnimation { actor, .. }
+            | Self::LoopAnimation { actor, .. }
+            | Self::AwaitAnimation { actor }
+            | Self::SpawnActor { actor, .. }
+            | Self::SetLocation { actor, .. }
+            | Self::SetRotation { actor, .. }
+            | Self::DestroyActor { actor }
+            | Self::Log { actor, .. }
+            | Self::DeferredCall { actor, .. } => *actor,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -253,6 +280,7 @@ pub struct ScriptRuntime {
     random_state: u32,
     object_handles: HashMap<ObjectId, i32>,
     handle_objects: Vec<ObjectId>,
+    next_actor: usize,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -317,6 +345,13 @@ fn object_id(package: &Arc<Package>, export_index: usize) -> ObjectId {
     ObjectId {
         package: Arc::clone(&package.summary().source),
         export_index,
+    }
+}
+
+fn runtime_actor_id(actor: usize) -> ObjectId {
+    ObjectId {
+        package: Arc::from("<runtime>"),
+        export_index: actor,
     }
 }
 

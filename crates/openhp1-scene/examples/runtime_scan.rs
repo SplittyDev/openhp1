@@ -14,6 +14,7 @@ struct ScanStats {
     animations_requested: usize,
     animations_applied: usize,
     animated_actors: HashSet<usize>,
+    spawned: usize,
     locations: usize,
     relocated: usize,
     rotations: usize,
@@ -152,6 +153,7 @@ fn main() -> Result<()> {
         stats.animations_applied, stats.animations_requested
     );
     println!("{state_resumes} state frames resumed");
+    println!("{} actors spawned", stats.spawned);
     println!(
         "{} SetLocation actions, {} actor relocations",
         stats.locations, stats.relocated
@@ -179,6 +181,7 @@ fn apply_actions(
 ) -> Result<()> {
     let mut actions = VecDeque::from(actions);
     while let Some(action) = actions.pop_front() {
+        scene.ensure_runtime_actor(action.actor());
         match action {
             ActorAction::PlayAnimation {
                 actor,
@@ -213,6 +216,30 @@ fn apply_actions(
                 if !scene.actor_animation_playing(actor) {
                     actions.extend(runtime.animation_finished(actor)?);
                 }
+            }
+            ActorAction::SpawnActor {
+                actor,
+                name,
+                class_package,
+                class_export,
+                class_name,
+                location,
+                rotation,
+            } => {
+                scene.spawn_actor(
+                    actor,
+                    name,
+                    class_package.to_string(),
+                    class_export,
+                    class_name,
+                    Vec3::from_array(location),
+                    Rotator {
+                        pitch: rotation[0],
+                        yaw: rotation[1],
+                        roll: rotation[2],
+                    },
+                )?;
+                stats.spawned += 1;
             }
             ActorAction::SetLocation { actor, location } => {
                 stats.locations += 1;

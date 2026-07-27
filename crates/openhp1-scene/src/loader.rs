@@ -214,6 +214,66 @@ impl LoadedScene {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_actor(
+        &mut self,
+        actor_index: usize,
+        name: String,
+        class_package: String,
+        class_export: usize,
+        class_name: String,
+        location: Vec3,
+        rotation: Rotator,
+    ) -> Result<()> {
+        ensure!(location.is_finite(), "spawned actor location is not finite");
+        while self.actors.len() < actor_index {
+            self.actors
+                .push(runtime_actor_placeholder(self.actors.len()));
+        }
+        let actor = SceneActor {
+            id: SceneObjectId {
+                package: "<runtime>".to_owned(),
+                export_index: actor_index,
+            },
+            name,
+            class: Some(SceneObjectId {
+                package: class_package,
+                export_index: class_export,
+            }),
+            class_name,
+            location,
+            rotation,
+            pre_pivot: Vec3::ZERO,
+            draw_scale: 1.0,
+            draw_type: 0,
+            hidden: false,
+            unlit: false,
+            mesh: None,
+            mesh_name: None,
+            animation: None,
+            render: None,
+            diagnostics: vec!["runtime-spawned actor rendering is not implemented".to_owned()],
+        };
+        if actor_index == self.actors.len() {
+            self.actors.push(actor);
+        } else {
+            ensure!(
+                self.actors[actor_index].id.package == "<runtime>"
+                    && self.actors[actor_index].class.is_none(),
+                "runtime actor index {actor_index} already exists in the scene"
+            );
+            self.actors[actor_index] = actor;
+        }
+        Ok(())
+    }
+
+    pub fn ensure_runtime_actor(&mut self, actor_index: usize) {
+        while self.actors.len() <= actor_index {
+            self.actors
+                .push(runtime_actor_placeholder(self.actors.len()));
+        }
+    }
+
     pub fn set_actor_location(&mut self, actor_index: usize, location: Vec3) -> Result<bool> {
         ensure!(location.is_finite(), "actor location is not finite");
         let actor = self
@@ -778,6 +838,30 @@ impl ActorState {
             self.unlit = unlit;
         }
         Ok(())
+    }
+}
+
+fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
+    SceneActor {
+        id: SceneObjectId {
+            package: "<runtime>".to_owned(),
+            export_index: actor_index,
+        },
+        name: format!("RuntimeActor{actor_index}"),
+        class: None,
+        class_name: "<unknown>".to_owned(),
+        location: Vec3::ZERO,
+        rotation: Rotator::default(),
+        pre_pivot: Vec3::ZERO,
+        draw_scale: 1.0,
+        draw_type: 0,
+        hidden: false,
+        unlit: false,
+        mesh: None,
+        mesh_name: None,
+        animation: None,
+        render: None,
+        diagnostics: vec!["spawn action was lost after a deferred script failure".to_owned()],
     }
 }
 

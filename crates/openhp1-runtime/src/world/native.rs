@@ -172,6 +172,9 @@ impl ScriptRuntime {
             });
             return Ok(Value::None);
         }
+        if index == SPAWN {
+            return self.spawn_actor(actor, actor_class, source, arguments, instance, actions);
+        }
         if matches!(index, 0xfe | 0xff)
             && let [left, right] = arguments
         {
@@ -321,6 +324,293 @@ impl ScriptRuntime {
             return Ok(Value::Float(random_float(&mut self.random_state)));
         }
         scalar_native(index, arguments)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_actor(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        source: &Arc<Package>,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<Value, String> {
+        if arguments.is_empty() || arguments.len() > 5 {
+            return Err(format!(
+                "Spawn expects a class and at most 4 optional arguments, found {}",
+                arguments.len()
+            ));
+        }
+        let Some(class_reference) = object_value(&arguments[0]) else {
+            return Err(format!(
+                "Spawn class is {}, expected object",
+                arguments[0].kind()
+            ));
+        };
+        let Some(class) = self
+            .resolve_spawn_class(source, class_reference)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(Value::Object(0));
+        };
+        let script = self.script(&class).map_err(|error| error.to_string())?;
+        let ScriptMetadata::Class(metadata) = &script.metadata else {
+            return Err("Spawn object is not a class".to_owned());
+        };
+        let summary = class.package.summary();
+        let class_name = summary.name(summary.exports[class.export_index].object_name);
+        if metadata.flags & CLASS_ABSTRACT != 0 {
+            actions.push(ActorAction::DeferredCall {
+                actor,
+                message: format!("Spawn cannot instantiate abstract class {class_name}"),
+            });
+            return Ok(Value::Object(0));
+        }
+        let class_name = class_name.to_owned();
+
+        let default_location = match self
+            .instance_property(actor_class, instance, "Location")
+            .map_err(|error| error.to_string())?
+        {
+            Some(StoredValue::Value(Value::Vector(value))) => value,
+            Some(value) => return Err(format!("Spawn source Location is {value:?}")),
+            None => [0.0; 3],
+        };
+        let location = match arguments.get(3) {
+            Some(Value::Vector(value)) => *value,
+            Some(Value::None) | None => default_location,
+            Some(value) => return Err(format!("Spawn location is {}", value.kind())),
+        };
+        if !location.iter().all(|value| value.is_finite()) {
+            return Err("Spawn location is not finite".to_owned());
+        }
+
+        let default_rotation = match self
+            .instance_property(actor_class, instance, "Rotation")
+            .map_err(|error| error.to_string())?
+        {
+            Some(StoredValue::Value(Value::Rotator(value))) => value,
+            Some(value) => return Err(format!("Spawn source Rotation is {value:?}")),
+            None => [0; 3],
+        };
+        let rotation = match arguments.get(4) {
+            Some(Value::Rotator(value)) => *value,
+            Some(Value::None) | None => default_rotation,
+            Some(value) => return Err(format!("Spawn rotation is {}", value.kind())),
+        };
+
+        let owner = self
+            .spawn_object_value(actor, arguments.get(1).unwrap_or(&Value::None))
+            .map_err(|error| error.to_string())?;
+        let tag = match arguments.get(2) {
+            Some(Value::None) | None => class_name.clone(),
+            Some(value) => {
+                let value = runtime_name(source, value)?;
+                if value.eq_ignore_ascii_case("None") {
+                    class_name.clone()
+                } else {
+                    value
+                }
+            }
+        };
+
+        let spawned = self.next_actor;
+        self.next_actor = self
+            .next_actor
+            .checked_add(1)
+            .ok_or_else(|| DispatchError::ObjectLimit.to_string())?;
+        let object = runtime_actor_id(spawned);
+        let handle = self
+            .object_handle(object.clone())
+            .map_err(|error| error.to_string())?;
+        self.object_actors.insert(object.clone(), spawned);
+        self.actor_objects.insert(spawned, object);
+        self.actor_classes
+            .insert(spawned, object_id(&class.package, class.export_index));
+        self.actor_states.insert(spawned, None);
+        self.destroyed.remove(&spawned);
+
+        let mut spawned_instance = self
+            .load_class_defaults(&class, 0)
+            .map_err(|error| error.to_string())?;
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "Location",
+            StoredValue::Value(Value::Vector(location)),
+        )?;
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "OldLocation",
+            StoredValue::Value(Value::Vector(location)),
+        )?;
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "Rotation",
+            StoredValue::Value(Value::Rotator(rotation)),
+        )?;
+        self.set_spawn_property(&class, &mut spawned_instance, "Tag", StoredValue::Name(tag))?;
+        self.set_spawn_property(&class, &mut spawned_instance, "Owner", owner)?;
+        for property in ["Instigator", "Level", "XLevel"] {
+            if let Some(value) = self
+                .instance_property(actor_class, instance, property)
+                .map_err(|error| error.to_string())?
+            {
+                self.set_spawn_property(&class, &mut spawned_instance, property, value)?;
+            }
+        }
+
+        self.refresh_tick_actor(spawned, &class)
+            .map_err(|error| error.to_string())?;
+        self.instances.insert(spawned, spawned_instance);
+        let name = format!("{class_name}{spawned}");
+        actions.push(ActorAction::SpawnActor {
+            actor: spawned,
+            name,
+            class_package: Arc::clone(&class.package.summary().source),
+            class_export: class.export_index,
+            class_name,
+            location,
+            rotation,
+        });
+
+        let parent_instance = std::mem::take(instance);
+        if self.instances.insert(actor, parent_instance).is_some() {
+            return Err(DispatchError::ActiveActorContext { actor }.to_string());
+        }
+        for event in [
+            "Spawned",
+            "PreBeginPlay",
+            "BeginPlay",
+            "PostBeginPlay",
+            "SetInitialState",
+        ] {
+            match self.dispatch_event(
+                spawned,
+                Path::new(class.package.summary().source.as_ref()),
+                class.export_index,
+                event,
+            ) {
+                Ok(event_actions) => actions.extend(event_actions),
+                Err(error) => actions.push(ActorAction::DeferredCall {
+                    actor: spawned,
+                    message: format!("{event}: {error}"),
+                }),
+            }
+        }
+        *instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| DispatchError::ActiveActorContext { actor }.to_string())?;
+
+        Ok(if self.destroyed.contains(&spawned) {
+            Value::Object(0)
+        } else {
+            Value::Object(handle)
+        })
+    }
+
+    fn resolve_spawn_class(
+        &mut self,
+        source: &Arc<Package>,
+        reference: i32,
+    ) -> DispatchResult<Option<ResolvedObject>> {
+        if reference == 0 {
+            return Ok(None);
+        }
+        if let Some(object) = self.packages.resolve(source, object_reference(reference))?
+            && self.is_spawn_class(&object)
+        {
+            return Ok(Some(object));
+        }
+        let index = usize::try_from(reference - 1)
+            .ok()
+            .filter(|index| *index < self.handle_objects.len())
+            .ok_or(DispatchError::InvalidObjectHandle { handle: reference })?;
+        let object = self.handle_objects[index].clone();
+        let object = self.resolved_object(&object)?;
+        if self.is_spawn_class(&object) {
+            Ok(Some(object))
+        } else {
+            let summary = object.package.summary();
+            let export = &summary.exports[object.export_index];
+            Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "Spawn object {} `{}` is not a class",
+                    summary.class_name(export).unwrap_or("<unknown>"),
+                    summary.name(export.object_name)
+                ),
+            })
+        }
+    }
+
+    fn is_spawn_class(&mut self, object: &ResolvedObject) -> bool {
+        let summary = object.package.summary();
+        match summary.class_name(&summary.exports[object.export_index]) {
+            Some(name) => name.eq_ignore_ascii_case("Class"),
+            None => self
+                .script(object)
+                .is_ok_and(|script| matches!(script.metadata, ScriptMetadata::Class(_))),
+        }
+    }
+
+    fn spawn_object_value(
+        &self,
+        current_actor: usize,
+        value: &Value,
+    ) -> DispatchResult<StoredValue> {
+        Ok(match value {
+            Value::None | Value::Object(0) => StoredValue::Object(None),
+            Value::Object(-1) => StoredValue::Object(Some(
+                self.actor_objects.get(&current_actor).cloned().ok_or(
+                    DispatchError::UnregisteredActor {
+                        actor: current_actor,
+                    },
+                )?,
+            )),
+            Value::Object(handle) => {
+                let index = usize::try_from(*handle - 1)
+                    .ok()
+                    .filter(|index| *index < self.handle_objects.len())
+                    .ok_or(DispatchError::InvalidObjectHandle { handle: *handle })?;
+                StoredValue::Object(Some(self.handle_objects[index].clone()))
+            }
+            value => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("Spawn owner is {}, expected object", value.kind()),
+                });
+            }
+        })
+    }
+
+    fn instance_property(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> DispatchResult<Option<StoredValue>> {
+        let Some(field) = self.find_property(class, name, 0)? else {
+            return Ok(None);
+        };
+        Ok(instance.get(&field).cloned())
+    }
+
+    fn set_spawn_property(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        name: &str,
+        value: StoredValue,
+    ) -> std::result::Result<(), String> {
+        let field = self
+            .find_property(class, name, 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Spawn property {name} is missing"))?;
+        instance.insert(field, value);
+        Ok(())
     }
 }
 

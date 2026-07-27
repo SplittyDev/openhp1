@@ -566,6 +566,7 @@ fn apply_runtime_actions(
     let mut transformed = false;
     let mut actions = VecDeque::from(actions);
     while let Some(action) = actions.pop_front() {
+        scene.ensure_runtime_actor(action.actor());
         match action {
             ActorAction::PlayAnimation {
                 actor,
@@ -600,6 +601,29 @@ fn apply_runtime_actions(
                 if !scene.actor_animation_playing(actor) {
                     actions.extend(runtime.animation_finished(actor)?);
                 }
+            }
+            ActorAction::SpawnActor {
+                actor,
+                name,
+                class_package,
+                class_export,
+                class_name,
+                location,
+                rotation,
+            } => {
+                scene.spawn_actor(
+                    actor,
+                    name,
+                    class_package.to_string(),
+                    class_export,
+                    class_name,
+                    Vec3::from_array(location),
+                    Rotator {
+                        pitch: rotation[0],
+                        yaw: rotation[1],
+                        roll: rotation[2],
+                    },
+                )?;
             }
             ActorAction::SetLocation { actor, location } => {
                 transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;
