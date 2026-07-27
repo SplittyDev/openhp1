@@ -46,6 +46,7 @@ const SET_TIMER: u16 = 0x118;
 const IS_IN_STATE: u16 = 0x119;
 const IS_ANIMATING: u16 = 0x11a;
 const GET_STATE_NAME: u16 = 0x11c;
+const TRACE_TEXTURE: u16 = 0x11d;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
@@ -466,7 +467,7 @@ mod tests {
         actor::update_touching_array,
         native::{
             animation_parameters, collision_updates, log_arguments, noise_loudness, random_float,
-            random_int, scalar_native, target_score,
+            random_int, scalar_native, sound_arguments, target_score, trace_texture,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -723,6 +724,33 @@ mod tests {
         assert_eq!(noise_loudness(&[Value::Float(0.5)]), Ok(0.5));
         assert!(noise_loudness(&[Value::Float(f32::NAN)]).is_err());
         assert!(noise_loudness(&[]).is_err());
+    }
+
+    #[test]
+    fn landing_surface_and_sound_natives_validate_calls() {
+        assert_eq!(
+            trace_texture(&[
+                Value::Vector([0.0; 3]),
+                Value::Vector([0.0, 0.0, -16.0]),
+                Value::Int(0),
+                Value::Bool(false),
+            ]),
+            Ok(Value::Object(0))
+        );
+        assert!(trace_texture(&[Value::Int(0)]).is_err());
+        assert!(
+            sound_arguments(
+                "PlayOwnedSound",
+                &[
+                    Value::Object(1),
+                    Value::Byte(0),
+                    Value::Float(1.0),
+                    Value::Bool(false),
+                ],
+            )
+            .is_ok()
+        );
+        assert!(sound_arguments("PlayOwnedSound", &[Value::Int(1)]).is_err());
     }
 
     #[test]

@@ -358,6 +358,17 @@ impl ScriptRuntime {
                 {
                     return self.sound_duration(arguments).map(Value::Float);
                 }
+                if class.eq_ignore_ascii_case("Actor")
+                    && function_name.eq_ignore_ascii_case("PlayOwnedSound")
+                {
+                    super::native::sound_arguments("PlayOwnedSound", arguments)
+                        .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                    actions.push(ActorAction::DeferredCall {
+                        actor,
+                        message: "PlaySound is not audible yet".to_owned(),
+                    });
+                    return Ok(Value::None);
+                }
                 if let Some(value) = named_native(class, function_name, arguments) {
                     return Ok(value);
                 }

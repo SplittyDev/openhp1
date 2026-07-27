@@ -95,6 +95,8 @@ Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
 Numeric natives interpret a null-context scalar result as the typed zero value
 that UE writes into the expression result buffer.
+Switches likewise compare an untyped null-context result as zero when their
+case values establish a numeric or boolean type.
 
 HP1 `CreateAnimChannel` creates the requested channel through the normal actor
 spawn lifecycle so scripts can retain and own the returned object.
@@ -106,6 +108,10 @@ Native class imports without serialized class exports remain opaque class
 handles so `DynamicLoadObject` can resolve qualified resources such as sounds.
 `GetSoundDuration` reads embedded WAV metadata or sums MPEG Layer II frames for
 dialogue timing without requiring audio playback.
+HP1 `TraceTexture` validates its authored start/end/flags form but returns no
+texture until BSP collision retains surface material identities. `PlaySound`
+and `PlayOwnedSound` share the nonfatal not-audible diagnostic until playback
+is connected.
 
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick

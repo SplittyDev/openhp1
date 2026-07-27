@@ -265,11 +265,15 @@ impl ScriptRuntime {
             return Ok(Value::None);
         }
         if index == PLAY_SOUND {
+            sound_arguments("PlaySound", arguments)?;
             actions.push(ActorAction::DeferredCall {
                 actor,
                 message: "PlaySound is not audible yet".to_owned(),
             });
             return Ok(Value::None);
+        }
+        if index == TRACE_TEXTURE {
+            return trace_texture(arguments);
         }
         if index == MAKE_NOISE {
             noise_loudness(arguments)?;
@@ -1262,6 +1266,61 @@ pub(super) fn noise_loudness(arguments: &[Value]) -> std::result::Result<f32, St
         return Err("MakeNoise loudness is not finite".to_owned());
     }
     Ok(*loudness)
+}
+
+pub(super) fn sound_arguments(
+    function: &str,
+    arguments: &[Value],
+) -> std::result::Result<(), String> {
+    let [sound, rest @ ..] = arguments else {
+        return Err(format!("{function} expects a sound"));
+    };
+    if !matches!(sound, Value::Object(_) | Value::None) || rest.len() > 5 {
+        return Err(format!(
+            "{function} expects a sound and at most 5 optional arguments"
+        ));
+    }
+    for (value, kind) in rest.iter().zip(["byte", "float", "bool", "float", "float"]) {
+        let valid = match (value, kind) {
+            (Value::None, _) | (Value::Byte(_), "byte") | (Value::Bool(_), "bool") => true,
+            (Value::Float(value), "float") => value.is_finite(),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!("{function} {kind} argument is {}", value.kind()));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn trace_texture(arguments: &[Value]) -> std::result::Result<Value, String> {
+    let [
+        Value::Vector(start),
+        Value::Vector(end),
+        Value::Int(_),
+        rest @ ..,
+    ] = arguments
+    else {
+        return Err(format!(
+            "TraceTexture expects start, end, flags, and an optional decal flag, found {}",
+            arguments
+                .iter()
+                .map(Value::kind)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    if rest.len() > 1
+        || rest
+            .first()
+            .is_some_and(|value| !matches!(value, Value::Bool(_) | Value::None))
+        || !start.iter().chain(end).all(|value| value.is_finite())
+    {
+        return Err("TraceTexture arguments are invalid".to_owned());
+    }
+    // ponytail: BSP collision does not retain surface texture identities yet;
+    // return no texture until material-aware traces have a gameplay consumer.
+    Ok(Value::Object(0))
 }
 
 pub(super) fn animation_parameters(

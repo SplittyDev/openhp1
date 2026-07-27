@@ -1500,6 +1500,12 @@ fn switch_values_equal(condition: &Value, case: &Value) -> Result<bool> {
         (Value::None, Value::None | Value::Object(0))
         | (Value::Object(0), Value::None)
         | (Value::Object(0), Value::Object(0)) => true,
+        (Value::None, Value::Byte(value)) => *value == 0,
+        (Value::None, Value::Int(value)) => *value == 0,
+        (Value::None, Value::Bool(value)) => !value,
+        (Value::None, Value::Float(value)) => *value == 0.0,
+        (Value::None, Value::Name(value)) => *value == 0,
+        (Value::None, Value::NameText(value)) => value.eq_ignore_ascii_case("None"),
         (Value::Byte(left), Value::Byte(right)) => left == right,
         (Value::Byte(left), Value::Int(right)) => i32::from(*left) == *right,
         (Value::Int(left), Value::Byte(right)) => *left == i32::from(*right),
@@ -1925,6 +1931,11 @@ mod tests {
         assert_eq!(
             switch_values_equal(&Value::Byte(2), &Value::Int(2)),
             Ok(true)
+        );
+        assert_eq!(switch_values_equal(&Value::None, &Value::Byte(0)), Ok(true));
+        assert_eq!(
+            switch_values_equal(&Value::None, &Value::Byte(1)),
+            Ok(false)
         );
     }
 
