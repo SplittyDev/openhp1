@@ -50,6 +50,7 @@ const GET_ANIM_GROUP: u16 = 0x125;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const TURN_TO: u16 = 508;
+const ADD_PAWN: u16 = 529;
 const CAN_SEE: u16 = 533;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;

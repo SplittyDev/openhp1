@@ -600,7 +600,71 @@ impl ScriptRuntime {
                 .can_see(actor, actor_class, instance, other)
                 .map(Value::Bool);
         }
+        if index == ADD_PAWN {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "AddPawn expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            self.add_pawn(actor, actor_class, instance)?;
+            return Ok(Value::None);
+        }
         scalar_native(index, arguments)
+    }
+
+    fn add_pawn(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+    ) -> std::result::Result<(), String> {
+        let level = self
+            .actor_object(actor_class, instance, "Level")?
+            .ok_or_else(|| "AddPawn actor has no Level".to_owned())?;
+        let level_actor = self
+            .object_actors
+            .get(&level)
+            .copied()
+            .ok_or_else(|| "AddPawn Level is not a registered actor".to_owned())?;
+        let level_class = self
+            .actor_classes
+            .get(&level_actor)
+            .cloned()
+            .ok_or_else(|| format!("AddPawn Level actor {level_actor} has no class"))?;
+        let level_class = self
+            .resolved_object(&level_class)
+            .map_err(|error| error.to_string())?;
+        let mut level_instance = self
+            .instances
+            .remove(&level_actor)
+            .ok_or_else(|| format!("AddPawn Level actor {level_actor} instance is active"))?;
+        let result = (|| {
+            let previous =
+                match self.required_actor_property(&level_class, &level_instance, "PawnList")? {
+                    StoredValue::Object(value) => value,
+                    value => return Err(format!("AddPawn Level.PawnList is {value:?}")),
+                };
+            self.set_actor_stored(
+                actor_class,
+                instance,
+                "nextPawn",
+                StoredValue::Object(previous),
+            )?;
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or_else(|| format!("AddPawn actor {actor} has no object identity"))?;
+            self.set_actor_stored(
+                &level_class,
+                &mut level_instance,
+                "PawnList",
+                StoredValue::Object(Some(object)),
+            )
+        })();
+        self.instances.insert(level_actor, level_instance);
+        result
     }
 
     pub(super) fn destroy_actor(
