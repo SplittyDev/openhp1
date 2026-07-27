@@ -63,6 +63,7 @@ impl ScriptRuntime {
             self.tick_functions.remove(&actor);
             self.failed_ticks.remove(&actor);
             self.state_frames.remove(&actor);
+            self.update_actor_base(actor, None);
             if let Some(cached) = self.collision_actors.get_mut(actor) {
                 *cached = None;
             }
@@ -596,7 +597,7 @@ impl ScriptRuntime {
 
         self.refresh_tick_actor(spawned, &class)
             .map_err(|error| error.to_string())?;
-        self.actor_bases.insert(spawned, None);
+        self.update_actor_base(spawned, None);
         self.refresh_cached_collision_actor(spawned, &class, &spawned_instance)?;
         self.instances.insert(spawned, spawned_instance);
         let name = format!("{class_name}{spawned}");

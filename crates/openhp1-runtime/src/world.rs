@@ -301,6 +301,7 @@ pub struct ScriptRuntime {
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
     grounded_world: HashMap<usize, [f32; 3]>,
     actor_bases: HashMap<usize, Option<ObjectId>>,
+    base_children: HashMap<ObjectId, Vec<usize>>,
     touching: HashSet<(usize, usize)>,
 }
 

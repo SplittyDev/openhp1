@@ -41,6 +41,7 @@ impl ScriptRuntime {
             collision_actors: Vec::new(),
             grounded_world: HashMap::new(),
             actor_bases: HashMap::new(),
+            base_children: HashMap::new(),
             touching: HashSet::new(),
         })
     }
@@ -170,7 +171,7 @@ impl ScriptRuntime {
                     Some(StoredValue::Object(base)) => base.clone(),
                     _ => None,
                 });
-        self.actor_bases.insert(actor, base);
+        self.update_actor_base(actor, base);
         self.instances.insert(actor, instance);
         Ok(())
     }

@@ -703,7 +703,7 @@ impl ScriptRuntime {
                 StoredValue::Object(base) => base.clone(),
                 _ => None,
             };
-            self.actor_bases.insert(actor, base);
+            self.update_actor_base(actor, base);
         }
         if actor == current_actor {
             current_instance.insert(field.clone(), value);

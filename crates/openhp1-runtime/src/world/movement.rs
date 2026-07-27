@@ -219,18 +219,36 @@ impl ScriptRuntime {
             .get(&actor)
             .cloned()
             .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
-        let mut based = self
-            .actor_bases
-            .iter()
-            .filter(|(candidate, base)| {
-                **candidate != actor
-                    && !self.destroyed.contains(candidate)
-                    && base.as_ref() == Some(&object)
-            })
-            .map(|(&candidate, _)| candidate)
-            .collect::<Vec<_>>();
-        based.sort_unstable();
+        let mut based = self.base_children.get(&object).cloned().unwrap_or_default();
+        based.retain(|candidate| !self.destroyed.contains(candidate));
         Ok(based)
+    }
+
+    pub(super) fn update_actor_base(&mut self, actor: usize, base: Option<ObjectId>) {
+        let previous = self.actor_bases.insert(actor, base.clone()).flatten();
+        if previous == base {
+            return;
+        }
+        if let Some(previous) = previous {
+            let remove_entry = self
+                .base_children
+                .get_mut(&previous)
+                .is_some_and(|children| {
+                    if let Ok(index) = children.binary_search(&actor) {
+                        children.remove(index);
+                    }
+                    children.is_empty()
+                });
+            if remove_entry {
+                self.base_children.remove(&previous);
+            }
+        }
+        if let Some(base) = base {
+            let children = self.base_children.entry(base).or_default();
+            if let Err(index) = children.binary_search(&actor) {
+                children.insert(index, actor);
+            }
+        }
     }
 
     pub(super) fn set_actor_location(
@@ -315,7 +333,7 @@ impl ScriptRuntime {
         }
 
         instance.insert(field, StoredValue::Object(base.clone()));
-        self.actor_bases.insert(actor, base.clone());
+        self.update_actor_base(actor, base.clone());
         // ponytail: derive direct based actors from this compact index; add
         // StandingCount bookkeeping when scripts consume it.
         if let Some(new_base) = base
