@@ -485,6 +485,12 @@ impl ScriptRuntime {
             "Rotation",
             StoredValue::Value(Value::Rotator(rotation)),
         )?;
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "DesiredRotation",
+            StoredValue::Value(Value::Rotator(rotation)),
+        )?;
         self.set_spawn_property(&class, &mut spawned_instance, "Tag", StoredValue::Name(tag))?;
         self.set_spawn_property(&class, &mut spawned_instance, "Owner", owner)?;
         for property in ["Instigator", "Level", "XLevel"] {

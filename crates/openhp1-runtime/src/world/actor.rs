@@ -153,6 +153,15 @@ impl ScriptRuntime {
         self.actor_states.insert(actor, state_name);
         self.refresh_tick_actor(actor, &class)?;
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
+        // UE1 starts desired turning from the actor's spawn orientation.
+        if let Some(rotation) = self
+            .find_property(&class, "Rotation", 0)?
+            .and_then(|field| instance.get(&field))
+            .cloned()
+            && let Some(desired) = self.find_property(&class, "DesiredRotation", 0)?
+        {
+            instance.insert(desired, rotation);
+        }
         let base =
             self.find_property(&class, "Base", 0)?
                 .and_then(|field| match instance.get(&field) {
