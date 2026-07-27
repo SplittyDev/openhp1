@@ -43,6 +43,7 @@ const SET_LOCATION: u16 = 0x10b;
 const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
 const IS_IN_STATE: u16 = 0x119;
+const GET_STATE_NAME: u16 = 0x11c;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;

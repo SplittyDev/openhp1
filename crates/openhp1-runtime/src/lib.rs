@@ -468,6 +468,7 @@ pub struct Frame<'a> {
     step_limit: usize,
     expression_depth: usize,
     current_context: i32,
+    context_parents: Vec<i32>,
     locals: HashMap<i32, Value>,
     instance: HashMap<i32, Value>,
     defaults: HashMap<i32, Value>,
@@ -488,6 +489,7 @@ impl<'a> Frame<'a> {
             step_limit: 100_000,
             expression_depth: 0,
             current_context: -1,
+            context_parents: Vec::new(),
             locals: HashMap::new(),
             instance: HashMap::new(),
             defaults: HashMap::new(),
@@ -617,6 +619,7 @@ impl<'a> Frame<'a> {
         self.steps = 0;
         self.expression_depth = 0;
         self.current_context = -1;
+        self.context_parents.clear();
         self.creating_iterator = false;
         self.suspend_requested = false;
         self.pending_iterator = None;
@@ -638,6 +641,7 @@ impl<'a> Frame<'a> {
         self.steps = 0;
         self.expression_depth = 0;
         self.current_context = -1;
+        self.context_parents.clear();
         self.creating_iterator = false;
         self.suspend_requested = false;
         self.pending_iterator = None;
@@ -819,7 +823,9 @@ impl<'a> Frame<'a> {
                     Value::Object(object) if object != 0 => {
                         let previous = self.current_context;
                         self.current_context = object;
+                        self.context_parents.push(previous);
                         let result = self.expression(host);
+                        self.context_parents.pop();
                         self.current_context = previous;
                         result?
                     }
@@ -964,11 +970,22 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Value> {
         let creating_iterator = std::mem::take(&mut self.creating_iterator);
+        let receiver = self.current_context;
+        let assignment_native = matches!(
+            function,
+            FunctionCall::Native(index)
+                if IncrementDecrement::try_from(index).is_ok()
+                    || CompoundAssignment::try_from(index).is_ok()
+        );
+        if !assignment_native {
+            self.current_context = self.context_parents.last().copied().unwrap_or(-1);
+        }
         let mut arguments = Vec::new();
         while Opcode::from(self.peek()?) != Opcode::EndFunctionParms {
             arguments.push(self.expression(host)?);
         }
         self.opcode()?;
+        self.current_context = receiver;
         if let FunctionCall::Native(index) = function
             && let Ok(operation) = IncrementDecrement::try_from(index)
         {
@@ -1054,7 +1071,7 @@ impl<'a> Frame<'a> {
             }
             let iterator = host(
                 FrameRequest::CallIterator {
-                    receiver: self.current_context,
+                    receiver,
                     function,
                     arguments: values,
                 },
@@ -1077,7 +1094,7 @@ impl<'a> Frame<'a> {
         }
         let response = host(
             FrameRequest::Call {
-                receiver: self.current_context,
+                receiver,
                 function,
                 arguments: values,
             },
@@ -2559,5 +2576,41 @@ mod tests {
 
         assert_eq!(result, Value::Int(42));
         assert_eq!(instance.get(&7), Some(&Value::Int(42)));
+    }
+
+    #[test]
+    fn context_call_arguments_use_the_callers_instance() {
+        let mut bytes = vec![0x04, 0x19, 0x20];
+        bytes.extend(11_i32.to_le_bytes());
+        bytes.extend([0, 0, 0, 0x1b]);
+        bytes.extend(5_i32.to_le_bytes());
+        bytes.push(0x01);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let result = frame
+            .execute_hosted(|request| match request {
+                FrameRequest::GetInstance {
+                    receiver: -1,
+                    field: 7,
+                } => Ok(FrameResponse::Value(Value::String("cue".to_owned()))),
+                FrameRequest::Call {
+                    receiver: 11,
+                    function: FunctionCall::Virtual(5),
+                    arguments,
+                } => {
+                    assert_eq!(arguments, [Value::String("cue".to_owned())]);
+                    Ok(FrameResponse::Value(Value::Int(42)))
+                }
+                _ => unreachable!(),
+            })
+            .unwrap();
+        assert_eq!(result, Value::Int(42));
     }
 }

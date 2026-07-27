@@ -732,6 +732,7 @@ impl ScriptRuntime {
                 &[],
                 instance,
                 actions,
+                0,
             )?;
             return Ok(());
         }

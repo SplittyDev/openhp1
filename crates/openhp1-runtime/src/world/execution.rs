@@ -260,7 +260,7 @@ impl ScriptRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn execute_function(
+    pub(super) fn execute_function(
         &mut self,
         actor: usize,
         actor_class: &ResolvedObject,
@@ -309,6 +309,7 @@ impl ScriptRuntime {
                         arguments,
                         instance,
                         actions,
+                        depth,
                     )
                     .map_err(|message| crate::Error::Call {
                         call: FunctionCall::Native(metadata.native_index),
@@ -446,6 +447,7 @@ impl ScriptRuntime {
                     arguments,
                     instance,
                     actions,
+                    depth,
                 )
                 .map_err(|message| crate::Error::Call { call, message }.into())
                 .map(CallOutput::value),
@@ -568,6 +570,16 @@ impl ScriptRuntime {
             package: self.packages.load_path(Path::new(class.package.as_ref()))?,
             export_index: class.export_index,
         };
+        let self_handle =
+            self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?)?;
+        let arguments = arguments
+            .iter()
+            .map(|value| concrete_self_value(value, self_handle))
+            .collect::<Vec<_>>();
         let mut instance = self
             .instances
             .remove(&actor)
@@ -577,7 +589,7 @@ impl ScriptRuntime {
             &class,
             source,
             call,
-            arguments,
+            &arguments,
             &mut instance,
             actions,
             depth,
@@ -925,7 +937,13 @@ impl ScriptRuntime {
                 name.eq_ignore_ascii_case("bHidden"),
             )
         };
-        let value = self.stored_value(source, &value)?;
+        let self_handle =
+            self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?)?;
+        let value = self.stored_value(source, &concrete_self_value(&value, self_handle))?;
         if is_base {
             let base = match &value {
                 StoredValue::Object(base) => base.clone(),
@@ -964,6 +982,25 @@ impl ScriptRuntime {
             .get(&self.handle_objects[index])
             .copied()
             .ok_or(DispatchError::InvalidActorHandle { handle })
+    }
+}
+
+fn concrete_self_value(value: &Value, self_handle: i32) -> Value {
+    match value {
+        Value::Object(-1) => Value::Object(self_handle),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| concrete_self_value(value, self_handle))
+                .collect(),
+        ),
+        Value::Struct(values) => Value::Struct(
+            values
+                .iter()
+                .map(|(name, value)| (name.clone(), concrete_self_value(value, self_handle)))
+                .collect(),
+        ),
+        value => value.clone(),
     }
 }
 
@@ -1042,6 +1079,15 @@ pub(super) fn fields(bytecode: &Bytecode, opcode: u8) -> impl Iterator<Item = i3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_keeps_the_callers_identity_across_actor_contexts() {
+        let value = Value::Array(vec![Value::Object(-1), Value::Object(7)]);
+        assert_eq!(
+            concrete_self_value(&value, 42),
+            Value::Array(vec![Value::Object(42), Value::Object(7)])
+        );
+    }
 
     #[test]
     fn returns_mutated_event_arguments_to_the_engine_host() {

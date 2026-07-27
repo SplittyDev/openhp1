@@ -15,6 +15,7 @@ impl ScriptRuntime {
         arguments: &[Value],
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
+        depth: usize,
     ) -> std::result::Result<Value, String> {
         if matches!(index, ENABLE | DISABLE) {
             let [event] = arguments else {
@@ -108,14 +109,77 @@ impl ScriptRuntime {
                 .map(|label| runtime_name(source, label))
                 .transpose()?
                 .unwrap_or_default();
+            let old_state = self
+                .actor_states
+                .get(&actor)
+                .and_then(Clone::clone)
+                .unwrap_or_else(|| "None".to_owned());
             let state = if state.eq_ignore_ascii_case("None") {
                 None
             } else {
                 self.find_state(actor_class, &state)
                     .map_err(|error| error.to_string())?
             };
+            let new_state = state
+                .as_ref()
+                .map(|state| {
+                    state
+                        .package
+                        .summary()
+                        .name(state.package.summary().exports[state.export_index].object_name)
+                        .to_owned()
+                })
+                .unwrap_or_else(|| "None".to_owned());
+            if !old_state.eq_ignore_ascii_case(&new_state)
+                && let Some(function) = self
+                    .find_actor_function(
+                        actor,
+                        ResolvedObject {
+                            package: Arc::clone(&actor_class.package),
+                            export_index: actor_class.export_index,
+                        },
+                        "EndState",
+                        0,
+                    )
+                    .map_err(|error| error.to_string())?
+            {
+                self.execute_function(
+                    actor,
+                    actor_class,
+                    &function,
+                    &[],
+                    instance,
+                    actions,
+                    depth + 1,
+                )
+                .map_err(|error| error.to_string())?;
+            }
             self.set_actor_state(actor, actor_class, state, &label)
                 .map_err(|error| error.to_string())?;
+            if !old_state.eq_ignore_ascii_case(&new_state)
+                && let Some(function) = self
+                    .find_actor_function(
+                        actor,
+                        ResolvedObject {
+                            package: Arc::clone(&actor_class.package),
+                            export_index: actor_class.export_index,
+                        },
+                        "BeginState",
+                        0,
+                    )
+                    .map_err(|error| error.to_string())?
+            {
+                self.execute_function(
+                    actor,
+                    actor_class,
+                    &function,
+                    &[],
+                    instance,
+                    actions,
+                    depth + 1,
+                )
+                .map_err(|error| error.to_string())?;
+            }
             return Ok(Value::None);
         }
         if index == SLEEP {
@@ -323,6 +387,20 @@ impl ScriptRuntime {
                     .get(&actor)
                     .and_then(|current| current.as_deref())
                     .is_some_and(|current| current.eq_ignore_ascii_case(&state)),
+            ));
+        }
+        if index == GET_STATE_NAME {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "GetStateName expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            return Ok(Value::NameText(
+                self.actor_states
+                    .get(&actor)
+                    .and_then(Clone::clone)
+                    .unwrap_or_else(|| "None".to_owned()),
             ));
         }
         if index == SET_COLLISION {
