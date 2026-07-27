@@ -365,5 +365,7 @@ heuristic.
   guards to individual map or texture callers.
 - Preserve unsupported data and diagnostics instead of turning incomplete
   support into silent corruption.
+- Run execution-heavy examples, corpus scans, viewers, and other runtime checks
+  with `--release` unless debug mode is specifically needed.
 - Run focused formatting, compilation, and tests for touched crates. State
   exactly what ran and whether tests depended on the local copyrighted corpus.
