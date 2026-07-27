@@ -669,6 +669,28 @@ fn apply_runtime_actions(
                         .push(format!("runtime deferred call: {message}"));
                 }
             }
+            ActorAction::DispatchEvent {
+                actor,
+                event,
+                arguments,
+            } => {
+                let Some(class) = scene.actors[actor].class.clone() else {
+                    continue;
+                };
+                match runtime.dispatch_event_with_arguments(
+                    actor,
+                    &class.package,
+                    class.export_index,
+                    event,
+                    &arguments,
+                ) {
+                    Ok(event_actions) => actions.extend(event_actions),
+                    Err(error) => actions.push_back(ActorAction::DeferredCall {
+                        actor,
+                        message: format!("{event}: {error}"),
+                    }),
+                }
+            }
         }
     }
     Ok((animations, deferred, transformed))

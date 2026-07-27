@@ -342,60 +342,6 @@ impl ScriptRuntime {
         scalar_native(index, arguments)
     }
 
-    fn move_actor(
-        &mut self,
-        actor: usize,
-        actor_class: &ResolvedObject,
-        delta: [f32; 3],
-        instance: &mut InstanceState,
-        actions: &mut Vec<ActorAction>,
-    ) -> std::result::Result<Value, String> {
-        let is_static = self.actor_bool(actor_class, instance, "bStatic")?;
-        let movable = self.actor_bool(actor_class, instance, "bMovable")?;
-        if is_static || !movable {
-            return Ok(Value::Bool(false));
-        }
-
-        let delta = glam::Vec3::from_array(delta);
-        if delta.length_squared() < 0.00000001 {
-            return Ok(Value::Bool(true));
-        }
-        let location = self.actor_vector(actor_class, instance, "Location")?;
-        let has_brush = match self.required_actor_property(actor_class, instance, "Brush")? {
-            StoredValue::Object(Some(_)) => true,
-            StoredValue::Object(None) => false,
-            value => return Err(format!("Move property Brush is {value:?}")),
-        };
-        let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let fraction = if collide_world && !has_brush {
-            let radius = self.actor_float(actor_class, instance, "CollisionRadius")?;
-            let height = self.actor_float(actor_class, instance, "CollisionHeight")?;
-            if radius < 0.0 || height < 0.0 {
-                return Err("Move collision dimensions are negative".to_owned());
-            }
-            self.collision
-                .as_ref()
-                .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?
-                .sweep_aabb(
-                    glam::Vec3::from_array(location),
-                    glam::Vec3::from_array(location) + delta,
-                    glam::Vec3::new(radius, radius, height),
-                )
-                .map_or(1.0, |hit| hit.fraction)
-        } else {
-            1.0
-        };
-        let location = glam::Vec3::from_array(location) + delta * fraction;
-        let location = location.to_array();
-        let field = self
-            .find_property(actor_class, "Location", 0)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Move property Location is missing".to_owned())?;
-        instance.insert(field, StoredValue::Value(Value::Vector(location)));
-        actions.push(ActorAction::SetLocation { actor, location });
-        Ok(Value::Bool(fraction == 1.0))
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn spawn_actor(
         &mut self,
@@ -654,69 +600,6 @@ impl ScriptRuntime {
                 });
             }
         })
-    }
-
-    fn instance_property(
-        &mut self,
-        class: &ResolvedObject,
-        instance: &InstanceState,
-        name: &str,
-    ) -> DispatchResult<Option<StoredValue>> {
-        let Some(field) = self.find_property(class, name, 0)? else {
-            return Ok(None);
-        };
-        Ok(instance.get(&field).cloned())
-    }
-
-    fn required_actor_property(
-        &mut self,
-        class: &ResolvedObject,
-        instance: &InstanceState,
-        name: &str,
-    ) -> std::result::Result<StoredValue, String> {
-        self.instance_property(class, instance, name)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Move property {name} is missing"))
-    }
-
-    fn actor_bool(
-        &mut self,
-        class: &ResolvedObject,
-        instance: &InstanceState,
-        name: &str,
-    ) -> std::result::Result<bool, String> {
-        match self.required_actor_property(class, instance, name)? {
-            StoredValue::Value(Value::Bool(value)) => Ok(value),
-            value => Err(format!("Move property {name} is {value:?}")),
-        }
-    }
-
-    fn actor_float(
-        &mut self,
-        class: &ResolvedObject,
-        instance: &InstanceState,
-        name: &str,
-    ) -> std::result::Result<f32, String> {
-        match self.required_actor_property(class, instance, name)? {
-            StoredValue::Value(Value::Float(value)) if value.is_finite() => Ok(value),
-            value => Err(format!("Move property {name} is {value:?}")),
-        }
-    }
-
-    fn actor_vector(
-        &mut self,
-        class: &ResolvedObject,
-        instance: &InstanceState,
-        name: &str,
-    ) -> std::result::Result<[f32; 3], String> {
-        match self.required_actor_property(class, instance, name)? {
-            StoredValue::Value(Value::Vector(value))
-                if value.iter().all(|component| component.is_finite()) =>
-            {
-                Ok(value)
-            }
-            value => Err(format!("Move property {name} is {value:?}")),
-        }
     }
 
     fn set_spawn_property(

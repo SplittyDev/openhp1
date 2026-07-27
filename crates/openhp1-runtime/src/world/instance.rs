@@ -2,6 +2,18 @@ use super::execution::{fields, local_fields};
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn instance_property(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> DispatchResult<Option<StoredValue>> {
+        let Some(field) = self.find_property(class, name, 0)? else {
+            return Ok(None);
+        };
+        Ok(instance.get(&field).cloned())
+    }
+
     pub(super) fn load_class_defaults(
         &mut self,
         class: &ResolvedObject,

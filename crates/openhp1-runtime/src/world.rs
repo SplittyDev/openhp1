@@ -21,6 +21,7 @@ use crate::{
 mod actor;
 mod execution;
 mod instance;
+mod movement;
 mod native;
 mod state;
 
@@ -163,6 +164,11 @@ pub enum ActorAction {
         actor: usize,
         message: String,
     },
+    DispatchEvent {
+        actor: usize,
+        event: &'static str,
+        arguments: Vec<Value>,
+    },
 }
 
 impl ActorAction {
@@ -176,7 +182,8 @@ impl ActorAction {
             | Self::SetRotation { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }
-            | Self::DeferredCall { actor, .. } => *actor,
+            | Self::DeferredCall { actor, .. }
+            | Self::DispatchEvent { actor, .. } => *actor,
         }
     }
 }
@@ -284,6 +291,7 @@ pub struct ScriptRuntime {
     handle_objects: Vec<ObjectId>,
     next_actor: usize,
     collision: Option<Arc<BspCollision>>,
+    touching: HashSet<(usize, usize)>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

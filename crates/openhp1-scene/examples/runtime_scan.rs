@@ -267,6 +267,27 @@ fn apply_actions(
             ActorAction::DeferredCall { actor, message } => {
                 record_deferred(scene, actor, message, deferred);
             }
+            ActorAction::DispatchEvent {
+                actor,
+                event,
+                arguments,
+            } => {
+                let Some(class) = scene.actors[actor].class.clone() else {
+                    continue;
+                };
+                match runtime.dispatch_event_with_arguments(
+                    actor,
+                    &class.package,
+                    class.export_index,
+                    event,
+                    &arguments,
+                ) {
+                    Ok(event_actions) => actions.extend(event_actions),
+                    Err(error) => {
+                        record_deferred(scene, actor, format!("{event}: {error}"), deferred)
+                    }
+                }
+            }
         }
     }
     Ok(())

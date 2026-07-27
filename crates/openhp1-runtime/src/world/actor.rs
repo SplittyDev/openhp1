@@ -35,6 +35,7 @@ impl ScriptRuntime {
             handle_objects: Vec::new(),
             next_actor: 0,
             collision: None,
+            touching: HashSet::new(),
         })
     }
 
