@@ -103,6 +103,9 @@ impl ScriptRuntime {
                     FrameRequest::DynamicCast { class, value } => self
                         .dynamic_cast(actor_class, &state.package, class, value)
                         .map(FrameResponse::Value),
+                    FrameRequest::ObjectToString { value } => self
+                        .object_to_string(actor, value)
+                        .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &state.package, field, instance)
                         .map(FrameResponse::Value),
@@ -258,6 +261,9 @@ impl ScriptRuntime {
                         .map(FrameResponse::Iterator),
                     FrameRequest::DynamicCast { class, value } => self
                         .dynamic_cast(actor_class, &function.package, class, value)
+                        .map(FrameResponse::Value),
+                    FrameRequest::ObjectToString { value } => self
+                        .object_to_string(actor, value)
                         .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &function.package, field, instance)
@@ -612,6 +618,51 @@ impl ScriptRuntime {
         } else {
             Value::Object(0)
         })
+    }
+
+    fn object_to_string(&mut self, current_actor: usize, value: Value) -> DispatchResult<Value> {
+        let object = match value {
+            Value::None | Value::Object(0) => return Ok(Value::String("None".to_owned())),
+            Value::Object(-1) => self.actor_objects.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?,
+            Value::Object(handle) => {
+                let index = usize::try_from(handle - 1)
+                    .ok()
+                    .filter(|index| *index < self.handle_objects.len())
+                    .ok_or(DispatchError::InvalidObjectHandle { handle })?;
+                self.handle_objects[index].clone()
+            }
+            value => {
+                return Err(crate::Error::Type {
+                    expected: "object",
+                    actual: value.kind(),
+                }
+                .into());
+            }
+        };
+        if object.package.as_ref() == "<runtime>" {
+            let actor = object.export_index;
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            let summary = class.package.summary();
+            let class_name = summary.name(summary.exports[class.export_index].object_name);
+            return Ok(Value::String(format!("{class_name}{actor}")));
+        }
+        let object = self.resolved_object(&object)?;
+        let summary = object.package.summary();
+        let name = summary.name(summary.exports[object.export_index].object_name);
+        let package = Path::new(summary.source.as_ref())
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(summary.source.as_ref());
+        Ok(Value::String(format!("{package}.{name}")))
     }
 
     fn class_is_a(

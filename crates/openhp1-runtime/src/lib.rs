@@ -161,6 +161,7 @@ enum ConversionOpcode {
     FloatToBool,
     ObjectToBool,
     NameToBool,
+    ObjectToString,
     Unsupported,
 }
 
@@ -182,6 +183,7 @@ impl From<u8> for ConversionOpcode {
             0x45 => Self::FloatToBool,
             0x47 => Self::ObjectToBool,
             0x48 => Self::NameToBool,
+            0x56 => Self::ObjectToString,
             _ => Self::Unsupported,
         }
     }
@@ -323,6 +325,9 @@ pub(crate) enum FrameRequest {
     },
     DynamicCast {
         class: i32,
+        value: Value,
+    },
+    ObjectToString {
         value: Value,
     },
     GetInstance {
@@ -494,6 +499,9 @@ impl<'a> Frame<'a> {
             }
             FrameRequest::DynamicCast { .. } => {
                 Err("standalone frames do not host dynamic casts".to_owned())
+            }
+            FrameRequest::ObjectToString { .. } => {
+                Err("standalone frames do not host object conversions".to_owned())
             }
             FrameRequest::Call { receiver, .. }
             | FrameRequest::GetInstance { receiver, .. }
@@ -853,7 +861,16 @@ impl<'a> Frame<'a> {
             }
             Opcode::Conversion(conversion) => {
                 let value = self.expression(host)?;
-                Expression::Value(convert(conversion, self.value(value, host)?)?)
+                let value = self.value(value, host)?;
+                if conversion == ConversionOpcode::ObjectToString {
+                    Expression::Value(
+                        host(FrameRequest::ObjectToString { value }, &mut self.instance)
+                            .and_then(FrameResponse::into_value)
+                            .map_err(|message| Error::Context { message })?,
+                    )
+                } else {
+                    Expression::Value(convert(conversion, value)?)
+                }
             }
             Opcode::ExtendedNative(high) => {
                 let low = self.read_u8()?;
@@ -1978,6 +1995,31 @@ mod tests {
 
         assert_eq!(run(Value::Object(11)), Value::Object(11));
         assert_eq!(run(Value::Object(0)), Value::Object(0));
+    }
+
+    #[test]
+    fn object_to_string_uses_frame_host() {
+        let mut bytes = vec![0x04, 0x56, 0x20];
+        bytes.extend(11_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        assert_eq!(
+            Frame::new(&bytecode)
+                .execute_hosted(|request| match request {
+                    FrameRequest::ObjectToString {
+                        value: Value::Object(11),
+                    } => Ok(FrameResponse::Value(Value::String(
+                        "Hog2.Snail1".to_owned(),
+                    ))),
+                    _ => unreachable!(),
+                })
+                .unwrap(),
+            Value::String("Hog2.Snail1".to_owned())
+        );
     }
 
     #[test]
