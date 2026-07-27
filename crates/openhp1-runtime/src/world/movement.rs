@@ -3,6 +3,8 @@ use openhp1_physics::{cylinders_overlap, sweep_cylinder};
 
 use super::*;
 
+const ACTOR_TRACE_MARGIN: f32 = 1.0;
+
 #[derive(Clone)]
 struct CollisionActor {
     actor: usize,
@@ -269,6 +271,7 @@ impl ScriptRuntime {
         );
         if let Some(Some(cached)) = self.collision_actors.get_mut(actor) {
             cached.actor.location = location;
+            self.reindex_cached_collision_actor(actor);
         }
         actions.push(ActorAction::SetLocation {
             actor,
@@ -367,17 +370,29 @@ impl ScriptRuntime {
         current_instance: &InstanceState,
     ) -> std::result::Result<Vec<ActorSweep>, String> {
         self.ensure_collision_actors(current_actor, current_instance)?;
-        let actors = self
-            .collision_actors
-            .iter()
-            .filter_map(|cached| cached.as_ref())
-            .filter(|cached| cached.actor.collide_actors && !cached.actor.has_brush)
-            .map(|cached| cached.actor.clone())
-            .collect::<Vec<_>>();
+        let end = current.location + delta;
+        let query_minimum = current.location.min(end)
+            - Vec3::new(current.radius, current.radius, current.height)
+            - Vec3::splat(ACTOR_TRACE_MARGIN);
+        let query_maximum = current.location.max(end)
+            + Vec3::new(current.radius, current.radius, current.height)
+            + Vec3::splat(ACTOR_TRACE_MARGIN);
+        let candidate_count = self.collision_actors_by_min_x.partition_point(|&actor| {
+            collision_actor_min_x(&self.collision_actors, actor) <= query_maximum.x
+        });
+        let actors = self.collision_actors_by_min_x[..candidate_count].to_vec();
         let mut hits = Vec::new();
-        for other in actors {
-            let actor = other.actor;
+        for actor in actors {
             if actor == current.actor || self.destroyed.contains(&actor) {
+                continue;
+            }
+            let other = &self.collision_actors[actor].as_ref().unwrap().actor;
+            if other.location.x + other.radius < query_minimum.x
+                || other.location.y + other.radius < query_minimum.y
+                || other.location.y - other.radius > query_maximum.y
+                || other.location.z + other.height < query_minimum.z
+                || other.location.z - other.height > query_maximum.z
+            {
                 continue;
             }
             if self
@@ -530,6 +545,23 @@ impl ScriptRuntime {
                 fields,
             });
         }
+        self.collision_actors_by_min_x = self
+            .collision_actors
+            .iter()
+            .enumerate()
+            .filter_map(|(actor, cached)| {
+                cached
+                    .as_ref()
+                    .is_some_and(|cached| cached.actor.collide_actors && !cached.actor.has_brush)
+                    .then_some(actor)
+            })
+            .collect();
+        self.collision_actors_by_min_x
+            .sort_unstable_by(|&left, &right| {
+                collision_actor_min_x(&self.collision_actors, left)
+                    .total_cmp(&collision_actor_min_x(&self.collision_actors, right))
+                    .then_with(|| left.cmp(&right))
+            });
         Ok(())
     }
 
@@ -550,6 +582,7 @@ impl ScriptRuntime {
             actor: collision_actor_from_fields(actor, instance, &fields)?,
             fields,
         });
+        self.reindex_cached_collision_actor(actor);
         Ok(())
     }
 
@@ -577,7 +610,34 @@ impl ScriptRuntime {
             actor: collision_actor_from_fields(actor, instance, &fields)?,
             fields,
         });
+        self.reindex_cached_collision_actor(actor);
         Ok(())
+    }
+
+    pub(super) fn reindex_cached_collision_actor(&mut self, actor: usize) {
+        if let Some(index) = self
+            .collision_actors_by_min_x
+            .iter()
+            .position(|&candidate| candidate == actor)
+        {
+            self.collision_actors_by_min_x.remove(index);
+        }
+        let Some(Some(cached)) = self.collision_actors.get(actor) else {
+            return;
+        };
+        if !cached.actor.collide_actors || cached.actor.has_brush {
+            return;
+        }
+        let minimum = cached.actor.location.x - cached.actor.radius;
+        let index = self
+            .collision_actors_by_min_x
+            .binary_search_by(|&candidate| {
+                collision_actor_min_x(&self.collision_actors, candidate)
+                    .total_cmp(&minimum)
+                    .then_with(|| candidate.cmp(&actor))
+            })
+            .unwrap_or_else(|index| index);
+        self.collision_actors_by_min_x.insert(index, actor);
     }
 
     fn collision_fields(
@@ -804,6 +864,11 @@ fn collision_actor_from_fields(
         player_collision: fields.player_collision,
         has_brush,
     })
+}
+
+fn collision_actor_min_x(actors: &[Option<CachedCollisionActor>], actor: usize) -> f32 {
+    let actor = &actors[actor].as_ref().unwrap().actor;
+    actor.location.x - actor.radius
 }
 
 fn actor_pair(first: usize, second: usize) -> (usize, usize) {

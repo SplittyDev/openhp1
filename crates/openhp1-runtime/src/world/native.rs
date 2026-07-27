@@ -66,6 +66,7 @@ impl ScriptRuntime {
             self.update_actor_base(actor, None);
             if let Some(cached) = self.collision_actors.get_mut(actor) {
                 *cached = None;
+                self.reindex_cached_collision_actor(actor);
             }
             let field = self
                 .find_property(actor_class, "bDeleteMe", 0)
