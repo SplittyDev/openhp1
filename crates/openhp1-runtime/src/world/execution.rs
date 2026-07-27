@@ -544,6 +544,19 @@ impl ScriptRuntime {
                 })
                 .map_err(DispatchError::from);
         }
+        if index == PICK_TARGET {
+            let (value, best_aim, best_dist) = self
+                .pick_target(actor, arguments)
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(index),
+                    message,
+                })
+                .map_err(DispatchError::from)?;
+            return Ok(CallOutput {
+                value,
+                outputs: vec![(0, Value::Float(best_aim)), (1, Value::Float(best_dist))],
+            });
+        }
         let value = self
             .native(
                 actor,

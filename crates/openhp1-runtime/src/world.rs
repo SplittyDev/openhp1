@@ -54,6 +54,7 @@ const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const TURN_TO: u16 = 508;
 const MAKE_NOISE: u16 = 512;
+const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
 const CAN_SEE: u16 = 533;
 const SAVE_CONFIG: u16 = 536;
@@ -465,7 +466,7 @@ mod tests {
         actor::update_touching_array,
         native::{
             animation_parameters, collision_updates, log_arguments, noise_loudness, random_float,
-            random_int, scalar_native,
+            random_int, scalar_native, target_score,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -615,6 +616,37 @@ mod tests {
         assert_eq!(
             scalar_native(0xb5, &[Value::Float(f32::NAN), Value::Float(f32::NAN)]),
             Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn pick_target_score_rejects_targets_behind_or_beyond_range() {
+        assert_eq!(
+            target_score(
+                glam::Vec3::ZERO,
+                glam::Vec3::X,
+                glam::Vec3::new(100.0, 0.0, 0.0),
+                0.5
+            ),
+            Some((1.0, 100.0))
+        );
+        assert_eq!(
+            target_score(
+                glam::Vec3::ZERO,
+                glam::Vec3::X,
+                glam::Vec3::new(-100.0, 0.0, 0.0),
+                0.0
+            ),
+            None
+        );
+        assert_eq!(
+            target_score(
+                glam::Vec3::ZERO,
+                glam::Vec3::X,
+                glam::Vec3::new(2_501.0, 0.0, 0.0),
+                0.0
+            ),
+            None
         );
     }
 

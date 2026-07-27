@@ -92,3 +92,5 @@ that UE writes into the expression result buffer.
 
 HP1 `CreateAnimChannel` creates the requested channel through the normal actor
 spawn lifecycle so scripts can retain and own the returned object.
+`PickTarget` selects visible living pawns within 2500 units using the authored
+fire direction and updates its `bestAim` and `bestDist` output parameters.
