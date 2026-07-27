@@ -1881,6 +1881,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "openhp1-physics"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "openhp1-map",
+ "openhp1-package",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "openhp1-render"
 version = "0.1.0"
 dependencies = [
