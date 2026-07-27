@@ -144,7 +144,7 @@ impl ScriptRuntime {
             let revision = self.state_revision(actor);
             self.state_resumes = self.state_resumes.saturating_add(1);
             self.pending_latent = None;
-            self.active_state_actor = Some(actor);
+            let previous_state_actor = self.active_state_actor.replace(actor);
             let run = frame.resume_hosted(|request| {
                 let result = match request {
                     FrameRequest::Call {
@@ -216,7 +216,7 @@ impl ScriptRuntime {
                     })
                     .map_err(|error| error.to_string())
             });
-            self.active_state_actor = None;
+            self.active_state_actor = previous_state_actor;
             let snapshot = frame.into_snapshot();
 
             if self.state_revision(actor) != revision {
