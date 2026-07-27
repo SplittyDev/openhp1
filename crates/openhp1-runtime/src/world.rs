@@ -156,6 +156,10 @@ pub enum ActorAction {
         actor: usize,
         rotation: [i32; 3],
     },
+    SetHidden {
+        actor: usize,
+        hidden: bool,
+    },
     DestroyActor {
         actor: usize,
     },
@@ -184,6 +188,7 @@ impl ActorAction {
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }
             | Self::SetRotation { actor, .. }
+            | Self::SetHidden { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }
             | Self::DeferredCall { actor, .. }

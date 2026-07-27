@@ -114,7 +114,15 @@ impl ScriptRuntime {
                         field,
                         value,
                     } => self
-                        .set_context_field(actor, receiver, &state.package, field, value, instance)
+                        .set_context_field(
+                            actor,
+                            receiver,
+                            &state.package,
+                            field,
+                            value,
+                            instance,
+                            actions,
+                        )
                         .map(|()| FrameResponse::Value(Value::None)),
                 };
                 result
@@ -280,6 +288,7 @@ impl ScriptRuntime {
                             field,
                             value,
                             instance,
+                            actions,
                         )
                         .map(|()| FrameResponse::Value(Value::None)),
                 };
@@ -759,6 +768,7 @@ impl ScriptRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn set_context_field(
         &mut self,
         current_actor: usize,
@@ -767,6 +777,7 @@ impl ScriptRuntime {
         field: i32,
         value: Value,
         current_instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
     ) -> DispatchResult<()> {
         let actor = if receiver == -1 {
             current_actor
@@ -776,13 +787,16 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_field(source, field)? else {
             return Ok(());
         };
-        let is_base = {
+        let (is_base, is_hidden) = {
             let field = self.resolved_object(&field)?;
-            field
+            let name = field
                 .package
                 .summary()
-                .name(field.package.summary().exports[field.export_index].object_name)
-                .eq_ignore_ascii_case("Base")
+                .name(field.package.summary().exports[field.export_index].object_name);
+            (
+                name.eq_ignore_ascii_case("Base"),
+                name.eq_ignore_ascii_case("bHidden"),
+            )
         };
         let value = self.stored_value(source, &value)?;
         if is_base {
@@ -792,6 +806,10 @@ impl ScriptRuntime {
             };
             self.update_actor_base(actor, base);
         }
+        let hidden = match (is_hidden, &value) {
+            (true, StoredValue::Value(Value::Bool(hidden))) => Some(*hidden),
+            _ => None,
+        };
         if actor == current_actor {
             current_instance.insert(field.clone(), value);
             self.update_cached_collision_property(actor, &field, Some(current_instance))
@@ -803,6 +821,9 @@ impl ScriptRuntime {
                 .insert(field.clone(), value);
             self.update_cached_collision_property(actor, &field, None)
                 .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        if let Some(hidden) = hidden {
+            actions.push(ActorAction::SetHidden { actor, hidden });
         }
         Ok(())
     }

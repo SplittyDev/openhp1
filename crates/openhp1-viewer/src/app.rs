@@ -639,6 +639,9 @@ fn apply_runtime_actions(
                     },
                 )?;
             }
+            ActorAction::SetHidden { actor, hidden } => {
+                transformed |= scene.set_actor_hidden(actor, hidden)?;
+            }
             ActorAction::DestroyActor { actor } => {
                 transformed |= scene.destroy_actor(actor)?;
             }

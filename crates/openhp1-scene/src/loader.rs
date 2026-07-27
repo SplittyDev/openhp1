@@ -50,6 +50,7 @@ pub struct LoadedScene {
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
+    hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     water_animations: Vec<AnimatedWaterTexture>,
 }
 
@@ -155,6 +156,17 @@ impl LoadedScene {
             &mut animations,
             &mut water_animations,
         );
+        let mut hidden_actor_positions = HashMap::new();
+        for (actor_index, actor) in actors.iter().enumerate().filter(|(_, actor)| actor.hidden) {
+            let Some(render) = &actor.render else {
+                continue;
+            };
+            hidden_actor_positions.insert(
+                actor_index,
+                mesh.positions[render.vertices.clone()].to_vec(),
+            );
+            collapse_positions(&mut mesh.positions[render.vertices.clone()]);
+        }
         let actor_meshes = actors.iter().filter(|actor| actor.render.is_some()).count();
         let animated_actor_meshes = actors
             .iter()
@@ -212,6 +224,7 @@ impl LoadedScene {
             zone_nodes: model.nodes.clone(),
             zone_count: model.zones.len(),
             animations,
+            hidden_actor_positions,
             water_animations,
         })
     }
@@ -298,6 +311,7 @@ impl LoadedScene {
         if delta == Vec3::ZERO {
             return Ok(false);
         }
+        let hidden = actor.hidden;
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         if let Some(vertices) = &vertices {
             ensure!(
@@ -308,7 +322,15 @@ impl LoadedScene {
 
         self.actors[actor_index].location = location;
         if let Some(vertices) = vertices {
-            translate_positions(&mut self.render.mesh.positions[vertices], delta);
+            if hidden {
+                let positions = self
+                    .hidden_actor_positions
+                    .get_mut(&actor_index)
+                    .context("hidden actor has no saved render positions")?;
+                translate_positions(positions, delta);
+            } else {
+                translate_positions(&mut self.render.mesh.positions[vertices], delta);
+            }
         }
         if let Some(animation) = self
             .animations
@@ -329,6 +351,7 @@ impl LoadedScene {
         if actor.rotation == rotation {
             return Ok(false);
         }
+        let hidden = actor.hidden;
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         if let Some(vertices) = &vertices {
             ensure!(
@@ -340,7 +363,15 @@ impl LoadedScene {
         let transform = rotation_delta(actor.location + actor.pre_pivot, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
         if let Some(vertices) = vertices {
-            transform_positions(&mut self.render.mesh.positions[vertices], transform);
+            if hidden {
+                let positions = self
+                    .hidden_actor_positions
+                    .get_mut(&actor_index)
+                    .context("hidden actor has no saved render positions")?;
+                transform_positions(positions, transform);
+            } else {
+                transform_positions(&mut self.render.mesh.positions[vertices], transform);
+            }
         }
         if let Some(animation) = self
             .animations
@@ -354,12 +385,49 @@ impl LoadedScene {
         Ok(true)
     }
 
+    pub fn set_actor_hidden(&mut self, actor_index: usize, hidden: bool) -> Result<bool> {
+        let actor = self
+            .actors
+            .get_mut(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        if actor.hidden == hidden {
+            return Ok(false);
+        }
+        actor.hidden = hidden;
+        let Some(render) = &actor.render else {
+            return Ok(false);
+        };
+        ensure!(
+            render.vertices.start <= render.vertices.end
+                && render.vertices.end <= self.render.mesh.positions.len(),
+            "actor render range is outside the scene mesh"
+        );
+        let positions = &mut self.render.mesh.positions[render.vertices.clone()];
+        if hidden {
+            self.hidden_actor_positions
+                .insert(actor_index, positions.to_vec());
+            Ok(collapse_positions(positions))
+        } else {
+            let restored = self
+                .hidden_actor_positions
+                .remove(&actor_index)
+                .context("hidden actor has no saved render positions")?;
+            ensure!(
+                restored.len() == positions.len(),
+                "hidden actor changed vertex count"
+            );
+            positions.copy_from_slice(&restored);
+            Ok(true)
+        }
+    }
+
     pub fn destroy_actor(&mut self, actor_index: usize) -> Result<bool> {
         let actor = self
             .actors
             .get_mut(actor_index)
             .context("runtime refers to a missing scene actor")?;
         actor.hidden = true;
+        self.hidden_actor_positions.remove(&actor_index);
         let render = actor.render.take();
         let animated = actor.animation.take().is_some();
         self.animations
@@ -422,15 +490,18 @@ impl LoadedScene {
             if finished {
                 completed.push(animation.actor_index);
             }
-            let actor = self
-                .actors
-                .get_mut(animation.actor_index)
-                .context("animation refers to a missing scene actor")?;
-            let actor_animation = actor
-                .animation
-                .as_mut()
-                .context("animated scene actor has no animation state")?;
-            actor_animation.phase = animation.phase;
+            let hidden = {
+                let actor = self
+                    .actors
+                    .get_mut(animation.actor_index)
+                    .context("animation refers to a missing scene actor")?;
+                let actor_animation = actor
+                    .animation
+                    .as_mut()
+                    .context("animated scene actor has no animation state")?;
+                actor_animation.phase = animation.phase;
+                actor.hidden
+            };
             let triangles = animation.sample()?;
             ensure!(
                 triangles.len() * 3 == animation.vertices.len(),
@@ -449,7 +520,14 @@ impl LoadedScene {
                     .zip(tween)
                     .map_or(target, |(from, tween)| from[index].lerp(target, tween));
                 let normal = (animation.normal_transform * vertex.normal).normalize_or_zero();
-                self.render.mesh.positions[destination] = position;
+                if hidden {
+                    self.hidden_actor_positions
+                        .get_mut(&animation.actor_index)
+                        .context("hidden animated actor has no saved render positions")?[index] =
+                        position;
+                } else {
+                    self.render.mesh.positions[destination] = position;
+                }
                 self.render.mesh.vertex_colors[destination] =
                     animation.lighting.color(position, normal, animation.unlit);
             }
@@ -995,12 +1073,11 @@ fn load_actors(
             continue;
         }
         apply_scene_actor_state(&mut scene_actor, &state);
-        if state.hidden || state.draw_type != 2 {
-            scene_actor.diagnostics.push(if state.hidden {
-                "hidden by actor state".to_owned()
-            } else {
-                format!("DrawType {} is not rendered as a mesh", state.draw_type)
-            });
+        if state.draw_type != 2 {
+            scene_actor.diagnostics.push(format!(
+                "DrawType {} is not rendered as a mesh",
+                state.draw_type
+            ));
             actors.push(scene_actor);
             continue;
         }

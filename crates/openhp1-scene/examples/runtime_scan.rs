@@ -19,6 +19,8 @@ struct ScanStats {
     relocated: usize,
     rotations: usize,
     rotated: usize,
+    visibility: usize,
+    visibility_changed: usize,
     destroyed: usize,
     logs: usize,
 }
@@ -163,6 +165,10 @@ fn main() -> Result<()> {
         "{} SetRotation actions, {} actor rotations",
         stats.rotations, stats.rotated
     );
+    println!(
+        "{} SetHidden actions, {} actor visibility changes",
+        stats.visibility, stats.visibility_changed
+    );
     println!("{} actors destroyed", stats.destroyed);
     println!("{} script log messages", stats.logs);
     let mut deferred = deferred.into_iter().collect::<Vec<_>>();
@@ -257,6 +263,10 @@ fn apply_actions(
                         roll: rotation[2],
                     },
                 )?);
+            }
+            ActorAction::SetHidden { actor, hidden } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_hidden(actor, hidden)?);
             }
             ActorAction::DestroyActor { actor } => {
                 stats.destroyed += usize::from(scene.destroy_actor(actor)?);
