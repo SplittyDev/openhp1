@@ -353,6 +353,11 @@ impl ScriptRuntime {
                 {
                     return self.dynamic_load_object(arguments);
                 }
+                if class.eq_ignore_ascii_case("Actor")
+                    && function_name.eq_ignore_ascii_case("GetSoundDuration")
+                {
+                    return self.sound_duration(arguments).map(Value::Float);
+                }
                 if let Some(value) = named_native(class, function_name, arguments) {
                     return Ok(value);
                 }
@@ -1068,6 +1073,53 @@ impl ScriptRuntime {
             .map(Value::Object)
     }
 
+    fn sound_duration(&mut self, arguments: &[Value]) -> DispatchResult<f32> {
+        let [sound] = arguments else {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "GetSoundDuration expects one sound, found {} arguments",
+                    arguments.len()
+                ),
+            });
+        };
+        let handle = match sound {
+            Value::None | Value::Object(0) => return Ok(0.0),
+            Value::Object(handle) => *handle,
+            value => {
+                return Err(crate::Error::Type {
+                    expected: "sound object",
+                    actual: value.kind(),
+                }
+                .into());
+            }
+        };
+        let object = self.object_for_handle(handle)?;
+        let object = self.resolved_object(&object)?;
+        let mut reader = object.package.export_reader(object.export_index)?;
+        while reader.next_property()?.is_some() {}
+        let format = reader.read_name_index("sound format")?;
+        let format = object.package.summary().name(format);
+        if object.package.summary().header.version >= 63 {
+            reader.read_u32()?;
+        }
+        let size = usize::try_from(reader.read_compact_index()?).map_err(|_| {
+            DispatchError::UnresolvedObject {
+                message: "sound data size is negative".to_owned(),
+            }
+        })?;
+        let data = reader.read_bytes(size)?;
+        let duration = if format.eq_ignore_ascii_case("wav") {
+            wav_duration(data)
+        } else if format.eq_ignore_ascii_case("mp2") {
+            mpeg_layer_two_duration(data)
+        } else {
+            Err(format!(
+                "GetSoundDuration does not support {format} sound data"
+            ))
+        };
+        duration.map_err(|message| DispatchError::UnresolvedObject { message })
+    }
+
     fn class_is_a(
         &mut self,
         mut class: ResolvedObject,
@@ -1373,6 +1425,87 @@ pub(super) fn fields(bytecode: &Bytecode, opcode: u8) -> impl Iterator<Item = i3
         })
 }
 
+fn wav_duration(data: &[u8]) -> std::result::Result<f32, String> {
+    if data.get(..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WAVE") || data.len() < 12 {
+        return Err("sound data is not a RIFF/WAVE stream".to_owned());
+    }
+    let mut offset = 12;
+    let mut bytes_per_second = None;
+    let mut data_size = None;
+    while offset + 8 <= data.len() {
+        let chunk = &data[offset..offset + 4];
+        let size = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+        let Some(payload) = data.get(offset..offset.saturating_add(size)) else {
+            return Err("WAV chunk exceeds sound data".to_owned());
+        };
+        if chunk == b"fmt " && payload.len() >= 12 {
+            bytes_per_second = Some(u32::from_le_bytes(payload[8..12].try_into().unwrap()) as f32);
+        } else if chunk == b"data" {
+            data_size = Some(size as f32);
+        }
+        offset = offset.saturating_add(size).saturating_add(size & 1);
+    }
+    match (data_size, bytes_per_second) {
+        (Some(size), Some(rate)) if rate > 0.0 => Ok(size / rate),
+        _ => Err("WAV sound is missing its format or data chunk".to_owned()),
+    }
+}
+
+fn mpeg_layer_two_duration(data: &[u8]) -> std::result::Result<f32, String> {
+    const MPEG1_BITRATES: [u32; 16] = [
+        0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0,
+    ];
+    const MPEG2_BITRATES: [u32; 16] = [
+        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+    ];
+    const SAMPLE_RATES: [u32; 3] = [44_100, 48_000, 32_000];
+
+    let mut offset = 0;
+    let mut duration = 0.0;
+    let mut frames = 0;
+    while offset + 4 <= data.len() {
+        let header = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap());
+        let version = (header >> 19) & 0x3;
+        let layer = (header >> 17) & 0x3;
+        let bitrate_index = ((header >> 12) & 0xf) as usize;
+        let sample_rate_index = ((header >> 10) & 0x3) as usize;
+        if header >> 21 != 0x7ff
+            || version == 1
+            || layer != 2
+            || sample_rate_index == 3
+            || bitrate_index == 0
+            || bitrate_index == 15
+        {
+            offset += 1;
+            continue;
+        }
+        let bitrate = if version == 3 {
+            MPEG1_BITRATES[bitrate_index]
+        } else {
+            MPEG2_BITRATES[bitrate_index]
+        } * 1_000;
+        let divisor = match version {
+            3 => 1,
+            2 => 2,
+            0 => 4,
+            _ => unreachable!(),
+        };
+        let sample_rate = SAMPLE_RATES[sample_rate_index] / divisor;
+        let padding = (header >> 9) & 1;
+        let frame_size = (144 * bitrate / sample_rate + padding) as usize;
+        if frame_size < 4 || offset + frame_size > data.len() {
+            break;
+        }
+        duration += 1_152.0 / sample_rate as f32;
+        frames += 1;
+        offset += frame_size;
+    }
+    (frames > 0)
+        .then_some(duration)
+        .ok_or_else(|| "MP2 sound has no complete Layer II frames".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1415,6 +1548,27 @@ mod tests {
                 Value::Vector([4.0, 5.0, 6.0]),
                 Value::Rotator([7, 8, 9]),
             ]
+        );
+    }
+
+    #[test]
+    fn reads_wav_duration_from_byte_rate_and_data_size() {
+        let mut wav = b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x40\x1f\0\0\x01\0\x08\0data\x04\0\0\0\0\0\0\0".to_vec();
+        assert_eq!(wav_duration(&wav).unwrap(), 4.0 / 8_000.0);
+        wav[0] = 0;
+        assert!(wav_duration(&wav).is_err());
+    }
+
+    #[test]
+    fn reads_mp2_duration_from_layer_two_frames() {
+        let header = (0x7ff << 21) | (3 << 19) | (2 << 17) | (1 << 16) | (8 << 12);
+        let frame_size = 144 * 128_000 / 44_100;
+        let mut mp2 = vec![0; frame_size * 2];
+        mp2[..4].copy_from_slice(&u32::to_be_bytes(header));
+        mp2[frame_size..frame_size + 4].copy_from_slice(&u32::to_be_bytes(header));
+        assert!(
+            (mpeg_layer_two_duration(&mp2).unwrap() - 2.0 * 1_152.0 / 44_100.0).abs()
+                < f32::EPSILON
         );
     }
 }

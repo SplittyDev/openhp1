@@ -98,3 +98,5 @@ fire direction and updates its `bestAim` and `bestDist` output parameters.
 English `.int` file and returns an empty string when no entry is available.
 Native class imports without serialized class exports remain opaque class
 handles so `DynamicLoadObject` can resolve qualified resources such as sounds.
+`GetSoundDuration` reads embedded WAV metadata or sums MPEG Layer II frames for
+dialogue timing without requiring audio playback.
