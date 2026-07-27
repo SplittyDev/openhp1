@@ -551,6 +551,20 @@ mod tests {
     }
 
     #[test]
+    fn rotator_addition_wraps_each_ue1_component() {
+        assert_eq!(
+            scalar_native(
+                0x13c,
+                &[
+                    Value::Rotator([i32::MAX, 2, -4]),
+                    Value::Rotator([1, 3, -5])
+                ]
+            ),
+            Ok(Value::Rotator([i32::MIN, 5, -9]))
+        );
+    }
+
+    #[test]
     fn requested_core_math_and_random_natives_match_unreal_semantics() {
         assert_eq!(
             scalar_native(0xfb, &[Value::Int(12), Value::Int(-5), Value::Int(10)]),

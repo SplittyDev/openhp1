@@ -730,6 +730,7 @@ enum ScalarNative {
     EqualEqual_BoolBool,
     NotEqual_BoolBool,
     Chr,
+    Add_RotatorRotator,
 }
 
 impl TryFrom<u16> for ScalarNative {
@@ -781,6 +782,7 @@ impl TryFrom<u16> for ScalarNative {
             0xf3 => Ok(Self::NotEqual_BoolBool),
             0xf5 => Ok(Self::FMax),
             0xfb => Ok(Self::Clamp),
+            0x13c => Ok(Self::Add_RotatorRotator),
             _ => Err(()),
         }
     }
@@ -941,6 +943,13 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Chr, [Value::Int(value)]) => {
             Value::String(char::from(*value as u8).to_string())
+        }
+        (ScalarNative::Add_RotatorRotator, [Value::Rotator(left), Value::Rotator(right)]) => {
+            Value::Rotator([
+                left[0].wrapping_add(right[0]),
+                left[1].wrapping_add(right[1]),
+                left[2].wrapping_add(right[2]),
+            ])
         }
         _ => {
             return Err(format!(
