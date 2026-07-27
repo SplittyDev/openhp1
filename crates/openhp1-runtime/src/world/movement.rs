@@ -346,18 +346,18 @@ impl ScriptRuntime {
             if actor == current.actor || self.destroyed.contains(&actor) {
                 continue;
             }
-            if self
-                .actors_share_base_chain(current.actor, actor, current_actor, current_instance)
-                .map_err(|error| error.to_string())?
-            {
-                continue;
-            }
             let Some(other) =
                 self.collision_actor_by_index(actor, current_actor, current_instance)?
             else {
                 continue;
             };
             if !other.collide_actors || other.has_brush {
+                continue;
+            }
+            if self
+                .actors_share_base_chain(current.actor, actor, current_actor, current_instance)
+                .map_err(|error| error.to_string())?
+            {
                 continue;
             }
             let Some(hit) = sweep_cylinder(
