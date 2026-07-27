@@ -191,7 +191,7 @@ impl ScriptRuntime {
 
         if let Some(other) = blocking_actor
             && !self
-                .actors_share_base_chain(actor, other, actor, instance)
+                .actors_share_base_chain(actor, other)
                 .map_err(|error| error.to_string())?
         {
             self.queue_pair_event(actions, other, actor, "Bump")?;
@@ -285,7 +285,7 @@ impl ScriptRuntime {
             .copied()
             && (base_actor == actor
                 || self
-                    .actor_is_based_on(base_actor, actor, actor, instance)
+                    .actor_is_based_on(base_actor, actor)
                     .map_err(|error| error.to_string())?)
         {
             return Ok(());
@@ -363,7 +363,7 @@ impl ScriptRuntime {
                 continue;
             }
             if self
-                .actors_share_base_chain(current.actor, actor, current_actor, current_instance)
+                .actors_share_base_chain(current.actor, actor)
                 .map_err(|error| error.to_string())?
             {
                 continue;
@@ -594,46 +594,16 @@ impl ScriptRuntime {
         Ok(fields)
     }
 
-    fn actors_share_base_chain(
-        &mut self,
-        first: usize,
-        second: usize,
-        current_actor: usize,
-        current_instance: &InstanceState,
-    ) -> DispatchResult<bool> {
-        Ok(
-            self.actor_is_based_on(first, second, current_actor, current_instance)?
-                || self.actor_is_based_on(second, first, current_actor, current_instance)?,
-        )
+    fn actors_share_base_chain(&self, first: usize, second: usize) -> DispatchResult<bool> {
+        Ok(self.actor_is_based_on(first, second)? || self.actor_is_based_on(second, first)?)
     }
 
-    fn actor_is_based_on(
-        &mut self,
-        mut actor: usize,
-        base: usize,
-        current_actor: usize,
-        current_instance: &InstanceState,
-    ) -> DispatchResult<bool> {
+    fn actor_is_based_on(&self, mut actor: usize, base: usize) -> DispatchResult<bool> {
         for _ in 0..MAX_CALL_DEPTH {
-            let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            let Some(Some(object)) = self.actor_bases.get(&actor) else {
                 return Ok(false);
             };
-            let class = self.resolved_object(&class)?;
-            let value = if actor == current_actor {
-                self.instance_property(&class, current_instance, "Base")?
-            } else {
-                let Some(field) = self.find_property(&class, "Base", 0)? else {
-                    return Ok(false);
-                };
-                self.instances
-                    .get(&actor)
-                    .and_then(|instance| instance.get(&field))
-                    .cloned()
-            };
-            let Some(StoredValue::Object(Some(object))) = value else {
-                return Ok(false);
-            };
-            let Some(next) = self.object_actors.get(&object).copied() else {
+            let Some(next) = self.object_actors.get(object).copied() else {
                 return Ok(false);
             };
             if next == base {
