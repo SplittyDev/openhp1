@@ -53,40 +53,9 @@ impl ScriptRuntime {
                 .map_err(|error| error.to_string());
         }
         if index == DESTROY {
-            for name in ["bStatic", "bNoDelete"] {
-                let field = self
-                    .find_property(actor_class, name, 0)
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| format!("Destroy property {name} is missing"))?;
-                match instance.get(&field) {
-                    Some(StoredValue::Value(Value::Bool(true))) => {
-                        return Ok(Value::Bool(false));
-                    }
-                    Some(StoredValue::Value(Value::Bool(false))) | None => {}
-                    Some(value) => {
-                        return Err(format!("Destroy property {name} is {value:?}"));
-                    }
-                }
-            }
-            if !self.destroyed.insert(actor) {
-                return Ok(Value::Bool(true));
-            }
-            self.tick_functions.remove(&actor);
-            self.failed_ticks.remove(&actor);
-            self.state_frames.remove(&actor);
-            self.update_actor_base(actor, None);
-            if let Some(cached) = self.collision_actors.get_mut(actor) {
-                *cached = None;
-                self.reindex_cached_collision_actor(actor);
-            }
-            let field = self
-                .find_property(actor_class, "bDeleteMe", 0)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
-            instance.insert(field, StoredValue::Value(Value::Bool(true)));
-            self.timers.remove(&actor);
-            actions.push(ActorAction::DestroyActor { actor });
-            return Ok(Value::Bool(true));
+            return self
+                .destroy_actor(actor, actor_class, instance, actions)
+                .map(Value::Bool);
         }
         if index == GOTO_STATE {
             if arguments.len() > 2 {
@@ -575,6 +544,45 @@ impl ScriptRuntime {
             ));
         }
         scalar_native(index, arguments)
+    }
+
+    pub(super) fn destroy_actor(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        for name in ["bStatic", "bNoDelete"] {
+            let field = self
+                .find_property(actor_class, name, 0)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("Destroy property {name} is missing"))?;
+            match instance.get(&field) {
+                Some(StoredValue::Value(Value::Bool(true))) => return Ok(false),
+                Some(StoredValue::Value(Value::Bool(false))) | None => {}
+                Some(value) => return Err(format!("Destroy property {name} is {value:?}")),
+            }
+        }
+        if !self.destroyed.insert(actor) {
+            return Ok(true);
+        }
+        self.tick_functions.remove(&actor);
+        self.failed_ticks.remove(&actor);
+        self.state_frames.remove(&actor);
+        self.update_actor_base(actor, None);
+        if let Some(cached) = self.collision_actors.get_mut(actor) {
+            *cached = None;
+            self.reindex_cached_collision_actor(actor);
+        }
+        let field = self
+            .find_property(actor_class, "bDeleteMe", 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
+        instance.insert(field, StoredValue::Value(Value::Bool(true)));
+        self.timers.remove(&actor);
+        actions.push(ActorAction::DestroyActor { actor });
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]

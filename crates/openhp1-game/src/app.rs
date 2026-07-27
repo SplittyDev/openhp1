@@ -507,7 +507,7 @@ impl Graphics {
                 ui.separator();
                 ui.monospace(format!(
                     "{} actors  {} triangles  {} draw calls",
-                    self.scene.actors.len(),
+                    self.runtime.active_actor_count(),
                     self.scene.render.mesh.indices.len() / 3,
                     self.render_stats.draw_calls
                 ));

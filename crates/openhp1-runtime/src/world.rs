@@ -432,6 +432,7 @@ fn object_reference(index: i32) -> ObjectReference {
 mod tests {
     use super::*;
     use super::{
+        actor::advance_lifespan,
         actor::advance_timer,
         actor::update_touching_array,
         native::{
@@ -453,6 +454,15 @@ mod tests {
         assert!(!advance_timer(&mut timer, 0.04));
         assert!(advance_timer(&mut timer, 0.01));
         assert!((timer.remaining - 0.1).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn positive_lifespans_expire_once_at_zero() {
+        let mut lifespan = 0.1;
+        assert!(!advance_lifespan(&mut lifespan, 0.04));
+        assert!(advance_lifespan(&mut lifespan, 0.07));
+        assert_eq!(lifespan, 0.0);
+        assert!(!advance_lifespan(&mut lifespan, 0.1));
     }
 
     #[test]

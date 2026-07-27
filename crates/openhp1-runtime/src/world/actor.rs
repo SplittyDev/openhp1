@@ -201,6 +201,12 @@ impl ScriptRuntime {
         self.player_actor
     }
 
+    pub fn active_actor_count(&self) -> usize {
+        self.actor_classes
+            .len()
+            .saturating_sub(self.destroyed.len())
+    }
+
     pub fn initialize_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
         let level = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
         let level_class = self
@@ -590,6 +596,7 @@ impl ScriptRuntime {
                 }
             }
         }
+        self.tick_lifespans(delta_time, &mut actions)?;
 
         let mut state_actors = self.state_frames.keys().copied().collect::<Vec<_>>();
         state_actors.sort_unstable();
@@ -699,6 +706,63 @@ impl ScriptRuntime {
             }
         }
         Ok(actions)
+    }
+
+    fn tick_lifespans(
+        &mut self,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        let mut actors = self
+            .actor_classes
+            .iter()
+            .filter(|(actor, _)| !self.destroyed.contains(actor))
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
+        actors.sort_unstable_by_key(|(actor, _)| *actor);
+        let mut expired = Vec::new();
+        for (actor, class) in actors {
+            let class = self.resolved_object(&class)?;
+            let Some(field) = self.find_property(&class, "LifeSpan", 0)? else {
+                continue;
+            };
+            let Some(StoredValue::Value(Value::Float(lifespan))) = self
+                .instances
+                .get_mut(&actor)
+                .and_then(|instance| instance.get_mut(&field))
+            else {
+                continue;
+            };
+            if advance_lifespan(lifespan, delta_time) {
+                expired.push((actor, class));
+            }
+        }
+
+        for (actor, class) in expired {
+            match self.dispatch_event(
+                actor,
+                Path::new(class.package.summary().source.as_ref()),
+                class.export_index,
+                "Expired",
+            ) {
+                Ok(mut expired_actions) => actions.append(&mut expired_actions),
+                Err(error) => actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("Expired: {error}"),
+                }),
+            }
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let mut instance = self
+                .instances
+                .remove(&actor)
+                .ok_or(DispatchError::ActiveActorContext { actor })?;
+            let result = self.destroy_actor(actor, &class, &mut instance, actions);
+            self.instances.insert(actor, instance);
+            result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        Ok(())
     }
 
     pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
@@ -822,6 +886,19 @@ pub(super) fn advance_timer(timer: &mut ActorTimer, delta_time: f32) -> bool {
         timer.remaining = timer.rate - (-timer.remaining).rem_euclid(timer.rate);
     }
     true
+}
+
+pub(super) fn advance_lifespan(lifespan: &mut f32, delta_time: f32) -> bool {
+    if *lifespan <= 0.0 {
+        return false;
+    }
+    if *lifespan <= delta_time {
+        *lifespan = 0.0;
+        true
+    } else {
+        *lifespan -= delta_time;
+        false
+    }
 }
 
 pub(super) fn update_touching_array(values: &mut [StoredValue], other: ObjectId, touching: bool) {
