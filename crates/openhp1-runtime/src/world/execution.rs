@@ -185,6 +185,9 @@ impl ScriptRuntime {
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)
                         .map(FrameResponse::Value),
+                    FrameRequest::ResolveObject { reference } => self
+                        .object_reference_value(&state.package, reference)
+                        .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &state.package, field, instance)
                         .map(FrameResponse::Value),
@@ -381,6 +384,9 @@ impl ScriptRuntime {
                         .map(FrameResponse::Value),
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)
+                        .map(FrameResponse::Value),
+                    FrameRequest::ResolveObject { reference } => self
+                        .object_reference_value(&function.package, reference)
                         .map(FrameResponse::Value),
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &function.package, field, instance)
@@ -768,8 +774,7 @@ impl ScriptRuntime {
             .into());
         }
         let base_class = self
-            .packages
-            .resolve(source, object_reference(*base_class))?
+            .resolve_class_value(source, *base_class)?
             .ok_or_else(|| DispatchError::UnresolvedObject {
                 message: "AllActors base class is null".to_owned(),
             })?;
@@ -937,6 +942,17 @@ impl ScriptRuntime {
             .and_then(|name| name.to_str())
             .unwrap_or(summary.source.as_ref());
         Ok(Value::String(format!("{package}.{name}")))
+    }
+
+    fn object_reference_value(
+        &mut self,
+        source: &Arc<Package>,
+        reference: i32,
+    ) -> DispatchResult<Value> {
+        let Some(object) = self.resolve_reference(source, reference)? else {
+            return Ok(Value::Object(0));
+        };
+        self.object_handle(object).map(Value::Object)
     }
 
     fn class_is_a(

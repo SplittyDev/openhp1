@@ -9,6 +9,8 @@ Actors use stable package/export identities. Class defaults followed by actor
 tagged-property overrides initialize persistent instance state. Remote actor
 contexts must resolve registered actor handles so field reads, writes, and
 calls affect the target actor rather than a temporary copy.
+Signed `ObjectConst` package references are resolved relative to the function
+or state package before context operations use their runtime handles.
 
 Nested remote calls may inspect or call back into their caller, so the caller's
 live instance remains addressable while the remote context executes. Serialized

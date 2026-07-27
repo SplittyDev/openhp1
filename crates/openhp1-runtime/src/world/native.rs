@@ -819,7 +819,7 @@ impl ScriptRuntime {
             ));
         };
         let Some(class) = self
-            .resolve_spawn_class(source, class_reference)
+            .resolve_class_value(source, class_reference)
             .map_err(|error| error.to_string())?
         else {
             return Ok(Value::Object(0));
@@ -992,7 +992,7 @@ impl ScriptRuntime {
         })
     }
 
-    fn resolve_spawn_class(
+    pub(super) fn resolve_class_value(
         &mut self,
         source: &Arc<Package>,
         reference: i32,
@@ -1000,7 +1000,14 @@ impl ScriptRuntime {
         if reference == 0 {
             return Ok(None);
         }
-        if let Some(object) = self.packages.resolve(source, object_reference(reference))?
+        let reference_object = object_reference(reference);
+        let reference_in_bounds = match reference_object {
+            ObjectReference::None => false,
+            ObjectReference::Export(index) => index < source.summary().exports.len(),
+            ObjectReference::Import(index) => index < source.summary().imports.len(),
+        };
+        if reference_in_bounds
+            && let Some(object) = self.packages.resolve(source, reference_object)?
             && self.is_spawn_class(&object)
         {
             return Ok(Some(object));

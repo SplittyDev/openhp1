@@ -384,6 +384,9 @@ pub(crate) enum FrameRequest {
     ObjectToString {
         value: Value,
     },
+    ResolveObject {
+        reference: i32,
+    },
     GetInstance {
         receiver: i32,
         field: i32,
@@ -564,6 +567,9 @@ impl<'a> Frame<'a> {
             }
             FrameRequest::ObjectToString { .. } => {
                 Err("standalone frames do not host object conversions".to_owned())
+            }
+            FrameRequest::ResolveObject { reference } => {
+                Ok(FrameResponse::Value(Value::Object(reference)))
             }
             FrameRequest::Call { receiver, .. }
             | FrameRequest::GetInstance { receiver, .. }
@@ -869,7 +875,17 @@ impl<'a> Frame<'a> {
             Opcode::IntConst => Expression::Value(Value::Int(self.read_i32()?)),
             Opcode::FloatConst => Expression::Value(Value::Float(self.read_f32()?)),
             Opcode::StringConst => Expression::Value(Value::String(self.read_ascii_z()?)),
-            Opcode::ObjectConst => Expression::Value(Value::Object(self.read_i32()?)),
+            Opcode::ObjectConst => {
+                let reference = self.read_i32()?;
+                Expression::Value(
+                    host(
+                        FrameRequest::ResolveObject { reference },
+                        &mut self.instance,
+                    )
+                    .and_then(FrameResponse::into_value)
+                    .map_err(|message| Error::Context { message })?,
+                )
+            }
             Opcode::NameConst => Expression::Value(Value::Name(self.read_i32()?)),
             Opcode::RotationConst => Expression::Value(Value::Rotator([
                 self.read_i32()?,
@@ -2011,6 +2027,9 @@ mod tests {
         let mut frame = Frame::new(&bytecode);
         let result = frame
             .execute_with_instance(&mut instance, |request, _| match request {
+                FrameRequest::ResolveObject { reference: 1 } => {
+                    Ok(FrameResponse::Value(Value::Object(1)))
+                }
                 FrameRequest::CallIterator {
                     function: FunctionCall::Native(0x130),
                     arguments,
@@ -2356,6 +2375,9 @@ mod tests {
             };
             Frame::new(&bytecode)
                 .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: 11 } => {
+                        Ok(FrameResponse::Value(Value::Object(11)))
+                    }
                     FrameRequest::DynamicCast {
                         class: 7,
                         value: Value::Object(11),
@@ -2382,6 +2404,9 @@ mod tests {
         assert_eq!(
             Frame::new(&bytecode)
                 .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: 11 } => {
+                        Ok(FrameResponse::Value(Value::Object(11)))
+                    }
                     FrameRequest::ObjectToString {
                         value: Value::Object(11),
                     } => Ok(FrameResponse::Value(Value::String(
@@ -2419,6 +2444,9 @@ mod tests {
         let mut frame = Frame::new(&bytecode);
         let result = frame
             .execute_with_instance(&mut instance, |request, _| match request {
+                FrameRequest::ResolveObject { reference: 1 } => {
+                    Ok(FrameResponse::Value(Value::Object(1)))
+                }
                 FrameRequest::GetInstance { receiver: 1, field } => Ok(FrameResponse::Value(
                     remote.get(&field).cloned().unwrap_or(Value::None),
                 )),
@@ -2471,6 +2499,9 @@ mod tests {
         );
         let result = frame
             .execute_hosted(|request| match request {
+                FrameRequest::ResolveObject { reference: 1 } => {
+                    Ok(FrameResponse::Value(Value::Object(1)))
+                }
                 FrameRequest::GetInstance { receiver: 1, field } => Ok(FrameResponse::Value(
                     remote
                         .get(&field)
@@ -2662,6 +2693,9 @@ mod tests {
         let mut frame = Frame::new(&bytecode);
         let result = frame
             .execute_hosted(|request| match request {
+                FrameRequest::ResolveObject { reference: 11 } => {
+                    Ok(FrameResponse::Value(Value::Object(11)))
+                }
                 FrameRequest::GetInstance {
                     receiver: -1,
                     field: 7,
@@ -2678,5 +2712,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn object_constants_resolve_signed_package_references() {
+        let mut bytes = vec![0x04, 0x20];
+        bytes.extend((-149_i32).to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        assert_eq!(
+            Frame::new(&bytecode)
+                .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: -149 } => {
+                        Ok(FrameResponse::Value(Value::Object(23)))
+                    }
+                    _ => unreachable!(),
+                })
+                .unwrap(),
+            Value::Object(23)
+        );
     }
 }
