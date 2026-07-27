@@ -298,6 +298,7 @@ pub struct ScriptRuntime {
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
+    collision_actors: Vec<Option<movement::CachedCollisionActor>>,
     grounded_world: HashMap<usize, [f32; 3]>,
     actor_bases: HashMap<usize, Option<ObjectId>>,
     touching: HashSet<(usize, usize)>,

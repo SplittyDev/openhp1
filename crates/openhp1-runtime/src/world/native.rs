@@ -63,6 +63,9 @@ impl ScriptRuntime {
             self.tick_functions.remove(&actor);
             self.failed_ticks.remove(&actor);
             self.state_frames.remove(&actor);
+            if let Some(cached) = self.collision_actors.get_mut(actor) {
+                *cached = None;
+            }
             let field = self
                 .find_property(actor_class, "bDeleteMe", 0)
                 .map_err(|error| error.to_string())?
@@ -293,6 +296,7 @@ impl ScriptRuntime {
                     .ok_or_else(|| format!("SetCollision property {name} is missing"))?;
                 instance.insert(field, StoredValue::Value(Value::Bool(value)));
             }
+            self.refresh_cached_collision_actor(actor, actor_class, instance)?;
             // ponytail: these flags become collision behavior when BSP movement exists.
             return Ok(Value::None);
         }
@@ -344,15 +348,13 @@ impl ScriptRuntime {
             if !location.iter().all(|value| value.is_finite()) {
                 return Err("SetLocation coordinates are not finite".to_owned());
             }
-            let field = self
-                .find_property(actor_class, "Location", 0)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "SetLocation property Location is missing".to_owned())?;
-            instance.insert(field, StoredValue::Value(Value::Vector(*location)));
-            actions.push(ActorAction::SetLocation {
+            self.set_actor_location(
                 actor,
-                location: *location,
-            });
+                actor_class,
+                instance,
+                Vec3::from_array(*location),
+                actions,
+            )?;
             // ponytail: accept finite locations until UE1 BSP collision rejection exists.
             return Ok(Value::Bool(true));
         }
@@ -595,6 +597,7 @@ impl ScriptRuntime {
         self.refresh_tick_actor(spawned, &class)
             .map_err(|error| error.to_string())?;
         self.actor_bases.insert(spawned, None);
+        self.refresh_cached_collision_actor(spawned, &class, &spawned_instance)?;
         self.instances.insert(spawned, spawned_instance);
         let name = format!("{class_name}{spawned}");
         actions.push(ActorAction::SpawnActor {

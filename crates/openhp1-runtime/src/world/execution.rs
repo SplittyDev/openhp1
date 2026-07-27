@@ -706,12 +706,16 @@ impl ScriptRuntime {
             self.actor_bases.insert(actor, base);
         }
         if actor == current_actor {
-            current_instance.insert(field, value);
+            current_instance.insert(field.clone(), value);
+            self.update_cached_collision_property(actor, &field, Some(current_instance))
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
         } else {
             self.instances
                 .get_mut(&actor)
                 .ok_or(DispatchError::ActiveActorContext { actor })?
-                .insert(field, value);
+                .insert(field.clone(), value);
+            self.update_cached_collision_property(actor, &field, None)
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
         }
         Ok(())
     }

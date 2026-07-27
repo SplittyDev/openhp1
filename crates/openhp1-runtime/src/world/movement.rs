@@ -3,6 +3,7 @@ use openhp1_physics::{cylinders_overlap, sweep_cylinder};
 
 use super::*;
 
+#[derive(Clone)]
 struct CollisionActor {
     actor: usize,
     location: Vec3,
@@ -13,6 +14,11 @@ struct CollisionActor {
     block_players: bool,
     player_collision: bool,
     has_brush: bool,
+}
+
+pub(super) struct CachedCollisionActor {
+    actor: CollisionActor,
+    fields: CollisionFields,
 }
 
 struct ActorSweep {
@@ -243,6 +249,9 @@ impl ScriptRuntime {
             field,
             StoredValue::Value(Value::Vector(location.to_array())),
         );
+        if let Some(Some(cached)) = self.collision_actors.get_mut(actor) {
+            cached.actor.location = location;
+        }
         actions.push(ActorAction::SetLocation {
             actor,
             location: location.to_array(),
@@ -339,19 +348,18 @@ impl ScriptRuntime {
         current_actor: usize,
         current_instance: &InstanceState,
     ) -> std::result::Result<Vec<ActorSweep>, String> {
-        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
-        actors.sort_unstable();
+        self.ensure_collision_actors(current_actor, current_instance)?;
+        let actors = self
+            .collision_actors
+            .iter()
+            .filter_map(|cached| cached.as_ref())
+            .filter(|cached| cached.actor.collide_actors && !cached.actor.has_brush)
+            .map(|cached| cached.actor.clone())
+            .collect::<Vec<_>>();
         let mut hits = Vec::new();
-        for actor in actors {
+        for other in actors {
+            let actor = other.actor;
             if actor == current.actor || self.destroyed.contains(&actor) {
-                continue;
-            }
-            let Some(other) =
-                self.collision_actor_by_index(actor, current_actor, current_instance)?
-            else {
-                continue;
-            };
-            if !other.collide_actors || other.has_brush {
                 continue;
             }
             if self
@@ -463,25 +471,95 @@ impl ScriptRuntime {
         current_actor: usize,
         current_instance: &InstanceState,
     ) -> std::result::Result<Option<CollisionActor>, String> {
-        let Some(class_id) = self.actor_classes.get(&actor).cloned() else {
-            return Ok(None);
-        };
-        let fields = if let Some(fields) = self.collision_fields.get(&class_id) {
-            fields.clone()
-        } else {
-            let class = self
-                .resolved_object(&class_id)
-                .map_err(|error| error.to_string())?;
-            self.collision_fields(&class)?
-        };
-        if actor == current_actor {
-            return collision_actor_from_fields(actor, current_instance, &fields).map(Some);
+        self.ensure_collision_actors(current_actor, current_instance)?;
+        Ok(self
+            .collision_actors
+            .get(actor)
+            .and_then(|cached| cached.as_ref())
+            .map(|cached| cached.actor.clone()))
+    }
+
+    fn ensure_collision_actors(
+        &mut self,
+        current_actor: usize,
+        current_instance: &InstanceState,
+    ) -> std::result::Result<(), String> {
+        if !self.collision_actors.is_empty() {
+            return Ok(());
         }
-        let instance = self
-            .instances
-            .get(&actor)
-            .ok_or_else(|| format!("actor {actor} instance is active"))?;
-        collision_actor_from_fields(actor, instance, &fields).map(Some)
+        self.collision_actors.resize_with(self.next_actor, || None);
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        for actor in actors {
+            let class_id = self.actor_classes[&actor].clone();
+            let fields = if let Some(fields) = self.collision_fields.get(&class_id) {
+                fields.clone()
+            } else {
+                let class = self
+                    .resolved_object(&class_id)
+                    .map_err(|error| error.to_string())?;
+                self.collision_fields(&class)?
+            };
+            let instance = if actor == current_actor {
+                current_instance
+            } else {
+                self.instances
+                    .get(&actor)
+                    .ok_or_else(|| format!("actor {actor} instance is active"))?
+            };
+            self.collision_actors[actor] = Some(CachedCollisionActor {
+                actor: collision_actor_from_fields(actor, instance, &fields)?,
+                fields,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn refresh_cached_collision_actor(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> std::result::Result<(), String> {
+        if self.collision_actors.is_empty() {
+            return Ok(());
+        }
+        let fields = self.collision_fields(class)?;
+        if actor >= self.collision_actors.len() {
+            self.collision_actors.resize_with(actor + 1, || None);
+        }
+        self.collision_actors[actor] = Some(CachedCollisionActor {
+            actor: collision_actor_from_fields(actor, instance, &fields)?,
+            fields,
+        });
+        Ok(())
+    }
+
+    pub(super) fn update_cached_collision_property(
+        &mut self,
+        actor: usize,
+        field: &ObjectId,
+        current_instance: Option<&InstanceState>,
+    ) -> std::result::Result<(), String> {
+        let Some(Some(cached)) = self.collision_actors.get(actor) else {
+            return Ok(());
+        };
+        let fields = cached.fields.clone();
+        if !fields.contains(field) {
+            return Ok(());
+        }
+        let instance = match current_instance {
+            Some(instance) => instance,
+            None => self
+                .instances
+                .get(&actor)
+                .ok_or_else(|| format!("actor {actor} instance is active"))?,
+        };
+        self.collision_actors[actor] = Some(CachedCollisionActor {
+            actor: collision_actor_from_fields(actor, instance, &fields)?,
+            fields,
+        });
+        Ok(())
     }
 
     fn collision_fields(
@@ -678,6 +756,21 @@ impl ScriptRuntime {
             StoredValue::Value(Value::Rotator(value)) => Ok(value),
             value => Err(format!("actor property {name} is {value:?}")),
         }
+    }
+}
+
+impl CollisionFields {
+    fn contains(&self, field: &ObjectId) -> bool {
+        [
+            &self.location,
+            &self.height,
+            &self.radius,
+            &self.collide_actors,
+            &self.block_actors,
+            &self.block_players,
+            &self.brush,
+        ]
+        .contains(&field)
     }
 }
 

@@ -38,6 +38,7 @@ impl ScriptRuntime {
             level_package: None,
             level_info: None,
             collision_fields: HashMap::new(),
+            collision_actors: Vec::new(),
             grounded_world: HashMap::new(),
             actor_bases: HashMap::new(),
             touching: HashSet::new(),
@@ -188,6 +189,7 @@ impl ScriptRuntime {
         if !delta_time.is_finite() || delta_time < 0.0 {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
+        self.collision_actors.clear();
         let mut actors = self
             .tick_functions
             .iter()
