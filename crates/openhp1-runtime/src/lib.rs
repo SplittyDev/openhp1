@@ -25,6 +25,7 @@ pub enum Value {
     Object(i32),
     Vector([f32; 3]),
     Rotator([i32; 3]),
+    Struct(HashMap<String, Value>),
     Array(Vec<Value>),
 }
 
@@ -215,6 +216,7 @@ impl Value {
             Self::Object(_) => "object",
             Self::Vector(_) => "vector",
             Self::Rotator(_) => "rotator",
+            Self::Struct(_) => "struct",
             Self::Array(_) => "array",
         }
     }
@@ -273,7 +275,7 @@ pub enum Error {
     Call { call: FunctionCall, message: String },
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum StructMember {
     X,
     Y,
@@ -281,10 +283,12 @@ pub(crate) enum StructMember {
     Pitch,
     Yaw,
     Roll,
+    Field { name: String, zero: Value },
 }
 
 #[derive(Clone, Debug)]
 enum Slot {
+    Discard(Value),
     Local(i32),
     Instance {
         receiver: i32,
@@ -731,11 +735,11 @@ impl<'a> Frame<'a> {
                 match object {
                     Value::None | Value::Object(0) => {
                         self.read(null_skip)?;
-                        Expression::Value(if zero_fill_size == 12 {
+                        Expression::Slot(Slot::Discard(if zero_fill_size == 12 {
                             Value::Vector([0.0; 3])
                         } else {
                             Value::None
-                        })
+                        }))
                     }
                     Value::Object(object) if object != 0 => {
                         let previous = self.current_context;
@@ -833,7 +837,7 @@ impl<'a> Frame<'a> {
                 let member = self
                     .struct_members
                     .get(&field)
-                    .copied()
+                    .cloned()
                     .ok_or(Error::MissingStructMember { field })?;
                 match target {
                     Expression::Slot(target) => Expression::Slot(Slot::StructMember {
@@ -1023,6 +1027,7 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<()> {
         match slot {
+            Slot::Discard(_) => {}
             Slot::Local(field) => {
                 self.locals.insert(field, value);
             }
@@ -1096,6 +1101,7 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Option<Value>> {
         Ok(match slot {
+            Slot::Discard(value) => Some(value.clone()),
             Slot::Local(field) => self.locals.get(field).cloned(),
             Slot::Instance {
                 receiver: -1,
@@ -1260,7 +1266,7 @@ fn array_element(value: &Value, index: i32) -> Result<Value> {
 }
 
 impl StructMember {
-    fn get(self, value: Value) -> Result<Value> {
+    fn get(&self, value: Value) -> Result<Value> {
         Ok(match (self, value) {
             (Self::X, Value::Vector(value)) => Value::Float(value[0]),
             (Self::Y, Value::Vector(value)) => Value::Float(value[1]),
@@ -1268,16 +1274,33 @@ impl StructMember {
             (Self::Pitch, Value::Rotator(value)) => Value::Int(value[0]),
             (Self::Yaw, Value::Rotator(value)) => Value::Int(value[1]),
             (Self::Roll, Value::Rotator(value)) => Value::Int(value[2]),
+            (Self::Field { name, zero }, Value::Struct(mut values)) => {
+                values.remove(name).unwrap_or_else(|| zero.clone())
+            }
+            (Self::Field { zero, .. }, Value::None) => zero.clone(),
             (_, value) => {
                 return Err(Error::Type {
-                    expected: "matching vector or rotator",
+                    expected: "matching struct, vector, or rotator",
                     actual: value.kind(),
                 });
             }
         })
     }
 
-    fn set(self, target: &mut Value, value: Value) -> Result<()> {
+    fn set(&self, target: &mut Value, value: Value) -> Result<()> {
+        if let Self::Field { name, .. } = self {
+            if matches!(target, Value::None) {
+                *target = Value::Struct(HashMap::new());
+            }
+            if let Value::Struct(values) = target {
+                values.insert(name.clone(), value);
+                return Ok(());
+            }
+            return Err(Error::Type {
+                expected: "struct",
+                actual: target.kind(),
+            });
+        }
         match (self, target, value) {
             (Self::X, Value::Vector(target), Value::Float(value)) => target[0] = value,
             (Self::Y, Value::Vector(target), Value::Float(value)) => target[1] = value,
@@ -1761,6 +1784,46 @@ mod tests {
     }
 
     #[test]
+    fn reads_and_writes_generic_struct_members() {
+        let mut bytes = vec![0x0f, 0x36];
+        bytes.extend(9_i32.to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(42.0_f32.to_le_bytes());
+        bytes.extend([0x04, 0x36]);
+        bytes.extend(9_i32.to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Struct(HashMap::new()));
+        frame.set_struct_member(
+            9,
+            StructMember::Field {
+                name: "Base".to_owned(),
+                zero: Value::Float(0.0),
+            },
+        );
+        assert_eq!(
+            frame.execute(|_, _| unreachable!()).unwrap(),
+            Value::Float(42.0)
+        );
+        assert_eq!(
+            frame.local(7),
+            Some(&Value::Struct(HashMap::from([(
+                "Base".to_owned(),
+                Value::Float(42.0)
+            )])))
+        );
+    }
+
+    #[test]
     fn reads_and_writes_fixed_array_elements() {
         let mut bytes = vec![0x0f, 0x1a, 0x26, 0x00];
         bytes.extend(7_i32.to_le_bytes());
@@ -1958,6 +2021,98 @@ mod tests {
             .unwrap();
         assert_eq!(result, Value::Int(42));
         assert_eq!(remote.get(&7), Some(&Value::Int(42)));
+    }
+
+    #[test]
+    fn context_reads_and_writes_remote_struct_members() {
+        let mut context = vec![0x19, 0x20];
+        context.extend(1_i32.to_le_bytes());
+        context.extend(5_u16.to_le_bytes());
+        context.push(0);
+        context.push(0x01);
+        context.extend(7_i32.to_le_bytes());
+        let mut member = vec![0x36];
+        member.extend(9_i32.to_le_bytes());
+        member.extend(&context);
+        let mut bytes = vec![0x0f];
+        bytes.extend(&member);
+        bytes.push(0x1e);
+        bytes.extend(42.0_f32.to_le_bytes());
+        bytes.push(0x04);
+        bytes.extend(member);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut remote = HashMap::new();
+        let mut frame = Frame::new(&bytecode);
+        frame.set_struct_member(
+            9,
+            StructMember::Field {
+                name: "Base".to_owned(),
+                zero: Value::Float(0.0),
+            },
+        );
+        let result = frame
+            .execute_hosted(|request| match request {
+                FrameRequest::GetInstance { receiver: 1, field } => Ok(FrameResponse::Value(
+                    remote
+                        .get(&field)
+                        .cloned()
+                        .unwrap_or_else(|| Value::Struct(HashMap::new())),
+                )),
+                FrameRequest::SetInstance {
+                    receiver: 1,
+                    field,
+                    value,
+                } => {
+                    remote.insert(field, value);
+                    Ok(FrameResponse::Value(Value::None))
+                }
+                _ => unreachable!(),
+            })
+            .unwrap();
+        assert_eq!(result, Value::Float(42.0));
+        assert_eq!(
+            remote.get(&7),
+            Some(&Value::Struct(HashMap::from([(
+                "Base".to_owned(),
+                Value::Float(42.0)
+            )])))
+        );
+    }
+
+    #[test]
+    fn null_context_discards_struct_member_writes() {
+        let mut bytes = vec![0x0f, 0x36];
+        bytes.extend(9_i32.to_le_bytes());
+        bytes.extend([0x19, 0x2a]);
+        bytes.extend(5_u16.to_le_bytes());
+        bytes.extend([8, 0x01]);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(42.0_f32.to_le_bytes());
+        bytes.extend([0x04, 0x27]);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_struct_member(
+            9,
+            StructMember::Field {
+                name: "Base".to_owned(),
+                zero: Value::Float(0.0),
+            },
+        );
+        assert_eq!(
+            frame.execute(|_, _| unreachable!()).unwrap(),
+            Value::Bool(true)
+        );
     }
 
     #[test]

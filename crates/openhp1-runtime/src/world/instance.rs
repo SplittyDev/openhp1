@@ -291,10 +291,7 @@ impl ScriptRuntime {
                     match name {
                         "Vector" => Value::Vector([0.0; 3]),
                         "Rotator" => Value::Rotator([0; 3]),
-                        _ => {
-                            self.zero_values.insert(id, None);
-                            return Ok(None);
-                        }
+                        _ => Value::Struct(HashMap::new()),
                     }
                 } else {
                     self.zero_values.insert(id, None);
@@ -402,7 +399,15 @@ impl ScriptRuntime {
                     ("Rotator", "Pitch") => StructMember::Pitch,
                     ("Rotator", "Yaw") => StructMember::Yaw,
                     ("Rotator", "Roll") => StructMember::Roll,
-                    _ => continue,
+                    _ => {
+                        let Some(zero) = self.zero_field_value(&resolved)? else {
+                            continue;
+                        };
+                        StructMember::Field {
+                            name: name.to_owned(),
+                            zero,
+                        }
+                    }
                 };
                 members.push((field, member));
             }
@@ -410,8 +415,8 @@ impl ScriptRuntime {
             self.struct_members.insert(key, Arc::clone(&members));
             members
         };
-        for &(field, member) in members.iter() {
-            frame.set_struct_member(field, member);
+        for (field, member) in members.iter() {
+            frame.set_struct_member(*field, member.clone());
         }
         Ok(())
     }

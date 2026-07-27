@@ -356,6 +356,24 @@ impl ScriptRuntime {
             }
             return Ok(Value::Float(random_float(&mut self.random_state)));
         }
+        if index == RAND_RANGE {
+            let [Value::Float(min), Value::Float(max)] = arguments else {
+                return Err(format!(
+                    "RandRange expects two floats, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if !min.is_finite() || !max.is_finite() {
+                return Err("RandRange bounds are not finite".to_owned());
+            }
+            return Ok(Value::Float(
+                min + random_float(&mut self.random_state) * (max - min),
+            ));
+        }
         scalar_native(index, arguments)
     }
 
