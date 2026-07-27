@@ -201,6 +201,7 @@ struct Graphics {
     last_error: Option<String>,
     deferred_calls: usize,
     view_actor: usize,
+    player_in_cutscene: bool,
     render_stats: RenderStats,
     frame_time_ms: f32,
     overlay_visible: bool,
@@ -319,6 +320,7 @@ impl Graphics {
             last_error,
             deferred_calls,
             view_actor: player_view.actor,
+            player_in_cutscene: false,
             render_stats: RenderStats::default(),
             frame_time_ms: 0.0,
             overlay_visible: true,
@@ -564,6 +566,13 @@ impl Graphics {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("player tick failed: {error}")),
         }
+        if cutscene_ended(
+            &mut self.player_in_cutscene,
+            self.runtime.player_state_name(),
+        ) && let Err(error) = self.runtime.clear_player_view_target()
+        {
+            self.last_error = Some(format!("player camera restore failed: {error}"));
+        }
 
         let Some(player) = self.scene.actors.get(self.player) else {
             self.last_error = Some("the player disappeared from the scene".to_owned());
@@ -638,6 +647,13 @@ fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
 }
 
+fn cutscene_ended(was_in_cutscene: &mut bool, state: Option<&str>) -> bool {
+    let in_cutscene = state.is_some_and(|state| state.starts_with("Cut"));
+    let ended = *was_in_cutscene && !in_cutscene;
+    *was_in_cutscene = in_cutscene;
+    ended
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +694,15 @@ mod tests {
         assert!((player.mouse_y + 38.4).abs() < 0.000_01);
         assert!(player.jump);
         assert!(!input.player_input(1.0 / 60.0).jump);
+    }
+
+    #[test]
+    fn restores_the_player_camera_after_cutscene_state() {
+        let mut in_cutscene = false;
+        assert!(!cutscene_ended(&mut in_cutscene, Some("PlayerWalking")));
+        assert!(!cutscene_ended(&mut in_cutscene, Some("CutIdleing")));
+        assert!(!cutscene_ended(&mut in_cutscene, Some("CutMovingTo")));
+        assert!(cutscene_ended(&mut in_cutscene, Some("PlayerWalking")));
+        assert!(!cutscene_ended(&mut in_cutscene, Some("PlayerWalking")));
     }
 }

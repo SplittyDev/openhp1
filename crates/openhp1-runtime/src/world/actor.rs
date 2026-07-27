@@ -308,6 +308,22 @@ impl ScriptRuntime {
             .get(&target)
             .cloned()
             .ok_or(DispatchError::UnregisteredActor { actor: target })?;
+        self.set_player_view_target(Some(target_object))?;
+        Ok(Some(target))
+    }
+
+    pub fn clear_player_view_target(&mut self) -> DispatchResult<()> {
+        self.set_player_view_target(None)
+    }
+
+    pub fn player_state_name(&self) -> Option<&str> {
+        self.player_actor
+            .and_then(|actor| self.actor_states.get(&actor))
+            .and_then(|state| state.as_deref())
+    }
+
+    fn set_player_view_target(&mut self, target: Option<ObjectId>) -> DispatchResult<()> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self
             .actor_classes
             .get(&player)
@@ -323,12 +339,11 @@ impl ScriptRuntime {
                 &class,
                 &mut instance,
                 "ViewTarget",
-                StoredValue::Object(Some(target_object)),
+                StoredValue::Object(target),
             )
             .map_err(|message| DispatchError::InvalidPlayerView { message });
         self.instances.insert(player, instance);
-        result?;
-        Ok(Some(target))
+        result
     }
 
     pub fn set_player_input(&mut self, input: PlayerInput) -> DispatchResult<()> {
