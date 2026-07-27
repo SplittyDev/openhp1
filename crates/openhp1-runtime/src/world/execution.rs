@@ -452,10 +452,10 @@ impl ScriptRuntime {
                 .map_err(|message| crate::Error::Call { call, message }.into())
                 .map(CallOutput::value),
             FunctionCall::Final(index) => {
-                let reference = object_reference(index);
-                let Some(function) = self.packages.resolve(source, reference)? else {
+                let Some(function) = self.resolve_reference(source, index)? else {
                     return Ok(CallOutput::value(Value::None));
                 };
+                let function = self.resolved_object(&function)?;
                 let mut output_arguments = Vec::new();
                 match self.execute_function_with_outputs(
                     actor,
@@ -850,7 +850,7 @@ impl ScriptRuntime {
         } else {
             self.actor_for_handle(receiver)?
         };
-        let Some(field) = self.resolve_field(source, field)? else {
+        let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(Value::None);
         };
         let intrinsic_name = {
@@ -923,7 +923,7 @@ impl ScriptRuntime {
         } else {
             self.actor_for_handle(receiver)?
         };
-        let Some(field) = self.resolve_field(source, field)? else {
+        let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(());
         };
         let (is_base, is_hidden) = {

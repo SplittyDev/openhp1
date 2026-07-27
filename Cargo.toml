@@ -28,6 +28,7 @@ egui-wgpu = { version = "0.35", default-features = false }
 egui-winit = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 glam = "0.30"
 pollster = "0.4"
+rustc-hash = "2.1"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

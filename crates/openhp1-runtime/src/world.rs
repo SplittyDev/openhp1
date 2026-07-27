@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
@@ -12,6 +8,7 @@ use openhp1_physics::BspCollision;
 use openhp1_script::{
     Bytecode, PropertyMetadata, ScriptExport, ScriptMetadata, class_defaults_reader,
 };
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use thiserror::Error;
 
 use crate::{
@@ -303,11 +300,12 @@ pub struct ScriptRuntime {
     packages: PackageStore,
     scripts: HashMap<ObjectId, Arc<ScriptExport>>,
     function_lookups: HashMap<FunctionLookup, Option<ObjectId>>,
+    state_lookups: HashMap<StateLookup, Option<ObjectId>>,
     instances: HashMap<usize, InstanceState>,
     class_defaults: HashMap<ObjectId, InstanceState>,
     class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,
-    resolved_fields: HashMap<(Arc<str>, i32), Option<ObjectId>>,
+    resolved_references: HashMap<(Arc<str>, i32), Option<ObjectId>>,
     zero_values: HashMap<ObjectId, Option<Value>>,
     frame_arguments: HashMap<ObjectId, ArgumentBindings>,
     struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
@@ -357,6 +355,21 @@ struct FunctionLookup {
     state: Option<String>,
     function: String,
     depth: usize,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct StateLookup {
+    class: ObjectId,
+    state: String,
+}
+
+impl StateLookup {
+    fn new(class: ObjectId, state: &str) -> Self {
+        Self {
+            class,
+            state: state.to_ascii_lowercase(),
+        }
+    }
 }
 
 impl FunctionLookup {
@@ -624,7 +637,7 @@ mod tests {
 
     #[test]
     fn disabled_events_are_case_insensitive_and_scoped_to_actor_state() {
-        let mut disabled = HashMap::new();
+        let mut disabled = HashMap::default();
         set_event_disabled(&mut disabled, 2, Some("Beano"), "Tick", true);
 
         assert!(event_disabled(&disabled, 2, Some("beano"), "TICK"));
@@ -770,5 +783,17 @@ mod tests {
 
         assert_eq!(lower, upper);
         assert_ne!(lower, other_state);
+    }
+
+    #[test]
+    fn state_lookups_are_case_insensitive() {
+        let class = ObjectId {
+            package: Arc::from("Test.u"),
+            export_index: 7,
+        };
+        assert_eq!(
+            StateLookup::new(class.clone(), "patrol"),
+            StateLookup::new(class, "PATROL")
+        );
     }
 }

@@ -35,7 +35,7 @@ impl ScriptRuntime {
         let (metadata, mut reader) = class_defaults_reader(&class.package, class.export_index)?;
         let mut defaults = match self.packages.resolve(&class.package, metadata.base_field)? {
             Some(base) => self.load_class_defaults(&base, depth + 1)?,
-            None => InstanceState::new(),
+            None => InstanceState::default(),
         };
         self.apply_properties(class, &class.package, &mut reader, &mut defaults)?;
         self.class_defaults.insert(id, defaults.clone());
@@ -186,7 +186,7 @@ impl ScriptRuntime {
             return Err(DispatchError::CallDepth);
         }
         let metadata = ScriptExport::decode(&structure.package, structure.export_index)?;
-        let mut values = HashMap::new();
+        let mut values = std::collections::HashMap::new();
         if let Some(base) = self
             .packages
             .resolve(&structure.package, metadata.base_field)?
@@ -458,7 +458,7 @@ impl ScriptRuntime {
                     match name {
                         "Vector" => Value::Vector([0.0; 3]),
                         "Rotator" => Value::Rotator([0; 3]),
-                        _ => Value::Struct(HashMap::new()),
+                        _ => Value::Struct(std::collections::HashMap::new()),
                     }
                 } else {
                     self.zero_values.insert(id, None);
@@ -511,23 +511,23 @@ impl ScriptRuntime {
         })
     }
 
-    pub(super) fn resolve_field(
+    pub(super) fn resolve_reference(
         &mut self,
         source: &Arc<Package>,
-        field: i32,
+        reference: i32,
     ) -> DispatchResult<Option<ObjectId>> {
-        let key = (Arc::clone(&source.summary().source), field);
-        if let Some(resolved) = self.resolved_fields.get(&key) {
+        let key = (Arc::clone(&source.summary().source), reference);
+        if let Some(resolved) = self.resolved_references.get(&key) {
             return Ok(resolved.clone());
         }
         let resolved = self
             .packages
-            .resolve(source, object_reference(field))?
-            .map(|field| ObjectId {
-                package: Arc::clone(&field.package.summary().source),
-                export_index: field.export_index,
+            .resolve(source, object_reference(reference))?
+            .map(|object| ObjectId {
+                package: Arc::clone(&object.package.summary().source),
+                export_index: object.export_index,
             });
-        self.resolved_fields.insert(key, resolved.clone());
+        self.resolved_references.insert(key, resolved.clone());
         Ok(resolved)
     }
 
@@ -542,7 +542,7 @@ impl ScriptRuntime {
             Arc::clone(members)
         } else {
             let mut members = Vec::new();
-            let mut seen = HashSet::new();
+            let mut seen = HashSet::default();
             for field in fields(bytecode, 0x36) {
                 if !seen.insert(field) {
                     continue;
@@ -605,7 +605,7 @@ impl ScriptRuntime {
             let parameters = self.function_parameters(source, function.children)?;
             let mut bindings = Vec::new();
             for field in local_fields(&function.bytecode) {
-                let Some(id) = self.resolve_field(source, field)? else {
+                let Some(id) = self.resolve_reference(source, field)? else {
                     continue;
                 };
                 if let Some((argument, (_, output))) = parameters
@@ -639,7 +639,7 @@ impl ScriptRuntime {
             if frame.local(field).is_some() {
                 continue;
             }
-            let Some(field_object) = self.resolve_field(source, field)? else {
+            let Some(field_object) = self.resolve_reference(source, field)? else {
                 continue;
             };
             let resolved = self.resolved_object(&field_object)?;
@@ -657,13 +657,21 @@ impl ScriptRuntime {
         bytecode: &Bytecode,
         frame: &mut Frame<'_>,
     ) -> DispatchResult<()> {
-        let defaults = self.load_class_defaults(class, 0)?;
+        let class_id = object_id(&class.package, class.export_index);
+        if !self.class_defaults.contains_key(&class_id) {
+            self.load_class_defaults(class, 0)?;
+        }
         for field in fields(bytecode, 0x02) {
-            let Some(id) = self.resolve_field(source, field)? else {
+            let Some(id) = self.resolve_reference(source, field)? else {
                 continue;
             };
-            let value = match defaults.get(&id) {
-                Some(value) => self.frame_value(value)?,
+            let value = match self
+                .class_defaults
+                .get(&class_id)
+                .and_then(|defaults| defaults.get(&id))
+                .cloned()
+            {
+                Some(value) => self.frame_value(&value)?,
                 None => {
                     let resolved = self.resolved_object(&id)?;
                     self.zero_field_value(&resolved)?.unwrap_or(Value::None)

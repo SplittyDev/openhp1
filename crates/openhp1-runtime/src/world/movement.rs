@@ -78,7 +78,7 @@ impl ScriptRuntime {
         self.ensure_collision_actors(player, &instance)
             .map_err(DispatchError::PlayerTouchCollision)?;
 
-        let mut touching = HashSet::new();
+        let mut touching = HashSet::default();
         if current.collide_actors && !current.has_brush {
             let query_minimum =
                 current.location - Vec3::new(current.radius, current.radius, current.height);

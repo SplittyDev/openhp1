@@ -325,8 +325,15 @@ impl ScriptRuntime {
         class: &ResolvedObject,
         name: &str,
     ) -> DispatchResult<Option<ResolvedObject>> {
-        if name.eq_ignore_ascii_case("Auto")
-            && let Some(state) = self.find_matching_state(
+        let lookup = StateLookup::new(object_id(&class.package, class.export_index), name);
+        if let Some(state) = self.state_lookups.get(&lookup).cloned() {
+            return state
+                .as_ref()
+                .map(|state| self.resolved_object(state))
+                .transpose();
+        }
+        let state = if name.eq_ignore_ascii_case("Auto") {
+            self.find_matching_state(
                 ResolvedObject {
                     package: Arc::clone(&class.package),
                     export_index: class.export_index,
@@ -334,17 +341,27 @@ impl ScriptRuntime {
                 None,
                 0,
             )?
-        {
-            return Ok(Some(state));
-        }
-        self.find_matching_state(
-            ResolvedObject {
-                package: Arc::clone(&class.package),
-                export_index: class.export_index,
-            },
-            Some(name),
-            0,
-        )
+        } else {
+            None
+        };
+        let state = match state {
+            Some(state) => Some(state),
+            None => self.find_matching_state(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                Some(name),
+                0,
+            )?,
+        };
+        self.state_lookups.insert(
+            lookup,
+            state
+                .as_ref()
+                .map(|state| object_id(&state.package, state.export_index)),
+        );
+        Ok(state)
     }
 
     pub(super) fn refresh_tick_actor(
@@ -388,9 +405,9 @@ impl ScriptRuntime {
         let Some(state) = self.find_state(class, &state_name)? else {
             return Ok(false);
         };
-        let metadata = ScriptExport::decode(&state.package, state.export_index)?;
+        let metadata = self.script(&state)?;
         Ok(matches!(
-            metadata.metadata,
+            &metadata.metadata,
             ScriptMetadata::State(state) if state.ignore_mask & (1_u64 << index) == 0
         ))
     }
