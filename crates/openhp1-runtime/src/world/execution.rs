@@ -332,6 +332,22 @@ impl ScriptRuntime {
                 let export = &summary.exports[function.export_index];
                 let class = summary.object_name(export.outer).unwrap_or("<unknown>");
                 let function_name = summary.name(export.object_name);
+                if class.eq_ignore_ascii_case("Object")
+                    && function_name.eq_ignore_ascii_case("Localize")
+                {
+                    let [
+                        Value::String(section),
+                        Value::String(key),
+                        Value::String(package),
+                    ] = arguments
+                    else {
+                        return Err(DispatchError::UnimplementedNamedNative {
+                            class: class.to_owned(),
+                            function: function_name.to_owned(),
+                        });
+                    };
+                    return Ok(Value::String(self.packages.localize(package, section, key)));
+                }
                 if let Some(value) = named_native(class, function_name, arguments) {
                     return Ok(value);
                 }

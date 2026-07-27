@@ -94,3 +94,5 @@ HP1 `CreateAnimChannel` creates the requested channel through the normal actor
 spawn lifecycle so scripts can retain and own the returned object.
 `PickTarget` selects visible living pawns within 2500 units using the authored
 fire direction and updates its `bestAim` and `bestDist` output parameters.
+`Object.Localize` reads case-insensitive section/key values from the package's
+English `.int` file and returns an empty string when no entry is available.

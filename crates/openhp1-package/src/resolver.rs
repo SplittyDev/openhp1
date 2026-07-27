@@ -65,6 +65,19 @@ impl PackageStore {
         self.paths.values().map(PathBuf::as_path)
     }
 
+    pub fn localize(&self, package: &str, section: &str, key: &str) -> String {
+        let Some(system_dir) = self.package_path(package).and_then(Path::parent) else {
+            return String::new();
+        };
+        let Some(path) = find_file(system_dir, &format!("{package}.int")) else {
+            return String::new();
+        };
+        let Ok(bytes) = fs::read(path) else {
+            return String::new();
+        };
+        localization_value(&String::from_utf8_lossy(&bytes), section, key).unwrap_or_default()
+    }
+
     pub fn load(&mut self, name: &str) -> ResolveResult<Arc<Package>> {
         let key = name.to_ascii_lowercase();
         if let Some(package) = self.loaded.get(&key) {
@@ -303,6 +316,34 @@ fn core_system_paths(ini: &str) -> Vec<String> {
     paths
 }
 
+fn localization_value(contents: &str, section: &str, key: &str) -> Option<String> {
+    let mut in_section = false;
+    for line in contents.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            in_section = line[1..line.len() - 1].eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !in_section || line.starts_with(';') {
+            continue;
+        }
+        let Some((candidate, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !candidate.trim().eq_ignore_ascii_case(key) {
+            continue;
+        }
+        let value = value.trim();
+        return Some(
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(value)
+                .to_owned(),
+        );
+    }
+    None
+}
+
 fn scan_pattern(
     system_dir: &Path,
     pattern: &str,
@@ -399,7 +440,7 @@ mod tests {
 
     use crate::{
         Export, Import, NameEntry, ObjectReference, PackageHeader, PackageSummary,
-        resolver::{core_system_paths, find_export},
+        resolver::{core_system_paths, find_export, localization_value},
     };
 
     #[test]
@@ -414,6 +455,16 @@ mod tests {
             core_system_paths(ini),
             ["../System/*.u", "../Textures/*.utx"]
         );
+    }
+
+    #[test]
+    fn reads_case_insensitive_localization_values() {
+        let contents = "[all]\nGreeting=\"Welcome\"\n";
+        assert_eq!(
+            localization_value(contents, "ALL", "greeting"),
+            Some("Welcome".to_owned())
+        );
+        assert_eq!(localization_value(contents, "all", "missing"), None);
     }
 
     #[test]
