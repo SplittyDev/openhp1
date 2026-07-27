@@ -50,6 +50,28 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<MovementHit, String> {
+        self.try_move_actor_inner(actor, actor_class, delta, instance, Some(actions))
+    }
+
+    pub(super) fn test_move_actor(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        delta: [f32; 3],
+        instance: &InstanceState,
+    ) -> std::result::Result<MovementHit, String> {
+        let mut instance = instance.clone();
+        self.try_move_actor_inner(actor, actor_class, delta, &mut instance, None)
+    }
+
+    fn try_move_actor_inner(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        delta: [f32; 3],
+        instance: &mut InstanceState,
+        mut actions: Option<&mut Vec<ActorAction>>,
+    ) -> std::result::Result<MovementHit, String> {
         if self.actor_bool(actor_class, instance, "bStatic")?
             || !self.actor_bool(actor_class, instance, "bMovable")?
         {
@@ -118,19 +140,11 @@ impl ScriptRuntime {
                 hit.actor
             });
 
+        let Some(actions) = actions.as_mut() else {
+            return Ok(blocking_hit);
+        };
         let location = current.location + delta * blocking_hit.fraction;
-        let field = self
-            .find_property(actor_class, "Location", 0)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "Move property Location is missing".to_owned())?;
-        instance.insert(
-            field,
-            StoredValue::Value(Value::Vector(location.to_array())),
-        );
-        actions.push(ActorAction::SetLocation {
-            actor,
-            location: location.to_array(),
-        });
+        self.set_actor_location(actor, actor_class, instance, location, actions)?;
 
         if let Some(other) = blocking_actor
             && !self
@@ -154,6 +168,29 @@ impl ScriptRuntime {
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
         Ok(blocking_hit)
+    }
+
+    pub(super) fn set_actor_location(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        location: Vec3,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let field = self
+            .find_property(actor_class, "Location", 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "actor property Location is missing".to_owned())?;
+        instance.insert(
+            field,
+            StoredValue::Value(Value::Vector(location.to_array())),
+        );
+        actions.push(ActorAction::SetLocation {
+            actor,
+            location: location.to_array(),
+        });
+        Ok(())
     }
 
     fn actor_sweeps(
