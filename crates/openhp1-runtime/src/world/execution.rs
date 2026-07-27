@@ -987,13 +987,31 @@ impl ScriptRuntime {
         field: i32,
         current_instance: &InstanceState,
     ) -> DispatchResult<Value> {
-        let actor = if receiver == -1 {
-            current_actor
+        let (actor, context_object) = if receiver == -1 {
+            (Some(current_actor), None)
         } else {
-            self.actor_for_handle(receiver)?
+            let object = self.object_for_handle(receiver)?;
+            (self.object_actors.get(&object).copied(), Some(object))
         };
         let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(Value::None);
+        };
+        let Some(actor) = actor else {
+            let Some(context_object) = context_object.as_ref() else {
+                return Err(DispatchError::InvalidActorHandle { handle: receiver });
+            };
+            let class = self.resolved_object(context_object)?;
+            if !matches!(self.script(&class)?.metadata, ScriptMetadata::Class(_)) {
+                return Err(DispatchError::InvalidActorHandle { handle: receiver });
+            }
+            let defaults = self.load_class_defaults(&class, 0)?;
+            return match defaults.get(&field) {
+                Some(value) => self.frame_value(value),
+                None => {
+                    let field = self.resolved_object(&field)?;
+                    Ok(self.zero_field_value(&field)?.unwrap_or(Value::None))
+                }
+            };
         };
         let intrinsic_name = {
             let field = self.resolved_object(&field)?;
@@ -1116,14 +1134,19 @@ impl ScriptRuntime {
     }
 
     pub(super) fn actor_for_handle(&self, handle: i32) -> DispatchResult<usize> {
+        let object = self.object_for_handle(handle)?;
+        self.object_actors
+            .get(&object)
+            .copied()
+            .ok_or(DispatchError::InvalidActorHandle { handle })
+    }
+
+    fn object_for_handle(&self, handle: i32) -> DispatchResult<ObjectId> {
         let index = usize::try_from(handle - 1)
             .ok()
             .filter(|index| *index < self.handle_objects.len())
             .ok_or(DispatchError::InvalidObjectHandle { handle })?;
-        self.object_actors
-            .get(&self.handle_objects[index])
-            .copied()
-            .ok_or(DispatchError::InvalidActorHandle { handle })
+        Ok(self.handle_objects[index].clone())
     }
 }
 

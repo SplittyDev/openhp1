@@ -11,6 +11,8 @@ contexts must resolve registered actor handles so field reads, writes, and
 calls affect the target actor rather than a temporary copy.
 Signed `ObjectConst` package references are resolved relative to the function
 or state package before context operations use their runtime handles.
+`ClassContext` reads instance-variable expressions from the referenced class's
+inherited default object.
 
 Nested remote calls may inspect or call back into their caller, so the caller's
 live instance remains addressable while the remote context executes. Serialized

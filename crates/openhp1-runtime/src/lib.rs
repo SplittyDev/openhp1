@@ -76,6 +76,7 @@ enum Opcode {
     EndFunctionParms,
     SelfObject,
     Skip,
+    ClassContext,
     Context,
     ArrayElement,
     VirtualFunction,
@@ -129,6 +130,7 @@ impl From<u8> for Opcode {
             0x16 => Self::EndFunctionParms,
             0x17 => Self::SelfObject,
             0x18 => Self::Skip,
+            0x12 => Self::ClassContext,
             0x19 => Self::Context,
             0x1a => Self::ArrayElement,
             0x1b => Self::VirtualFunction,
@@ -812,7 +814,7 @@ impl<'a> Frame<'a> {
                 self.read_u16()?;
                 self.expression(host)?
             }
-            Opcode::Context => {
+            Opcode::ClassContext | Opcode::Context => {
                 let object = self.expression(host)?;
                 let object = self.value(object, host)?;
                 let null_skip = usize::from(self.read_u16()?);
@@ -2463,6 +2465,37 @@ mod tests {
             .unwrap();
         assert_eq!(result, Value::Int(42));
         assert_eq!(remote.get(&7), Some(&Value::Int(42)));
+    }
+
+    #[test]
+    fn class_context_reads_the_resolved_default_object() {
+        let mut bytes = vec![0x04, 0x12, 0x20];
+        bytes.extend((-149_i32).to_le_bytes());
+        bytes.extend(5_u16.to_le_bytes());
+        bytes.push(4);
+        bytes.push(0x01);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        assert_eq!(
+            Frame::new(&bytecode)
+                .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: -149 } => {
+                        Ok(FrameResponse::Value(Value::Object(23)))
+                    }
+                    FrameRequest::GetInstance {
+                        receiver: 23,
+                        field: 7,
+                    } => Ok(FrameResponse::Value(Value::Int(42))),
+                    _ => unreachable!(),
+                })
+                .unwrap(),
+            Value::Int(42)
+        );
     }
 
     #[test]
