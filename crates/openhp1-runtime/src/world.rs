@@ -577,6 +577,10 @@ mod tests {
     #[test]
     fn scalar_comparisons_cover_bool_int_and_float_families() {
         assert_eq!(
+            scalar_native(0x98, &[Value::None, Value::Int(0)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
             scalar_native(0x83, &[Value::Bool(true), Value::Bool(false)]),
             Ok(Value::Bool(true))
         );

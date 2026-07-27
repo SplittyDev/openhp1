@@ -87,6 +87,8 @@ state family so normal `PlayerCalcView` output resumes with player control.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
+Numeric natives interpret a null-context scalar result as the typed zero value
+that UE writes into the expression result buffer.
 
 HP1 `CreateAnimChannel` creates the requested channel through the normal actor
 spawn lifecycle so scripts can retain and own the returned object.

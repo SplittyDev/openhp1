@@ -1366,6 +1366,24 @@ impl TryFrom<u16> for ScalarNative {
 pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Result<Value, String> {
     let native = ScalarNative::try_from(index)
         .map_err(|()| format!("native {index:#05x} is not implemented"))?;
+    let normalized = null_numeric_value(native).and_then(|zero| {
+        arguments
+            .iter()
+            .any(|value| matches!(value, Value::None))
+            .then(|| {
+                arguments
+                    .iter()
+                    .map(|value| {
+                        if matches!(value, Value::None) {
+                            zero.clone()
+                        } else {
+                            value.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+    });
+    let arguments = normalized.as_deref().unwrap_or(arguments);
     if matches!(native, ScalarNative::FMin | ScalarNative::FMax) {
         let [Value::Float(left), Value::Float(right)] = arguments else {
             return Err(format!(
@@ -1651,6 +1669,43 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
                     .join(", ")
             ));
         }
+    })
+}
+
+fn null_numeric_value(native: ScalarNative) -> Option<Value> {
+    Some(match native {
+        ScalarNative::Multiply_IntInt
+        | ScalarNative::Divide_IntInt
+        | ScalarNative::Add_IntInt
+        | ScalarNative::Subtract_IntInt
+        | ScalarNative::Less_IntInt
+        | ScalarNative::Greater_IntInt
+        | ScalarNative::LessEqual_IntInt
+        | ScalarNative::GreaterEqual_IntInt
+        | ScalarNative::EqualEqual_IntInt
+        | ScalarNative::NotEqual_IntInt
+        | ScalarNative::And_IntInt
+        | ScalarNative::Min
+        | ScalarNative::Max
+        | ScalarNative::Clamp
+        | ScalarNative::Chr => Value::Int(0),
+        ScalarNative::Subtract_PreFloat
+        | ScalarNative::Multiply_FloatFloat
+        | ScalarNative::Divide_FloatFloat
+        | ScalarNative::Add_FloatFloat
+        | ScalarNative::Subtract_FloatFloat
+        | ScalarNative::Less_FloatFloat
+        | ScalarNative::Greater_FloatFloat
+        | ScalarNative::LessEqual_FloatFloat
+        | ScalarNative::GreaterEqual_FloatFloat
+        | ScalarNative::EqualEqual_FloatFloat
+        | ScalarNative::NotEqual_FloatFloat
+        | ScalarNative::Abs
+        | ScalarNative::Sqrt
+        | ScalarNative::FMin
+        | ScalarNative::FMax
+        | ScalarNative::FClamp => Value::Float(0.0),
+        _ => return None,
     })
 }
 
