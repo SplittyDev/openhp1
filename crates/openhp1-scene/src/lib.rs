@@ -4,9 +4,11 @@ mod actor;
 mod coordinates;
 mod loader;
 mod render;
+mod runtime;
 
 pub use actor::{SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId};
 pub use coordinates::{render_to_unreal, unreal_to_render};
 pub use loader::LoadedScene;
 pub use openhp1_map::{LightmapImage, Rotator, SkyZone, TriangleMesh};
 pub use render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
+pub use runtime::{apply_runtime_actions, initialize_runtime};
