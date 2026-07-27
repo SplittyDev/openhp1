@@ -36,6 +36,150 @@ pub enum FunctionCall {
     Global(i32),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Opcode {
+    LocalVariable,
+    InstanceVariable,
+    DefaultVariable,
+    Return,
+    Jump,
+    JumpIfNot,
+    Stop,
+    Nothing,
+    LabelTable,
+    GotoLabel,
+    Let,
+    LetBool,
+    Unknown0x15,
+    EndFunctionParms,
+    SelfObject,
+    Skip,
+    Context,
+    ArrayElement,
+    VirtualFunction,
+    FinalFunction,
+    IntConst,
+    FloatConst,
+    StringConst,
+    ObjectConst,
+    NameConst,
+    RotationConst,
+    VectorConst,
+    ByteConst,
+    IntZero,
+    IntOne,
+    True,
+    False,
+    NoObject,
+    Unknown0x2b,
+    IntConstByte,
+    BoolVariable,
+    DynamicCast,
+    Iterator,
+    IteratorPop,
+    IteratorNext,
+    StructMember,
+    GlobalFunction,
+    Conversion(ConversionOpcode),
+    ExtendedNative(u16),
+    Native(u16),
+    Unsupported,
+}
+
+impl From<u8> for Opcode {
+    fn from(opcode: u8) -> Self {
+        match opcode {
+            0x00 => Self::LocalVariable,
+            0x01 => Self::InstanceVariable,
+            0x02 => Self::DefaultVariable,
+            0x04 => Self::Return,
+            0x06 => Self::Jump,
+            0x07 => Self::JumpIfNot,
+            0x08 => Self::Stop,
+            0x0b => Self::Nothing,
+            0x0c => Self::LabelTable,
+            0x0d => Self::GotoLabel,
+            0x0f => Self::Let,
+            0x14 => Self::LetBool,
+            0x15 => Self::Unknown0x15,
+            0x16 => Self::EndFunctionParms,
+            0x17 => Self::SelfObject,
+            0x18 => Self::Skip,
+            0x19 => Self::Context,
+            0x1a => Self::ArrayElement,
+            0x1b => Self::VirtualFunction,
+            0x1c => Self::FinalFunction,
+            0x1d => Self::IntConst,
+            0x1e => Self::FloatConst,
+            0x1f => Self::StringConst,
+            0x20 => Self::ObjectConst,
+            0x21 => Self::NameConst,
+            0x22 => Self::RotationConst,
+            0x23 => Self::VectorConst,
+            0x24 => Self::ByteConst,
+            0x25 => Self::IntZero,
+            0x26 => Self::IntOne,
+            0x27 => Self::True,
+            0x28 => Self::False,
+            0x2a => Self::NoObject,
+            0x2b => Self::Unknown0x2b,
+            0x2c => Self::IntConstByte,
+            0x2d => Self::BoolVariable,
+            0x2e => Self::DynamicCast,
+            0x2f => Self::Iterator,
+            0x30 => Self::IteratorPop,
+            0x31 => Self::IteratorNext,
+            0x36 => Self::StructMember,
+            0x38 => Self::GlobalFunction,
+            0x39..=0x60 => Self::Conversion(opcode.into()),
+            0x61..=0x6f => Self::ExtendedNative(u16::from(opcode - 0x60) << 8),
+            0x70..=0xff => Self::Native(u16::from(opcode)),
+            _ => Self::Unsupported,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ConversionOpcode {
+    ByteToInt,
+    ByteToBool,
+    ByteToFloat,
+    IntToByte,
+    IntToBool,
+    IntToFloat,
+    BoolToByte,
+    BoolToInt,
+    BoolToFloat,
+    FloatToByte,
+    FloatToInt,
+    FloatToBool,
+    ObjectToBool,
+    NameToBool,
+    Unsupported,
+}
+
+impl From<u8> for ConversionOpcode {
+    fn from(opcode: u8) -> Self {
+        match opcode {
+            0x3a => Self::ByteToInt,
+            0x3b => Self::ByteToBool,
+            0x3c => Self::ByteToFloat,
+            0x3d => Self::IntToByte,
+            0x3e => Self::IntToBool,
+            0x3f => Self::IntToFloat,
+            0x40 => Self::BoolToByte,
+            0x41 => Self::BoolToInt,
+            0x42 => Self::BoolToFloat,
+            0x43 => Self::FloatToByte,
+            0x44 => Self::FloatToInt,
+            0x45 => Self::FloatToBool,
+            0x47 => Self::ObjectToBool,
+            0x48 => Self::NameToBool,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 impl Value {
     pub(crate) fn truthy(&self) -> Result<bool> {
         match self {
@@ -423,8 +567,8 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<FrameRun> {
         while self.instruction_pointer < self.bytecode.bytes.len() {
-            match self.peek()? {
-                0x04 => {
+            match Opcode::from(self.peek()?) {
+                Opcode::Return => {
                     self.opcode()?;
                     let value = if self.bytecode.version > 61 {
                         let value = self.expression(host)?;
@@ -434,12 +578,12 @@ impl<'a> Frame<'a> {
                     }?;
                     return Ok(FrameRun::Complete(value));
                 }
-                0x06 => {
+                Opcode::Jump => {
                     self.opcode()?;
                     let target = usize::from(self.read_u16()?);
                     self.jump(target)?;
                 }
-                0x07 => {
+                Opcode::JumpIfNot => {
                     self.opcode()?;
                     let target = usize::from(self.read_u16()?);
                     let condition = self.expression(host)?;
@@ -447,19 +591,19 @@ impl<'a> Frame<'a> {
                         self.jump(target)?;
                     }
                 }
-                0x08 => {
+                Opcode::Stop => {
                     self.opcode()?;
                     return Ok(FrameRun::Stopped);
                 }
-                0x0c => {
+                Opcode::LabelTable => {
                     return Ok(FrameRun::Stopped);
                 }
-                0x0d => {
+                Opcode::GotoLabel => {
                     self.opcode()?;
                     let label = self.expression(host)?;
                     return Ok(FrameRun::GotoLabel(self.value(label, host)?));
                 }
-                0x2f => {
+                Opcode::Iterator => {
                     self.opcode()?;
                     self.creating_iterator = true;
                     let result = self.expression(host);
@@ -475,11 +619,11 @@ impl<'a> Frame<'a> {
                     });
                     self.next_iterator(host)?;
                 }
-                0x30 => {
+                Opcode::IteratorPop => {
                     self.opcode()?;
                     self.iterators.pop().ok_or(Error::MissingIterator)?;
                 }
-                0x31 => {
+                Opcode::IteratorNext => {
                     self.opcode()?;
                     self.next_iterator(host)?;
                 }
@@ -521,28 +665,29 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<Expression> {
         let offset = self.instruction_pointer;
-        let opcode = self.opcode()?;
+        let raw_opcode = self.opcode()?;
+        let opcode = Opcode::from(raw_opcode);
         Ok(match opcode {
-            0x00 => Expression::Slot(Slot::Local(self.read_i32()?)),
-            0x01 => Expression::Slot(Slot::Instance {
+            Opcode::LocalVariable => Expression::Slot(Slot::Local(self.read_i32()?)),
+            Opcode::InstanceVariable => Expression::Slot(Slot::Instance {
                 receiver: self.current_context,
                 field: self.read_i32()?,
             }),
-            0x02 => Expression::Slot(Slot::Default(self.read_i32()?)),
-            0x0b | 0x15 => Expression::Value(Value::None),
-            0x0f | 0x14 => {
+            Opcode::DefaultVariable => Expression::Slot(Slot::Default(self.read_i32()?)),
+            Opcode::Nothing | Opcode::Unknown0x15 => Expression::Value(Value::None),
+            Opcode::Let | Opcode::LetBool => {
                 let target = self.expression(host)?;
                 let value_expression = self.expression(host)?;
                 let value = self.value(value_expression, host)?;
                 self.assign(target, value.clone(), host)?;
                 Expression::Value(value)
             }
-            0x17 => Expression::Value(Value::Object(-1)),
-            0x18 => {
+            Opcode::SelfObject => Expression::Value(Value::Object(-1)),
+            Opcode::Skip => {
                 self.read_u16()?;
                 self.expression(host)?
             }
-            0x19 => {
+            Opcode::Context => {
                 let object = self.expression(host)?;
                 let object = self.value(object, host)?;
                 let null_skip = usize::from(self.read_u16()?);
@@ -571,7 +716,7 @@ impl<'a> Frame<'a> {
                     }
                 }
             }
-            0x1a => {
+            Opcode::ArrayElement => {
                 let index = self.expression(host)?;
                 let index = match self.value(index, host)? {
                     Value::Byte(index) => i32::from(index),
@@ -592,48 +737,48 @@ impl<'a> Frame<'a> {
                     target => Expression::Value(array_element(&self.value(target, host)?, index)?),
                 }
             }
-            0x1b => {
+            Opcode::VirtualFunction => {
                 let name = self.read_i32()?;
                 Expression::Value(self.call(FunctionCall::Virtual(name), host)?)
             }
-            0x1c => {
+            Opcode::FinalFunction => {
                 let function = self.read_i32()?;
                 Expression::Value(self.call(FunctionCall::Final(function), host)?)
             }
-            0x1d => Expression::Value(Value::Int(self.read_i32()?)),
-            0x1e => Expression::Value(Value::Float(self.read_f32()?)),
-            0x1f => Expression::Value(Value::String(self.read_ascii_z()?)),
-            0x20 => Expression::Value(Value::Object(self.read_i32()?)),
-            0x21 => Expression::Value(Value::Name(self.read_i32()?)),
-            0x22 => Expression::Value(Value::Rotator([
+            Opcode::IntConst => Expression::Value(Value::Int(self.read_i32()?)),
+            Opcode::FloatConst => Expression::Value(Value::Float(self.read_f32()?)),
+            Opcode::StringConst => Expression::Value(Value::String(self.read_ascii_z()?)),
+            Opcode::ObjectConst => Expression::Value(Value::Object(self.read_i32()?)),
+            Opcode::NameConst => Expression::Value(Value::Name(self.read_i32()?)),
+            Opcode::RotationConst => Expression::Value(Value::Rotator([
                 self.read_i32()?,
                 self.read_i32()?,
                 self.read_i32()?,
             ])),
-            0x23 => Expression::Value(Value::Vector([
+            Opcode::VectorConst => Expression::Value(Value::Vector([
                 self.read_f32()?,
                 self.read_f32()?,
                 self.read_f32()?,
             ])),
-            0x24 => Expression::Value(Value::Byte(self.read_u8()?)),
-            0x2c => Expression::Value(Value::Int(i32::from(self.read_u8()?))),
-            0x25 => Expression::Value(Value::Int(0)),
-            0x26 => Expression::Value(Value::Int(1)),
-            0x27 => Expression::Value(Value::Bool(true)),
-            0x28 => Expression::Value(Value::Bool(false)),
-            0x2a => Expression::Value(Value::Object(0)),
-            0x2b => {
+            Opcode::ByteConst => Expression::Value(Value::Byte(self.read_u8()?)),
+            Opcode::IntConstByte => Expression::Value(Value::Int(i32::from(self.read_u8()?))),
+            Opcode::IntZero => Expression::Value(Value::Int(0)),
+            Opcode::IntOne => Expression::Value(Value::Int(1)),
+            Opcode::True => Expression::Value(Value::Bool(true)),
+            Opcode::False => Expression::Value(Value::Bool(false)),
+            Opcode::NoObject => Expression::Value(Value::Object(0)),
+            Opcode::Unknown0x2b => {
                 self.read_u8()?;
                 self.expression(host)?
             }
-            0x2d => {
+            Opcode::BoolVariable => {
                 let value = self.expression(host)?;
                 match value {
                     Expression::Slot(slot) => Expression::Slot(slot),
                     value => Expression::Value(Value::Bool(self.value(value, host)?.truthy()?)),
                 }
             }
-            0x2e => {
+            Opcode::DynamicCast => {
                 let class = self.read_i32()?;
                 let value = self.expression(host)?;
                 let value = self.value(value, host)?;
@@ -646,7 +791,7 @@ impl<'a> Frame<'a> {
                     .map_err(|message| Error::Context { message })?,
                 )
             }
-            0x36 => {
+            Opcode::StructMember => {
                 let field = self.read_i32()?;
                 let target = self.expression(host)?;
                 let member = self
@@ -662,23 +807,27 @@ impl<'a> Frame<'a> {
                     target => Expression::Value(member.get(self.value(target, host)?)?),
                 }
             }
-            0x38 => {
+            Opcode::GlobalFunction => {
                 let name = self.read_i32()?;
                 Expression::Value(self.call(FunctionCall::Global(name), host)?)
             }
-            0x39..=0x60 => {
+            Opcode::Conversion(conversion) => {
                 let value = self.expression(host)?;
-                Expression::Value(convert(opcode, self.value(value, host)?)?)
+                Expression::Value(convert(conversion, self.value(value, host)?)?)
             }
-            0x61..=0x6f => {
+            Opcode::ExtendedNative(high) => {
                 let low = self.read_u8()?;
-                let index = (u16::from(opcode - 0x60) << 8) | u16::from(low);
+                Expression::Value(self.call(FunctionCall::Native(high | u16::from(low)), host)?)
+            }
+            Opcode::Native(index) => {
                 Expression::Value(self.call(FunctionCall::Native(index), host)?)
             }
-            0x70..=0xff => {
-                Expression::Value(self.call(FunctionCall::Native(u16::from(opcode)), host)?)
+            _ => {
+                return Err(Error::UnsupportedOpcode {
+                    offset,
+                    opcode: raw_opcode,
+                });
             }
-            _ => return Err(Error::UnsupportedOpcode { offset, opcode }),
         })
     }
 
@@ -692,12 +841,12 @@ impl<'a> Frame<'a> {
     ) -> Result<Value> {
         let creating_iterator = std::mem::take(&mut self.creating_iterator);
         let mut arguments = Vec::new();
-        while self.peek()? != 0x16 {
+        while Opcode::from(self.peek()?) != Opcode::EndFunctionParms {
             arguments.push(self.expression(host)?);
         }
         self.opcode()?;
         if let FunctionCall::Native(index) = function
-            && is_compound_assignment(index)
+            && let Ok(assignment) = CompoundAssignment::try_from(index)
         {
             let [target, operand] =
                 arguments
@@ -714,7 +863,7 @@ impl<'a> Frame<'a> {
                 Expression::Slot(slot) => self.slot(slot, host)?.unwrap_or(Value::None),
             };
             let operand = self.value(operand, host)?;
-            let value = compound_assignment(index, &current, &operand)?;
+            let value = compound_assignment(assignment, &current, &operand)?;
             self.assign(target, value.clone(), host)?;
             return Ok(value);
         }
@@ -1095,29 +1244,76 @@ impl StructMember {
     }
 }
 
-fn is_compound_assignment(index: u16) -> bool {
-    matches!(index, 0xa1 | 0xb6..=0xb9 | 0xdd..=0xe0)
+#[allow(non_camel_case_types)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum CompoundAssignment {
+    AddEqual_IntInt,
+    MultiplyEqual_FloatFloat,
+    DivideEqual_FloatFloat,
+    AddEqual_FloatFloat,
+    SubtractEqual_FloatFloat,
+    MultiplyEqual_VectorFloat,
+    DivideEqual_VectorFloat,
+    AddEqual_VectorVector,
+    SubtractEqual_VectorVector,
 }
 
-fn compound_assignment(index: u16, left: &Value, right: &Value) -> Result<Value> {
-    Ok(match (index, left, right) {
-        (0xa1, Value::Int(left), Value::Int(right)) => Value::Int(left.wrapping_add(*right)),
-        (0xb6, Value::Float(left), Value::Float(right)) => Value::Float(left * right),
-        (0xb7, Value::Float(left), Value::Float(right)) => Value::Float(left / right),
-        (0xb8, Value::Float(left), Value::Float(right)) => Value::Float(left + right),
-        (0xb9, Value::Float(left), Value::Float(right)) => Value::Float(left - right),
-        (0xdd, Value::Vector(left), Value::Float(right)) => {
-            Value::Vector([left[0] * right, left[1] * right, left[2] * right])
+impl TryFrom<u16> for CompoundAssignment {
+    type Error = ();
+
+    fn try_from(index: u16) -> std::result::Result<Self, Self::Error> {
+        match index {
+            0xa1 => Ok(Self::AddEqual_IntInt),
+            0xb6 => Ok(Self::MultiplyEqual_FloatFloat),
+            0xb7 => Ok(Self::DivideEqual_FloatFloat),
+            0xb8 => Ok(Self::AddEqual_FloatFloat),
+            0xb9 => Ok(Self::SubtractEqual_FloatFloat),
+            0xdd => Ok(Self::MultiplyEqual_VectorFloat),
+            0xde => Ok(Self::DivideEqual_VectorFloat),
+            0xdf => Ok(Self::AddEqual_VectorVector),
+            0xe0 => Ok(Self::SubtractEqual_VectorVector),
+            _ => Err(()),
         }
-        (0xde, Value::Vector(left), Value::Float(right)) => {
+    }
+}
+
+fn compound_assignment(
+    assignment: CompoundAssignment,
+    left: &Value,
+    right: &Value,
+) -> Result<Value> {
+    Ok(match (assignment, left, right) {
+        (CompoundAssignment::AddEqual_IntInt, Value::Int(left), Value::Int(right)) => {
+            Value::Int(left.wrapping_add(*right))
+        }
+        (CompoundAssignment::MultiplyEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
+            Value::Float(left * right)
+        }
+        (CompoundAssignment::DivideEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
+            Value::Float(left / right)
+        }
+        (CompoundAssignment::AddEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
+            Value::Float(left + right)
+        }
+        (CompoundAssignment::SubtractEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
+            Value::Float(left - right)
+        }
+        (
+            CompoundAssignment::MultiplyEqual_VectorFloat,
+            Value::Vector(left),
+            Value::Float(right),
+        ) => Value::Vector([left[0] * right, left[1] * right, left[2] * right]),
+        (CompoundAssignment::DivideEqual_VectorFloat, Value::Vector(left), Value::Float(right)) => {
             Value::Vector([left[0] / right, left[1] / right, left[2] / right])
         }
-        (0xdf, Value::Vector(left), Value::Vector(right)) => {
+        (CompoundAssignment::AddEqual_VectorVector, Value::Vector(left), Value::Vector(right)) => {
             Value::Vector([left[0] + right[0], left[1] + right[1], left[2] + right[2]])
         }
-        (0xe0, Value::Vector(left), Value::Vector(right)) => {
-            Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]])
-        }
+        (
+            CompoundAssignment::SubtractEqual_VectorVector,
+            Value::Vector(left),
+            Value::Vector(right),
+        ) => Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]]),
         (_, left, right) => {
             return Err(Error::Type {
                 expected: "matching compound arithmetic operands",
@@ -1131,23 +1327,25 @@ fn compound_assignment(index: u16, left: &Value, right: &Value) -> Result<Value>
     })
 }
 
-fn convert(opcode: u8, value: Value) -> Result<Value> {
+fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
     Ok(match (opcode, value) {
-        (0x3a, Value::Byte(value)) => Value::Int(i32::from(value)),
-        (0x3b, Value::Byte(value)) => Value::Bool(value != 0),
-        (0x3c, Value::Byte(value)) => Value::Float(f32::from(value)),
-        (0x3d, Value::Int(value)) => Value::Byte(value as u8),
-        (0x3e, Value::Int(value)) => Value::Bool(value != 0),
-        (0x3f, Value::Int(value)) => Value::Float(value as f32),
-        (0x40, Value::Bool(value)) => Value::Byte(u8::from(value)),
-        (0x41, Value::Bool(value)) => Value::Int(i32::from(value)),
-        (0x42, Value::Bool(value)) => Value::Float(f32::from(value)),
-        (0x43, Value::Float(value)) => Value::Byte(value as u8),
-        (0x44, Value::Float(value)) => Value::Int(value as i32),
-        (0x45, Value::Float(value)) => Value::Bool(value != 0.0),
-        (0x47, Value::Object(value)) => Value::Bool(value != 0),
-        (0x48, Value::Name(value)) => Value::Bool(value != 0),
-        (0x48, Value::NameText(value)) => Value::Bool(!value.eq_ignore_ascii_case("None")),
+        (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
+        (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
+        (ConversionOpcode::ByteToFloat, Value::Byte(value)) => Value::Float(f32::from(value)),
+        (ConversionOpcode::IntToByte, Value::Int(value)) => Value::Byte(value as u8),
+        (ConversionOpcode::IntToBool, Value::Int(value)) => Value::Bool(value != 0),
+        (ConversionOpcode::IntToFloat, Value::Int(value)) => Value::Float(value as f32),
+        (ConversionOpcode::BoolToByte, Value::Bool(value)) => Value::Byte(u8::from(value)),
+        (ConversionOpcode::BoolToInt, Value::Bool(value)) => Value::Int(i32::from(value)),
+        (ConversionOpcode::BoolToFloat, Value::Bool(value)) => Value::Float(f32::from(value)),
+        (ConversionOpcode::FloatToByte, Value::Float(value)) => Value::Byte(value as u8),
+        (ConversionOpcode::FloatToInt, Value::Float(value)) => Value::Int(value as i32),
+        (ConversionOpcode::FloatToBool, Value::Float(value)) => Value::Bool(value != 0.0),
+        (ConversionOpcode::ObjectToBool, Value::Object(value)) => Value::Bool(value != 0),
+        (ConversionOpcode::NameToBool, Value::Name(value)) => Value::Bool(value != 0),
+        (ConversionOpcode::NameToBool, Value::NameText(value)) => {
+            Value::Bool(!value.eq_ignore_ascii_case("None"))
+        }
         (_, value) => {
             return Err(Error::Type {
                 expected: "supported conversion input",
@@ -1387,7 +1585,12 @@ mod tests {
         );
         assert_eq!(frame.local(7), Some(&Value::Float(4.0)));
         assert_eq!(
-            compound_assignment(0xa1, &Value::Int(i32::MAX), &Value::Int(1)).unwrap(),
+            compound_assignment(
+                CompoundAssignment::AddEqual_IntInt,
+                &Value::Int(i32::MAX),
+                &Value::Int(1),
+            )
+            .unwrap(),
             Value::Int(i32::MIN)
         );
     }
