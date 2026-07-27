@@ -270,6 +270,16 @@ impl ScriptRuntime {
             // ponytail: accept rotations until UE1 collision rejection exists.
             return Ok(Value::Bool(true));
         }
+        if index == LOG {
+            let (message, tag) = log_arguments(arguments)?;
+            let tag = tag.map(|tag| runtime_name(source, tag)).transpose()?;
+            actions.push(ActorAction::Log {
+                actor,
+                message: message.to_owned(),
+                tag,
+            });
+            return Ok(Value::None);
+        }
         if index == 0xa7 {
             let [Value::Int(max)] = arguments else {
                 return Err(format!(
@@ -293,6 +303,23 @@ impl ScriptRuntime {
             return Ok(Value::Float(random_float(&mut self.random_state)));
         }
         scalar_native(index, arguments)
+    }
+}
+
+pub(super) fn log_arguments(
+    arguments: &[Value],
+) -> std::result::Result<(&str, Option<&Value>), String> {
+    match arguments {
+        [Value::String(message)] | [Value::String(message), Value::None] => Ok((message, None)),
+        [Value::String(message), tag] => Ok((message, Some(tag))),
+        _ => Err(format!(
+            "Log expects a string and optional name, found {}",
+            arguments
+                .iter()
+                .map(Value::kind)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
     }
 }
 

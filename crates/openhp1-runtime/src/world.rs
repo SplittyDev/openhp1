@@ -37,6 +37,7 @@ const PLAY_SOUND: u16 = 0x108;
 const SET_LOCATION: u16 = 0x10b;
 const SET_TIMER: u16 = 0x118;
 const SET_ROTATION: u16 = 0x12b;
+const LOG: u16 = 0x0e7;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_RETURN: u32 = 0x400;
@@ -137,6 +138,11 @@ pub enum ActorAction {
     },
     DestroyActor {
         actor: usize,
+    },
+    Log {
+        actor: usize,
+        message: String,
+        tag: Option<String>,
     },
     DeferredCall {
         actor: usize,
@@ -324,7 +330,8 @@ mod tests {
     use super::{
         actor::advance_timer,
         native::{
-            animation_parameters, collision_updates, random_float, random_int, scalar_native,
+            animation_parameters, collision_updates, log_arguments, random_float, random_int,
+            scalar_native,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -429,6 +436,18 @@ mod tests {
             Ok([Some(true), None, None])
         );
         assert!(collision_updates(&[Value::Float(1.0)]).is_err());
+    }
+
+    #[test]
+    fn log_arguments_preserve_optional_tags() {
+        assert_eq!(
+            log_arguments(&[Value::String("hello".to_owned()), Value::Name(7)]),
+            Ok(("hello", Some(&Value::Name(7))))
+        );
+        assert!(log_arguments(&[Value::Int(1)]).is_err());
+        assert!(
+            log_arguments(&[Value::String("hello".to_owned()), Value::None, Value::None]).is_err()
+        );
     }
 
     #[test]

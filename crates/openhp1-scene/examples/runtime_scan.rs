@@ -19,6 +19,7 @@ struct ScanStats {
     rotations: usize,
     rotated: usize,
     destroyed: usize,
+    logs: usize,
 }
 
 fn main() -> Result<()> {
@@ -160,6 +161,7 @@ fn main() -> Result<()> {
         stats.rotations, stats.rotated
     );
     println!("{} actors destroyed", stats.destroyed);
+    println!("{} script log messages", stats.logs);
     let mut deferred = deferred.into_iter().collect::<Vec<_>>();
     deferred.sort_by(|left, right| right.1.0.cmp(&left.1.0).then_with(|| left.0.cmp(&right.0)));
     for (message, (count, sample)) in deferred.into_iter().take(20) {
@@ -230,6 +232,9 @@ fn apply_actions(
             }
             ActorAction::DestroyActor { actor } => {
                 stats.destroyed += usize::from(scene.destroy_actor(actor)?);
+            }
+            ActorAction::Log { .. } => {
+                stats.logs += 1;
             }
             ActorAction::DeferredCall { actor, message } => {
                 record_deferred(scene, actor, message, deferred);

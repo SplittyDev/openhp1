@@ -617,6 +617,19 @@ fn apply_runtime_actions(
             ActorAction::DestroyActor { actor } => {
                 transformed |= scene.destroy_actor(actor)?;
             }
+            ActorAction::Log {
+                actor,
+                message,
+                tag,
+            } => {
+                info!(
+                    actor,
+                    actor_name = scene.actors[actor].name,
+                    tag = tag.as_deref().unwrap_or(""),
+                    message = %message,
+                    "UnrealScript log"
+                );
+            }
             ActorAction::DeferredCall { actor, message } => {
                 deferred += 1;
                 if scene.actors[actor]
