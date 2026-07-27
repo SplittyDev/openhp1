@@ -1,9 +1,10 @@
-use glam::Vec3;
-use openhp1_physics::{cylinders_overlap, sweep_cylinder};
+use glam::{Mat3, Vec3};
+use openhp1_physics::{boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder};
 
 use super::*;
 
 const ACTOR_TRACE_MARGIN: f32 = 1.0;
+const COLLIDE_BOX: u8 = 2;
 
 #[derive(Clone)]
 struct CollisionActor {
@@ -11,6 +12,9 @@ struct CollisionActor {
     location: Vec3,
     height: f32,
     radius: f32,
+    width: f32,
+    rotation: Mat3,
+    collide_type: u8,
     collide_actors: bool,
     block_actors: bool,
     block_players: bool,
@@ -35,6 +39,9 @@ pub(super) struct CollisionFields {
     location: ObjectId,
     height: ObjectId,
     radius: ObjectId,
+    width: ObjectId,
+    rotation: ObjectId,
+    collide_type: ObjectId,
     collide_actors: ObjectId,
     block_actors: ObjectId,
     block_players: ObjectId,
@@ -80,10 +87,9 @@ impl ScriptRuntime {
 
         let mut touching = HashSet::default();
         if current.collide_actors && !current.has_brush {
-            let query_minimum =
-                current.location - Vec3::new(current.radius, current.radius, current.height);
-            let query_maximum =
-                current.location + Vec3::new(current.radius, current.radius, current.height);
+            let current_extents = collision_actor_world_extents(&current);
+            let query_minimum = current.location - current_extents;
+            let query_maximum = current.location + current_extents;
             let candidate_count = self.collision_actors_by_min_x.partition_point(|&actor| {
                 collision_actor_min_x(&self.collision_actors, actor) <= query_maximum.x
             });
@@ -92,23 +98,17 @@ impl ScriptRuntime {
                     continue;
                 }
                 let other = &self.collision_actors[actor].as_ref().unwrap().actor;
-                if other.location.x + other.radius < query_minimum.x
-                    || other.location.y + other.radius < query_minimum.y
-                    || other.location.y - other.radius > query_maximum.y
-                    || other.location.z + other.height < query_minimum.z
-                    || other.location.z - other.height > query_maximum.z
+                let other_extents = collision_actor_world_extents(other);
+                if other.location.x + other_extents.x < query_minimum.x
+                    || other.location.y + other_extents.y < query_minimum.y
+                    || other.location.y - other_extents.y > query_maximum.y
+                    || other.location.z + other_extents.z < query_minimum.z
+                    || other.location.z - other_extents.z > query_maximum.z
                     || actors_block(&current, other)
                 {
                     continue;
                 }
-                if cylinders_overlap(
-                    current.location,
-                    current.height,
-                    current.radius,
-                    other.location,
-                    other.height,
-                    other.radius,
-                ) {
+                if collision_actors_overlap(&current, other) {
                     touching.insert(actor);
                 }
             }
@@ -505,12 +505,11 @@ impl ScriptRuntime {
     ) -> std::result::Result<Vec<ActorSweep>, String> {
         self.ensure_collision_actors(current_actor, current_instance)?;
         let end = current.location + delta;
-        let query_minimum = current.location.min(end)
-            - Vec3::new(current.radius, current.radius, current.height)
-            - Vec3::splat(ACTOR_TRACE_MARGIN);
-        let query_maximum = current.location.max(end)
-            + Vec3::new(current.radius, current.radius, current.height)
-            + Vec3::splat(ACTOR_TRACE_MARGIN);
+        let current_extents = collision_actor_world_extents(current);
+        let query_minimum =
+            current.location.min(end) - current_extents - Vec3::splat(ACTOR_TRACE_MARGIN);
+        let query_maximum =
+            current.location.max(end) + current_extents + Vec3::splat(ACTOR_TRACE_MARGIN);
         let candidate_count = self.collision_actors_by_min_x.partition_point(|&actor| {
             collision_actor_min_x(&self.collision_actors, actor) <= query_maximum.x
         });
@@ -521,11 +520,12 @@ impl ScriptRuntime {
                 continue;
             }
             let other = &self.collision_actors[actor].as_ref().unwrap().actor;
-            if other.location.x + other.radius < query_minimum.x
-                || other.location.y + other.radius < query_minimum.y
-                || other.location.y - other.radius > query_maximum.y
-                || other.location.z + other.height < query_minimum.z
-                || other.location.z - other.height > query_maximum.z
+            let other_extents = collision_actor_world_extents(other);
+            if other.location.x + other_extents.x < query_minimum.x
+                || other.location.y + other_extents.y < query_minimum.y
+                || other.location.y - other_extents.y > query_maximum.y
+                || other.location.z + other_extents.z < query_minimum.z
+                || other.location.z - other_extents.z > query_maximum.z
             {
                 continue;
             }
@@ -535,15 +535,7 @@ impl ScriptRuntime {
             {
                 continue;
             }
-            let Some(hit) = sweep_cylinder(
-                current.location,
-                current.location + delta,
-                current.height,
-                current.radius,
-                other.location,
-                other.height,
-                other.radius,
-            ) else {
+            let Some(hit) = sweep_collision_actors(current, other, delta) else {
                 continue;
             };
             hits.push(ActorSweep {
@@ -575,14 +567,9 @@ impl ScriptRuntime {
             let overlaps = self
                 .collision_actor_by_index(other, actor, current_instance)?
                 .is_some_and(|other| {
-                    cylinders_overlap(
-                        location,
-                        current.height,
-                        current.radius,
-                        other.location,
-                        other.height,
-                        other.radius,
-                    )
+                    let mut current = current.clone();
+                    current.location = location;
+                    collision_actors_overlap(&current, &other)
                 });
             if !overlaps {
                 self.touching.remove(&pair);
@@ -799,7 +786,7 @@ impl ScriptRuntime {
         if !cached.actor.collide_actors || cached.actor.has_brush {
             return;
         }
-        let minimum = cached.actor.location.x - cached.actor.radius;
+        let minimum = cached.actor.location.x - collision_actor_world_extents(&cached.actor).x;
         let index = self
             .collision_actors_by_min_x
             .binary_search_by(|&candidate| {
@@ -828,6 +815,9 @@ impl ScriptRuntime {
             location: field("Location")?,
             height: field("CollisionHeight")?,
             radius: field("CollisionRadius")?,
+            width: field("CollisionWidth")?,
+            rotation: field("Rotation")?,
+            collide_type: field("CollideType")?,
             collide_actors: field("bCollideActors")?,
             block_actors: field("bBlockActors")?,
             block_players: field("bBlockPlayers")?,
@@ -984,6 +974,9 @@ impl CollisionFields {
             &self.location,
             &self.height,
             &self.radius,
+            &self.width,
+            &self.rotation,
+            &self.collide_type,
             &self.collide_actors,
             &self.block_actors,
             &self.block_players,
@@ -1019,16 +1012,34 @@ fn collision_actor_from_fields(
         Some(value) => Err(format!("actor property {name} is {value:?}")),
         None => Ok(false),
     };
+    let byte = |field: &ObjectId, name| match instance.get(field) {
+        Some(StoredValue::Value(Value::Byte(value))) => Ok(*value),
+        Some(value) => Err(format!("actor property {name} is {value:?}")),
+        None => Ok(0),
+    };
+    let rotator = |field: &ObjectId, name| match instance.get(field) {
+        Some(StoredValue::Value(Value::Rotator(value))) => Ok(*value),
+        Some(value) => Err(format!("actor property {name} is {value:?}")),
+        None => Ok([0; 3]),
+    };
     let has_brush = match instance.get(&fields.brush) {
         Some(StoredValue::Object(value)) => value.is_some(),
         Some(value) => return Err(format!("actor property Brush is {value:?}")),
         None => false,
     };
+    let rotation = crate::rotator_axes(rotator(&fields.rotation, "Rotation")?);
     Ok(CollisionActor {
         actor,
         location: vector(&fields.location, "Location")?,
         height: float(&fields.height, "CollisionHeight")?,
         radius: float(&fields.radius, "CollisionRadius")?,
+        width: float(&fields.width, "CollisionWidth")?,
+        rotation: Mat3::from_cols(
+            Vec3::from_array(rotation[0]),
+            Vec3::from_array(rotation[1]),
+            Vec3::from_array(rotation[2]),
+        ),
+        collide_type: byte(&fields.collide_type, "CollideType")?,
         collide_actors: boolean(&fields.collide_actors, "bCollideActors")?,
         block_actors: boolean(&fields.block_actors, "bBlockActors")?,
         block_players: boolean(&fields.block_players, "bBlockPlayers")?,
@@ -1037,9 +1048,90 @@ fn collision_actor_from_fields(
     })
 }
 
+fn collision_actor_local_extents(actor: &CollisionActor) -> Vec3 {
+    if actor.collide_type == COLLIDE_BOX {
+        Vec3::new(actor.radius, actor.width, actor.height)
+    } else {
+        Vec3::new(actor.radius, actor.radius, actor.height)
+    }
+}
+
+fn collision_actor_world_extents(actor: &CollisionActor) -> Vec3 {
+    if actor.collide_type == COLLIDE_BOX {
+        actor.rotation.abs() * collision_actor_local_extents(actor)
+    } else {
+        collision_actor_local_extents(actor)
+    }
+}
+
+fn sweep_collision_actors(
+    current: &CollisionActor,
+    other: &CollisionActor,
+    delta: Vec3,
+) -> Option<openhp1_physics::ActorCollisionHit> {
+    if other.collide_type == COLLIDE_BOX {
+        sweep_box(
+            current.location,
+            current.location + delta,
+            collision_actor_world_extents(current),
+            other.location,
+            collision_actor_local_extents(other),
+            other.rotation,
+        )
+    } else if current.collide_type == COLLIDE_BOX {
+        sweep_box(
+            current.location,
+            current.location + delta,
+            collision_actor_world_extents(current),
+            other.location,
+            collision_actor_local_extents(other),
+            Mat3::IDENTITY,
+        )
+    } else {
+        sweep_cylinder(
+            current.location,
+            current.location + delta,
+            current.height,
+            current.radius,
+            other.location,
+            other.height,
+            other.radius,
+        )
+    }
+}
+
+fn collision_actors_overlap(first: &CollisionActor, second: &CollisionActor) -> bool {
+    if second.collide_type == COLLIDE_BOX {
+        boxes_overlap(
+            first.location,
+            collision_actor_world_extents(first),
+            second.location,
+            collision_actor_local_extents(second),
+            second.rotation,
+        )
+    } else if first.collide_type == COLLIDE_BOX {
+        boxes_overlap(
+            second.location,
+            collision_actor_world_extents(second),
+            first.location,
+            collision_actor_local_extents(first),
+            first.rotation,
+        )
+    } else {
+        cylinders_overlap(
+            first.location,
+            first.height,
+            first.radius,
+            second.location,
+            second.height,
+            second.radius,
+        )
+    }
+}
+
 fn collision_actor_min_x(actors: &[Option<CachedCollisionActor>], actor: usize) -> f32 {
     let actor = &actors[actor].as_ref().unwrap().actor;
-    actor.location.x - actor.radius
+    actor.location.x - collision_actor_world_extents(actor).x
 }
 
 fn actors_block(first: &CollisionActor, second: &CollisionActor) -> bool {
@@ -1051,15 +1143,7 @@ fn actors_block(first: &CollisionActor, second: &CollisionActor) -> bool {
 }
 
 fn placement_blocked(first: &CollisionActor, second: &CollisionActor) -> bool {
-    actors_block(first, second)
-        && cylinders_overlap(
-            first.location,
-            first.height,
-            first.radius,
-            second.location,
-            second.height,
-            second.radius,
-        )
+    actors_block(first, second) && collision_actors_overlap(first, second)
 }
 
 fn actor_pair(first: usize, second: usize) -> (usize, usize) {
@@ -1103,6 +1187,9 @@ mod tests {
             location,
             height: 10.0,
             radius: 10.0,
+            width: 10.0,
+            rotation: Mat3::IDENTITY,
+            collide_type: 0,
             collide_actors: true,
             block_actors: false,
             block_players,
@@ -1129,6 +1216,21 @@ mod tests {
         assert!(actors_block(&player, &wall));
         assert!(!placement_blocked(&player, &trigger));
         assert!(placement_blocked(&player, &wall));
+    }
+
+    #[test]
+    fn hp1_box_collision_uses_width_and_actor_rotation() {
+        let pawn = collision_actor(0, Vec3::new(20.0, -30.0, 0.0), true);
+        let mut wall = collision_actor(1, Vec3::ZERO, true);
+        wall.radius = 10.0;
+        wall.width = 2.0;
+        wall.rotation = Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        wall.collide_type = COLLIDE_BOX;
+
+        assert!(sweep_collision_actors(&pawn, &wall, Vec3::Y * 60.0).is_none());
+        let mut pawn = pawn;
+        pawn.location.x = 0.0;
+        assert!(sweep_collision_actors(&pawn, &wall, Vec3::Y * 60.0).is_some());
     }
 
     #[test]

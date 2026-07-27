@@ -1,6 +1,6 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
-use glam::Vec3;
+use glam::{Mat3, Vec3};
 use openhp1_map::{BspNode, Model, bsp_zone_at};
 use openhp1_package::ObjectReference;
 use thiserror::Error;
@@ -361,6 +361,97 @@ pub fn sweep_cylinder(
     })
 }
 
+pub fn sweep_box(
+    start: Vec3,
+    end: Vec3,
+    moving_extents: Vec3,
+    target: Vec3,
+    target_extents: Vec3,
+    rotation: Mat3,
+) -> Option<ActorCollisionHit> {
+    if !start.is_finite()
+        || !end.is_finite()
+        || !moving_extents.is_finite()
+        || !target.is_finite()
+        || !target_extents.is_finite()
+        || !rotation.is_finite()
+        || moving_extents.min_element() < 0.0
+        || target_extents.min_element() < 0.0
+    {
+        return None;
+    }
+    let world_to_local = rotation.transpose();
+    let start = world_to_local * (start - target);
+    let end = world_to_local * (end - target);
+    let extents = target_extents + world_to_local.abs() * moving_extents;
+    if start.abs().cmplt(extents).all() {
+        return None;
+    }
+
+    let delta = end - start;
+    let distance = delta.length();
+    if distance <= f32::EPSILON {
+        return None;
+    }
+    let mut entry = 0.0_f32;
+    let mut exit = 1.0_f32;
+    let mut normal = Vec3::ZERO;
+    for axis in 0..3 {
+        let origin = start[axis];
+        let direction = delta[axis];
+        let extent = extents[axis];
+        if direction.abs() <= f32::EPSILON {
+            if origin < -extent || origin > extent {
+                return None;
+            }
+            continue;
+        }
+        let first = (-extent - origin) / direction;
+        let second = (extent - origin) / direction;
+        let near = first.min(second);
+        let far = first.max(second);
+        if near > entry {
+            entry = near;
+            normal = Vec3::ZERO;
+            normal[axis] = if direction > 0.0 { -1.0 } else { 1.0 };
+        }
+        exit = exit.min(far);
+        if entry > exit {
+            return None;
+        }
+    }
+    if !(0.0..=1.0).contains(&entry) || normal == Vec3::ZERO {
+        return None;
+    }
+    Some(ActorCollisionHit {
+        fraction: ((entry * distance - TRACE_MARGIN).max(0.0) / distance).min(1.0),
+        normal: rotation * normal,
+    })
+}
+
+pub fn boxes_overlap(
+    first: Vec3,
+    first_extents: Vec3,
+    second: Vec3,
+    second_extents: Vec3,
+    second_rotation: Mat3,
+) -> bool {
+    if !first.is_finite()
+        || !first_extents.is_finite()
+        || !second.is_finite()
+        || !second_extents.is_finite()
+        || !second_rotation.is_finite()
+        || first_extents.min_element() < 0.0
+        || second_extents.min_element() < 0.0
+    {
+        return false;
+    }
+    let world_to_second = second_rotation.transpose();
+    let local_first = world_to_second * (first - second);
+    let extents = second_extents + world_to_second.abs() * first_extents;
+    local_first.abs().cmplt(extents).all()
+}
+
 pub fn cylinders_overlap(
     first: Vec3,
     first_height: f32,
@@ -641,6 +732,40 @@ mod tests {
             Vec3::new(0.0, 0.0, 4.0),
             2.0,
             2.0,
+        ));
+    }
+
+    #[test]
+    fn box_sweep_uses_collision_width_and_rotation() {
+        let rotation = Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        assert!(
+            sweep_box(
+                Vec3::new(20.0, -20.0, 0.0),
+                Vec3::new(20.0, 20.0, 0.0),
+                Vec3::ONE,
+                Vec3::ZERO,
+                Vec3::new(10.0, 2.0, 3.0),
+                rotation,
+            )
+            .is_none()
+        );
+        let hit = sweep_box(
+            Vec3::new(-20.0, 0.0, 0.0),
+            Vec3::new(20.0, 0.0, 0.0),
+            Vec3::ONE,
+            Vec3::ZERO,
+            Vec3::new(10.0, 2.0, 3.0),
+            rotation,
+        )
+        .unwrap();
+        assert!((hit.fraction - 0.4).abs() < 0.0001);
+        assert!(hit.normal.abs_diff_eq(Vec3::NEG_X, 0.000001));
+        assert!(boxes_overlap(
+            Vec3::X * 2.0,
+            Vec3::ONE,
+            Vec3::ZERO,
+            Vec3::new(10.0, 2.0, 3.0),
+            rotation,
         ));
     }
 

@@ -62,6 +62,10 @@ Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
+Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
+`CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
+the default aligned cylinder. A sweep that starts inside an existing overlap
+may move out instead of treating the exit surface as a new impact.
 `MakeNoise` currently validates its loudness without populating pawn noise
 slots or dispatching `HearNoise`.
 
