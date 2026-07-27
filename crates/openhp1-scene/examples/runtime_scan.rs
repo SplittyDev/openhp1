@@ -26,6 +26,15 @@ struct ScanStats {
 }
 
 fn main() -> Result<()> {
+    let seconds = env::args()
+        .nth(2)
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .context("simulation duration must be a whole number of seconds")?
+        .unwrap_or(5);
+    let ticks = seconds
+        .checked_mul(60)
+        .context("simulation duration is too large")?;
     let maps = env::args_os()
         .nth(1)
         .map(PathBuf::from)
@@ -133,7 +142,7 @@ fn main() -> Result<()> {
 
         let timer_callbacks = runtime.timer_callbacks();
         let mut timer_actions = 0;
-        for _ in 0..300 {
+        for _ in 0..ticks {
             let (_, completed) = scene.tick_animations_with_completions(1.0 / 60.0)?;
             for actor in completed {
                 let actions = runtime.animation_finished(actor)?;
