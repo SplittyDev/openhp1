@@ -408,13 +408,7 @@ impl ViewerApp {
         let delta_time = delta_time * self.animation_speed;
         let completed = match self.scene.tick_animations_with_completions(delta_time) {
             Ok((true, completed)) => {
-                if !self
-                    .renderer
-                    .update_vertices(&self.state.queue, &self.scene.render.mesh)
-                {
-                    self.animations_playing = false;
-                    self.load_error = Some("animation changed the scene vertex count".to_owned());
-                }
+                self.update_vertices();
                 completed
             }
             Ok((false, completed)) => completed,
@@ -433,15 +427,7 @@ impl ViewerApp {
                 }
             };
             match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
-                Ok((_, _, true))
-                    if !self
-                        .renderer
-                        .update_vertices(&self.state.queue, &self.scene.render.mesh) =>
-                {
-                    self.load_error =
-                        Some("animation callback changed the scene vertex count".to_owned());
-                    break;
-                }
+                Ok((_, _, true)) => self.update_vertices(),
                 Ok(_) => {}
                 Err(error) => {
                     self.load_error = Some(format!("animation callback failed: {error:#}"));
@@ -492,17 +478,21 @@ impl ViewerApp {
             }
         }
         match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
-            Ok((_, _, true))
-                if !self
-                    .renderer
-                    .update_vertices(&self.state.queue, &self.scene.render.mesh) =>
-            {
-                self.load_error = Some("runtime changed the scene vertex count".to_owned());
-            }
+            Ok((_, _, true)) => self.update_vertices(),
             Ok(_) => {}
             Err(error) => {
                 self.load_error = Some(format!("runtime action failed: {error:#}"));
             }
+        }
+    }
+
+    fn update_vertices(&mut self) {
+        if !self
+            .renderer
+            .update_vertices(&self.state.queue, &self.scene.render.mesh)
+        {
+            self.renderer
+                .reload_scene(&self.state.device, &self.state.queue, &self.scene.render);
         }
     }
 }

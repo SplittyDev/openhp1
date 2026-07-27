@@ -145,6 +145,7 @@ pub fn apply_runtime_actions(
                         roll: rotation[2],
                     },
                 )?;
+                transformed = true;
             }
             ActorAction::SetLocation { actor, location } => {
                 transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;

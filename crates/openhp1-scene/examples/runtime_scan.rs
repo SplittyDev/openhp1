@@ -162,7 +162,9 @@ fn main() -> Result<()> {
                 .filter(|&&actor| {
                     scene.actors[actor].render.as_ref().is_some_and(|render| {
                         render.vertices.clone().any(|vertex| {
-                            !before[vertex].abs_diff_eq(scene.render.mesh.positions[vertex], 1.0e-4)
+                            before.get(vertex).is_none_or(|before| {
+                                !before.abs_diff_eq(scene.render.mesh.positions[vertex], 1.0e-4)
+                            })
                         })
                     })
                 })

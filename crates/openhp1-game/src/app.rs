@@ -610,7 +610,8 @@ impl Graphics {
             .renderer
             .update_vertices(&self.queue, &self.scene.render.mesh)
         {
-            self.last_error = Some("runtime changed the scene vertex count".to_owned());
+            self.renderer
+                .reload_scene(&self.device, &self.queue, &self.scene.render);
         }
     }
 }

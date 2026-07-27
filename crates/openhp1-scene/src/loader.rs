@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -52,6 +52,18 @@ pub struct LoadedScene {
     animations: Vec<AnimatedActorMesh>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     water_animations: Vec<AnimatedWaterTexture>,
+    actor_render: ActorRenderContext,
+}
+
+struct ActorRenderContext {
+    packages: PackageStore,
+    model: Model,
+    vertex_lighting: VertexLighting,
+    class_cache: HashMap<SceneObjectId, ClassState>,
+    mesh_cache: HashMap<SceneObjectId, Option<Arc<Mesh>>>,
+    animation_cache: HashMap<SceneObjectId, Option<Arc<SkeletalAnimation>>>,
+    decoded_textures: HashMap<SceneObjectId, Option<DecodedTexture>>,
+    images: HashMap<(String, usize, bool), usize>,
 }
 
 impl LoadedScene {
@@ -152,13 +164,20 @@ impl LoadedScene {
         let vertex_lighting = model
             .vertex_lighting(&package)
             .context("failed to decode actor vertex lighting")?;
+        let mut actor_render = ActorRenderContext {
+            packages,
+            model,
+            vertex_lighting,
+            class_cache,
+            mesh_cache: HashMap::new(),
+            animation_cache: HashMap::new(),
+            decoded_textures: HashMap::new(),
+            images: HashMap::new(),
+        };
         let actors = load_actors(
-            &mut packages,
+            &mut actor_render,
             &package,
             &level,
-            &model,
-            &vertex_lighting,
-            &mut class_cache,
             &mut mesh,
             &mut textures,
             &mut surface_materials,
@@ -183,9 +202,9 @@ impl LoadedScene {
             .count();
         info!(
             map = %path.display(),
-            points = model.points.len(),
-            nodes = model.nodes.len(),
-            surfaces = model.surfaces.len(),
+            points = actor_render.model.points.len(),
+            nodes = actor_render.model.nodes.len(),
+            surfaces = actor_render.model.surfaces.len(),
             triangles = mesh.indices.len() / 3,
             textures = textures.len(),
             lightmaps = lightmaps.len(),
@@ -216,9 +235,9 @@ impl LoadedScene {
                 surface_materials,
                 sky_zone,
             },
-            points: model.points.len(),
-            nodes: model.nodes.len(),
-            surfaces: model.surfaces.len(),
+            points: actor_render.model.points.len(),
+            nodes: actor_render.model.nodes.len(),
+            surfaces: actor_render.model.surfaces.len(),
             visible_bsp_surfaces,
             textured_surfaces,
             masked_surfaces,
@@ -230,11 +249,12 @@ impl LoadedScene {
             animated_actor_meshes,
             actors,
             collision,
-            zone_nodes: model.nodes.clone(),
-            zone_count: model.zones.len(),
+            zone_nodes: actor_render.model.nodes.clone(),
+            zone_count: actor_render.model.zones.len(),
             animations,
             hidden_actor_positions,
             water_animations,
+            actor_render,
         })
     }
 
@@ -266,19 +286,34 @@ impl LoadedScene {
             self.actors
                 .push(runtime_actor_placeholder(self.actors.len()));
         }
-        let actor = SceneActor {
+        let package = self
+            .actor_render
+            .packages
+            .load_path(Path::new(&class_package))?;
+        let class = SceneObject {
+            package,
+            export_index: class_export,
+        };
+        let class_state = class_state(
+            &mut self.actor_render.packages,
+            &class,
+            &mut self.actor_render.class_cache,
+            0,
+        );
+        let is_pawn = class_state.is_pawn;
+        let mut state = class_state.actor;
+        state.location = location;
+        state.rotation = rotation;
+        let mut actor = SceneActor {
             id: SceneObjectId {
                 package: "<runtime>".to_owned(),
                 export_index: actor_index,
             },
             name,
-            class: Some(SceneObjectId {
-                package: class_package,
-                export_index: class_export,
-            }),
+            class: Some(class.id()),
             class_name,
-            location,
-            rotation,
+            location: Vec3::ZERO,
+            rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
             draw_scale: 1.0,
             draw_type: 0,
@@ -288,8 +323,34 @@ impl LoadedScene {
             mesh_name: None,
             animation: None,
             render: None,
-            diagnostics: vec!["runtime-spawned actor rendering is not implemented".to_owned()],
+            diagnostics: class_state.diagnostics,
         };
+        apply_scene_actor_state(&mut actor, &state);
+        append_scene_actor_mesh(
+            &mut self.actor_render,
+            &mut actor,
+            &state,
+            is_pawn,
+            actor_index,
+            &mut self.render.mesh,
+            &mut self.render.textures,
+            &mut self.render.surface_materials,
+            &mut self.animations,
+            &mut self.water_animations,
+        );
+        if let Some(render) = &actor.render {
+            self.actor_meshes += 1;
+            if actor.animation.is_some() {
+                self.animated_actor_meshes += 1;
+            }
+            if actor.hidden {
+                self.hidden_actor_positions.insert(
+                    actor_index,
+                    self.render.mesh.positions[render.vertices.clone()].to_vec(),
+                );
+                collapse_positions(&mut self.render.mesh.positions[render.vertices.clone()]);
+            }
+        }
         if actor_index == self.actors.len() {
             self.actors.push(actor);
         } else {
@@ -1001,22 +1062,15 @@ fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
 
 #[allow(clippy::too_many_arguments)]
 fn load_actors(
-    packages: &mut PackageStore,
+    actor_render: &mut ActorRenderContext,
     map: &Arc<Package>,
     level: &Level,
-    model: &Model,
-    vertex_lighting: &VertexLighting,
-    class_cache: &mut HashMap<SceneObjectId, ClassState>,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> Vec<SceneActor> {
-    let mut mesh_cache = HashMap::<SceneObjectId, Option<Arc<Mesh>>>::new();
-    let mut animation_cache = HashMap::<SceneObjectId, Option<Arc<SkeletalAnimation>>>::new();
-    let mut decoded_textures = HashMap::<SceneObjectId, Option<DecodedTexture>>::new();
-    let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut actors = Vec::new();
     let mut seen_exports = HashSet::new();
 
@@ -1068,7 +1122,7 @@ fn load_actors(
                 continue;
             }
         };
-        let class = match packages.resolve(map, export.class) {
+        let class = match actor_render.packages.resolve(map, export.class) {
             Ok(Some(class)) => {
                 let class = SceneObject::from(class);
                 scene_actor.class = Some(class.id());
@@ -1091,11 +1145,16 @@ fn load_actors(
                 continue;
             }
         };
-        let class_state = class_state(packages, &class, class_cache, 0);
+        let class_state = class_state(
+            &mut actor_render.packages,
+            &class,
+            &mut actor_render.class_cache,
+            0,
+        );
         scene_actor.diagnostics.extend(class_state.diagnostics);
         let is_pawn = class_state.is_pawn;
         let mut state = class_state.actor;
-        if let Err(error) = state.apply(packages, map, &actor.properties) {
+        if let Err(error) = state.apply(&mut actor_render.packages, map, &actor.properties) {
             warn!(export_index, %error, "could not resolve actor properties");
             scene_actor
                 .diagnostics
@@ -1104,136 +1163,154 @@ fn load_actors(
             continue;
         }
         apply_scene_actor_state(&mut scene_actor, &state);
-        if state.draw_type != 2 {
-            scene_actor.diagnostics.push(format!(
-                "DrawType {} is not rendered as a mesh",
-                state.draw_type
-            ));
-            actors.push(scene_actor);
-            continue;
-        }
-        let Some(mesh_object) = state.mesh.clone() else {
-            scene_actor
-                .diagnostics
-                .push("mesh draw type has no mesh assigned".to_owned());
-            actors.push(scene_actor);
-            continue;
+        append_scene_actor_mesh(
+            actor_render,
+            &mut scene_actor,
+            &state,
+            is_pawn,
+            actors.len(),
+            render_mesh,
+            textures,
+            materials,
+            animations,
+            water_animations,
+        );
+        actors.push(scene_actor);
+    }
+    actors
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_scene_actor_mesh(
+    actor_render: &mut ActorRenderContext,
+    scene_actor: &mut SceneActor,
+    state: &ActorState,
+    is_pawn: bool,
+    actor_index: usize,
+    render_mesh: &mut openhp1_map::TriangleMesh,
+    textures: &mut Vec<TextureImage>,
+    materials: &mut Vec<SurfaceMaterial>,
+    animations: &mut Vec<AnimatedActorMesh>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+) {
+    if state.draw_type != 2 {
+        scene_actor.diagnostics.push(format!(
+            "DrawType {} is not rendered as a mesh",
+            state.draw_type
+        ));
+        return;
+    }
+    let Some(mesh_object) = state.mesh.clone() else {
+        scene_actor
+            .diagnostics
+            .push("mesh draw type has no mesh assigned".to_owned());
+        return;
+    };
+    let ActorRenderContext {
+        packages,
+        model,
+        vertex_lighting,
+        mesh_cache,
+        animation_cache,
+        decoded_textures,
+        images,
+        ..
+    } = actor_render;
+    let mesh_key = mesh_object.id();
+    if !mesh_cache.contains_key(&mesh_key) {
+        let decoded = match Mesh::decode(&mesh_object.package, mesh_object.export_index) {
+            Ok(mesh) => Some(Arc::new(mesh)),
+            Err(error) => {
+                warn!(actor = %scene_actor.name, %error, "could not decode actor mesh");
+                None
+            }
         };
-        let mesh_key = mesh_object.id();
-        if !mesh_cache.contains_key(&mesh_key) {
-            let decoded = match Mesh::decode(&mesh_object.package, mesh_object.export_index) {
-                Ok(mesh) => Some(Arc::new(mesh)),
+        mesh_cache.insert(mesh_key.clone(), decoded);
+    }
+    let Some(mesh) = mesh_cache.get(&mesh_key).and_then(Option::as_ref).cloned() else {
+        scene_actor.diagnostics.push(format!(
+            "mesh {} could not be decoded",
+            scene_actor.mesh_name.as_deref().unwrap_or("<unnamed>")
+        ));
+        return;
+    };
+    let mesh_offset = pawn_mesh_offset(
+        is_pawn,
+        mesh_object
+            .package
+            .summary()
+            .class_name(&mesh_object.package.summary().exports[mesh_object.export_index])
+            == Some("SkeletalMesh"),
+        state.physics,
+        state.collision_height,
+        mesh.origin.z,
+    );
+    let animation_object = state.skeletal_animation.clone().or_else(|| {
+        match packages.resolve(&mesh_object.package, mesh.default_animation) {
+            Ok(animation) => animation.map(SceneObject::from),
+            Err(error) => {
+                warn!(
+                    actor = %scene_actor.name,
+                    %error,
+                    "could not resolve actor skeletal animation"
+                );
+                None
+            }
+        }
+    });
+    let skeletal_animation = animation_object.and_then(|animation_object| {
+        let key = animation_object.id();
+        if !animation_cache.contains_key(&key) {
+            let decoded = match SkeletalAnimation::decode(
+                &animation_object.package,
+                animation_object.export_index,
+            ) {
+                Ok(animation) => Some(Arc::new(animation)),
                 Err(error) => {
                     warn!(
-                        actor = %map.summary().name(export.object_name),
+                        actor = %scene_actor.name,
                         %error,
-                        "could not decode actor mesh"
+                        "could not decode actor skeletal animation"
                     );
                     None
                 }
             };
-            mesh_cache.insert(mesh_key.clone(), decoded);
+            animation_cache.insert(key.clone(), decoded);
         }
-        let Some(mesh) = mesh_cache.get(&mesh_key).and_then(Option::as_ref).cloned() else {
-            scene_actor.diagnostics.push(format!(
-                "mesh {} could not be decoded",
-                scene_actor.mesh_name.as_deref().unwrap_or("<unnamed>")
-            ));
-            actors.push(scene_actor);
-            continue;
-        };
-        let mesh_offset = pawn_mesh_offset(
-            is_pawn,
-            mesh_object
-                .package
-                .summary()
-                .class_name(&mesh_object.package.summary().exports[mesh_object.export_index])
-                == Some("SkeletalMesh"),
-            state.physics,
-            state.collision_height,
-            mesh.origin.z,
-        );
-        let animation_object = if let Some(animation) = state.skeletal_animation.clone() {
-            Some(animation)
-        } else {
-            match packages.resolve(&mesh_object.package, mesh.default_animation) {
-                Ok(animation) => animation.map(SceneObject::from),
-                Err(error) => {
-                    warn!(
-                        actor = %map.summary().name(export.object_name),
-                        %error,
-                        "could not resolve actor skeletal animation"
-                    );
-                    None
-                }
-            }
-        };
-        let skeletal_animation = match animation_object {
-            Some(animation_object) => {
-                let key = animation_object.id();
-                if !animation_cache.contains_key(&key) {
-                    let decoded = match SkeletalAnimation::decode(
-                        &animation_object.package,
-                        animation_object.export_index,
-                    ) {
-                        Ok(animation) => Some(Arc::new(animation)),
-                        Err(error) => {
-                            warn!(
-                                actor = %map.summary().name(export.object_name),
-                                %error,
-                                "could not decode actor skeletal animation"
-                            );
-                            None
-                        }
-                    };
-                    animation_cache.insert(key.clone(), decoded);
-                }
-                animation_cache.get(&key).and_then(Option::as_ref).cloned()
-            }
-            None => None,
-        };
-        let actor_index = actors.len();
-        match append_actor_mesh(
-            packages,
-            &mesh_object,
-            &mesh,
-            skeletal_animation.as_ref(),
-            &state,
-            mesh_offset,
-            actor_index,
-            model,
-            vertex_lighting,
-            render_mesh,
-            textures,
-            materials,
-            &mut decoded_textures,
-            &mut images,
-            animations,
-            water_animations,
-        ) {
-            Ok(Some(appended)) => {
-                scene_actor.render = Some(appended.render);
-                scene_actor.animation = appended.animation;
-            }
-            Ok(None) => {
-                scene_actor
-                    .diagnostics
-                    .push("mesh contains no renderable triangles".to_owned());
-            }
-            Err(error) => {
-                warn!(
-                    actor = %map.summary().name(export.object_name),
-                    %error,
-                    "could not append actor mesh"
-                );
-                scene_actor
-                    .diagnostics
-                    .push(format!("mesh assembly failed: {error}"));
-            }
+        animation_cache.get(&key).and_then(Option::as_ref).cloned()
+    });
+    match append_actor_mesh(
+        packages,
+        &mesh_object,
+        &mesh,
+        skeletal_animation.as_ref(),
+        state,
+        mesh_offset,
+        actor_index,
+        model,
+        vertex_lighting,
+        render_mesh,
+        textures,
+        materials,
+        decoded_textures,
+        images,
+        animations,
+        water_animations,
+    ) {
+        Ok(Some(appended)) => {
+            scene_actor.render = Some(appended.render);
+            scene_actor.animation = appended.animation;
         }
-        actors.push(scene_actor);
+        Ok(None) => scene_actor
+            .diagnostics
+            .push("mesh contains no renderable triangles".to_owned()),
+        Err(error) => {
+            warn!(actor = %scene_actor.name, %error, "could not append actor mesh");
+            scene_actor
+                .diagnostics
+                .push(format!("mesh assembly failed: {error}"));
+        }
     }
-    actors
 }
 
 fn class_state(

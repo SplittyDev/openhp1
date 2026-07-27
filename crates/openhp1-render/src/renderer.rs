@@ -446,6 +446,18 @@ impl Renderer {
         true
     }
 
+    pub fn reload_scene(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &RenderScene,
+    ) {
+        let auto_uv = self.auto_uv;
+        let mut renderer = Self::new(device, queue, self.target_format, scene, self.depth.size);
+        renderer.auto_uv = auto_uv;
+        *self = renderer;
+    }
+
     pub fn update_textures(
         &self,
         queue: &wgpu::Queue,
