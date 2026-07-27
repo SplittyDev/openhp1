@@ -305,7 +305,9 @@ actor. The viewer provides a searchable actor inspector, while visible vertex
 and skeletal meshes remain batched into the shared render mesh. Actor rotation
 and mesh `RotationOrigin` use UE1's positive-yaw, negative-pitch, negative-roll
 object transform in yaw/pitch/roll composition order; do not substitute the
-inverse view rotation.
+inverse view rotation. UE1 skeletal meshes use a mirrored ActorX local Y axis:
+mirror sampled positions, reverse triangle winding, and negate
+`RotationOrigin.Yaw` before applying the actor transform.
 All 6,816 script struct exports in the 248-package corpus decode into canonical
 UE1 execution bytecode. The initial runtime executes assignments, constants,
 branches, scalar/vector arithmetic natives, and final/virtual/global call

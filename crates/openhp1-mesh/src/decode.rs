@@ -57,8 +57,11 @@ impl Mesh {
         reader.read_u32()?; // or flags
         let scale = read_vec3(&mut reader)?;
         let origin = read_vec3(&mut reader)?;
-        let rotation_origin =
+        let mut rotation_origin =
             IVec3::new(reader.read_i32()?, reader.read_i32()?, reader.read_i32()?);
+        if class == "SkeletalMesh" {
+            rotation_origin.y = rotation_origin.y.wrapping_neg();
+        }
         reader.read_u32()?; // current polygon
         reader.read_u32()?; // current vertex
         match package.summary().header.version {

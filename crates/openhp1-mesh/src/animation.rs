@@ -384,6 +384,6 @@ mod tests {
             }]],
         };
         let sampled = animation.sample(&mesh, 0, 0.5).unwrap();
-        assert!(sampled[0].abs_diff_eq(Vec3::new(1.707, -0.707, 0.0), 0.002));
+        assert!(sampled[0].abs_diff_eq(Vec3::new(1.707, 0.707, 0.0), 0.002));
     }
 }

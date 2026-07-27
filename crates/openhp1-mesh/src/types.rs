@@ -3,7 +3,7 @@ use openhp1_package::ObjectReference;
 
 use crate::{
     Error, Result,
-    geometry::{sample_triangles, vertex_normals},
+    geometry::{mirror_skeletal_position, sample_triangles, vertex_normals},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -280,6 +280,9 @@ impl SkeletalAnimation {
                         * influence.weight
             });
         }
+        points
+            .iter_mut()
+            .for_each(|point| *point = mirror_skeletal_position(*point));
         Ok(points)
     }
 }

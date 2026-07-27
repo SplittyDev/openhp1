@@ -80,12 +80,17 @@ pub(crate) fn lod_triangles(
         reader.read_u16()?;
         Ok(())
     })?;
-    let faces = read_vec(reader, "LOD faces", |reader| {
+    let mut faces = read_vec(reader, "LOD faces", |reader| {
         Ok((
             [reader.read_u16()?, reader.read_u16()?, reader.read_u16()?],
             reader.read_u16()?,
         ))
     })?;
+    if skeletal {
+        for (indices, _) in &mut faces {
+            mirror_skeletal_face(indices);
+        }
+    }
     skip_vec(reader, "collapse wedges", |reader| {
         reader.read_u16()?;
         Ok(())
@@ -114,9 +119,16 @@ pub(crate) fn lod_triangles(
     reader.read_u32()?; // old frame vertices
 
     let skeletal = skeletal.then(|| decode_skeletal_mesh(reader)).transpose()?;
-    let vertices = skeletal
-        .as_ref()
-        .map_or(vertices, |skeletal| skeletal.mesh.points.as_slice());
+    let skeletal_points = skeletal.as_ref().map(|skeletal| {
+        skeletal
+            .mesh
+            .points
+            .iter()
+            .copied()
+            .map(mirror_skeletal_position)
+            .collect::<Vec<_>>()
+    });
+    let vertices = skeletal_points.as_deref().unwrap_or(vertices);
     let frame_vertices = if frame_vertices == 0 {
         vertices.len()
     } else {
@@ -298,6 +310,15 @@ fn decode_skeletal_mesh(reader: &mut ObjectReader<'_>) -> Result<DecodedSkeletal
     })
 }
 
+pub(crate) fn mirror_skeletal_position(mut position: Vec3) -> Vec3 {
+    position.y = -position.y;
+    position
+}
+
+fn mirror_skeletal_face(face: &mut [u16; 3]) {
+    face.swap(0, 1);
+}
+
 pub(crate) fn sample_triangles(
     triangles: &[MeshTriangle],
     faces: &[[usize; 3]],
@@ -368,6 +389,17 @@ mod tests {
         assert_eq!(normals[1], normals[0]);
         assert_eq!(normals[2], Vec3::Z);
         assert_eq!(normals[3], Vec3::Y);
+    }
+
+    #[test]
+    fn mirrors_ue1_skeletal_positions_and_winding() {
+        assert_eq!(
+            mirror_skeletal_position(Vec3::new(1.0, 2.0, 3.0)),
+            Vec3::new(1.0, -2.0, 3.0)
+        );
+        let mut face = [1, 2, 3];
+        mirror_skeletal_face(&mut face);
+        assert_eq!(face, [2, 1, 3]);
     }
 
     #[test]
