@@ -369,6 +369,42 @@ mod tests {
     }
 
     #[test]
+    fn scalar_comparisons_cover_bool_int_and_float_families() {
+        assert_eq!(
+            scalar_native(0xf2, &[Value::Bool(true), Value::Bool(true)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0xf3, &[Value::Bool(true), Value::Bool(false)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0x98, &[Value::Int(2), Value::Int(2)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0x99, &[Value::Int(3), Value::Int(2)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0xb2, &[Value::Float(2.0), Value::Float(2.0)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0xb3, &[Value::Float(3.0), Value::Float(2.0)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0xb4, &[Value::Float(2.0), Value::Float(2.0)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
+            scalar_native(0xb5, &[Value::Float(f32::NAN), Value::Float(f32::NAN)]),
+            Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
     fn collision_updates_preserve_omitted_flags() {
         assert_eq!(
             collision_updates(&[Value::Bool(true), Value::None]),

@@ -360,6 +360,8 @@ enum ScalarNative {
     Subtract_IntInt,
     Less_IntInt,
     Greater_IntInt,
+    LessEqual_IntInt,
+    GreaterEqual_IntInt,
     EqualEqual_IntInt,
     NotEqual_IntInt,
     And_IntInt,
@@ -370,6 +372,10 @@ enum ScalarNative {
     Subtract_FloatFloat,
     Less_FloatFloat,
     Greater_FloatFloat,
+    LessEqual_FloatFloat,
+    GreaterEqual_FloatFloat,
+    EqualEqual_FloatFloat,
+    NotEqual_FloatFloat,
     Abs,
     Subtract_PreVector,
     Multiply_VectorFloat,
@@ -381,6 +387,8 @@ enum ScalarNative {
     Normal,
     FMax,
     Clamp,
+    EqualEqual_BoolBool,
+    NotEqual_BoolBool,
 }
 
 impl TryFrom<u16> for ScalarNative {
@@ -401,6 +409,8 @@ impl TryFrom<u16> for ScalarNative {
             0x93 => Ok(Self::Subtract_IntInt),
             0x96 => Ok(Self::Less_IntInt),
             0x97 => Ok(Self::Greater_IntInt),
+            0x98 => Ok(Self::LessEqual_IntInt),
+            0x99 => Ok(Self::GreaterEqual_IntInt),
             0x9a => Ok(Self::EqualEqual_IntInt),
             0x9b => Ok(Self::NotEqual_IntInt),
             0x9c => Ok(Self::And_IntInt),
@@ -411,6 +421,10 @@ impl TryFrom<u16> for ScalarNative {
             0xaf => Ok(Self::Subtract_FloatFloat),
             0xb0 => Ok(Self::Less_FloatFloat),
             0xb1 => Ok(Self::Greater_FloatFloat),
+            0xb2 => Ok(Self::LessEqual_FloatFloat),
+            0xb3 => Ok(Self::GreaterEqual_FloatFloat),
+            0xb4 => Ok(Self::EqualEqual_FloatFloat),
+            0xb5 => Ok(Self::NotEqual_FloatFloat),
             0xba => Ok(Self::Abs),
             0xd3 => Ok(Self::Subtract_PreVector),
             0xd4 => Ok(Self::Multiply_VectorFloat),
@@ -421,6 +435,8 @@ impl TryFrom<u16> for ScalarNative {
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
             0xf5 => Ok(Self::FMax),
+            0xf2 => Ok(Self::EqualEqual_BoolBool),
+            0xf3 => Ok(Self::NotEqual_BoolBool),
             0xfb => Ok(Self::Clamp),
             _ => Err(()),
         }
@@ -488,6 +504,12 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::Greater_IntInt, [Value::Int(left), Value::Int(right)]) => {
             Value::Bool(left > right)
         }
+        (ScalarNative::LessEqual_IntInt, [Value::Int(left), Value::Int(right)]) => {
+            Value::Bool(left <= right)
+        }
+        (ScalarNative::GreaterEqual_IntInt, [Value::Int(left), Value::Int(right)]) => {
+            Value::Bool(left >= right)
+        }
         (ScalarNative::EqualEqual_IntInt, [Value::Int(left), Value::Int(right)]) => {
             Value::Bool(left == right)
         }
@@ -522,6 +544,18 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         (ScalarNative::Greater_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
             Value::Bool(left > right)
         }
+        (ScalarNative::LessEqual_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
+            Value::Bool(left <= right)
+        }
+        (ScalarNative::GreaterEqual_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
+            Value::Bool(left >= right)
+        }
+        (ScalarNative::EqualEqual_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
+            Value::Bool(left == right)
+        }
+        (ScalarNative::NotEqual_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
+            Value::Bool(left != right)
+        }
         (ScalarNative::Abs, [Value::Float(value)]) => Value::Float(value.abs()),
         (ScalarNative::Subtract_PreVector, [Value::Vector(value)]) => {
             Value::Vector([-value[0], -value[1], -value[2]])
@@ -552,6 +586,12 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Clamp, [Value::Int(value), Value::Int(min), Value::Int(max)]) => {
             Value::Int((*value).min(*max).max(*min))
+        }
+        (ScalarNative::EqualEqual_BoolBool, [Value::Bool(left), Value::Bool(right)]) => {
+            Value::Bool(left == right)
+        }
+        (ScalarNative::NotEqual_BoolBool, [Value::Bool(left), Value::Bool(right)]) => {
+            Value::Bool(left != right)
         }
         _ => {
             return Err(format!(
