@@ -41,6 +41,7 @@ const MOVE: u16 = 0x10a;
 const SET_LOCATION: u16 = 0x10b;
 const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
+const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const SET_PHYSICS: u16 = 0xf82;
 const LOG: u16 = 0x0e7;

@@ -284,6 +284,23 @@ impl ScriptRuntime {
             // ponytail: accept finite locations until UE1 BSP collision rejection exists.
             return Ok(Value::Bool(true));
         }
+        if index == SET_BASE {
+            let [base] = arguments else {
+                return Err(format!(
+                    "SetBase expects one object, found {}",
+                    arguments.len()
+                ));
+            };
+            let base = match self
+                .stored_value(source, base)
+                .map_err(|error| error.to_string())?
+            {
+                StoredValue::Object(base) => base,
+                value => return Err(format!("SetBase object is {value:?}")),
+            };
+            self.set_actor_base(actor, actor_class, instance, base, actions)?;
+            return Ok(Value::None);
+        }
         if index == SET_ROTATION {
             let [Value::Rotator(rotation)] = arguments else {
                 return Err(format!(

@@ -205,6 +205,87 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    pub(super) fn set_actor_base(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        base: Option<ObjectId>,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let field = self
+            .find_property(actor_class, "Base", 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "actor property Base is missing".to_owned())?;
+        let current = match instance.get(&field) {
+            Some(StoredValue::Object(value)) => value.clone(),
+            Some(value) => return Err(format!("actor property Base is {value:?}")),
+            None => None,
+        };
+        if current == base {
+            return Ok(());
+        }
+        if let Some(base_actor) = base
+            .as_ref()
+            .and_then(|object| self.object_actors.get(object))
+            .copied()
+            && (base_actor == actor
+                || self
+                    .actor_is_based_on(base_actor, actor, actor, instance)
+                    .map_err(|error| error.to_string())?)
+        {
+            return Ok(());
+        }
+
+        let level = self.actor_object(actor_class, instance, "Level")?;
+        let actor_object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+        let actor_handle = self
+            .object_handle(actor_object)
+            .map_err(|error| error.to_string())?;
+        if let Some(old_base) = current
+            .as_ref()
+            .filter(|old_base| Some(*old_base) != level.as_ref())
+            .and_then(|object| self.object_actors.get(object))
+            .copied()
+        {
+            self.call_other_actor_event(
+                old_base,
+                "Detach",
+                vec![Value::Object(actor_handle)],
+                actions,
+            )?;
+        }
+
+        instance.insert(field, StoredValue::Object(base.clone()));
+        // ponytail: keep Base identity and events authoritative without a parallel
+        // BasedActors list; add StandingCount bookkeeping when scripts consume it.
+        if let Some(new_base) = base
+            .as_ref()
+            .filter(|new_base| Some(*new_base) != level.as_ref())
+            .and_then(|object| self.object_actors.get(object))
+            .copied()
+        {
+            self.call_other_actor_event(
+                new_base,
+                "Attach",
+                vec![Value::Object(actor_handle)],
+                actions,
+            )?;
+        }
+        self.call_actor_event(
+            actor,
+            actor_class,
+            instance,
+            "BaseChange",
+            Vec::new(),
+            actions,
+        )
+    }
+
     fn actor_sweeps(
         &mut self,
         current: &CollisionActor,

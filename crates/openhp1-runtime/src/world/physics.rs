@@ -293,7 +293,7 @@ impl ScriptRuntime {
                 let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
                 if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
                     self.grounded_world.remove(&actor);
-                    self.start_falling(class, instance)?;
+                    self.start_falling(actor, class, instance, actions)?;
                 } else if floor.actor.is_none() {
                     self.grounded_world.insert(actor, old_location);
                 }
@@ -325,7 +325,7 @@ impl ScriptRuntime {
         let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
         if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
             self.grounded_world.remove(&actor);
-            self.start_falling(class, instance)?;
+            self.start_falling(actor, class, instance, actions)?;
             return Ok(false);
         }
         let floor = self.try_move_actor(actor, class, step_down.to_array(), instance, actions)?;
@@ -333,18 +333,20 @@ impl ScriptRuntime {
             let base = floor
                 .actor
                 .and_then(|actor| self.actor_objects.get(&actor).cloned());
-            self.set_actor_stored(class, instance, "Base", StoredValue::Object(base))?;
+            self.set_actor_base(actor, class, instance, base, actions)?;
         }
         Ok(true)
     }
 
     fn start_falling(
         &mut self,
+        actor: usize,
         class: &ResolvedObject,
         instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
         self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
-        self.set_actor_stored(class, instance, "Base", StoredValue::Object(None))
+        self.set_actor_base(actor, class, instance, None, actions)
     }
 
     fn tick_falling(
@@ -820,7 +822,7 @@ impl ScriptRuntime {
         let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
         if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
             self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
-            self.set_actor_stored(class, instance, "Base", StoredValue::Object(None))?;
+            self.set_actor_base(actor, class, instance, None, actions)?;
         } else {
             let floor =
                 self.try_move_actor(actor, class, step_down.to_array(), instance, actions)?;
@@ -828,7 +830,7 @@ impl ScriptRuntime {
                 let base = floor
                     .actor
                     .and_then(|actor| self.actor_objects.get(&actor).cloned());
-                self.set_actor_stored(class, instance, "Base", StoredValue::Object(base))?;
+                self.set_actor_base(actor, class, instance, base, actions)?;
             }
         }
         if !self.actor_bool(class, instance, "bJustTeleported")? {
@@ -1191,7 +1193,7 @@ impl ScriptRuntime {
             Value::Byte(if pawn { PHYS_WALKING } else { PHYS_NONE }),
         )?;
         let base = hit_actor.and_then(|actor| self.actor_objects.get(&actor).cloned());
-        self.set_actor_stored(class, instance, "Base", StoredValue::Object(base))?;
+        self.set_actor_base(actor, class, instance, base, actions)?;
         if pawn && hit_actor.is_none() {
             let location = self.actor_vector(class, instance, "Location")?;
             self.grounded_world.insert(actor, location);
@@ -1231,7 +1233,7 @@ impl ScriptRuntime {
         )
     }
 
-    fn call_actor_event(
+    pub(super) fn call_actor_event(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -1522,7 +1524,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn call_other_actor_event(
+    pub(super) fn call_other_actor_event(
         &mut self,
         actor: usize,
         event: &str,
