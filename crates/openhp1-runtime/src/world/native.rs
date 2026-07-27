@@ -498,6 +498,7 @@ impl ScriptRuntime {
 
         self.refresh_tick_actor(spawned, &class)
             .map_err(|error| error.to_string())?;
+        self.actor_bases.insert(spawned, None);
         self.instances.insert(spawned, spawned_instance);
         let name = format!("{class_name}{spawned}");
         actions.push(ActorAction::SpawnActor {

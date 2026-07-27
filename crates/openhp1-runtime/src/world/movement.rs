@@ -157,6 +157,31 @@ impl ScriptRuntime {
         };
         let location = current.location + delta * blocking_hit.fraction;
         self.set_actor_location(actor, actor_class, instance, location, actions)?;
+        let actually_moved = delta * blocking_hit.fraction;
+        for based_actor in self.based_actors(actor)? {
+            let class = self
+                .actor_classes
+                .get(&based_actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: based_actor })
+                .map_err(|error| error.to_string())?;
+            let class = self
+                .resolved_object(&class)
+                .map_err(|error| error.to_string())?;
+            let mut based_instance = self
+                .instances
+                .remove(&based_actor)
+                .ok_or_else(|| format!("based actor {based_actor} instance is active"))?;
+            let result = self.try_move_actor(
+                based_actor,
+                &class,
+                actually_moved.to_array(),
+                &mut based_instance,
+                actions,
+            );
+            self.instances.insert(based_actor, based_instance);
+            result?;
+        }
 
         if let Some(other) = blocking_actor
             && !self
@@ -180,6 +205,26 @@ impl ScriptRuntime {
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
         Ok(blocking_hit)
+    }
+
+    fn based_actors(&self, actor: usize) -> std::result::Result<Vec<usize>, String> {
+        let object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+        let mut based = self
+            .actor_bases
+            .iter()
+            .filter(|(candidate, base)| {
+                **candidate != actor
+                    && !self.destroyed.contains(candidate)
+                    && base.as_ref() == Some(&object)
+            })
+            .map(|(&candidate, _)| candidate)
+            .collect::<Vec<_>>();
+        based.sort_unstable();
+        Ok(based)
     }
 
     pub(super) fn set_actor_location(
@@ -261,8 +306,9 @@ impl ScriptRuntime {
         }
 
         instance.insert(field, StoredValue::Object(base.clone()));
-        // ponytail: keep Base identity and events authoritative without a parallel
-        // BasedActors list; add StandingCount bookkeeping when scripts consume it.
+        self.actor_bases.insert(actor, base.clone());
+        // ponytail: derive direct based actors from this compact index; add
+        // StandingCount bookkeeping when scripts consume it.
         if let Some(new_base) = base
             .as_ref()
             .filter(|new_base| Some(*new_base) != level.as_ref())
@@ -300,17 +346,18 @@ impl ScriptRuntime {
             if actor == current.actor || self.destroyed.contains(&actor) {
                 continue;
             }
+            if self
+                .actors_share_base_chain(current.actor, actor, current_actor, current_instance)
+                .map_err(|error| error.to_string())?
+            {
+                continue;
+            }
             let Some(other) =
                 self.collision_actor_by_index(actor, current_actor, current_instance)?
             else {
                 continue;
             };
-            if !other.collide_actors
-                || other.has_brush
-                || self
-                    .actors_share_base_chain(current.actor, actor, current_actor, current_instance)
-                    .map_err(|error| error.to_string())?
-            {
+            if !other.collide_actors || other.has_brush {
                 continue;
             }
             let Some(hit) = sweep_cylinder(

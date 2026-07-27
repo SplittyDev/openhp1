@@ -297,6 +297,7 @@ pub struct ScriptRuntime {
     level_info: Option<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     grounded_world: HashMap<usize, [f32; 3]>,
+    actor_bases: HashMap<usize, Option<ObjectId>>,
     touching: HashSet<(usize, usize)>,
 }
 

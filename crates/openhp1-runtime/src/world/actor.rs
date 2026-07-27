@@ -39,6 +39,7 @@ impl ScriptRuntime {
             level_info: None,
             collision_fields: HashMap::new(),
             grounded_world: HashMap::new(),
+            actor_bases: HashMap::new(),
             touching: HashSet::new(),
         })
     }
@@ -152,6 +153,13 @@ impl ScriptRuntime {
         self.actor_states.insert(actor, state_name);
         self.refresh_tick_actor(actor, &class)?;
         self.apply_properties(&class, &actor_package, &mut reader, &mut instance)?;
+        let base =
+            self.find_property(&class, "Base", 0)?
+                .and_then(|field| match instance.get(&field) {
+                    Some(StoredValue::Object(base)) => base.clone(),
+                    _ => None,
+                });
+        self.actor_bases.insert(actor, base);
         self.instances.insert(actor, instance);
         Ok(())
     }

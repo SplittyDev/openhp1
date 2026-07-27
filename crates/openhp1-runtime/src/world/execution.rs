@@ -686,7 +686,22 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_field(source, field)? else {
             return Ok(());
         };
+        let is_base = {
+            let field = self.resolved_object(&field)?;
+            field
+                .package
+                .summary()
+                .name(field.package.summary().exports[field.export_index].object_name)
+                .eq_ignore_ascii_case("Base")
+        };
         let value = self.stored_value(source, &value)?;
+        if is_base {
+            let base = match &value {
+                StoredValue::Object(base) => base.clone(),
+                _ => None,
+            };
+            self.actor_bases.insert(actor, base);
+        }
         if actor == current_actor {
             current_instance.insert(field, value);
         } else {
