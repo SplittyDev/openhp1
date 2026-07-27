@@ -15,6 +15,7 @@ pub struct ActorProperties {
     pub rotation: Option<Rotator>,
     pub pre_pivot: Option<Vec3>,
     pub collision_height: Option<f32>,
+    pub physics: Option<u8>,
     pub draw_scale: Option<f32>,
     pub draw_type: Option<u8>,
     pub mesh: Option<ObjectReference>,
@@ -68,6 +69,9 @@ impl ActorProperties {
                 }
                 ("CollisionHeight", PropertyKind::Float, _) => {
                     properties.collision_height = Some(value.read_f32()?);
+                }
+                ("Physics", PropertyKind::Byte, _) => {
+                    properties.physics = Some(value.read_u8()?);
                 }
                 ("DrawScale", PropertyKind::Float, _) => {
                     properties.draw_scale = Some(value.read_f32()?);
