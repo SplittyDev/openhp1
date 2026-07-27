@@ -848,6 +848,26 @@ impl<'a> Frame<'a> {
         }
         self.opcode()?;
         if let FunctionCall::Native(index) = function
+            && let Ok(operation) = IncrementDecrement::try_from(index)
+        {
+            let [target] = arguments
+                .try_into()
+                .map_err(|arguments: Vec<_>| Error::Call {
+                    call: function,
+                    message: format!(
+                        "increment or decrement expects 1 argument, found {}",
+                        arguments.len()
+                    ),
+                })?;
+            let current = match &target {
+                Expression::Value(value) => value.clone(),
+                Expression::Slot(slot) => self.slot(slot, host)?.unwrap_or(Value::None),
+            };
+            let (stored, returned) = increment_decrement(operation, &current)?;
+            self.assign(target, stored, host)?;
+            return Ok(returned);
+        }
+        if let FunctionCall::Native(index) = function
             && let Ok(assignment) = CompoundAssignment::try_from(index)
         {
             let [target, operand] =
@@ -1248,6 +1268,78 @@ impl StructMember {
 
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum IncrementDecrement {
+    AddAdd_PreByte,
+    SubtractSubtract_PreByte,
+    AddAdd_Byte,
+    SubtractSubtract_Byte,
+    AddAdd_PreInt,
+    SubtractSubtract_PreInt,
+    AddAdd_Int,
+    SubtractSubtract_Int,
+}
+
+impl TryFrom<u16> for IncrementDecrement {
+    type Error = ();
+
+    fn try_from(index: u16) -> std::result::Result<Self, Self::Error> {
+        match index {
+            0x89 => Ok(Self::AddAdd_PreByte),
+            0x8a => Ok(Self::SubtractSubtract_PreByte),
+            0x8b => Ok(Self::AddAdd_Byte),
+            0x8c => Ok(Self::SubtractSubtract_Byte),
+            0xa3 => Ok(Self::AddAdd_PreInt),
+            0xa4 => Ok(Self::SubtractSubtract_PreInt),
+            0xa5 => Ok(Self::AddAdd_Int),
+            0xa6 => Ok(Self::SubtractSubtract_Int),
+            _ => Err(()),
+        }
+    }
+}
+
+fn increment_decrement(operation: IncrementDecrement, current: &Value) -> Result<(Value, Value)> {
+    let (stored, prefix) = match (operation, current) {
+        (IncrementDecrement::AddAdd_PreByte, Value::Byte(value)) => {
+            (Value::Byte(value.wrapping_add(1)), true)
+        }
+        (IncrementDecrement::SubtractSubtract_PreByte, Value::Byte(value)) => {
+            (Value::Byte(value.wrapping_sub(1)), true)
+        }
+        (IncrementDecrement::AddAdd_Byte, Value::Byte(value)) => {
+            (Value::Byte(value.wrapping_add(1)), false)
+        }
+        (IncrementDecrement::SubtractSubtract_Byte, Value::Byte(value)) => {
+            (Value::Byte(value.wrapping_sub(1)), false)
+        }
+        (IncrementDecrement::AddAdd_PreInt, Value::Int(value)) => {
+            (Value::Int(value.wrapping_add(1)), true)
+        }
+        (IncrementDecrement::SubtractSubtract_PreInt, Value::Int(value)) => {
+            (Value::Int(value.wrapping_sub(1)), true)
+        }
+        (IncrementDecrement::AddAdd_Int, Value::Int(value)) => {
+            (Value::Int(value.wrapping_add(1)), false)
+        }
+        (IncrementDecrement::SubtractSubtract_Int, Value::Int(value)) => {
+            (Value::Int(value.wrapping_sub(1)), false)
+        }
+        (_, value) => {
+            return Err(Error::Type {
+                expected: "matching byte or int increment operand",
+                actual: value.kind(),
+            });
+        }
+    };
+    let returned = if prefix {
+        stored.clone()
+    } else {
+        current.clone()
+    };
+    Ok((stored, returned))
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum CompoundAssignment {
     AddEqual_IntInt,
     MultiplyEqual_FloatFloat,
@@ -1621,6 +1713,35 @@ mod tests {
             )
             .unwrap(),
             Value::Int(i32::MIN)
+        );
+    }
+
+    #[test]
+    fn increment_natives_preserve_prefix_and_postfix_results() {
+        let run = |native, initial| {
+            let mut bytes = vec![0x0f, 0x00];
+            bytes.extend(8_i32.to_le_bytes());
+            bytes.extend([native, 0x00]);
+            bytes.extend(7_i32.to_le_bytes());
+            bytes.extend([0x16, 0x04, 0x00]);
+            bytes.extend(8_i32.to_le_bytes());
+            let bytecode = Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            };
+            let mut frame = Frame::new(&bytecode);
+            frame.set_local(7, Value::Int(initial));
+            let returned = frame.execute(|_, _| unreachable!()).unwrap();
+            (returned, frame.local(7).cloned())
+        };
+
+        assert_eq!(run(0xa3, 41), (Value::Int(42), Some(Value::Int(42))));
+        assert_eq!(run(0xa5, 41), (Value::Int(41), Some(Value::Int(42))));
+        assert_eq!(
+            increment_decrement(IncrementDecrement::AddAdd_Byte, &Value::Byte(u8::MAX)).unwrap(),
+            (Value::Byte(0), Value::Byte(u8::MAX))
         );
     }
 
