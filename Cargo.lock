@@ -1862,6 +1862,7 @@ dependencies = [
  "anyhow",
  "glam",
  "openhp1-render",
+ "openhp1-runtime",
  "openhp1-scene",
  "pollster",
  "tracing",

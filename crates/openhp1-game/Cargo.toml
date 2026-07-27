@@ -9,6 +9,7 @@ rust-version.workspace = true
 anyhow.workspace = true
 glam.workspace = true
 openhp1-render = { path = "../openhp1-render" }
+openhp1-runtime = { path = "../openhp1-runtime" }
 openhp1-scene = { path = "../openhp1-scene" }
 pollster.workspace = true
 tracing.workspace = true
