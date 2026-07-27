@@ -1,3 +1,6 @@
+use glam::Vec3;
+
+use super::physics::{PHYS_FALLING, PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING};
 use super::state::set_event_disabled;
 use super::*;
 
@@ -174,6 +177,75 @@ impl ScriptRuntime {
         }
         if index == SPAWN {
             return self.spawn_actor(actor, actor_class, source, arguments, instance, actions);
+        }
+        if index == MOVE_TO {
+            let [Value::Vector(destination), rest @ ..] = arguments else {
+                return Err(format!(
+                    "MoveTo expects a vector and optional speed, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            let speed = match rest {
+                [] | [Value::None] => 1.0,
+                [Value::Float(speed)] if speed.is_finite() => *speed,
+                [value] => return Err(format!("MoveTo speed is {}", value.kind())),
+                _ => {
+                    return Err(format!(
+                        "MoveTo expects at most 2 arguments, found {}",
+                        arguments.len()
+                    ));
+                }
+            };
+            if self.active_state_actor != Some(actor) {
+                return Err("MoveTo is only valid in state code".to_owned());
+            }
+            let desired_speed = speed.clamp(
+                0.0,
+                self.actor_float(actor_class, instance, "MaxDesiredSpeed")?,
+            );
+            let location =
+                Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+            let speed = match self.actor_byte(actor_class, instance, "Physics")? {
+                PHYS_WALKING | PHYS_FALLING => {
+                    self.actor_float(actor_class, instance, "GroundSpeed")?
+                }
+                PHYS_SWIMMING => self.actor_float(actor_class, instance, "WaterSpeed")?,
+                PHYS_FLYING => self.actor_float(actor_class, instance, "AirSpeed")?,
+                _ => 0.0,
+            };
+            let scale = desired_speed * speed;
+            let duration = if scale > 0.0 {
+                1.0 + 1.3 * (Vec3::from_array(*destination) - location).length() / scale
+            } else {
+                0.5
+            };
+            self.set_actor_stored(
+                actor_class,
+                instance,
+                "MoveTarget",
+                StoredValue::Object(None),
+            )?;
+            self.set_actor_value(actor_class, instance, "bReducedSpeed", Value::Bool(false))?;
+            self.set_actor_value(
+                actor_class,
+                instance,
+                "DesiredSpeed",
+                Value::Float(desired_speed),
+            )?;
+            self.set_actor_value(
+                actor_class,
+                instance,
+                "Destination",
+                Value::Vector(*destination),
+            )?;
+            self.set_actor_value(actor_class, instance, "Focus", Value::Vector(*destination))?;
+            self.set_actor_value(actor_class, instance, "MoveTimer", Value::Float(duration))?;
+            self.pending_latent = Some(LatentAction::MoveTo);
+            return Ok(Value::None);
         }
         if matches!(index, 0xfe | 0xff)
             && let [left, right] = arguments

@@ -4,10 +4,10 @@ use super::*;
 
 const PHYSICS_STEP: f32 = 0.02;
 const PHYS_NONE: u8 = 0;
-const PHYS_WALKING: u8 = 1;
-const PHYS_FALLING: u8 = 2;
-const PHYS_SWIMMING: u8 = 3;
-const PHYS_FLYING: u8 = 4;
+pub(super) const PHYS_WALKING: u8 = 1;
+pub(super) const PHYS_FALLING: u8 = 2;
+pub(super) const PHYS_SWIMMING: u8 = 3;
+pub(super) const PHYS_FLYING: u8 = 4;
 const PHYS_PROJECTILE: u8 = 6;
 const PHYS_ROLLING: u8 = 7;
 const PHYS_INTERPOLATING: u8 = 8;
@@ -27,6 +27,45 @@ struct ZonePhysics {
 }
 
 impl ScriptRuntime {
+    pub(super) fn tick_move_to(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+    ) -> std::result::Result<bool, String> {
+        let timer = self.actor_float_any(class, instance, "MoveTimer")? - elapsed;
+        self.set_actor_value(class, instance, "MoveTimer", Value::Float(timer))?;
+        let physics = self.actor_byte(class, instance, "Physics")?;
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let destination = Vec3::from_array(self.actor_vector(class, instance, "Destination")?);
+        let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
+        let Some(direction) = move_to_direction(physics, destination - location, velocity, timer)
+        else {
+            return Ok(true);
+        };
+        let acceleration = direction * self.actor_float(class, instance, "AccelRate")?;
+        self.set_actor_value(
+            class,
+            instance,
+            "Acceleration",
+            Value::Vector(acceleration.to_array()),
+        )?;
+        let yaw = (direction.y.atan2(direction.x) * (65_536.0 / std::f32::consts::TAU)) as i32;
+        let pitch = if physics == PHYS_WALKING {
+            0
+        } else {
+            ((-direction.z).atan2(direction.x.hypot(direction.y))
+                * (65_536.0 / std::f32::consts::TAU)) as i32
+        };
+        self.set_actor_value(
+            class,
+            instance,
+            "DesiredRotation",
+            Value::Rotator([pitch, yaw, 0]),
+        )?;
+        Ok(false)
+    }
+
     pub(super) fn tick_physics(
         &mut self,
         delta_time: f32,
@@ -1416,7 +1455,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn set_actor_value(
+    pub(super) fn set_actor_value(
         &mut self,
         class: &ResolvedObject,
         instance: &mut InstanceState,
@@ -1431,7 +1470,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    fn set_actor_stored(
+    pub(super) fn set_actor_stored(
         &mut self,
         class: &ResolvedObject,
         instance: &mut InstanceState,
@@ -1557,6 +1596,21 @@ impl ScriptRuntime {
 fn spline_weight(value: f32) -> f32 {
     let squared = value * value;
     squared * squared * (1.0 / 16.0) - squared * 0.5 + 1.0
+}
+
+fn move_to_direction(physics: u8, mut delta: Vec3, velocity: Vec3, timer: f32) -> Option<Vec3> {
+    if timer < 0.0 {
+        return None;
+    }
+    if physics == PHYS_WALKING {
+        delta.z = 0.0;
+    }
+    let distance_squared = delta.length_squared();
+    if distance_squared < 1.0 || distance_squared < velocity.length_squared() * 0.05 {
+        None
+    } else {
+        Some(delta.normalize())
+    }
 }
 
 fn spline_weights(alpha: f32) -> [f32; 4] {
@@ -1688,6 +1742,22 @@ mod tests {
                 0.02,
             ),
             Vec3::new(9.8, 0.0, -20.04)
+        );
+    }
+
+    #[test]
+    fn move_to_uses_horizontal_walking_distance_and_ue1_arrival_threshold() {
+        assert_eq!(
+            move_to_direction(PHYS_WALKING, Vec3::new(3.0, 4.0, 100.0), Vec3::ZERO, 1.0),
+            Some(Vec3::new(0.6, 0.8, 0.0))
+        );
+        assert_eq!(
+            move_to_direction(PHYS_WALKING, Vec3::X, Vec3::splat(4.0), 1.0),
+            None
+        );
+        assert_eq!(
+            move_to_direction(PHYS_WALKING, Vec3::X * 100.0, Vec3::ZERO, -0.1),
+            None
         );
     }
 

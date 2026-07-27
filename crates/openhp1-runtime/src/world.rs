@@ -43,6 +43,7 @@ const SPAWN: u16 = 0x116;
 const SET_TIMER: u16 = 0x118;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
+const MOVE_TO: u16 = 500;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const LOG: u16 = 0x0e7;
@@ -356,6 +357,7 @@ enum LatentAction {
     Stop,
     Sleep(f32),
     FinishAnimation,
+    MoveTo,
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;

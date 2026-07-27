@@ -132,6 +132,7 @@ impl ScriptRuntime {
                         0 => LatentAction::Continue,
                         0x101 => LatentAction::Sleep(0.0),
                         0x106 => LatentAction::FinishAnimation,
+                        501 => LatentAction::MoveTo,
                         _ => LatentAction::Stop,
                     },
                 },
@@ -241,6 +242,32 @@ impl ScriptRuntime {
         for actor in state_actors {
             if self.destroyed.contains(&actor) {
                 continue;
+            }
+            if self
+                .state_frames
+                .get(&actor)
+                .is_some_and(|frame| frame.latent == LatentAction::MoveTo)
+            {
+                let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                    continue;
+                };
+                let class = self.resolved_object(&class)?;
+                let mut instance = self.instances.remove(&actor).unwrap_or_default();
+                let result = self.tick_move_to(&class, &mut instance, delta_time);
+                self.instances.insert(actor, instance);
+                match result {
+                    Ok(true) => {
+                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
+                    }
+                    Ok(false) => {}
+                    Err(message) => {
+                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Stop;
+                        actions.push(ActorAction::DeferredCall {
+                            actor,
+                            message: format!("MoveTo: {message}"),
+                        });
+                    }
+                }
             }
             let ready = match self.state_frames.get_mut(&actor) {
                 Some(StateFrame {

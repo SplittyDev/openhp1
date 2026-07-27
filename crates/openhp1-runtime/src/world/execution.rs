@@ -48,7 +48,10 @@ impl ScriptRuntime {
                 LatentAction::Sleep(remaining) if remaining <= 0.0 => {
                     state_frame.latent = LatentAction::Continue;
                 }
-                LatentAction::Stop | LatentAction::Sleep(_) | LatentAction::FinishAnimation => {
+                LatentAction::Stop
+                | LatentAction::Sleep(_)
+                | LatentAction::FinishAnimation
+                | LatentAction::MoveTo => {
                     self.state_frames.insert(actor, state_frame);
                     return Ok(());
                 }
