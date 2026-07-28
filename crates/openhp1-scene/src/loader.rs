@@ -588,6 +588,14 @@ impl LoadedScene {
             .unwrap_or_default()
     }
 
+    pub fn actor_bone_names(&self, actor: usize) -> Vec<String> {
+        self.animations
+            .iter()
+            .find(|animation| animation.actor_index == actor)
+            .map(|animation| animation.mesh.bone_names().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     pub fn tick_animations_with_completions(
         &mut self,
         delta_time: f32,

@@ -423,6 +423,19 @@ impl ScriptRuntime {
                     .unwrap_or_else(|| "None".to_owned()),
             ));
         }
+        if index == BONE_NUMBER {
+            let [bone] = arguments else {
+                return Err(format!(
+                    "BoneNumber expects one name, found {}",
+                    arguments.len()
+                ));
+            };
+            let bone = runtime_name(source, bone)?;
+            return Ok(Value::Int(bone_number(
+                self.actor_bone_names.get(&actor).map(Vec::as_slice),
+                &bone,
+            )));
+        }
         if index == SPAWN {
             return self.spawn_actor(actor, actor_class, source, arguments, instance, actions);
         }
@@ -2318,6 +2331,17 @@ pub(super) fn target_score(
     }
     let aim = direction.dot(delta) / distance;
     (aim >= best_aim && aim >= 0.0).then_some((aim, distance))
+}
+
+pub(super) fn bone_number(bones: Option<&[String]>, name: &str) -> i32 {
+    bones
+        .and_then(|bones| {
+            bones
+                .iter()
+                .position(|bone| bone.eq_ignore_ascii_case(name))
+        })
+        .and_then(|index| i32::try_from(index).ok())
+        .unwrap_or(0)
 }
 
 fn next_random(state: &mut u32) -> u32 {

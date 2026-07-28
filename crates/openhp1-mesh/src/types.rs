@@ -55,6 +55,12 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    pub fn bone_names(&self) -> impl Iterator<Item = &str> {
+        self.skeletal
+            .iter()
+            .flat_map(|mesh| mesh.bones.iter().map(|bone| bone.name.as_str()))
+    }
+
     /// Samples a looping animation sequence at a normalized phase.
     ///
     /// Phase zero is the first frame and phase one wraps back to it.

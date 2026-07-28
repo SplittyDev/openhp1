@@ -40,6 +40,7 @@ impl ScriptRuntime {
             level_info: None,
             player_actor: None,
             animation_sequences: HashMap::default(),
+            actor_bone_names: HashMap::default(),
             animation_commands: HashMap::default(),
             animating: HashSet::default(),
             player_probe_touching: HashSet::default(),
@@ -87,6 +88,11 @@ impl ScriptRuntime {
         );
         self.synchronize_animation_command(actor)
             .map_err(|message| DispatchError::UnresolvedObject { message })
+    }
+
+    pub fn set_actor_bone_names(&mut self, actor: usize, bones: impl IntoIterator<Item = String>) {
+        self.actor_bone_names
+            .insert(actor, bones.into_iter().collect());
     }
 
     pub fn register_actor(

@@ -53,6 +53,7 @@ const TRACE_TEXTURE: u16 = 0x11d;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
+const BONE_NUMBER: u16 = 0x10c;
 const TWEEN_ANIM: u16 = 0x126;
 const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
@@ -376,6 +377,7 @@ pub struct ScriptRuntime {
     level_info: Option<usize>,
     player_actor: Option<usize>,
     animation_sequences: HashMap<usize, HashMap<String, AnimationSequence>>,
+    actor_bone_names: HashMap<usize, Vec<String>>,
     animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,
     player_probe_touching: HashSet<usize>,
@@ -514,8 +516,8 @@ mod tests {
         actor::decode_latent_action,
         actor::update_touching_array,
         native::{
-            animation_parameters, collision_updates, log_arguments, noise_loudness, random_float,
-            random_int, scalar_native, sound_arguments, target_score, trace_texture,
+            animation_parameters, bone_number, collision_updates, log_arguments, noise_loudness,
+            random_float, random_int, scalar_native, sound_arguments, target_score, trace_texture,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -608,6 +610,13 @@ mod tests {
             panic!("expected float");
         };
         assert!((value - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn bone_numbers_follow_case_insensitive_skeletal_order() {
+        let bones = vec!["Root".to_owned(), "Head".to_owned()];
+        assert_eq!(bone_number(Some(&bones), "head"), 1);
+        assert_eq!(bone_number(Some(&bones), "missing"), 0);
     }
 
     #[test]
