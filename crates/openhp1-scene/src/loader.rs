@@ -12,7 +12,7 @@ use openhp1_map::{
     VertexLighting, bsp_zone_at,
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
-use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
+use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
 use openhp1_physics::BspCollision;
 use openhp1_runtime::{ParticleEmitter, ParticleFloat};
 use openhp1_script::class_defaults_reader;
@@ -1301,6 +1301,7 @@ struct ActorState {
     skeletal_animation: Option<SceneObject>,
     skin: Option<SceneObject>,
     texture: Option<SceneObject>,
+    editor_sprite: bool,
     multi_skins: Vec<Option<SceneObject>>,
     style: u8,
     ambient_glow: u8,
@@ -1336,6 +1337,7 @@ impl Default for ActorState {
             skeletal_animation: None,
             skin: None,
             texture: None,
+            editor_sprite: false,
             multi_skins: Vec::new(),
             style: 1,
             ambient_glow: 0,
@@ -1391,7 +1393,24 @@ impl ActorState {
             self.skin = packages.resolve(source, reference)?.map(Into::into);
         }
         if let Some(reference) = properties.texture {
-            self.texture = packages.resolve(source, reference)?.map(Into::into);
+            self.editor_sprite = false;
+            self.texture = match packages.resolve(source, reference) {
+                Ok(texture) => texture.map(Into::into),
+                Err(ResolveError::MissingObject { package, class, .. })
+                    if package.eq_ignore_ascii_case("HPEdit")
+                        && class.eq_ignore_ascii_case("Texture") =>
+                {
+                    self.editor_sprite = true;
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            };
+            self.editor_sprite |= self.texture.as_ref().is_some_and(|texture| {
+                texture.name().starts_with("S_")
+                    || Path::new(texture.package.summary().source.as_ref())
+                        .file_stem()
+                        .is_some_and(|name| name.eq_ignore_ascii_case("HPEdit"))
+            });
         }
         for (index, reference) in properties.multi_skins.iter().enumerate() {
             let Some(reference) = reference else {
@@ -1764,6 +1783,9 @@ fn append_scene_actor_sprite(
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if state.editor_sprite {
+        return;
+    }
     let Some(texture) = state.texture.as_ref() else {
         scene_actor
             .diagnostics
