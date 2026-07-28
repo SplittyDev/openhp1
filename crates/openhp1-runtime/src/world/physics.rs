@@ -602,7 +602,7 @@ impl ScriptRuntime {
         let up = Vec3::Z;
         let inward = Vec3::new(-hit.normal.x, -hit.normal.y, 0.0).normalize_or_zero();
         let raised = location + up * max_height;
-        let far = raised + inward * (height * 2.0 + max_height * hit.normal.z);
+        let far = raised + inward * (radius * 2.0 + max_height * hit.normal.z);
         let diagonal_end = far - (up + hit.normal) * max_height;
         let Some(ledge) = collision.sweep_cylinder(far, diagonal_end, radius, height) else {
             return Ok(false);

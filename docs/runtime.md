@@ -81,6 +81,7 @@ hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
 Pawn mounting follows HP1's native `APawn::Mount` path: only BSP surfaces with
 the authored `bHighLedge` flag qualify, and the original raised, diagonal, and
 destination cylinder probes must all pass before the pawn's `Mount` event runs.
+The horizontal probe offset uses the pawn's collision diameter, not its height.
 Aligned cylinders sweep BSP box corners as rounded corners so the resulting
 contact normal can slide a pawn through an adjacent opening.
 `MakeNoise` currently validates its loudness without populating pawn noise
