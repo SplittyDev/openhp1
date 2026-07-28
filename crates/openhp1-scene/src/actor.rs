@@ -41,6 +41,7 @@ pub struct SceneActor {
     pub draw_type: u8,
     pub hidden: bool,
     pub unlit: bool,
+    pub brush: Option<SceneObjectId>,
     pub mesh: Option<SceneObjectId>,
     pub mesh_name: Option<String>,
     pub animation: Option<SceneActorAnimation>,

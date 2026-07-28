@@ -8,6 +8,7 @@ mod level;
 mod lighting;
 mod mesh;
 mod model;
+mod polys;
 mod sky;
 
 pub use actor::{Actor, ActorProperties};
@@ -19,4 +20,5 @@ pub use level::{Level, world_model_export};
 pub use lighting::{ActorVertexLighting, LightmapImage, VertexLighting, bsp_zone_at};
 pub use mesh::TriangleMesh;
 pub use model::Model;
+pub use polys::{BrushPolygon, BrushPolys};
 pub use sky::{Rotator, SkyZone};

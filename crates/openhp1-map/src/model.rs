@@ -5,7 +5,7 @@ use crate::{
     BspNode, BspSurface, BspVertex, ConvexLeaf, Error, LightMap, PrimitiveBounds, Result, Zone,
     decode::{
         compact_count, fixed_count, index, invalid_count, read_box, read_primitive_bounds,
-        read_vec3, require_class,
+        read_vec3, require_class, skip_object_stack,
     },
 };
 
@@ -40,6 +40,7 @@ impl Model {
         }
 
         let mut reader = package.export_reader(export_index)?;
+        skip_object_stack(package, export_index, &mut reader)?;
         while reader.next_property()?.is_some() {}
         let bounds = read_primitive_bounds(&mut reader, true)?;
 

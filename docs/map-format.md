@@ -23,11 +23,11 @@ reference. OpenHP1 therefore retains one `SceneActor` per distinct local actor
 export, identified by the package source and zero-based export index.
 
 Each scene actor preserves its object and resolved class names, Unreal-space
-transform, draw state, resolved mesh, current animation state, and any
-actor-local diagnostics. Visible mesh actors also retain their vertex and index
+transform, draw state, resolved brush or mesh, current animation state, and any
+actor-local diagnostics. Visible actors also retain their vertex and index
 ranges inside the shared CPU render mesh. This keeps the current batching
 strategy while letting the script runtime address an actor and change its
-active vertex- or skeletal-animation sequence without rebuilding the scene.
+transform or active animation without rebuilding the scene.
 
 Actor state is assembled from the decodable class-default chain followed by
 the actor export's tagged properties. A direct class-default failure contributes
@@ -45,6 +45,10 @@ state metadata offset is not a canonical decoded-byte offset.
 
 - an axis-aligned box: minimum and maximum `f32` vectors plus a validity byte;
 - a bounding sphere: center and radius as four `f32` values.
+
+`Model` and its referenced `Polys` object may carry the standard serialized
+UObject stack before those properties. This occurs on several Lev_Tut1 mover
+brushes, so both decoders must consume the stack according to the export flags.
 
 ## Inline BSP arrays
 
@@ -80,6 +84,10 @@ different texture coordinates.
 After the geometry arrays come the shared-side count, zone table, editor
 polygon object, lightmap metadata and bits, collision bounds, leaf hulls,
 convex leaves, light actors, and two final model flags.
+
+Moving-brush models use the referenced `Polys` object rather than BSP nodes for
+their visible faces. Each polygon stores its base, normal, texture axes,
+vertices, flags, actor and texture references, name, link indices, and U/V pan.
 
 Each surface selects a lightmap index. A lightmap stores its shadow-bit offset,
 texture-space pan, U/V clamp dimensions, U/V scale, and an offset into the

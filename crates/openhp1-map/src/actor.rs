@@ -18,6 +18,8 @@ pub struct ActorProperties {
     pub physics: Option<u8>,
     pub draw_scale: Option<f32>,
     pub draw_type: Option<u8>,
+    pub brush: Option<ObjectReference>,
+    pub main_scale: Option<Vec3>,
     pub mesh: Option<ObjectReference>,
     pub skeletal_animation: Option<ObjectReference>,
     pub skin: Option<ObjectReference>,
@@ -80,6 +82,12 @@ impl ActorProperties {
                 }
                 ("DrawType", PropertyKind::Byte, _) => {
                     properties.draw_type = Some(value.read_u8()?);
+                }
+                ("Brush", PropertyKind::Object, _) => {
+                    properties.brush = Some(value.read_object_reference()?);
+                }
+                ("MainScale", PropertyKind::Struct, Some("Scale")) => {
+                    properties.main_scale = Some(read_vec3(&mut value)?);
                 }
                 ("Mesh", PropertyKind::Object, _) => {
                     properties.mesh = Some(value.read_object_reference()?);

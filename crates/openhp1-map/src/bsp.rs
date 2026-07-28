@@ -60,6 +60,10 @@ impl PolyFlags {
         Self(bits)
     }
 
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0
     }

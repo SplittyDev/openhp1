@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
-    Actor, ActorProperties, ActorVertexLighting, BspNode, Level, Model, PolyFlags, VertexLighting,
-    bsp_zone_at,
+    Actor, ActorProperties, ActorVertexLighting, BrushPolys, BspNode, Level, Model, PolyFlags,
+    VertexLighting, bsp_zone_at,
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
@@ -61,6 +61,7 @@ struct ActorRenderContext {
     vertex_lighting: VertexLighting,
     class_cache: HashMap<SceneObjectId, ClassState>,
     mesh_cache: HashMap<SceneObjectId, Option<Arc<Mesh>>>,
+    brush_cache: HashMap<SceneObjectId, Option<Arc<BrushPolys>>>,
     animation_cache: HashMap<SceneObjectId, Option<Arc<SkeletalAnimation>>>,
     decoded_textures: HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: HashMap<(String, usize, bool), usize>,
@@ -174,6 +175,7 @@ impl LoadedScene {
             vertex_lighting,
             class_cache,
             mesh_cache: HashMap::new(),
+            brush_cache: HashMap::new(),
             animation_cache: HashMap::new(),
             decoded_textures: HashMap::new(),
             images: HashMap::new(),
@@ -323,6 +325,7 @@ impl LoadedScene {
             draw_type: 0,
             hidden: false,
             unlit: false,
+            brush: None,
             mesh: None,
             mesh_name: None,
             animation: None,
@@ -330,7 +333,7 @@ impl LoadedScene {
             diagnostics: class_state.diagnostics,
         };
         apply_scene_actor_state(&mut actor, &state);
-        append_scene_actor_mesh(
+        append_scene_actor_render(
             &mut self.actor_render,
             &mut actor,
             &state,
@@ -434,7 +437,12 @@ impl LoadedScene {
             );
         }
 
-        let transform = rotation_delta(actor.location + actor.pre_pivot, actor.rotation, rotation);
+        let origin = if actor.draw_type == 3 {
+            actor.location
+        } else {
+            actor.location + actor.pre_pivot
+        };
+        let transform = rotation_delta(origin, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
         if let Some(vertices) = vertices {
             if hidden {
@@ -908,6 +916,8 @@ struct ActorState {
     physics: u8,
     draw_scale: f32,
     draw_type: u8,
+    brush: Option<SceneObject>,
+    main_scale: Vec3,
     mesh: Option<SceneObject>,
     skeletal_animation: Option<SceneObject>,
     skin: Option<SceneObject>,
@@ -941,6 +951,8 @@ impl Default for ActorState {
             physics: 0,
             draw_scale: 1.0,
             draw_type: 0,
+            brush: None,
+            main_scale: Vec3::ONE,
             mesh: None,
             skeletal_animation: None,
             skin: None,
@@ -986,6 +998,12 @@ impl ActorState {
         }
         if let Some(draw_type) = properties.draw_type {
             self.draw_type = draw_type;
+        }
+        if let Some(reference) = properties.brush {
+            self.brush = packages.resolve(source, reference)?.map(Into::into);
+        }
+        if let Some(main_scale) = properties.main_scale {
+            self.main_scale = main_scale;
         }
         if let Some(reference) = properties.mesh {
             self.mesh = packages.resolve(source, reference)?.map(Into::into);
@@ -1056,6 +1074,7 @@ fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
         draw_type: 0,
         hidden: false,
         unlit: false,
+        brush: None,
         mesh: None,
         mesh_name: None,
         animation: None,
@@ -1109,6 +1128,7 @@ fn load_actors(
             draw_type: 0,
             hidden: false,
             unlit: false,
+            brush: None,
             mesh: None,
             mesh_name: None,
             animation: None,
@@ -1167,7 +1187,7 @@ fn load_actors(
             continue;
         }
         apply_scene_actor_state(&mut scene_actor, &state);
-        append_scene_actor_mesh(
+        append_scene_actor_render(
             actor_render,
             &mut scene_actor,
             &state,
@@ -1185,7 +1205,7 @@ fn load_actors(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_scene_actor_mesh(
+fn append_scene_actor_render(
     actor_render: &mut ActorRenderContext,
     scene_actor: &mut SceneActor,
     state: &ActorState,
@@ -1197,6 +1217,18 @@ fn append_scene_actor_mesh(
     animations: &mut Vec<AnimatedActorMesh>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if state.draw_type == 3 {
+        append_scene_actor_brush(
+            actor_render,
+            scene_actor,
+            state,
+            render_mesh,
+            textures,
+            materials,
+            water_animations,
+        );
+        return;
+    }
     if state.draw_type != 2 {
         scene_actor.diagnostics.push(format!(
             "DrawType {} is not rendered as a mesh",
@@ -1317,6 +1349,91 @@ fn append_scene_actor_mesh(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn append_scene_actor_brush(
+    actor_render: &mut ActorRenderContext,
+    scene_actor: &mut SceneActor,
+    state: &ActorState,
+    render_mesh: &mut openhp1_map::TriangleMesh,
+    textures: &mut Vec<TextureImage>,
+    materials: &mut Vec<SurfaceMaterial>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+) {
+    let Some(brush_object) = state.brush.clone() else {
+        scene_actor
+            .diagnostics
+            .push("brush draw type has no brush assigned".to_owned());
+        return;
+    };
+    let ActorRenderContext {
+        packages,
+        model: world_model,
+        vertex_lighting,
+        brush_cache,
+        decoded_textures,
+        images,
+        ..
+    } = actor_render;
+    let brush_model = match Model::decode(&brush_object.package, brush_object.export_index) {
+        Ok(model) => model,
+        Err(error) => {
+            scene_actor
+                .diagnostics
+                .push(format!("brush model could not be decoded: {error}"));
+            return;
+        }
+    };
+    let ObjectReference::Export(polys_export) = brush_model.polys else {
+        scene_actor
+            .diagnostics
+            .push("brush model has no local Polys export".to_owned());
+        return;
+    };
+    let polys_key = SceneObjectId {
+        package: brush_object.package.summary().source.to_string(),
+        export_index: polys_export,
+    };
+    if !brush_cache.contains_key(&polys_key) {
+        let decoded = BrushPolys::decode(&brush_object.package, polys_export)
+            .map(Arc::new)
+            .map_err(|error| {
+                scene_actor
+                    .diagnostics
+                    .push(format!("brush polygons could not be decoded: {error}"));
+            })
+            .ok();
+        brush_cache.insert(polys_key.clone(), decoded);
+    }
+    let Some(polys) = brush_cache
+        .get(&polys_key)
+        .and_then(Option::as_ref)
+        .cloned()
+    else {
+        return;
+    };
+    match append_actor_brush(
+        packages,
+        &polys,
+        state,
+        world_model,
+        vertex_lighting,
+        render_mesh,
+        textures,
+        materials,
+        decoded_textures,
+        images,
+        water_animations,
+    ) {
+        Ok(Some(render)) => scene_actor.render = Some(render),
+        Ok(None) => scene_actor
+            .diagnostics
+            .push("brush contains no renderable polygons".to_owned()),
+        Err(error) => scene_actor
+            .diagnostics
+            .push(format!("brush assembly failed: {error}")),
+    }
+}
+
 fn class_state(
     packages: &mut PackageStore,
     class: &SceneObject,
@@ -1398,6 +1515,7 @@ fn apply_scene_actor_state(actor: &mut SceneActor, state: &ActorState) {
     actor.draw_type = state.draw_type;
     actor.hidden = state.hidden;
     actor.unlit = state.unlit;
+    actor.brush = state.brush.as_ref().map(SceneObject::id);
     actor.mesh = state.mesh.as_ref().map(SceneObject::id);
     actor.mesh_name = state.mesh.as_ref().map(SceneObject::name);
 }
@@ -1410,6 +1528,110 @@ fn decode_class_defaults(class: &SceneObject) -> Result<(ObjectReference, ActorP
 struct AppendedActorMesh {
     render: SceneActorRenderRange,
     animation: Option<SceneActorAnimation>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_actor_brush(
+    packages: &mut PackageStore,
+    polys: &BrushPolys,
+    actor: &ActorState,
+    model: &Model,
+    vertex_lighting: &VertexLighting,
+    render_mesh: &mut openhp1_map::TriangleMesh,
+    textures: &mut Vec<TextureImage>,
+    materials: &mut Vec<SurfaceMaterial>,
+    decoded_textures: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
+    images: &mut HashMap<(String, usize, bool), usize>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+) -> Result<Option<SceneActorRenderRange>> {
+    ensure!(
+        actor.main_scale.is_finite(),
+        "brush MainScale is not finite"
+    );
+    let transform = brush_transform(actor);
+    let normal_transform = Mat3::from_mat4(transform).inverse().transpose();
+    let transformed = polys
+        .polygons
+        .iter()
+        .flat_map(|polygon| &polygon.vertices)
+        .map(|&position| transform.transform_point3(position))
+        .collect::<Vec<_>>();
+    let Some(&first_position) = transformed.first() else {
+        return Ok(None);
+    };
+    let (minimum, maximum) = transformed.iter().copied().fold(
+        (first_position, first_position),
+        |(minimum, maximum), position| (minimum.min(position), maximum.max(position)),
+    );
+    let center = (minimum + maximum) * 0.5;
+    let actor_lighting =
+        vertex_lighting.for_actor(model, center, actor.ambient_glow, actor.scale_glow);
+    let zone_unlit = model.zone_at(center) == 0;
+    let first_vertex = render_mesh.positions.len();
+    let first_index = render_mesh.indices.len();
+
+    for polygon in &polys.polygons {
+        if polygon.vertices.len() < 3 {
+            continue;
+        }
+        let texture = packages
+            .resolve(
+                &actor
+                    .brush
+                    .as_ref()
+                    .context("brush actor has no model object")?
+                    .package,
+                polygon.texture,
+            )?
+            .map(SceneObject::from);
+        let surface = materials.len();
+        materials.push(actor_surface_material(
+            packages,
+            texture.as_ref(),
+            polygon.poly_flags.bits(),
+            actor,
+            textures,
+            decoded_textures,
+            images,
+            water_animations,
+        ));
+        let base = u32::try_from(render_mesh.positions.len())?;
+        let normal = (normal_transform * polygon.normal).normalize_or_zero();
+        let unlit = actor.unlit || polygon.poly_flags.contains(PolyFlags::UNLIT) || zone_unlit;
+        for &vertex in &polygon.vertices {
+            let position = transform.transform_point3(vertex);
+            render_mesh.positions.push(position);
+            render_mesh.texture_coordinates.push(Vec2::new(
+                polygon.texture_u.dot(vertex - polygon.base) + f32::from(polygon.pan_u),
+                polygon.texture_v.dot(vertex - polygon.base) + f32::from(polygon.pan_v),
+            ));
+            render_mesh.lightmap_coordinates.push(Vec2::ZERO);
+            render_mesh.vertex_lightmaps.push(None);
+            render_mesh
+                .vertex_colors
+                .push(actor_lighting.color(position, normal, unlit));
+            render_mesh.vertex_surfaces.push(surface);
+        }
+        for offset in 1..u32::try_from(polygon.vertices.len() - 1)? {
+            render_mesh
+                .indices
+                .extend_from_slice(&[base, base + offset, base + offset + 1]);
+            render_mesh.triangle_surfaces.push(surface);
+        }
+    }
+    Ok(
+        (render_mesh.positions.len() != first_vertex).then_some(SceneActorRenderRange {
+            vertices: first_vertex..render_mesh.positions.len(),
+            indices: first_index..render_mesh.indices.len(),
+        }),
+    )
+}
+
+fn brush_transform(actor: &ActorState) -> Mat4 {
+    Mat4::from_translation(actor.location)
+        * rotation_matrix(actor.rotation)
+        * Mat4::from_scale(actor.main_scale)
+        * Mat4::from_translation(-actor.pre_pivot)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2122,6 +2344,22 @@ mod tests {
         );
         super::transform_positions(&mut positions, transform);
         assert!(positions[0].abs_diff_eq(glam::Vec3::new(10.0, 1.0, 0.0), 1.0e-5));
+    }
+
+    #[test]
+    fn transforms_moving_brushes_around_their_pre_pivot() {
+        let actor = super::ActorState {
+            location: glam::Vec3::new(10.0, 20.0, 30.0),
+            pre_pivot: glam::Vec3::new(2.0, 3.0, 4.0),
+            main_scale: glam::Vec3::splat(2.0),
+            ..Default::default()
+        };
+        let transform = super::brush_transform(&actor);
+        assert_eq!(transform.transform_point3(actor.pre_pivot), actor.location);
+        assert_eq!(
+            transform.transform_point3(actor.pre_pivot + glam::Vec3::X),
+            actor.location + glam::Vec3::X * 2.0
+        );
     }
 
     #[test]

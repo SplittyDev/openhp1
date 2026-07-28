@@ -19,8 +19,8 @@ on world BSP geometry.
 7. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
    Unreal rotator.
 8. `openhp1-scene` resolves actor defaults and instance properties, retains
-   first-class actor records, and appends visible vertex and skeletal meshes
-   with their materials and render ranges.
+   first-class actor records, and appends visible vertex meshes, skeletal
+   meshes, and moving brushes with their materials and render ranges.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
    backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
 10. `openhp1-render` packs lightmaps with replicated edge gutters into one
@@ -103,8 +103,12 @@ matters for sky-box cube faces.
 
 The renderer still uses only the first mip and does not cull by zones. Visible
 vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
-serialized or runtime-selected animation sequences. Sprite, brush/mover,
-corona, and particle actor paths remain unsupported.
+serialized or runtime-selected animation sequences. Mover geometry comes from
+the brush model's `Polys` export and follows UE1's
+`Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
+therefore pivots around `Location`, not the mesh-actor
+`Location + PrePivot` origin. Sprite, corona, and particle actor paths remain
+unsupported.
 Water-backed `WetTexture` exports animate independently of actor scripts.
 Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
 `TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.
