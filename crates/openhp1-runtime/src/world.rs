@@ -39,6 +39,7 @@ const LOOP_ANIM: u16 = 0x104;
 const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
 const PLAY_SOUND: u16 = 0x108;
+const STOP_SOUND: u16 = 0x238;
 const CREATE_ANIM_CHANNEL: u16 = 0x109;
 const SET_OWNER: u16 = 0x110;
 const MOVE: u16 = 0x10a;
@@ -185,6 +186,11 @@ pub enum ActorAction {
         radius: f32,
         pitch: f32,
     },
+    StopSound {
+        actor: usize,
+        clip: Option<AudioClip>,
+        slot: Option<u8>,
+    },
     SpawnActor {
         actor: usize,
         name: String,
@@ -236,6 +242,7 @@ impl ActorAction {
             | Self::LoopAnimation { actor, .. }
             | Self::AwaitAnimation { actor }
             | Self::PlaySound { actor, .. }
+            | Self::StopSound { actor, .. }
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }
             | Self::SetRotation { actor, .. }

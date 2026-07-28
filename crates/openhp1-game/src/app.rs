@@ -767,18 +767,17 @@ fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Re
     let Some(audio) = audio else {
         return Ok(());
     };
-    if let ActorAction::PlaySound {
-        actor,
-        clip,
-        location,
-        slot,
-        volume,
-        no_override,
-        radius,
-        pitch,
-    } = action
-    {
-        audio.play_sound(
+    match action {
+        ActorAction::PlaySound {
+            actor,
+            clip,
+            location,
+            slot,
+            volume,
+            no_override,
+            radius,
+            pitch,
+        } => audio.play_sound(
             actor,
             &clip,
             unreal_to_render(Vec3::from_array(location)).to_array(),
@@ -787,7 +786,11 @@ fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Re
             no_override,
             radius,
             pitch,
-        )?;
+        )?,
+        ActorAction::StopSound { actor, clip, slot } => {
+            audio.stop_sound(actor, clip.as_ref(), slot)
+        }
+        _ => {}
     }
     Ok(())
 }

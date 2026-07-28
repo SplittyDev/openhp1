@@ -412,6 +412,37 @@ impl ScriptRuntime {
             )?;
             return Ok(Value::None);
         }
+        if index == STOP_SOUND {
+            if arguments.len() > 2 {
+                return Err(format!(
+                    "StopSound expects an optional sound and slot, found {} arguments",
+                    arguments.len()
+                ));
+            }
+            let clip = match arguments.first() {
+                None | Some(Value::None | Value::Object(0)) => None,
+                Some(Value::Object(handle)) => {
+                    let object = self
+                        .object_for_handle(*handle)
+                        .map_err(|error| error.to_string())?;
+                    let object = self
+                        .resolved_object(&object)
+                        .map_err(|error| error.to_string())?;
+                    Some(
+                        AudioClip::decode(&object.package, object.export_index)
+                            .map_err(|error| error.to_string())?,
+                    )
+                }
+                Some(value) => return Err(format!("StopSound sound is {}", value.kind())),
+            };
+            let slot = match arguments.get(1) {
+                None | Some(Value::None) => None,
+                Some(Value::Byte(slot)) => Some(*slot),
+                Some(value) => return Err(format!("StopSound slot is {}", value.kind())),
+            };
+            actions.push(ActorAction::StopSound { actor, clip, slot });
+            return Ok(Value::None);
+        }
         if index == TRACE_TEXTURE {
             return trace_texture(arguments);
         }

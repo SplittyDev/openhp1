@@ -14,6 +14,7 @@ use crate::{AudioClip, Error, Result};
 
 struct ActiveSound {
     actor: usize,
+    clip: AudioClip,
     slot: u8,
     volume: f32,
     radius: f32,
@@ -100,6 +101,7 @@ impl AudioPlayer {
         );
         self.sounds.push(ActiveSound {
             actor,
+            clip: clip.clone(),
             slot,
             volume,
             radius,
@@ -107,6 +109,18 @@ impl AudioPlayer {
             sound,
         });
         Ok(())
+    }
+
+    pub fn stop_sound(&mut self, actor: usize, clip: Option<&AudioClip>, slot: Option<u8>) {
+        for sound in self.sounds.iter_mut().filter(|sound| {
+            sound.actor == actor
+                && clip.is_none_or(|clip| sound.clip == *clip)
+                && slot.is_none_or(|slot| sound.slot == slot)
+        }) {
+            sound.sound.stop(Tween::default());
+        }
+        self.sounds
+            .retain(|sound| sound.sound.state() != PlaybackState::Stopped);
     }
 
     pub fn update(

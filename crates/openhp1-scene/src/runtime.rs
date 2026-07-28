@@ -164,7 +164,9 @@ pub fn apply_runtime_actions_with(
                     actions.extend(runtime.animation_finished(actor)?);
                 }
             }
-            action @ ActorAction::PlaySound { .. } => external(action)?,
+            action @ (ActorAction::PlaySound { .. } | ActorAction::StopSound { .. }) => {
+                external(action)?
+            }
             ActorAction::SpawnActor {
                 actor,
                 name,

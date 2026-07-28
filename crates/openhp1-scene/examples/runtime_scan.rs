@@ -304,6 +304,7 @@ fn apply_actions(
             ActorAction::PlaySound { .. } => {
                 stats.sounds += 1;
             }
+            ActorAction::StopSound { .. } => {}
             ActorAction::SpawnActor {
                 actor,
                 name,
