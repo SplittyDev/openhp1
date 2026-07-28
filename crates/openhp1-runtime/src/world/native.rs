@@ -538,9 +538,9 @@ impl ScriptRuntime {
             return Ok(Value::None);
         }
         if index == SET_COLLISION_SIZE {
-            let [Value::Float(radius), Value::Float(height)] = arguments else {
+            let [Value::Float(radius), Value::Float(height), rest @ ..] = arguments else {
                 return Err(format!(
-                    "SetCollisionSize expects radius and height floats, found {}",
+                    "SetCollisionSize expects radius, height, and optional width floats, found {}",
                     arguments
                         .iter()
                         .map(Value::kind)
@@ -548,7 +548,27 @@ impl ScriptRuntime {
                         .join(", ")
                 ));
             };
-            if !radius.is_finite() || !height.is_finite() || *radius < 0.0 || *height < 0.0 {
+            let width = match rest {
+                [] => None,
+                [Value::Float(width)] => Some(*width),
+                _ => {
+                    return Err(format!(
+                        "SetCollisionSize expects radius, height, and optional width floats, found {}",
+                        arguments
+                            .iter()
+                            .map(Value::kind)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            };
+            if !radius.is_finite()
+                || !height.is_finite()
+                || width.is_some_and(|width| !width.is_finite())
+                || *radius < 0.0
+                || *height < 0.0
+                || width.is_some_and(|width| width < 0.0)
+            {
                 return Err("SetCollisionSize dimensions are invalid".to_owned());
             }
             self.set_actor_value(
@@ -563,6 +583,9 @@ impl ScriptRuntime {
                 "CollisionHeight",
                 Value::Float(*height),
             )?;
+            if let Some(width) = width {
+                self.set_actor_value(actor_class, instance, "CollisionWidth", Value::Float(width))?;
+            }
             self.refresh_cached_collision_actor(actor, actor_class, instance)?;
             return Ok(Value::Bool(true));
         }
