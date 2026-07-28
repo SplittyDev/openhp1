@@ -160,9 +160,9 @@ impl Texture {
         }
         match class {
             TextureClass::Regular => {}
-            TextureClass::Wet => {
-                // A WetTexture starts from its source image; water simulation
-                // later displaces those palette indices.
+            TextureClass::Wet | TextureClass::Ice => {
+                // Both classes start from their source image. Water later
+                // displaces it; ice retains it until its native update.
                 if let ObjectReference::Export(source_index) = source_texture
                     && source_index != export_index
                     && let source = Self::decode(package, source_index)?
@@ -467,6 +467,7 @@ enum TextureClass {
     Regular,
     Wet,
     Fire,
+    Ice,
 }
 
 fn texture_class(package: &Package, export_index: usize) -> Result<TextureClass> {
@@ -483,8 +484,9 @@ fn texture_class(package: &Package, export_index: usize) -> Result<TextureClass>
         "Texture" => Ok(TextureClass::Regular),
         "WetTexture" => Ok(TextureClass::Wet),
         "FireTexture" => Ok(TextureClass::Fire),
+        "IceTexture" => Ok(TextureClass::Ice),
         _ => Err(Error::WrongClass {
-            expected: "Texture, WetTexture, or FireTexture",
+            expected: "Texture, WetTexture, FireTexture, or IceTexture",
             actual: actual.to_owned(),
         }),
     }
