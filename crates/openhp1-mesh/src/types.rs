@@ -124,6 +124,25 @@ impl Mesh {
         sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
     }
 
+    pub fn sample_skeletal_sequence_with_root_motion(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<(Vec<MeshTriangle>, Vec3)> {
+        if !phase.is_finite() {
+            return Err(Error::InvalidAnimationPhase(phase));
+        }
+        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
+        let (vertices, root_motion) =
+            animation.sample_with_root_motion(skeletal, sequence, phase)?;
+        let normals = vertex_normals(&vertices, &self.face_vertices);
+        Ok((
+            sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)?,
+            root_motion,
+        ))
+    }
+
     fn frame_slice<'a>(&self, values: &'a [Vec3], frame: usize) -> Result<&'a [Vec3]> {
         let invalid_layout = || Error::InvalidAnimationLayout {
             frame_vertices: self.frame_vertices,
@@ -199,6 +218,26 @@ impl SkeletalAnimation {
         sequence: usize,
         phase: f32,
     ) -> Result<Vec<Vec3>> {
+        self.sample_pose(mesh, sequence, phase, false)
+            .map(|(points, _)| points)
+    }
+
+    pub(crate) fn sample_with_root_motion(
+        &self,
+        mesh: &SkeletalMesh,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<(Vec<Vec3>, Vec3)> {
+        self.sample_pose(mesh, sequence, phase, true)
+    }
+
+    fn sample_pose(
+        &self,
+        mesh: &SkeletalMesh,
+        sequence: usize,
+        phase: f32,
+        extract_root_motion: bool,
+    ) -> Result<(Vec<Vec3>, Vec3)> {
         let sequence_index = sequence;
         let sequence = self
             .sequences
@@ -226,6 +265,7 @@ impl SkeletalAnimation {
             .iter()
             .map(|bone| (bone.orientation, bone.position))
             .collect::<Vec<_>>();
+        let mut root_motion = Vec3::ZERO;
         for (track_index, track) in movement.tracks.iter().enumerate() {
             let animation_bone = movement
                 .bone_indices
@@ -254,7 +294,13 @@ impl SkeletalAnimation {
                     index: track_index,
                     length: mesh.bones.len(),
                 })?;
-            local[mesh_bone] = track.sample(time, movement.track_time, local[mesh_bone]);
+            let fallback = local[mesh_bone];
+            local[mesh_bone] = track.sample(time, movement.track_time, fallback);
+            if extract_root_motion && mesh_bone == 0 {
+                let start = track.sample(0.0, movement.track_time, fallback).1;
+                root_motion = local[mesh_bone].1 - start;
+                local[mesh_bone].1 = start;
+            }
         }
 
         let mut global = Vec::with_capacity(mesh.bones.len());
@@ -283,7 +329,7 @@ impl SkeletalAnimation {
         points
             .iter_mut()
             .for_each(|point| *point = mirror_skeletal_position(*point));
-        Ok(points)
+        Ok((points, mirror_skeletal_position(root_motion)))
     }
 }
 
@@ -326,5 +372,56 @@ impl AnimationTrack {
             0.0
         };
         (first, second, blend.clamp(0.0, 1.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_skeletal_root_translation_from_the_pose() {
+        let mesh = SkeletalMesh {
+            points: vec![Vec3::ZERO],
+            bones: vec![SkeletalBone {
+                name: "Root".to_owned(),
+                orientation: Quat::IDENTITY,
+                position: Vec3::ZERO,
+                parent: 0,
+            }],
+            influences: vec![vec![SkeletalInfluence {
+                bone: 0,
+                weight: 1.0,
+                local_position: Vec3::ZERO,
+            }]],
+        };
+        let animation = SkeletalAnimation {
+            sequences: vec![MeshAnimationSequence {
+                name: "Move".to_owned(),
+                group: "None".to_owned(),
+                start_frame: 0,
+                frame_count: 2,
+                notifications: Vec::new(),
+                rate: 1.0,
+            }],
+            bones: vec![AnimationBone {
+                name: "Root".to_owned(),
+            }],
+            moves: vec![AnimationMove {
+                track_time: 1.0,
+                start_bone: 0,
+                bone_indices: vec![0],
+                tracks: vec![AnimationTrack {
+                    rotations: Vec::new(),
+                    positions: vec![Vec3::ZERO, Vec3::new(4.0, 2.0, 6.0)],
+                    times: vec![0.0, 1.0],
+                }],
+            }],
+        };
+
+        let (points, motion) = animation.sample_with_root_motion(&mesh, 0, 0.5).unwrap();
+
+        assert_eq!(points, vec![Vec3::ZERO]);
+        assert_eq!(motion, Vec3::new(2.0, -1.0, 3.0));
     }
 }

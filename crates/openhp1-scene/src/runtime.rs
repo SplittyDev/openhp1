@@ -118,8 +118,16 @@ pub fn apply_runtime_actions_with(
                 sequence,
                 rate,
                 tween_time,
+                root_motion,
             } => {
-                if scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
+                let played = if root_motion {
+                    scene.play_actor_animation_with_root_motion(
+                        actor, &sequence, rate, tween_time, false,
+                    )?
+                } else {
+                    scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)?
+                };
+                if played {
                     animations += 1;
                 } else {
                     scene.actors[actor]
@@ -132,8 +140,16 @@ pub fn apply_runtime_actions_with(
                 sequence,
                 rate,
                 tween_time,
+                root_motion,
             } => {
-                if scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
+                let played = if root_motion {
+                    scene.play_actor_animation_with_root_motion(
+                        actor, &sequence, rate, tween_time, true,
+                    )?
+                } else {
+                    scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)?
+                };
+                if played {
                     animations += 1;
                 } else {
                     scene.actors[actor]

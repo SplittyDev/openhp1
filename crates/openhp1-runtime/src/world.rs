@@ -157,12 +157,14 @@ pub enum ActorAction {
         sequence: String,
         rate: f32,
         tween_time: f32,
+        root_motion: bool,
     },
     LoopAnimation {
         actor: usize,
         sequence: String,
         rate: f32,
         tween_time: f32,
+        root_motion: bool,
     },
     AwaitAnimation {
         actor: usize,

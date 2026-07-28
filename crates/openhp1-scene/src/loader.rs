@@ -45,6 +45,7 @@ pub struct LoadedScene {
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
+    root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     water_animations: Vec<AnimatedWaterTexture>,
     actor_render: ActorRenderContext,
@@ -253,6 +254,7 @@ impl LoadedScene {
             zone_nodes: actor_render.model.nodes.clone(),
             zone_count: actor_render.model.zones.len(),
             animations,
+            root_motions: Vec::new(),
             hidden_actor_positions,
             water_animations,
             actor_render,
@@ -603,7 +605,15 @@ impl LoadedScene {
                 actor_animation.phase = animation.phase;
                 actor.hidden
             };
-            let triangles = animation.sample()?;
+            let (triangles, root_motion) = animation.sample()?;
+            if animation.root_motion {
+                let root_motion = animation.transform.transform_vector3(root_motion);
+                let delta = root_motion - animation.root_motion_position;
+                animation.root_motion_position = root_motion;
+                if delta != Vec3::ZERO {
+                    self.root_motions.push((animation.actor_index, delta));
+                }
+            }
             ensure!(
                 triangles.len() * 3 == animation.vertices.len(),
                 "animation changed actor vertex count"
@@ -667,7 +677,14 @@ impl LoadedScene {
         relative_rate: f32,
         tween_time: f32,
     ) -> Result<bool> {
-        self.set_actor_animation(actor_index, sequence_name, relative_rate, tween_time, true)
+        self.set_actor_animation(
+            actor_index,
+            sequence_name,
+            relative_rate,
+            tween_time,
+            true,
+            false,
+        )
     }
 
     pub fn play_actor_animation(
@@ -686,7 +703,36 @@ impl LoadedScene {
         relative_rate: f32,
         tween_time: f32,
     ) -> Result<bool> {
-        self.set_actor_animation(actor_index, sequence_name, relative_rate, tween_time, false)
+        self.set_actor_animation(
+            actor_index,
+            sequence_name,
+            relative_rate,
+            tween_time,
+            false,
+            false,
+        )
+    }
+
+    pub fn play_actor_animation_with_root_motion(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+        tween_time: f32,
+        looping: bool,
+    ) -> Result<bool> {
+        self.set_actor_animation(
+            actor_index,
+            sequence_name,
+            relative_rate,
+            tween_time,
+            looping,
+            true,
+        )
+    }
+
+    pub fn take_root_motions(&mut self) -> Vec<(usize, Vec3)> {
+        std::mem::take(&mut self.root_motions)
     }
 
     pub fn actor_animation_playing(&self, actor_index: usize) -> bool {
@@ -715,6 +761,7 @@ impl LoadedScene {
         relative_rate: f32,
         tween_time: f32,
         looping: bool,
+        root_motion: bool,
     ) -> Result<bool> {
         ensure!(relative_rate.is_finite(), "animation rate is not finite");
         ensure!(tween_time.is_finite(), "animation tween time is not finite");
@@ -764,6 +811,8 @@ impl LoadedScene {
         animation.rate = relative_rate * source_rate / source_frames.max(1) as f32;
         animation.playing = true;
         animation.looping = looping;
+        animation.root_motion = root_motion;
+        animation.root_motion_position = Vec3::ZERO;
         let actor = self
             .actors
             .get_mut(actor_index)
@@ -844,6 +893,8 @@ struct AnimatedActorMesh {
     rate: f32,
     playing: bool,
     looping: bool,
+    root_motion: bool,
+    root_motion_position: Vec3,
     tween_from: Option<Vec<Vec3>>,
     tween_elapsed: f32,
     tween_duration: f32,
@@ -870,13 +921,23 @@ impl AnimatedActorMesh {
             })
     }
 
-    fn sample(&self) -> openhp1_mesh::Result<Vec<openhp1_mesh::MeshTriangle>> {
+    fn sample(&self) -> openhp1_mesh::Result<(Vec<openhp1_mesh::MeshTriangle>, Vec3)> {
         if let Some(animation) = &self.skeletal_animation {
-            self.mesh
-                .sample_skeletal_sequence(animation, self.sequence, self.phase)
+            if self.root_motion {
+                self.mesh.sample_skeletal_sequence_with_root_motion(
+                    animation,
+                    self.sequence,
+                    self.phase,
+                )
+            } else {
+                self.mesh
+                    .sample_skeletal_sequence(animation, self.sequence, self.phase)
+                    .map(|triangles| (triangles, Vec3::ZERO))
+            }
         } else {
             self.mesh
                 .sample_sequence(&self.mesh.animation_sequences[self.sequence], self.phase)
+                .map(|triangles| (triangles, Vec3::ZERO))
         }
     }
 }
@@ -1775,6 +1836,8 @@ fn append_actor_mesh(
             rate: animation.as_ref().map_or(0.0, |animation| animation.rate),
             playing: animation.is_some(),
             looping: true,
+            root_motion: false,
+            root_motion_position: Vec3::ZERO,
             tween_from: None,
             tween_elapsed: 0.0,
             tween_duration: 0.0,

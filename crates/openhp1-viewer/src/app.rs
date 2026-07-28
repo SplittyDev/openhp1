@@ -418,6 +418,23 @@ impl ViewerApp {
                 Vec::new()
             }
         };
+        for (actor, delta) in self.scene.take_root_motions() {
+            let actions = match self.runtime.apply_root_motion(actor, delta.to_array()) {
+                Ok(actions) => actions,
+                Err(error) => {
+                    self.load_error = Some(format!("root motion failed: {error}"));
+                    break;
+                }
+            };
+            match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
+                Ok((_, _, true)) => self.update_vertices(),
+                Ok(_) => {}
+                Err(error) => {
+                    self.load_error = Some(format!("root motion failed: {error:#}"));
+                    break;
+                }
+            }
+        }
         for actor in completed {
             let actions = match self.runtime.animation_finished(actor) {
                 Ok(actions) => actions,

@@ -960,6 +960,33 @@ impl ScriptRuntime {
         )
     }
 
+    pub fn apply_root_motion(
+        &mut self,
+        actor: usize,
+        delta: [f32; 3],
+    ) -> DispatchResult<Vec<ActorAction>> {
+        if !delta.iter().all(|value| value.is_finite()) {
+            return Err(DispatchError::UnresolvedObject {
+                message: "root motion delta is not finite".to_owned(),
+            });
+        }
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mut actions = Vec::new();
+        let result = self.move_actor(actor, &class, delta, &mut instance, &mut actions);
+        self.instances.insert(actor, instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        Ok(actions)
+    }
+
     pub fn timer_callbacks(&self) -> usize {
         self.timer_callbacks
     }

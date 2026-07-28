@@ -159,6 +159,10 @@ fn main() -> Result<()> {
         let mut timer_actions = 0;
         for _ in 0..ticks {
             let (_, completed) = scene.tick_animations_with_completions(1.0 / 60.0)?;
+            for (actor, delta) in scene.take_root_motions() {
+                let actions = runtime.apply_root_motion(actor, delta.to_array())?;
+                apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            }
             for actor in completed {
                 let actions = runtime.animation_finished(actor)?;
                 apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
@@ -252,9 +256,17 @@ fn apply_actions(
                 sequence,
                 rate,
                 tween_time,
+                root_motion,
             } => {
                 stats.animations_requested += 1;
-                if scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
+                let played = if root_motion {
+                    scene.play_actor_animation_with_root_motion(
+                        actor, &sequence, rate, tween_time, false,
+                    )?
+                } else {
+                    scene.play_actor_animation_with_tween(actor, &sequence, rate, tween_time)?
+                };
+                if played {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
                 } else {
@@ -266,9 +278,17 @@ fn apply_actions(
                 sequence,
                 rate,
                 tween_time,
+                root_motion,
             } => {
                 stats.animations_requested += 1;
-                if scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)? {
+                let played = if root_motion {
+                    scene.play_actor_animation_with_root_motion(
+                        actor, &sequence, rate, tween_time, true,
+                    )?
+                } else {
+                    scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)?
+                };
+                if played {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
                 } else {

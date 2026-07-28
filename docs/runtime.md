@@ -54,6 +54,8 @@ offsets.
 - Repeated `LoopAnim` calls preserve the current phase.
 - `FinishAnim` ends the current loop.
 - Tween-time arguments blend from the displayed pose.
+- HP1's `RootBone='Move'` argument extracts skeletal root translation from the
+  rendered pose and applies it to the actor through normal collision movement.
 - `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions.
 
 Unsupported actions should remain nonfatal actor diagnostics until their

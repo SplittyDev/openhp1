@@ -589,6 +589,14 @@ impl Graphics {
     fn update_animations(&mut self, delta_time: f32) {
         match self.scene.tick_animations_with_completions(delta_time) {
             Ok((changed, completed)) => {
+                for (actor, delta) in self.scene.take_root_motions() {
+                    match self.runtime.apply_root_motion(actor, delta.to_array()) {
+                        Ok(actions) => self.apply_actions(actions),
+                        Err(error) => {
+                            self.last_error = Some(format!("root motion failed: {error}"));
+                        }
+                    }
+                }
                 if changed {
                     self.update_vertices();
                 }

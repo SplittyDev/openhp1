@@ -176,6 +176,7 @@ impl ScriptRuntime {
         {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("PlayAnim", rest)?;
+            let root_motion = animation_root_motion("PlayAnim", source, rest, 3)?;
             self.start_animation(
                 actor,
                 actor_class,
@@ -191,6 +192,7 @@ impl ScriptRuntime {
                 sequence: name,
                 rate,
                 tween_time,
+                root_motion,
             });
             self.animating.insert(actor);
             return Ok(Value::None);
@@ -200,6 +202,7 @@ impl ScriptRuntime {
         {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("LoopAnim", rest)?;
+            let root_motion = animation_root_motion("LoopAnim", source, rest, 4)?;
             self.start_animation(
                 actor,
                 actor_class,
@@ -215,6 +218,7 @@ impl ScriptRuntime {
                 sequence: name,
                 rate,
                 tween_time,
+                root_motion,
             });
             self.animating.insert(actor);
             return Ok(Value::None);
@@ -250,6 +254,7 @@ impl ScriptRuntime {
                 sequence: name,
                 rate: 0.0,
                 tween_time,
+                root_motion: false,
             });
             return Ok(Value::None);
         }
@@ -1705,6 +1710,27 @@ pub(super) fn animation_parameters(
         parameter(0, "rate", 1.0)?,
         parameter(1, "tween time", 0.0)?.max(0.0),
     ))
+}
+
+fn animation_root_motion(
+    name: &str,
+    source: &Package,
+    arguments: &[Value],
+    root_index: usize,
+) -> std::result::Result<bool, String> {
+    if arguments.len() > root_index + 1 {
+        return Err(format!(
+            "{name} expects at most {} optional arguments, found {}",
+            root_index + 1,
+            arguments.len()
+        ));
+    }
+    arguments
+        .get(root_index)
+        .filter(|value| !matches!(value, Value::None))
+        .map(|value| runtime_name(source, value).map(|root| root.eq_ignore_ascii_case("Move")))
+        .transpose()
+        .map(Option::unwrap_or_default)
 }
 
 pub(super) fn runtime_name(source: &Package, value: &Value) -> std::result::Result<String, String> {
