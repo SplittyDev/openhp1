@@ -68,6 +68,16 @@ offsets.
 Unsupported actions should remain nonfatal actor diagnostics until their
 subsystem exists; they must not silently claim successful behavior.
 
+## Particle effects
+
+`ParticleFX` configuration remains live UnrealScript instance state. The scene
+samples inherited and script-mutated emission, lifetime, source, size, speed,
+gravity, texture, style, and unlit fields each frame. A zero `ParticlesMax`
+uses the emitter's maximum authored emission rate multiplied by its maximum
+lifetime, matching the size needed for a steady emitter rather than disabling
+it. Emission is interpolated between the actor's previous and current location
+so moving spell and creature effects leave continuous trails.
+
 ## Movement and spawning
 
 Walking physics advances when either horizontal velocity component is nonzero;

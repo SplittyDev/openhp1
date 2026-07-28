@@ -14,6 +14,7 @@ use openhp1_map::{
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolvedObject};
 use openhp1_physics::BspCollision;
+use openhp1_runtime::{ParticleEmitter, ParticleFloat};
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
@@ -49,6 +50,8 @@ pub struct LoadedScene {
     root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     water_animations: Vec<AnimatedWaterTexture>,
+    particles: HashMap<usize, ParticleSystem>,
+    particle_view_rotation: Mat4,
     actor_render: ActorRenderContext,
 }
 
@@ -261,6 +264,8 @@ impl LoadedScene {
             root_motions: Vec::new(),
             hidden_actor_positions,
             water_animations,
+            particles: HashMap::new(),
+            particle_view_rotation: Mat4::IDENTITY,
             actor_render,
         })
     }
@@ -427,6 +432,7 @@ impl LoadedScene {
 
     pub fn update_sprite_billboards(&mut self, view_rotation: Rotator) -> bool {
         let rotation = rotation_matrix(view_rotation);
+        self.particle_view_rotation = rotation;
         let mut changed = false;
         for sprite in &self.sprites {
             let Some(actor) = self.actors.get(sprite.actor_index) else {
@@ -445,6 +451,185 @@ impl LoadedScene {
                 target.copy_from_slice(&positions);
                 changed = true;
             }
+        }
+        changed
+    }
+
+    pub fn sync_particle_emitters(&mut self, emitters: Vec<ParticleEmitter>) -> Result<bool> {
+        let mut changed = false;
+        for emitter in emitters {
+            if emitter.textures.is_empty() {
+                continue;
+            }
+            if let Some(system) = self.particles.get_mut(&emitter.actor) {
+                system.config = emitter;
+                continue;
+            }
+            let capacity = particle_capacity(&emitter);
+            ensure!(
+                capacity <= 100_000,
+                "particle emitter requests {capacity} particles"
+            );
+            if capacity == 0 || emitter.actor >= self.actors.len() {
+                continue;
+            }
+            let texture = &emitter.textures[0];
+            let package = self
+                .actor_render
+                .packages
+                .load_path(Path::new(&texture.package))?;
+            let texture = SceneObject {
+                package,
+                export_index: texture.export_index,
+            };
+            let mut state = ActorState::default();
+            state.style = emitter.style;
+            state.unlit = emitter.unlit;
+            let material = actor_surface_material(
+                &mut self.actor_render.packages,
+                Some(&texture),
+                PolyFlags::TWO_SIDED.bits(),
+                &state,
+                &mut self.render.textures,
+                &mut self.actor_render.decoded_textures,
+                &mut self.actor_render.images,
+                &mut self.water_animations,
+            );
+            let Some(texture_index) = material.texture else {
+                continue;
+            };
+            let dimensions = Vec2::new(
+                self.render.textures[texture_index].width as f32,
+                self.render.textures[texture_index].height as f32,
+            );
+            let surface = self.render.surface_materials.len();
+            self.render.surface_materials.push(SurfaceMaterial {
+                unlit: emitter.unlit,
+                ..material
+            });
+            let vertices =
+                self.render.mesh.positions.len()..self.render.mesh.positions.len() + capacity * 4;
+            for slot in 0..capacity {
+                let base = self.render.mesh.positions.len() as u32;
+                self.render.mesh.positions.extend([Vec3::ZERO; 4]);
+                self.render.mesh.texture_coordinates.extend([
+                    Vec2::ZERO,
+                    Vec2::new(dimensions.x, 0.0),
+                    dimensions,
+                    Vec2::new(0.0, dimensions.y),
+                ]);
+                self.render
+                    .mesh
+                    .lightmap_coordinates
+                    .extend([Vec2::ZERO; 4]);
+                self.render.mesh.vertex_lightmaps.extend([None; 4]);
+                self.render.mesh.vertex_colors.extend([Vec3::ONE; 4]);
+                self.render.mesh.vertex_surfaces.extend([surface; 4]);
+                self.render.mesh.indices.extend_from_slice(&[
+                    base,
+                    base + 2,
+                    base + 1,
+                    base,
+                    base + 3,
+                    base + 2,
+                ]);
+                self.render.mesh.triangle_surfaces.extend([surface; 2]);
+                debug_assert_eq!(vertices.start + slot * 4, base as usize);
+            }
+            let actor = emitter.actor;
+            self.particles.insert(
+                actor,
+                ParticleSystem {
+                    config: emitter,
+                    particles: Vec::new(),
+                    capacity,
+                    vertices,
+                    residue: 0.0,
+                    last_location: self.actors[actor].location,
+                    random: actor as u32 ^ 0xa341_316c,
+                    primed: false,
+                },
+            );
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    pub fn tick_particles(&mut self, delta_time: f32) -> bool {
+        if !delta_time.is_finite() || delta_time <= 0.0 {
+            return false;
+        }
+        let mut changed = false;
+        for (&actor, system) in &mut self.particles {
+            let Some(owner) = self.actors.get(actor) else {
+                continue;
+            };
+            system.particles.retain_mut(|particle| {
+                particle.age += delta_time;
+                particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
+                particle.location += particle.velocity * delta_time;
+                particle.age < particle.lifetime
+            });
+            let rate =
+                sample_particle_float(system.config.particles_per_second, &mut system.random)
+                    .max(0.0);
+            if system.config.emit && !owner.hidden {
+                if system.config.prime && !system.primed {
+                    system.residue += rate
+                        * sample_particle_float(system.config.lifetime, &mut system.random)
+                            .max(0.0);
+                    system.primed = true;
+                }
+                system.residue += rate * delta_time;
+                let count = (system.residue.floor() as usize)
+                    .min(system.capacity.saturating_sub(system.particles.len()));
+                system.residue -= count as f32;
+                for index in 0..count {
+                    let fraction = (index as f32 + 0.5) / count.max(1) as f32;
+                    let center = system.last_location.lerp(owner.location, fraction);
+                    let source = Vec3::new(
+                        random_signed(&mut system.random)
+                            * sample_particle_float(system.config.source_width, &mut system.random),
+                        random_signed(&mut system.random)
+                            * sample_particle_float(system.config.source_depth, &mut system.random),
+                        random_signed(&mut system.random)
+                            * sample_particle_float(
+                                system.config.source_height,
+                                &mut system.random,
+                            ),
+                    ) * 0.5;
+                    let speed =
+                        sample_particle_float(system.config.speed, &mut system.random).max(0.0);
+                    let direction =
+                        rotation_matrix(owner.rotation).transform_vector3(Vec3::X) * speed;
+                    system.particles.push(Particle {
+                        location: center + source,
+                        velocity: direction,
+                        age: 0.0,
+                        lifetime: sample_particle_float(system.config.lifetime, &mut system.random)
+                            .max(1.0 / 60.0),
+                        half_size: Vec2::new(
+                            sample_particle_float(system.config.size_width, &mut system.random),
+                            sample_particle_float(system.config.size_length, &mut system.random),
+                        ) * 0.5,
+                    });
+                }
+            }
+            system.last_location = owner.location;
+            for slot in 0..system.capacity {
+                let target = system.vertices.start + slot * 4;
+                if let Some(particle) = system.particles.get(slot) {
+                    let positions = sprite_positions(
+                        particle.location,
+                        particle.half_size,
+                        self.particle_view_rotation,
+                    );
+                    self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
+                } else {
+                    self.render.mesh.positions[target..target + 4].fill(Vec3::ZERO);
+                }
+            }
+            changed = true;
         }
         changed
     }
@@ -1000,6 +1185,47 @@ struct SpriteActor {
     half_size: Vec2,
 }
 
+struct ParticleSystem {
+    config: ParticleEmitter,
+    particles: Vec<Particle>,
+    capacity: usize,
+    vertices: Range<usize>,
+    residue: f32,
+    last_location: Vec3,
+    random: u32,
+    primed: bool,
+}
+
+struct Particle {
+    location: Vec3,
+    velocity: Vec3,
+    age: f32,
+    lifetime: f32,
+    half_size: Vec2,
+}
+
+fn particle_capacity(emitter: &ParticleEmitter) -> usize {
+    if emitter.particles_max != 0 {
+        return emitter.particles_max;
+    }
+    let rate = emitter.particles_per_second.base.abs() + emitter.particles_per_second.random.abs();
+    let lifetime = emitter.lifetime.base.abs() + emitter.lifetime.random.abs();
+    (rate * lifetime).ceil().max(1.0) as usize
+}
+
+fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
+    value.base + value.random * random_unit(random)
+}
+
+fn random_signed(random: &mut u32) -> f32 {
+    random_unit(random) * 2.0 - 1.0
+}
+
+fn random_unit(random: &mut u32) -> f32 {
+    *random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    (*random >> 8) as f32 / 16_777_216.0
+}
+
 impl AnimatedActorMesh {
     fn sequences(&self) -> &[MeshAnimationSequence] {
         self.skeletal_animation
@@ -1402,6 +1628,9 @@ fn append_scene_actor_render(
             materials,
             water_animations,
         );
+        return;
+    }
+    if state.draw_type == 8 {
         return;
     }
     if state.draw_type != 2 {
@@ -2505,9 +2734,41 @@ fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
 #[cfg(test)]
 mod tests {
     use openhp1_map::PolyFlags;
+    use openhp1_runtime::{ParticleEmitter, ParticleFloat};
     use openhp1_texture::TextureRenderFlags;
 
     use crate::SurfaceMode;
+
+    #[test]
+    fn particle_capacity_uses_authored_limit_or_emission_lifetime() {
+        let mut emitter = ParticleEmitter {
+            actor: 0,
+            emit: true,
+            prime: false,
+            style: 3,
+            unlit: true,
+            particles_max: 7,
+            particles_per_second: ParticleFloat {
+                base: 10.0,
+                random: 5.0,
+            },
+            lifetime: ParticleFloat {
+                base: 1.0,
+                random: 1.0,
+            },
+            speed: ParticleFloat::default(),
+            source_width: ParticleFloat::default(),
+            source_height: ParticleFloat::default(),
+            source_depth: ParticleFloat::default(),
+            size_width: ParticleFloat::default(),
+            size_length: ParticleFloat::default(),
+            gravity: [0.0; 3],
+            textures: Vec::new(),
+        };
+        assert_eq!(super::particle_capacity(&emitter), 7);
+        emitter.particles_max = 0;
+        assert_eq!(super::particle_capacity(&emitter), 30);
+    }
 
     #[test]
     fn combines_surface_and_texture_render_flags() {

@@ -300,6 +300,8 @@ impl Graphics {
                 fallback_view
             }
         };
+        scene.sync_particle_emitters(runtime.particle_emitters()?)?;
+        scene.tick_particles(1.0 / 60.0);
 
         let size = nonzero_size(window.inner_size());
         let instance = wgpu::Instance::default();
@@ -676,6 +678,20 @@ impl Graphics {
             }
             Ok(None) => {}
             Err(error) => self.last_error = Some(format!("music update failed: {error}")),
+        }
+        match self.runtime.particle_emitters().and_then(|emitters| {
+            self.scene
+                .sync_particle_emitters(emitters)
+                .map_err(|error| openhp1_runtime::DispatchError::UnresolvedObject {
+                    message: error.to_string(),
+                })
+        }) {
+            Ok(topology_changed) => {
+                if topology_changed || self.scene.tick_particles(delta_time) {
+                    self.update_vertices();
+                }
+            }
+            Err(error) => self.last_error = Some(format!("particle update failed: {error}")),
         }
         match self.runtime.player_view(location, rotation) {
             Ok((view, actions)) => {

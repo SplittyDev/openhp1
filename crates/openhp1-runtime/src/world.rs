@@ -157,6 +157,38 @@ pub struct PlayerMusic {
     pub transition: u8,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ParticleFloat {
+    pub base: f32,
+    pub random: f32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticleTexture {
+    pub package: String,
+    pub export_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParticleEmitter {
+    pub actor: usize,
+    pub emit: bool,
+    pub prime: bool,
+    pub style: u8,
+    pub unlit: bool,
+    pub particles_max: usize,
+    pub particles_per_second: ParticleFloat,
+    pub lifetime: ParticleFloat,
+    pub speed: ParticleFloat,
+    pub source_width: ParticleFloat,
+    pub source_height: ParticleFloat,
+    pub source_depth: ParticleFloat,
+    pub size_width: ParticleFloat,
+    pub size_length: ParticleFloat,
+    pub gravity: [f32; 3],
+    pub textures: Vec<ParticleTexture>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActorAction {
     PlayAnimation {

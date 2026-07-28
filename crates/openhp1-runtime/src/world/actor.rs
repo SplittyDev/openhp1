@@ -252,6 +252,89 @@ impl ScriptRuntime {
             .saturating_sub(self.destroyed.len())
     }
 
+    pub fn particle_emitters(&mut self) -> DispatchResult<Vec<ParticleEmitter>> {
+        let actors = self
+            .actor_classes
+            .iter()
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
+        let mut emitters = Vec::new();
+        for (actor, class) in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self.resolved_object(&class)?;
+            if !self.class_has_name(&class, "ParticleFX")? {
+                continue;
+            }
+            let instance = self
+                .instances
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor })?;
+            let textures = match self.instance_property(&class, &instance, "Textures")? {
+                Some(StoredValue::Array(values)) => values
+                    .into_iter()
+                    .filter_map(|value| match value {
+                        StoredValue::Object(Some(object)) => Some(ParticleTexture {
+                            package: object.package.to_string(),
+                            export_index: object.export_index,
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            emitters.push(ParticleEmitter {
+                actor,
+                emit: particle_bool(self.instance_property(&class, &instance, "bEmit")?),
+                prime: particle_bool(self.instance_property(&class, &instance, "bPrime")?),
+                style: particle_byte(self.instance_property(&class, &instance, "Style")?),
+                unlit: particle_bool(self.instance_property(&class, &instance, "bUnlit")?),
+                particles_max: particle_int(self.instance_property(
+                    &class,
+                    &instance,
+                    "ParticlesMax",
+                )?),
+                particles_per_second: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "ParticlesPerSec",
+                )?),
+                lifetime: particle_float(self.instance_property(&class, &instance, "Lifetime")?),
+                speed: particle_float(self.instance_property(&class, &instance, "Speed")?),
+                source_width: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SourceWidth",
+                )?),
+                source_height: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SourceHeight",
+                )?),
+                source_depth: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SourceDepth",
+                )?),
+                size_width: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SizeWidth",
+                )?),
+                size_length: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SizeLength",
+                )?),
+                gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
+                textures,
+            });
+        }
+        Ok(emitters)
+    }
+
     pub fn initialize_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
         let level = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
         let level_class = self
@@ -1134,6 +1217,49 @@ impl ScriptRuntime {
         };
         update_touching_array(values, other, touching);
         Ok(())
+    }
+}
+
+fn particle_bool(value: Option<StoredValue>) -> bool {
+    matches!(value, Some(StoredValue::Value(Value::Bool(true))))
+}
+
+fn particle_int(value: Option<StoredValue>) -> usize {
+    match value {
+        Some(StoredValue::Value(Value::Int(value))) => usize::try_from(value).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn particle_byte(value: Option<StoredValue>) -> u8 {
+    match value {
+        Some(StoredValue::Value(Value::Byte(value))) => value,
+        _ => 0,
+    }
+}
+
+fn particle_float(value: Option<StoredValue>) -> ParticleFloat {
+    let Some(StoredValue::Value(Value::Struct(values))) = value else {
+        return ParticleFloat::default();
+    };
+    let get = |name: &str| match values.get(name) {
+        Some(Value::Float(value)) if value.is_finite() => *value,
+        _ => 0.0,
+    };
+    ParticleFloat {
+        base: get("Base"),
+        random: get("Rand"),
+    }
+}
+
+fn particle_vector(value: Option<StoredValue>) -> [f32; 3] {
+    match value {
+        Some(StoredValue::Value(Value::Vector(value)))
+            if value.iter().all(|component| component.is_finite()) =>
+        {
+            value
+        }
+        _ => [0.0; 3],
     }
 }
 
