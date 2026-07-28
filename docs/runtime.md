@@ -75,6 +75,9 @@ the default aligned cylinder. A sweep that starts inside an existing overlap
 may move out instead of treating the exit surface as a new impact.
 Movers participate in world collision through their transformed brush-model
 hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
+Pawn mounting follows HP1's native `APawn::Mount` path: only BSP surfaces with
+the authored `bHighLedge` flag qualify, and the original raised, diagonal, and
+destination cylinder probes must all pass before the pawn's `Mount` event runs.
 Aligned cylinders sweep BSP box corners as rounded corners so the resulting
 contact normal can slide a pawn through an adjacent opening.
 `MakeNoise` currently validates its loudness without populating pawn noise

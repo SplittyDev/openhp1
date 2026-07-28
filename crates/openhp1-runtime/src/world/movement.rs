@@ -58,6 +58,7 @@ pub(super) struct MovementHit {
     pub fraction: f32,
     pub normal: Vec3,
     pub actor: Option<usize>,
+    pub node: Option<usize>,
 }
 
 impl ScriptRuntime {
@@ -241,6 +242,7 @@ impl ScriptRuntime {
                 fraction: 0.0,
                 normal: Vec3::ZERO,
                 actor: None,
+                node: None,
             });
         }
 
@@ -250,6 +252,7 @@ impl ScriptRuntime {
                 fraction: 1.0,
                 normal: Vec3::ZERO,
                 actor: None,
+                node: None,
             });
         }
         let current = self.collision_actor(actor, actor_class, instance)?;
@@ -281,12 +284,14 @@ impl ScriptRuntime {
                 fraction: hit.fraction,
                 normal: hit.normal,
                 actor: None,
+                node: Some(hit.node),
             }
         } else {
             MovementHit {
                 fraction: 1.0,
                 normal: Vec3::ZERO,
                 actor: None,
+                node: None,
             }
         };
 
@@ -308,6 +313,7 @@ impl ScriptRuntime {
                     fraction: hit.fraction,
                     normal: hit.normal,
                     actor: Some(hit.actor),
+                    node: None,
                 };
                 hit.actor
             });

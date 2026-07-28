@@ -1,7 +1,7 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
 use glam::{Mat3, Vec3};
-use openhp1_map::{BspNode, Model, bsp_zone_at};
+use openhp1_map::{BspNode, Model, PolyFlags, bsp_zone_at};
 use openhp1_package::ObjectReference;
 use thiserror::Error;
 
@@ -30,13 +30,14 @@ pub struct BspCollision {
     hulls_by_min_x: Vec<usize>,
     zone_nodes: Vec<BspNode>,
     zone_actors: Vec<Option<usize>>,
+    node_poly_flags: Vec<PolyFlags>,
 }
 
 #[derive(Clone, Debug)]
 struct ConvexHull {
     node: usize,
     bounds: Aabb,
-    planes: Vec<Plane>,
+    planes: Vec<HullPlane>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +50,12 @@ struct Aabb {
 struct Plane {
     normal: Vec3,
     distance: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HullPlane {
+    node: usize,
+    plane: Plane,
 }
 
 #[derive(Clone, Copy)]
@@ -174,7 +181,10 @@ impl BspCollision {
                     plane.normal = -plane.normal;
                     plane.distance = -plane.distance;
                 }
-                planes.push(plane);
+                planes.push(HullPlane {
+                    node: plane_index,
+                    plane,
+                });
             }
             hulls.push(ConvexHull {
                 node: node_index,
@@ -204,6 +214,17 @@ impl BspCollision {
             hulls_by_min_x,
             zone_nodes: model.nodes.clone(),
             zone_actors,
+            node_poly_flags: model
+                .nodes
+                .iter()
+                .map(|node| {
+                    usize::try_from(node.surface)
+                        .ok()
+                        .and_then(|surface| model.surfaces.get(surface))
+                        .map(|surface| surface.poly_flags)
+                        .unwrap_or_default()
+                })
+                .collect(),
         })
     }
 
@@ -347,7 +368,11 @@ impl BspCollision {
                 let hit = CollisionHit {
                     fraction: hit.fraction,
                     normal: hit.normal,
-                    node: hull.node,
+                    node: hull
+                        .planes
+                        .iter()
+                        .find(|plane| plane.plane.normal.abs_diff_eq(hit.normal, 0.00001))
+                        .map_or(hull.node, |plane| plane.node),
                 };
                 if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
                     hit.fraction < current.fraction
@@ -365,15 +390,15 @@ impl BspCollision {
                 .planes
                 .iter()
                 .copied()
-                .all(|plane| cursor.clip_plane(plane))
+                .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
             {
                 continue;
             }
             for (index, plane) in hull.planes.iter().copied().enumerate() {
                 for other in hull.planes[..index].iter().copied() {
                     for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                        if opposite_axis_signs(plane.normal, other.normal, axis) {
-                            cursor.clip_bevel(plane, other, axis);
+                        if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
+                            cursor.clip_bevel(plane.plane, other.plane, axis);
                         }
                     }
                 }
@@ -385,7 +410,12 @@ impl BspCollision {
             let hit = CollisionHit {
                 fraction,
                 normal: cursor.hit_normal,
-                node: hull.node,
+                node: cursor.hit_node.unwrap_or_else(|| {
+                    hull.planes
+                        .iter()
+                        .find(|plane| plane.plane.normal.abs_diff_eq(cursor.hit_normal, 0.00001))
+                        .map_or(hull.node, |plane| plane.node)
+                }),
             };
             if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
                 hit.fraction < current.fraction
@@ -399,6 +429,12 @@ impl BspCollision {
 
     pub fn hull_count(&self) -> usize {
         self.hulls.len()
+    }
+
+    pub fn node_has_poly_flag(&self, node: usize, flag: PolyFlags) -> bool {
+        self.node_poly_flags
+            .get(node)
+            .is_some_and(|flags| flags.contains(flag))
     }
 
     pub fn zone_at(&self, point: Vec3) -> usize {
@@ -700,7 +736,7 @@ fn hull_is_axis_aligned_box(hull: &ConvexHull) -> bool {
     }
     let mut axes = 0_u8;
     for plane in &hull.planes {
-        let normal = plane.normal;
+        let normal = plane.plane.normal;
         let bit = if normal.abs_diff_eq(Vec3::X, 0.00001) {
             0
         } else if normal.abs_diff_eq(Vec3::NEG_X, 0.00001) {
@@ -750,6 +786,7 @@ struct SweepCursor {
     start_fraction: f32,
     end_fraction: f32,
     hit_normal: Vec3,
+    hit_node: Option<usize>,
     no_hit: bool,
 }
 
@@ -762,11 +799,12 @@ impl SweepCursor {
             start_fraction: -1.0,
             end_fraction: 2.0,
             hit_normal: Vec3::ZERO,
+            hit_node: None,
             no_hit: false,
         }
     }
 
-    fn clip_plane(&mut self, plane: Plane) -> bool {
+    fn clip_plane(&mut self, plane: Plane, node: Option<usize>) -> bool {
         let push_out = self.shape.support(plane.normal);
         let start_distance = plane.normal.dot(self.start) - plane.distance;
         let end_distance = plane.normal.dot(self.end) - plane.distance;
@@ -783,9 +821,12 @@ impl SweepCursor {
         };
 
         if front_face > 0.00001 {
-            if fraction > self.start_fraction {
+            if fraction > self.start_fraction
+                || (fraction == self.start_fraction && self.hit_node.is_none() && node.is_some())
+            {
                 self.start_fraction = fraction;
                 self.hit_normal = plane.normal;
+                self.hit_node = node;
             }
         } else if front_face < -0.00001 {
             self.end_fraction = self.end_fraction.min(fraction);
@@ -821,10 +862,13 @@ impl SweepCursor {
         if first.normal.dot(normal) < 0.0 {
             normal = -normal;
         }
-        self.clip_plane(Plane {
-            normal,
-            distance: point.dot(normal),
-        });
+        self.clip_plane(
+            Plane {
+                normal,
+                distance: point.dot(normal),
+            },
+            None,
+        );
     }
 
     fn clip_box(&mut self, bounds: Aabb) -> bool {
@@ -855,7 +899,7 @@ impl SweepCursor {
             },
         ]
         .into_iter()
-        .all(|plane| self.clip_plane(plane))
+        .all(|plane| self.clip_plane(plane, None))
     }
 
     fn hit_distance(&self, trace_distance: f32) -> Option<f32> {
@@ -876,11 +920,28 @@ fn opposite_axis_signs(first: Vec3, second: Vec3, axis: Vec3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhp1_map::{BspNode, Model, PrimitiveBounds};
+    use openhp1_map::{BspNode, BspSurface, Model, PrimitiveBounds};
 
     #[test]
     fn decodes_and_sweeps_serialized_leaf_hull() {
         let mut model = empty_model();
+        model.surfaces.push(BspSurface {
+            texture: ObjectReference::None,
+            poly_flags: PolyFlags::HIGH_LEDGE,
+            base_point: 0,
+            normal: 0,
+            texture_u: 0,
+            texture_v: 0,
+            light_map: -1,
+            brush_poly: -1,
+            pan_u: 0,
+            pan_v: 0,
+            brush_actor: ObjectReference::None,
+        });
+        model.surfaces.push(BspSurface {
+            poly_flags: PolyFlags::default(),
+            ..model.surfaces[0].clone()
+        });
         let planes = [
             [1.0, 0.0, 0.0, 10.0],
             [-1.0, 0.0, 0.0, 10.0],
@@ -897,7 +958,7 @@ mod tests {
                 zone_mask: 0,
                 flags: 0,
                 vertex_pool: 0,
-                surface: 0,
+                surface: if index == 0 { 0 } else { 1 },
                 back: -1,
                 front: -1,
                 coplanar: -1,
@@ -921,12 +982,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(collision.hull_count(), 1);
+        assert!(collision.node_has_poly_flag(0, PolyFlags::HIGH_LEDGE));
         assert!(
             hit.fraction > 0.35 && hit.fraction < 0.45,
             "{}",
             hit.fraction
         );
         assert_eq!(hit.normal, Vec3::X);
+        assert_eq!(hit.node, 0);
+        let opposite = collision
+            .sweep_aabb(Vec3::new(-20.0, 0.0, 0.0), Vec3::ZERO, Vec3::ONE)
+            .unwrap();
+        assert_eq!(opposite.node, 1);
+        assert!(!collision.node_has_poly_flag(opposite.node, PolyFlags::HIGH_LEDGE));
 
         let rotation = Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2);
         let hit = collision

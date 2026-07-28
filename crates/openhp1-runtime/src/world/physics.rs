@@ -1,5 +1,7 @@
 use glam::Vec3;
+use openhp1_map::PolyFlags;
 
+use super::movement::MovementHit;
 use super::*;
 
 const PHYSICS_STEP: f32 = 0.02;
@@ -294,6 +296,9 @@ impl ScriptRuntime {
                     time_left -= time_left * hit.fraction;
                 }
                 if hit.fraction < 1.0 {
+                    if player && self.try_mount(actor, class, instance, hit, actions)? {
+                        return Ok(());
+                    }
                     if let (true, Some(other)) = (player, hit.actor) {
                         if self
                             .actor_has_class(other, "Decoration")
@@ -517,6 +522,9 @@ impl ScriptRuntime {
                 .transpose()
                 .map_err(|error| error.to_string())?
                 .unwrap_or(false);
+            if pawn && !hit_pawn {
+                self.try_mount(actor, class, instance, hit, actions)?;
+            }
             if !hit_pawn {
                 self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
             }
@@ -561,6 +569,80 @@ impl ScriptRuntime {
             break;
         }
         Ok(())
+    }
+
+    fn try_mount(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        hit: MovementHit,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        let Some(node) = hit.node else {
+            return Ok(false);
+        };
+        let max_height = self.actor_float(class, instance, "MaxMountHeight")?;
+        if max_height <= 0.0 || !(-0.1..0.7).contains(&hit.normal.z) {
+            return Ok(false);
+        }
+        let collision = self
+            .collision
+            .clone()
+            .ok_or_else(|| "Mount requires a configured BSP collision model".to_owned())?;
+        if !collision.node_has_poly_flag(node, PolyFlags::HIGH_LEDGE) {
+            return Ok(false);
+        }
+        let rotation = self.actor_rotator(class, instance, "Rotation")?;
+        let forward = Vec3::from_array(crate::rotator_axes(rotation)[0]);
+        if forward.dot(hit.normal) >= 0.0 {
+            return Ok(false);
+        }
+
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let radius = self.actor_float(class, instance, "CollisionRadius")?;
+        let height = self.actor_float(class, instance, "CollisionHeight")?;
+        let up = Vec3::Z;
+        let inward = Vec3::new(-hit.normal.x, -hit.normal.y, 0.0).normalize_or_zero();
+        let raised = location + up * max_height;
+        let far = raised + inward * (height * 2.0 + max_height * hit.normal.z);
+        let diagonal_end = far - (up + hit.normal) * max_height;
+        let Some(ledge) = collision.sweep_cylinder(far, diagonal_end, radius, height) else {
+            return Ok(false);
+        };
+        let ledge_location = far + (diagonal_end - far) * ledge.fraction;
+        let minimum_rise = if self.actor_byte(class, instance, "Physics")? == PHYS_FALLING {
+            0.0
+        } else {
+            self.actor_float(class, instance, "MaxStepHeight")?
+        };
+        if ledge_location.z - location.z < minimum_rise {
+            return Ok(false);
+        }
+        let destination = ledge_location + Vec3::Z * 0.51;
+        if collision
+            .sweep_cylinder(location, raised, radius, height)
+            .is_some()
+            || collision
+                .sweep_cylinder(raised, destination, radius, height)
+                .is_some()
+        {
+            return Ok(false);
+        }
+
+        let base = self
+            .level_info
+            .and_then(|level| self.actor_objects.get(&level).cloned());
+        self.set_actor_base(actor, class, instance, base, actions)?;
+        self.call_actor_event(
+            actor,
+            class,
+            instance,
+            "Mount",
+            vec![Value::Vector((destination - location).to_array())],
+            actions,
+        )?;
+        Ok(true)
     }
 
     fn tick_flying(

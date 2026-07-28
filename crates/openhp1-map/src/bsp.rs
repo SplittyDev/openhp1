@@ -54,6 +54,7 @@ impl PolyFlags {
     pub const TWO_SIDED: Self = Self(0x0000_0100);
     pub const AUTO_U_PAN: Self = Self(0x0000_0200);
     pub const AUTO_V_PAN: Self = Self(0x0000_0400);
+    pub const HIGH_LEDGE: Self = Self(0x0000_1000);
     pub const UNLIT: Self = Self(0x0040_0000);
 
     pub const fn from_bits(bits: u32) -> Self {
