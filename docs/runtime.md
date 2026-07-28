@@ -79,7 +79,8 @@ limit is zero. `ParticlesEmitted` is synchronized back into UnrealScript so
 the original `Shutdown` logic can stop finite effects. World-relative emitters
 interpolate emission between locations, while `bSystemRelative` particles
 remain attached to their moving system. Authored size growth, delay, and end
-scale are applied over each particle's lifetime. A `Gesture` assigned to
+scale are applied over each particle's lifetime. Particle velocity uses the
+authored exponential `Damping` decay. A `Gesture` assigned to
 `Pattern` places emissions along its authored point segments; `Period` selects
 the active normalized range, which is how spell lessons progressively draw
 their visible template.

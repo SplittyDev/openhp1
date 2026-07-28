@@ -387,6 +387,7 @@ impl ScriptRuntime {
                     &instance,
                     "bSystemRelative",
                 )?),
+                damping: particle_scalar(self.instance_property(&class, &instance, "Damping")?),
                 gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
                 pattern,
                 textures,

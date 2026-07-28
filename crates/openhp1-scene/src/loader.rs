@@ -574,6 +574,7 @@ impl LoadedScene {
             system.particles.retain_mut(|particle| {
                 particle.age += delta_time;
                 particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
+                particle.velocity *= particle_damping(system.config.damping, delta_time);
                 particle.location += particle.velocity * delta_time;
                 particle.age < particle.lifetime
             });
@@ -1428,6 +1429,10 @@ fn particle_capacity(emitter: &ParticleEmitter) -> usize {
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
     value.base + value.random * random_unit(random)
+}
+
+fn particle_damping(damping: f32, delta_time: f32) -> f32 {
+    (-damping * delta_time).exp()
 }
 
 fn pattern_position(points: &[[f32; 3]], progress: f32) -> Option<Vec3> {
@@ -3128,6 +3133,7 @@ mod tests {
             size_grow_period: 0.0,
             draw_scale: 1.0,
             system_relative: false,
+            damping: 0.0,
             gravity: [0.0; 3],
             pattern: Vec::new(),
             textures: Vec::new(),
@@ -3161,6 +3167,12 @@ mod tests {
             ),
             25.0
         );
+    }
+
+    #[test]
+    fn particle_damping_is_exponential_over_elapsed_time() {
+        assert!((super::particle_damping(1.0, 1.0) - std::f32::consts::E.recip()).abs() < 1e-6);
+        assert_eq!(super::particle_damping(0.0, 10.0), 1.0);
     }
 
     #[test]

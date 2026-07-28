@@ -199,6 +199,7 @@ pub struct ParticleEmitter {
     pub size_grow_period: f32,
     pub draw_scale: f32,
     pub system_relative: bool,
+    pub damping: f32,
     pub gravity: [f32; 3],
     pub pattern: Vec<[f32; 3]>,
     pub textures: Vec<ParticleTexture>,
