@@ -189,6 +189,16 @@ pub fn apply_runtime_actions_with(
                         roll: rotation[2],
                     },
                 )?;
+                for diagnostic in &scene.actors[actor].diagnostics {
+                    warn!(
+                        actor,
+                        actor_name = scene.actors[actor].name,
+                        class = scene.actors[actor].class_name,
+                        draw_type = scene.actors[actor].draw_type,
+                        diagnostic,
+                        "spawned actor capability diagnostic"
+                    );
+                }
                 runtime
                     .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
                 runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
@@ -232,14 +242,7 @@ pub fn apply_runtime_actions_with(
             ActorAction::DeferredCall { actor, message } => {
                 deferred += 1;
                 let diagnostic = format!("runtime deferred call: {message}");
-                if !scene.actors[actor].diagnostics.contains(&diagnostic)
-                    && scene.actors[actor]
-                        .diagnostics
-                        .iter()
-                        .filter(|diagnostic| diagnostic.starts_with("runtime deferred"))
-                        .count()
-                        < 3
-                {
+                if !scene.actors[actor].diagnostics.contains(&diagnostic) {
                     warn!(
                         actor,
                         actor_name = scene.actors[actor].name,

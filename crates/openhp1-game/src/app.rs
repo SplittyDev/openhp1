@@ -532,6 +532,12 @@ impl Graphics {
                 actor.rotation.roll,
             ]
         });
+        let capability_diagnostics = self
+            .scene
+            .actors
+            .iter()
+            .map(|actor| actor.diagnostics.len())
+            .sum::<usize>();
         egui::Window::new("OpenHP1 diagnostics")
             .default_pos([12.0, 12.0])
             .resizable(false)
@@ -569,6 +575,9 @@ impl Graphics {
                     self.render_stats.draw_calls
                 ));
                 ui.monospace(format!("{} deferred runtime calls", self.deferred_calls));
+                ui.monospace(format!(
+                    "{capability_diagnostics} capability diagnostics (see log)"
+                ));
                 if self.input.keys.iter().copied().any(is_fast_forward_key) {
                     ui.colored_label(
                         egui::Color32::YELLOW,

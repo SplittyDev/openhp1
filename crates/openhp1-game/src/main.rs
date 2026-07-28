@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use app::GameApp;
 use openhp1_scene::LoadedScene;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{
     EnvFilter, Layer, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
 };
@@ -23,6 +23,30 @@ fn main() -> Result<()> {
     info!(path = %log_path.display(), "logging game diagnostics");
 
     let scene = LoadedScene::load(level_path()?)?;
+    let diagnostics = scene
+        .actors
+        .iter()
+        .flat_map(|actor| {
+            actor
+                .diagnostics
+                .iter()
+                .map(move |message| (actor, message))
+        })
+        .collect::<Vec<_>>();
+    for (actor, message) in &diagnostics {
+        warn!(
+            actor = actor.name,
+            class = actor.class_name,
+            draw_type = actor.draw_type,
+            diagnostic = message.as_str(),
+            "scene actor capability diagnostic"
+        );
+    }
+    info!(
+        actors = scene.actors.len(),
+        diagnostics = diagnostics.len(),
+        "loaded scene capabilities"
+    );
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut GameApp::new(scene))?;
     Ok(())
