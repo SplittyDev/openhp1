@@ -70,6 +70,7 @@ An idle walking pawn still steps down to a reachable floor; a floor probe alone
 must not leave a newly initialized or script-moved pawn suspended above it.
 Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
+Latent `TurnToward` tracks the target actor's current location while turning.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
 Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated

@@ -291,6 +291,38 @@ impl ScriptRuntime {
             self.pending_latent = Some(LatentAction::TurnTo);
             return Ok(Value::None);
         }
+        if index == TURN_TOWARD {
+            let [Value::Object(handle)] = arguments else {
+                return Err(format!(
+                    "TurnToward expects one actor, found {}",
+                    arguments.len()
+                ));
+            };
+            if *handle == 0 {
+                return Ok(Value::None);
+            }
+            let target_actor = if *handle == -1 {
+                actor
+            } else {
+                self.actor_for_handle(*handle)
+                    .map_err(|error| error.to_string())?
+            };
+            let target = self
+                .actor_objects
+                .get(&target_actor)
+                .cloned()
+                .ok_or_else(|| format!("TurnToward target actor {target_actor} is unregistered"))?;
+            let focus = self.other_actor_vector(target_actor, "Location")?;
+            self.set_actor_stored(
+                actor_class,
+                instance,
+                "FaceTarget",
+                StoredValue::Object(Some(target)),
+            )?;
+            self.set_actor_value(actor_class, instance, "Focus", Value::Vector(focus))?;
+            self.pending_latent = Some(LatentAction::TurnToward);
+            return Ok(Value::None);
+        }
         if index == FINISH_ANIM {
             if arguments.len() > 1 {
                 return Err(format!(

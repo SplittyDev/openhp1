@@ -58,6 +58,7 @@ const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
 const TURN_TO: u16 = 508;
+const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
 const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
@@ -475,6 +476,7 @@ enum LatentAction {
     FinishInterpolation,
     MoveTo,
     TurnTo,
+    TurnToward,
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;

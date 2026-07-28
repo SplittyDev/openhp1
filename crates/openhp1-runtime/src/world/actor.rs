@@ -684,7 +684,10 @@ impl ScriptRuntime {
             if matches!(
                 latent,
                 Some(
-                    LatentAction::FinishInterpolation | LatentAction::MoveTo | LatentAction::TurnTo
+                    LatentAction::FinishInterpolation
+                        | LatentAction::MoveTo
+                        | LatentAction::TurnTo
+                        | LatentAction::TurnToward
                 )
             ) {
                 let Some(class) = self.actor_classes.get(&actor).cloned() else {
@@ -700,6 +703,7 @@ impl ScriptRuntime {
                         self.tick_move_to(&class, &mut instance, delta_time)
                     }
                     Some(LatentAction::TurnTo) => self.tick_turn_to(&class, &mut instance),
+                    Some(LatentAction::TurnToward) => self.tick_turn_toward(&class, &mut instance),
                     _ => unreachable!(),
                 };
                 self.instances.insert(actor, instance);
@@ -1106,6 +1110,7 @@ pub(super) fn decode_latent_action(index: i32) -> LatentAction {
         0x12e => LatentAction::FinishInterpolation,
         501 => LatentAction::MoveTo,
         509 => LatentAction::TurnTo,
+        511 => LatentAction::TurnToward,
         _ => LatentAction::Stop,
     }
 }
@@ -1155,7 +1160,7 @@ pub(super) fn update_touching_array(values: &mut [StoredValue], other: ObjectId,
 
 #[cfg(test)]
 mod animation_tests {
-    use super::advance_animation_frame;
+    use super::{LatentAction, advance_animation_frame, decode_latent_action};
 
     #[test]
     fn animation_frames_follow_ue_tween_and_loop_rules() {
@@ -1167,5 +1172,10 @@ mod animation_tests {
         assert!(
             (advance_animation_frame(0.9, 0.2, 0.0, 0.95, true, 1.0) - 0.1).abs() < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn decodes_turn_toward_latent_state() {
+        assert_eq!(decode_latent_action(511), LatentAction::TurnToward);
     }
 }

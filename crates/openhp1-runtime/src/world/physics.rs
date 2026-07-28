@@ -55,6 +55,22 @@ impl ScriptRuntime {
         Ok(!(2_000..=0x1_0000 - 2_000).contains(&difference))
     }
 
+    pub(super) fn tick_turn_toward(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let Some(target) = self.actor_object(class, instance, "FaceTarget")? else {
+            return Ok(true);
+        };
+        let Some(target) = self.object_actors.get(&target).copied() else {
+            return Ok(true);
+        };
+        let focus = self.other_actor_vector(target, "Location")?;
+        self.set_actor_value(class, instance, "Focus", Value::Vector(focus))?;
+        self.tick_turn_to(class, instance)
+    }
+
     pub(super) fn tick_move_to(
         &mut self,
         class: &ResolvedObject,
@@ -1524,7 +1540,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn other_actor_vector(
+    pub(super) fn other_actor_vector(
         &mut self,
         actor: usize,
         name: &str,
