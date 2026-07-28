@@ -19,7 +19,6 @@ const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
 
 struct ZonePhysics {
-    number: usize,
     gravity: Vec3,
     velocity: Vec3,
     ground_friction: f32,
@@ -194,8 +193,7 @@ impl ScriptRuntime {
             return Ok(());
         }
         let old_location = self.actor_vector(class, instance, "Location")?;
-        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
-        if zone.number == 0 {
+        let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
             self.call_actor_event(
                 actor,
                 class,
@@ -205,7 +203,7 @@ impl ScriptRuntime {
                 actions,
             )?;
             return Ok(());
-        }
+        };
         self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
         self.set_actor_value(class, instance, "bJustTeleported", Value::Bool(false))?;
 
@@ -418,8 +416,7 @@ impl ScriptRuntime {
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
         let old_location = self.actor_vector(class, instance, "Location")?;
-        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
-        if zone.number == 0 {
+        let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
             self.call_actor_event(
                 actor,
                 class,
@@ -429,7 +426,7 @@ impl ScriptRuntime {
                 actions,
             )?;
             return Ok(());
-        }
+        };
         let pawn = self
             .class_has_name(class, "Pawn")
             .map_err(|error| error.to_string())?;
@@ -661,8 +658,7 @@ impl ScriptRuntime {
             return Ok(());
         }
         let old_location = self.actor_vector(class, instance, "Location")?;
-        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
-        if zone.number == 0 {
+        let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
             self.call_actor_event(
                 actor,
                 class,
@@ -672,7 +668,7 @@ impl ScriptRuntime {
                 actions,
             )?;
             return Ok(());
-        }
+        };
         self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
         self.set_actor_value(class, instance, "bJustTeleported", Value::Bool(false))?;
 
@@ -791,7 +787,7 @@ impl ScriptRuntime {
         if swimming {
             let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
             let new_zone = self.zone_physics(location, actor, instance)?;
-            if !new_zone.water {
+            if !new_zone.is_some_and(|zone| zone.water) {
                 if velocity.z > 0.0 {
                     velocity.z = velocity.z.max((100.0 + velocity.truncate().length()) * 0.5);
                 }
@@ -820,8 +816,7 @@ impl ScriptRuntime {
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
         let old_location = self.actor_vector(class, instance, "Location")?;
-        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
-        if zone.number == 0 {
+        let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
             self.native(
                 actor,
                 class,
@@ -833,7 +828,7 @@ impl ScriptRuntime {
                 0,
             )?;
             return Ok(());
-        }
+        };
         self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
         self.set_actor_value(class, instance, "bJustTeleported", Value::Bool(false))?;
 
@@ -906,8 +901,7 @@ impl ScriptRuntime {
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
         let old_location = self.actor_vector(class, instance, "Location")?;
-        let zone = self.zone_physics(Vec3::from_array(old_location), actor, instance)?;
-        if zone.number == 0 {
+        let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
             self.call_actor_event(
                 actor,
                 class,
@@ -917,7 +911,7 @@ impl ScriptRuntime {
                 actions,
             )?;
             return Ok(());
-        }
+        };
         self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
         self.set_actor_value(class, instance, "bJustTeleported", Value::Bool(false))?;
 
@@ -1412,12 +1406,14 @@ impl ScriptRuntime {
         location: Vec3,
         current_actor: usize,
         current_instance: &InstanceState,
-    ) -> std::result::Result<ZonePhysics, String> {
+    ) -> std::result::Result<Option<ZonePhysics>, String> {
         let collision = self
             .collision
             .as_ref()
             .ok_or_else(|| "physics requires a configured BSP collision model".to_owned())?;
-        let zone = collision.zone_at(location);
+        let Some(zone) = collision.zone_at(location) else {
+            return Ok(None);
+        };
         let zone_actor = collision
             .zone_actor_export(zone)
             .and_then(|export_index| {
@@ -1449,15 +1445,14 @@ impl ScriptRuntime {
                 .cloned()
                 .ok_or_else(|| format!("zone actor {zone_actor} instance is active"))?
         };
-        Ok(ZonePhysics {
-            number: zone,
+        Ok(Some(ZonePhysics {
             gravity: Vec3::from_array(self.actor_vector(&class, &instance, "ZoneGravity")?),
             velocity: Vec3::from_array(self.actor_vector(&class, &instance, "ZoneVelocity")?),
             ground_friction: self.actor_float(&class, &instance, "ZoneGroundFriction")?,
             fluid_friction: self.actor_float(&class, &instance, "ZoneFluidFriction")?,
             terminal_velocity: self.actor_float(&class, &instance, "ZoneTerminalVelocity")?,
             water: self.actor_bool(&class, &instance, "bWaterZone")?,
-        })
+        }))
     }
 
     fn actor_has_class(&mut self, actor: usize, name: &str) -> DispatchResult<bool> {

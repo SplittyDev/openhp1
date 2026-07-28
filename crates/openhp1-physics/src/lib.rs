@@ -1,7 +1,7 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
 use glam::{Mat3, Vec3};
-use openhp1_map::{BspNode, BspVertex, Model, PolyFlags, bsp_zone_at};
+use openhp1_map::{BspNode, BspVertex, Model, PolyFlags, bsp_zone_at_checked};
 use openhp1_package::ObjectReference;
 use thiserror::Error;
 
@@ -548,8 +548,8 @@ impl BspCollision {
             .is_some_and(|flags| flags.contains(flag))
     }
 
-    pub fn zone_at(&self, point: Vec3) -> usize {
-        bsp_zone_at(&self.zone_nodes, self.zone_actors.len(), point)
+    pub fn zone_at(&self, point: Vec3) -> Option<usize> {
+        bsp_zone_at_checked(&self.zone_nodes, self.zone_actors.len(), point)
     }
 
     pub fn zone_actor_export(&self, zone: usize) -> Option<usize> {

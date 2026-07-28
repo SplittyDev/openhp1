@@ -17,7 +17,9 @@ pub use bsp::{
 };
 pub use error::{Error, Result};
 pub use level::{Level, world_model_export};
-pub use lighting::{ActorVertexLighting, LightmapImage, VertexLighting, bsp_zone_at};
+pub use lighting::{
+    ActorVertexLighting, LightmapImage, VertexLighting, bsp_zone_at, bsp_zone_at_checked,
+};
 pub use mesh::TriangleMesh;
 pub use model::Model;
 pub use polys::{BrushPolygon, BrushPolys};

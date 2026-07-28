@@ -240,11 +240,17 @@ impl VertexLighting {
 }
 
 pub fn bsp_zone_at(nodes: &[crate::BspNode], zone_count: usize, point: Vec3) -> usize {
+    bsp_zone_at_checked(nodes, zone_count, point).unwrap_or(0)
+}
+
+pub fn bsp_zone_at_checked(
+    nodes: &[crate::BspNode],
+    zone_count: usize,
+    point: Vec3,
+) -> Option<usize> {
     let mut node_index = 0;
     loop {
-        let Some(node) = nodes.get(node_index) else {
-            return 0;
-        };
+        let node = nodes.get(node_index)?;
         let side = plane_side(node.plane, point);
         let child = if side >= 0.0 { node.front } else { node.back };
         if let Ok(child) = usize::try_from(child) {
@@ -257,8 +263,7 @@ pub fn bsp_zone_at(nodes: &[crate::BspNode], zone_count: usize, point: Vec3) -> 
             node.zones[0]
         })
         .ok()
-        .filter(|zone| *zone < zone_count)
-        .unwrap_or(0);
+        .filter(|zone| *zone < zone_count);
     }
 }
 
@@ -313,6 +318,27 @@ mod tests {
         let nodes = [node];
         assert_eq!(bsp_zone_at(&nodes, 3, Vec3::X), 1);
         assert_eq!(bsp_zone_at(&nodes, 3, -Vec3::X), 2);
+    }
+
+    #[test]
+    fn checked_zone_lookup_distinguishes_zone_zero_from_outside_the_model() {
+        let node = crate::BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: 0,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [0, 1],
+            vertex_count: 0,
+            leaves: [-1; 2],
+        };
+        assert_eq!(bsp_zone_at_checked(&[node], 2, -Vec3::X), Some(0));
+        assert_eq!(bsp_zone_at_checked(&[], 2, Vec3::ZERO), None);
     }
 
     #[test]
