@@ -671,14 +671,31 @@ impl ScriptRuntime {
             .collision
             .as_ref()
             .and_then(|collision| collision.sweep_aabb(start, end, extent));
-        let (location, normal) = hit.map_or((end, Vec3::ZERO), |hit| {
-            (start + (end - start) * hit.fraction, hit.normal)
-        });
+        let (value, location, normal) = if let Some(hit) = hit {
+            let level = self
+                .level_info
+                .ok_or_else(|| "Trace hit BSP without a registered LevelInfo".to_owned())?;
+            let object = self
+                .actor_objects
+                .get(&level)
+                .cloned()
+                .ok_or_else(|| format!("LevelInfo actor {level} has no object identity"))?;
+            (
+                Value::Object(
+                    self.object_handle(object)
+                        .map_err(|error| error.to_string())?,
+                ),
+                start + (end - start) * hit.fraction,
+                hit.normal,
+            )
+        } else {
+            (Value::Object(0), end, Vec3::ZERO)
+        };
         let mut output_arguments = arguments.to_vec();
         output_arguments[0] = Value::Vector(location.to_array());
         output_arguments[1] = Value::Vector(normal.to_array());
         Ok(CallOutput::from_arguments(
-            Value::Object(0),
+            value,
             arguments,
             output_arguments,
         ))

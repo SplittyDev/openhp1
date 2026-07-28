@@ -97,7 +97,8 @@ Engine side effects without an OpenHP1 surface do not abort scripts:
 detachment is a no-op until decals render.
 
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
-visibility tests. `TraceActors` currently yields no actor hits; add actor
+visibility tests. BSP trace hits return the active `LevelInfo`, as UE1
+UnrealScript expects. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
