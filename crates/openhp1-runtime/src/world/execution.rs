@@ -131,6 +131,7 @@ impl ScriptRuntime {
                 | LatentAction::FinishAnimation(_)
                 | LatentAction::FinishInterpolation(_)
                 | LatentAction::MoveTo(_)
+                | LatentAction::MoveToward(_)
                 | LatentAction::TurnTo(_)
                 | LatentAction::TurnToward(_) => {
                     self.state_frames.insert(actor, state_frame);

@@ -110,6 +110,24 @@ impl ScriptRuntime {
         Ok(false)
     }
 
+    pub(super) fn tick_move_toward(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+    ) -> std::result::Result<bool, String> {
+        let Some(target) = self.actor_object(class, instance, "MoveTarget")? else {
+            return Ok(true);
+        };
+        let Some(target) = self.object_actors.get(&target).copied() else {
+            return Ok(true);
+        };
+        let destination = self.other_actor_vector(target, "Location")?;
+        self.set_actor_value(class, instance, "Destination", Value::Vector(destination))?;
+        self.set_actor_value(class, instance, "Focus", Value::Vector(destination))?;
+        self.tick_move_to(class, instance, elapsed)
+    }
+
     pub(super) fn tick_physics(
         &mut self,
         delta_time: f32,

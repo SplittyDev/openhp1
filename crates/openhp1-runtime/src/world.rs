@@ -59,6 +59,7 @@ const TWEEN_ANIM: u16 = 0x126;
 const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
+const MOVE_TOWARD: u16 = 502;
 const TURN_TO: u16 = 508;
 const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
@@ -491,6 +492,7 @@ enum LatentAction {
     FinishAnimation(usize),
     FinishInterpolation(usize),
     MoveTo(usize),
+    MoveToward(usize),
     TurnTo(usize),
     TurnToward(usize),
 }

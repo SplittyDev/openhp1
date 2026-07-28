@@ -723,6 +723,7 @@ impl ScriptRuntime {
                 Some(
                     LatentAction::FinishInterpolation(_)
                         | LatentAction::MoveTo(_)
+                        | LatentAction::MoveToward(_)
                         | LatentAction::TurnTo(_)
                         | LatentAction::TurnToward(_)
                 )
@@ -731,6 +732,7 @@ impl ScriptRuntime {
                     Some(
                         LatentAction::FinishInterpolation(target)
                         | LatentAction::MoveTo(target)
+                        | LatentAction::MoveToward(target)
                         | LatentAction::TurnTo(target)
                         | LatentAction::TurnToward(target),
                     ) => target,
@@ -747,6 +749,9 @@ impl ScriptRuntime {
                         .map(|interpolating| !interpolating),
                     Some(LatentAction::MoveTo(_)) => {
                         self.tick_move_to(&class, &mut instance, delta_time)
+                    }
+                    Some(LatentAction::MoveToward(_)) => {
+                        self.tick_move_toward(&class, &mut instance, delta_time)
                     }
                     Some(LatentAction::TurnTo(_)) => self.tick_turn_to(&class, &mut instance),
                     Some(LatentAction::TurnToward(_)) => {
@@ -1157,6 +1162,7 @@ pub(super) fn decode_latent_action(index: i32, actor: usize) -> LatentAction {
         0x106 => LatentAction::FinishAnimation(actor),
         0x12e => LatentAction::FinishInterpolation(actor),
         501 => LatentAction::MoveTo(actor),
+        503 => LatentAction::MoveToward(actor),
         509 => LatentAction::TurnTo(actor),
         511 => LatentAction::TurnToward(actor),
         _ => LatentAction::Stop,
@@ -1224,6 +1230,7 @@ mod animation_tests {
 
     #[test]
     fn decodes_turn_toward_latent_state() {
+        assert_eq!(decode_latent_action(503, 7), LatentAction::MoveToward(7));
         assert_eq!(decode_latent_action(511, 7), LatentAction::TurnToward(7));
     }
 }
