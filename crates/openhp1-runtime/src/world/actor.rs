@@ -45,7 +45,6 @@ impl ScriptRuntime {
             collision_fields: HashMap::default(),
             collision_actors: Vec::new(),
             collision_actors_by_min_x: Vec::new(),
-            grounded_world: HashMap::default(),
             actor_bases: HashMap::default(),
             base_children: HashMap::default(),
             touching: HashSet::default(),

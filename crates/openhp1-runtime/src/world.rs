@@ -370,7 +370,6 @@ pub struct ScriptRuntime {
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
     collision_actors_by_min_x: Vec<usize>,
-    grounded_world: HashMap<usize, [f32; 3]>,
     actor_bases: HashMap<usize, Option<ObjectId>>,
     base_children: HashMap<ObjectId, Vec<usize>>,
     touching: HashSet<(usize, usize)>,

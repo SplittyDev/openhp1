@@ -353,17 +353,7 @@ impl ScriptRuntime {
                 }
             }
         } else {
-            // ponytail: the BSP is static, so recheck an idle world-supported pawn
-            // only after its location changes; moving bases will invalidate this.
-            if self.grounded_world.get(&actor) != Some(&old_location) {
-                let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
-                if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
-                    self.grounded_world.remove(&actor);
-                    self.start_falling(actor, class, instance, actions)?;
-                } else if floor.actor.is_none() {
-                    self.grounded_world.insert(actor, old_location);
-                }
-            }
+            self.walk_to_floor(actor, class, instance, step_down, actions)?;
         }
 
         if !self.actor_bool(class, instance, "bJustTeleported")? {
@@ -390,7 +380,6 @@ impl ScriptRuntime {
     ) -> std::result::Result<bool, String> {
         let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
         if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
-            self.grounded_world.remove(&actor);
             self.start_falling(actor, class, instance, actions)?;
             return Ok(false);
         }
@@ -1266,10 +1255,6 @@ impl ScriptRuntime {
         )?;
         let base = hit_actor.and_then(|actor| self.actor_objects.get(&actor).cloned());
         self.set_actor_base(actor, class, instance, base, actions)?;
-        if pawn && hit_actor.is_none() {
-            let location = self.actor_vector(class, instance, "Location")?;
-            self.grounded_world.insert(actor, location);
-        }
         if !pawn {
             self.set_actor_value(class, instance, "Velocity", Value::Vector([0.0; 3]))?;
         }
