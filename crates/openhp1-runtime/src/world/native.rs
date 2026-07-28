@@ -317,6 +317,9 @@ impl ScriptRuntime {
                     arguments.len()
                 ));
             };
+            if self.active_state_actor.is_none() {
+                return Err("TurnTo is only valid in state code".to_owned());
+            }
             self.set_actor_stored(
                 actor_class,
                 instance,
@@ -324,7 +327,7 @@ impl ScriptRuntime {
                 StoredValue::Object(None),
             )?;
             self.set_actor_value(actor_class, instance, "Focus", Value::Vector(*focus))?;
-            self.pending_latent = Some(LatentAction::TurnTo);
+            self.pending_latent = Some(LatentAction::TurnTo(actor));
             return Ok(Value::None);
         }
         if index == TURN_TOWARD {
@@ -334,6 +337,9 @@ impl ScriptRuntime {
                     arguments.len()
                 ));
             };
+            if self.active_state_actor.is_none() {
+                return Err("TurnToward is only valid in state code".to_owned());
+            }
             if *handle == 0 {
                 return Ok(Value::None);
             }
@@ -356,7 +362,7 @@ impl ScriptRuntime {
                 StoredValue::Object(Some(target)),
             )?;
             self.set_actor_value(actor_class, instance, "Focus", Value::Vector(focus))?;
-            self.pending_latent = Some(LatentAction::TurnToward);
+            self.pending_latent = Some(LatentAction::TurnToward(actor));
             return Ok(Value::None);
         }
         if index == FINISH_ANIM {
@@ -371,14 +377,14 @@ impl ScriptRuntime {
             {
                 runtime_name(source, root)?;
             }
-            if self.active_state_actor != Some(actor) {
+            if self.active_state_actor.is_none() {
                 return Err("FinishAnim is only valid in state code".to_owned());
             }
             self.set_actor_value(actor_class, instance, "bAnimLoop", Value::Bool(false))?;
             if let Some(command) = self.animation_commands.get_mut(&actor) {
                 command.looping = false;
             }
-            self.pending_latent = Some(LatentAction::FinishAnimation);
+            self.pending_latent = Some(LatentAction::FinishAnimation(actor));
             actions.push(ActorAction::AwaitAnimation { actor });
             return Ok(Value::None);
         }
@@ -389,10 +395,10 @@ impl ScriptRuntime {
                     arguments.len()
                 ));
             }
-            if self.active_state_actor != Some(actor) {
+            if self.active_state_actor.is_none() {
                 return Err("FinishInterpolation is only valid in state code".to_owned());
             }
-            self.pending_latent = Some(LatentAction::FinishInterpolation);
+            self.pending_latent = Some(LatentAction::FinishInterpolation(actor));
             return Ok(Value::None);
         }
         if index == PLAY_SOUND {
@@ -497,7 +503,7 @@ impl ScriptRuntime {
                     ));
                 }
             };
-            if self.active_state_actor != Some(actor) {
+            if self.active_state_actor.is_none() {
                 return Err("MoveTo is only valid in state code".to_owned());
             }
             let desired_speed = speed.clamp(
@@ -541,7 +547,7 @@ impl ScriptRuntime {
             )?;
             self.set_actor_value(actor_class, instance, "Focus", Value::Vector(*destination))?;
             self.set_actor_value(actor_class, instance, "MoveTimer", Value::Float(duration))?;
-            self.pending_latent = Some(LatentAction::MoveTo);
+            self.pending_latent = Some(LatentAction::MoveTo(actor));
             return Ok(Value::None);
         }
         if matches!(index, 0xfe | 0xff)

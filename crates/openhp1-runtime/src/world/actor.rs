@@ -202,7 +202,7 @@ impl ScriptRuntime {
                 StateFrame {
                     state: object_id(&state.package, state.export_index),
                     frame: FrameSnapshot::at(offset),
-                    latent: decode_latent_action(stack.latent_action),
+                    latent: decode_latent_action(stack.latent_action, actor),
                 },
             );
         }
@@ -721,29 +721,40 @@ impl ScriptRuntime {
             if matches!(
                 latent,
                 Some(
-                    LatentAction::FinishInterpolation
-                        | LatentAction::MoveTo
-                        | LatentAction::TurnTo
-                        | LatentAction::TurnToward
+                    LatentAction::FinishInterpolation(_)
+                        | LatentAction::MoveTo(_)
+                        | LatentAction::TurnTo(_)
+                        | LatentAction::TurnToward(_)
                 )
             ) {
-                let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                let target = match latent {
+                    Some(
+                        LatentAction::FinishInterpolation(target)
+                        | LatentAction::MoveTo(target)
+                        | LatentAction::TurnTo(target)
+                        | LatentAction::TurnToward(target),
+                    ) => target,
+                    _ => unreachable!(),
+                };
+                let Some(class) = self.actor_classes.get(&target).cloned() else {
                     continue;
                 };
                 let class = self.resolved_object(&class)?;
-                let mut instance = self.instances.remove(&actor).unwrap_or_default();
+                let mut instance = self.instances.remove(&target).unwrap_or_default();
                 let result = match latent {
-                    Some(LatentAction::FinishInterpolation) => self
+                    Some(LatentAction::FinishInterpolation(_)) => self
                         .actor_bool(&class, &instance, "bInterpolating")
                         .map(|interpolating| !interpolating),
-                    Some(LatentAction::MoveTo) => {
+                    Some(LatentAction::MoveTo(_)) => {
                         self.tick_move_to(&class, &mut instance, delta_time)
                     }
-                    Some(LatentAction::TurnTo) => self.tick_turn_to(&class, &mut instance),
-                    Some(LatentAction::TurnToward) => self.tick_turn_toward(&class, &mut instance),
+                    Some(LatentAction::TurnTo(_)) => self.tick_turn_to(&class, &mut instance),
+                    Some(LatentAction::TurnToward(_)) => {
+                        self.tick_turn_toward(&class, &mut instance)
+                    }
                     _ => unreachable!(),
                 };
-                self.instances.insert(actor, instance);
+                self.instances.insert(target, instance);
                 match result {
                     Ok(true) => {
                         self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
@@ -962,10 +973,10 @@ impl ScriptRuntime {
     }
 
     pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
-        if let Some(frame) = self.state_frames.get_mut(&actor)
-            && frame.latent == LatentAction::FinishAnimation
-        {
-            frame.latent = LatentAction::Continue;
+        for frame in self.state_frames.values_mut() {
+            if frame.latent == LatentAction::FinishAnimation(actor) {
+                frame.latent = LatentAction::Continue;
+            }
         }
         let Some(class) = self.actor_classes.get(&actor).cloned() else {
             return Ok(Vec::new());
@@ -1139,15 +1150,15 @@ fn advance_animation_frame(
     }
 }
 
-pub(super) fn decode_latent_action(index: i32) -> LatentAction {
+pub(super) fn decode_latent_action(index: i32, actor: usize) -> LatentAction {
     match index {
         0 => LatentAction::Continue,
         0x101 => LatentAction::Sleep(0.0),
-        0x106 => LatentAction::FinishAnimation,
-        0x12e => LatentAction::FinishInterpolation,
-        501 => LatentAction::MoveTo,
-        509 => LatentAction::TurnTo,
-        511 => LatentAction::TurnToward,
+        0x106 => LatentAction::FinishAnimation(actor),
+        0x12e => LatentAction::FinishInterpolation(actor),
+        501 => LatentAction::MoveTo(actor),
+        509 => LatentAction::TurnTo(actor),
+        511 => LatentAction::TurnToward(actor),
         _ => LatentAction::Stop,
     }
 }
@@ -1213,6 +1224,6 @@ mod animation_tests {
 
     #[test]
     fn decodes_turn_toward_latent_state() {
-        assert_eq!(decode_latent_action(511), LatentAction::TurnToward);
+        assert_eq!(decode_latent_action(511, 7), LatentAction::TurnToward(7));
     }
 }

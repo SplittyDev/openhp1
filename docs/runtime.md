@@ -31,6 +31,9 @@ Persistent state frames retain their decoded instruction pointer and local
 values across latent `Sleep` and `FinishAnim` actions. `GotoState`,
 `GotoLabel`, and `Stop` operate on that retained frame rather than restarting
 the state body.
+
+Context latent calls suspend the caller's state while movement and animation
+completion are polled on the actor that received the call.
 `FinishInterpolation` resumes the retained frame when mover physics clears
 `bInterpolating`.
 

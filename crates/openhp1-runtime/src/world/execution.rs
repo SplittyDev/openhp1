@@ -128,11 +128,11 @@ impl ScriptRuntime {
                 }
                 LatentAction::Stop
                 | LatentAction::Sleep(_)
-                | LatentAction::FinishAnimation
-                | LatentAction::FinishInterpolation
-                | LatentAction::MoveTo
-                | LatentAction::TurnTo
-                | LatentAction::TurnToward => {
+                | LatentAction::FinishAnimation(_)
+                | LatentAction::FinishInterpolation(_)
+                | LatentAction::MoveTo(_)
+                | LatentAction::TurnTo(_)
+                | LatentAction::TurnToward(_) => {
                     self.state_frames.insert(actor, state_frame);
                     return Ok(());
                 }

@@ -488,11 +488,11 @@ enum LatentAction {
     Continue,
     Stop,
     Sleep(f32),
-    FinishAnimation,
-    FinishInterpolation,
-    MoveTo,
-    TurnTo,
-    TurnToward,
+    FinishAnimation(usize),
+    FinishInterpolation(usize),
+    MoveTo(usize),
+    TurnTo(usize),
+    TurnToward(usize),
 }
 
 type InstanceState = HashMap<ObjectId, StoredValue>;
@@ -563,8 +563,8 @@ mod tests {
     #[test]
     fn decodes_finish_interpolation_latent_state() {
         assert_eq!(
-            decode_latent_action(0x12e),
-            LatentAction::FinishInterpolation
+            decode_latent_action(0x12e, 7),
+            LatentAction::FinishInterpolation(7)
         );
     }
 
