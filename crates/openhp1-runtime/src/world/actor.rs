@@ -365,6 +365,64 @@ impl ScriptRuntime {
         Ok(emitters)
     }
 
+    pub fn weapon_attachments(&mut self) -> DispatchResult<Vec<WeaponAttachment>> {
+        let actors = self
+            .actor_classes
+            .iter()
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
+        let mut attachments = Vec::new();
+        for (pawn, class) in actors {
+            if self.destroyed.contains(&pawn) {
+                continue;
+            }
+            let class = self.resolved_object(&class)?;
+            if !self.class_has_name(&class, "Pawn")? {
+                continue;
+            }
+            let instance = self
+                .instances
+                .get(&pawn)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor: pawn })?;
+            let Some(StoredValue::Object(Some(weapon))) =
+                self.instance_property(&class, &instance, "Weapon")?
+            else {
+                continue;
+            };
+            let Some(&weapon) = self.object_actors.get(&weapon) else {
+                continue;
+            };
+            let weapon_class = self
+                .actor_classes
+                .get(&weapon)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: weapon })?;
+            let weapon_class = self.resolved_object(&weapon_class)?;
+            let weapon_instance = self
+                .instances
+                .get(&weapon)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor: weapon })?;
+            if !matches!(
+                self.instance_property(&weapon_class, &weapon_instance, "ThirdPersonMesh")?,
+                Some(StoredValue::Object(Some(_)))
+            ) {
+                continue;
+            }
+            attachments.push(WeaponAttachment {
+                pawn,
+                weapon,
+                scale: particle_scalar(self.instance_property(
+                    &weapon_class,
+                    &weapon_instance,
+                    "ThirdPersonScale",
+                )?),
+            });
+        }
+        Ok(attachments)
+    }
+
     pub fn set_particle_counts(&mut self, actor: usize, emitted: usize) -> DispatchResult<()> {
         let Some(class) = self.actor_classes.get(&actor).cloned() else {
             return Ok(());

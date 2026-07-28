@@ -9,7 +9,7 @@ mod world;
 
 pub use world::{
     ActorAction, DispatchError, DispatchResult, ParticleEmitter, ParticleFloat, ParticleTexture,
-    PlayerMusic, ScriptRuntime,
+    PlayerMusic, ScriptRuntime, WeaponAttachment,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;

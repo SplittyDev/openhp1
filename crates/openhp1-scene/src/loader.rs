@@ -14,7 +14,7 @@ use openhp1_map::{
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
 use openhp1_physics::BspCollision;
-use openhp1_runtime::{ParticleEmitter, ParticleFloat};
+use openhp1_runtime::{ParticleEmitter, ParticleFloat, WeaponAttachment};
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
@@ -338,6 +338,8 @@ impl LoadedScene {
             mesh_name: None,
             animation: None,
             render: None,
+            mesh_transform: None,
+            mesh_to_object: None,
             diagnostics: class_state.diagnostics,
         };
         apply_scene_actor_state(&mut actor, &state);
@@ -408,6 +410,9 @@ impl LoadedScene {
         }
 
         self.actors[actor_index].location = location;
+        if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
+            *transform = Mat4::from_translation(delta) * *transform;
+        }
         if let Some(vertices) = vertices {
             if hidden {
                 let positions = self
@@ -681,6 +686,58 @@ impl LoadedScene {
             .collect()
     }
 
+    pub fn sync_weapon_attachments(&mut self, attachments: Vec<WeaponAttachment>) -> Result<bool> {
+        let mut changed = false;
+        for attachment in attachments {
+            let Some(points) = self
+                .animations
+                .iter()
+                .find(|animation| animation.actor_index == attachment.pawn)
+                .map(AnimatedActorMesh::attachment)
+                .transpose()?
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(weapon) = self.actors.get(attachment.weapon) else {
+                continue;
+            };
+            let (Some(render), Some(current), Some(mesh_to_object)) = (
+                weapon.render.as_ref().map(|render| render.vertices.clone()),
+                weapon.mesh_transform,
+                weapon.mesh_to_object,
+            ) else {
+                continue;
+            };
+            let Some(desired) =
+                weapon_attachment_transform(points, attachment.scale, mesh_to_object)
+            else {
+                continue;
+            };
+            let delta = desired * current.inverse();
+            if weapon.hidden {
+                let positions = self
+                    .hidden_actor_positions
+                    .get_mut(&attachment.weapon)
+                    .context("hidden attached weapon has no saved render positions")?;
+                transform_positions(positions, delta);
+            } else {
+                transform_positions(&mut self.render.mesh.positions[render], delta);
+            }
+            self.actors[attachment.weapon].mesh_transform = Some(desired);
+            if let Some(animation) = self
+                .animations
+                .iter_mut()
+                .find(|animation| animation.actor_index == attachment.weapon)
+            {
+                animation.transform = desired;
+                animation.normal_transform = Mat3::from_mat4(desired).inverse().transpose();
+            }
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     pub fn set_actor_rotation(&mut self, actor_index: usize, rotation: Rotator) -> Result<bool> {
         let actor = self
             .actors
@@ -705,6 +762,9 @@ impl LoadedScene {
         };
         let transform = rotation_delta(origin, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
+        if let Some(mesh_transform) = &mut self.actors[actor_index].mesh_transform {
+            *mesh_transform = transform * *mesh_transform;
+        }
         if let Some(vertices) = vertices {
             if hidden {
                 let positions = self
@@ -741,6 +801,9 @@ impl LoadedScene {
         let hidden = actor.hidden;
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         self.actors[actor_index].pre_pivot = pre_pivot;
+        if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
+            *transform = Mat4::from_translation(delta) * *transform;
+        }
         if let Some(vertices) = vertices {
             if hidden {
                 let positions = self
@@ -1184,6 +1247,25 @@ fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
     }
 }
 
+fn weapon_attachment_transform(
+    points: [Vec3; 3],
+    scale: f32,
+    mesh_to_object: Mat4,
+) -> Option<Mat4> {
+    let x = (points[1] - points[0]).normalize_or_zero();
+    let y = x.cross(points[2] - points[0]).normalize_or_zero();
+    let z = x.cross(y).normalize_or_zero();
+    (x != Vec3::ZERO && y != Vec3::ZERO && z != Vec3::ZERO).then(|| {
+        Mat4::from_cols(
+            x.extend(0.0),
+            y.extend(0.0),
+            z.extend(0.0),
+            ((points[0] + points[2]) * 0.5).extend(1.0),
+        ) * Mat4::from_scale(Vec3::splat(scale))
+            * mesh_to_object
+    })
+}
+
 fn rotation_delta(origin: Vec3, old: Rotator, new: Rotator) -> Mat4 {
     Mat4::from_translation(origin)
         * rotation_matrix(new)
@@ -1307,6 +1389,17 @@ impl AnimatedActorMesh {
                 .sample_sequence(&self.mesh.animation_sequences[self.sequence], self.phase)
                 .map(|triangles| (triangles, Vec3::ZERO))
         }
+    }
+
+    fn attachment(&self) -> openhp1_mesh::Result<Option<[Vec3; 3]>> {
+        let Some(animation) = &self.skeletal_animation else {
+            return Ok(None);
+        };
+        self.mesh
+            .sample_skeletal_attachment(animation, self.sequence, self.phase)
+            .map(|attachment| {
+                attachment.map(|points| points.map(|point| self.transform.transform_point3(point)))
+            })
     }
 }
 
@@ -1529,6 +1622,8 @@ fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
         mesh_name: None,
         animation: None,
         render: None,
+        mesh_transform: None,
+        mesh_to_object: None,
         diagnostics: vec!["spawn action was lost after a deferred script failure".to_owned()],
     }
 }
@@ -1585,6 +1680,8 @@ fn load_actors(
             mesh_name: None,
             animation: None,
             render: None,
+            mesh_transform: None,
+            mesh_to_object: None,
             diagnostics: Vec::new(),
         };
         let actor = match Actor::decode(map, export_index) {
@@ -1815,6 +1912,8 @@ fn append_scene_actor_render(
         Ok(Some(appended)) => {
             scene_actor.render = Some(appended.render);
             scene_actor.animation = appended.animation;
+            scene_actor.mesh_transform = Some(appended.transform);
+            scene_actor.mesh_to_object = Some(appended.mesh_to_object);
         }
         Ok(None) => scene_actor
             .diagnostics
@@ -2107,6 +2206,8 @@ fn decode_class_defaults(class: &SceneObject) -> Result<(ObjectReference, ActorP
 struct AppendedActorMesh {
     render: SceneActorRenderRange,
     animation: Option<SceneActorAnimation>,
+    transform: Mat4,
+    mesh_to_object: Mat4,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2241,17 +2342,17 @@ fn append_actor_mesh(
                 .map(|object| object.map(SceneObject::from))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mesh_to_object = rotation_matrix(Rotator {
+        pitch: mesh.rotation_origin.x,
+        yaw: mesh.rotation_origin.y,
+        roll: mesh.rotation_origin.z,
+    }) * Mat4::from_scale(mesh.scale)
+        * Mat4::from_translation(-mesh.origin);
     let transform = Mat4::from_translation(actor.location + actor.pre_pivot)
         * rotation_matrix(actor.rotation)
         * Mat4::from_translation(mesh_offset)
         * Mat4::from_scale(Vec3::splat(actor.draw_scale))
-        * rotation_matrix(Rotator {
-            pitch: mesh.rotation_origin.x,
-            yaw: mesh.rotation_origin.y,
-            roll: mesh.rotation_origin.z,
-        })
-        * Mat4::from_scale(mesh.scale)
-        * Mat4::from_translation(-mesh.origin);
+        * mesh_to_object;
     let normal_transform = Mat3::from_mat4(transform).inverse().transpose();
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
@@ -2374,6 +2475,8 @@ fn append_actor_mesh(
                 indices: first_index..render_mesh.indices.len(),
             },
             animation,
+            transform,
+            mesh_to_object,
         }),
     )
 }
@@ -2851,6 +2954,28 @@ mod tests {
         emitter.particles_alive = 0;
         emitter.particles_max = 0;
         assert_eq!(super::particle_capacity(&emitter), 30);
+    }
+
+    #[test]
+    fn weapon_attachment_uses_the_authored_special_triangle_axes() {
+        let transform = super::weapon_attachment_transform(
+            [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            2.0,
+            glam::Mat4::IDENTITY,
+        )
+        .unwrap();
+        assert_eq!(
+            transform.transform_point3(glam::Vec3::ZERO),
+            glam::Vec3::new(0.0, 0.5, 0.0)
+        );
+        assert_eq!(
+            transform.transform_vector3(glam::Vec3::X),
+            glam::Vec3::X * 2.0
+        );
+        assert_eq!(
+            transform.transform_vector3(glam::Vec3::Y),
+            glam::Vec3::Z * 2.0
+        );
     }
 
     #[test]

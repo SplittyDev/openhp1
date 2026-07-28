@@ -135,6 +135,7 @@ impl Mesh {
             vertices,
             normals,
             face_vertices: geometry.face_vertices,
+            attachment_vertices: geometry.attachment_vertices,
             skeletal: geometry.skeletal.map(|mesh| mesh.mesh),
         })
     }

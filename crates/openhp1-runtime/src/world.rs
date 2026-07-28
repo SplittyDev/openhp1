@@ -195,6 +195,13 @@ pub struct ParticleEmitter {
     pub textures: Vec<ParticleTexture>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeaponAttachment {
+    pub pawn: usize,
+    pub weapon: usize,
+    pub scale: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActorAction {
     PlayAnimation {

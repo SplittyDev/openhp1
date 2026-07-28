@@ -12,6 +12,7 @@ pub(crate) type SerializedTriangle = ([u16; 3], [[u8; 2]; 3], u32, i32);
 pub(crate) struct DecodedGeometry {
     pub triangles: Vec<MeshTriangle>,
     pub face_vertices: Vec<[usize; 3]>,
+    pub attachment_vertices: Option<[usize; 3]>,
     pub skeletal: Option<DecodedSkeletalMesh>,
 }
 
@@ -62,6 +63,7 @@ pub(crate) fn classic_triangles(
     Ok(DecodedGeometry {
         triangles: decoded,
         face_vertices: faces,
+        attachment_vertices: None,
         skeletal: None,
     })
 }
@@ -101,9 +103,13 @@ pub(crate) fn lod_triangles(
     let materials = read_vec(reader, "LOD materials", |reader| {
         Ok((reader.read_u32()?, reader.read_i32()?))
     })?;
-    skip_vec(reader, "LOD special faces", |reader| {
-        reader.read_bytes(8)?;
-        Ok(())
+    let special_faces = read_vec(reader, "LOD special faces", |reader| {
+        Ok([
+            reader.read_u16()?,
+            reader.read_u16()?,
+            reader.read_u16()?,
+            reader.read_u16()?,
+        ])
     })?;
     reader.read_u32()?; // model vertices
     let special_vertices = reader.read_u32()? as usize;
@@ -158,6 +164,32 @@ pub(crate) fn lod_triangles(
             Ok(vertices)
         })
         .collect::<Result<Vec<_>>>()?;
+    let attachment_vertices = if let Some(face) = special_faces.first() {
+        let remap_vertex = |vertex| -> Result<usize> {
+            let vertex = usize::from(vertex);
+            if remap.is_empty() {
+                Ok(vertex)
+            } else {
+                Ok(usize::from(checked(
+                    &remap,
+                    vertex,
+                    "attachment animation vertex remap",
+                )?))
+            }
+        };
+        Some([
+            remap_vertex(face[0])?,
+            remap_vertex(face[1])?,
+            remap_vertex(face[2])?,
+        ])
+    } else {
+        None
+    };
+    if let Some(indices) = attachment_vertices {
+        for index in indices {
+            checked(vertices, index, "mesh attachment vertex")?;
+        }
+    }
     let normals = vertex_normals(vertices, &face_vertices);
     let mut triangles = Vec::with_capacity(faces.len());
     for ((indices, material_index), face_vertices) in faces.into_iter().zip(&face_vertices) {
@@ -186,6 +218,7 @@ pub(crate) fn lod_triangles(
     Ok(DecodedGeometry {
         triangles,
         face_vertices,
+        attachment_vertices,
         skeletal,
     })
 }

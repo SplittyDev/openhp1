@@ -32,6 +32,14 @@ OpenHP1's coordinate path. Skeletal geometry and sampled poses therefore:
 These corrections belong in the shared mesh decoding/sampling path, not as
 per-actor or renderer fixes.
 
+## Weapon attachments
+
+UE1 pawn weapons are rendered from the pawn LOD mesh's first serialized special
+face. Its three sampled vertices define the weapon coordinate axes and midpoint
+for the current pose; the weapon's `ThirdPersonScale` and mesh-to-object
+transform are then applied. The weapon actor's world location alone is not its
+render placement.
+
 ## Packed rotations
 
 Each signed packed quaternion component maps to:

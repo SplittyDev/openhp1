@@ -305,6 +305,7 @@ impl Graphics {
         for (actor, emitted) in scene.particle_counts() {
             runtime.set_particle_counts(actor, emitted)?;
         }
+        scene.sync_weapon_attachments(runtime.weapon_attachments()?)?;
 
         let size = nonzero_size(window.inner_size());
         let instance = wgpu::Instance::default();
@@ -701,6 +702,17 @@ impl Graphics {
                 }
             }
             Err(error) => self.last_error = Some(format!("particle update failed: {error}")),
+        }
+        match self.runtime.weapon_attachments().and_then(|attachments| {
+            self.scene
+                .sync_weapon_attachments(attachments)
+                .map_err(|error| openhp1_runtime::DispatchError::UnresolvedObject {
+                    message: error.to_string(),
+                })
+        }) {
+            Ok(true) => self.update_vertices(),
+            Ok(false) => {}
+            Err(error) => self.last_error = Some(format!("weapon attachment failed: {error}")),
         }
         match self.runtime.player_view(location, rotation) {
             Ok((view, actions)) => {

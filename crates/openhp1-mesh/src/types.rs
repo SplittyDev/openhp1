@@ -3,6 +3,7 @@ use openhp1_package::ObjectReference;
 
 use crate::{
     Error, Result,
+    decode::checked,
     geometry::{mirror_skeletal_position, sample_triangles, vertex_normals},
 };
 
@@ -51,6 +52,7 @@ pub struct Mesh {
     pub(crate) vertices: Vec<Vec3>,
     pub(crate) normals: Vec<Vec3>,
     pub(crate) face_vertices: Vec<[usize; 3]>,
+    pub(crate) attachment_vertices: Option<[usize; 3]>,
     pub(crate) skeletal: Option<SkeletalMesh>,
 }
 
@@ -128,6 +130,27 @@ impl Mesh {
         let vertices = animation.sample(skeletal, sequence, phase)?;
         let normals = vertex_normals(&vertices, &self.face_vertices);
         sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
+    }
+
+    pub fn sample_skeletal_attachment(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<Option<[Vec3; 3]>> {
+        if !phase.is_finite() {
+            return Err(Error::InvalidAnimationPhase(phase));
+        }
+        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
+        let vertices = animation.sample(skeletal, sequence, phase)?;
+        let Some(indices) = self.attachment_vertices else {
+            return Ok(None);
+        };
+        Ok(Some([
+            checked(&vertices, indices[0], "mesh attachment vertex")?,
+            checked(&vertices, indices[1], "mesh attachment vertex")?,
+            checked(&vertices, indices[2], "mesh attachment vertex")?,
+        ]))
     }
 
     pub fn sample_skeletal_sequence_with_root_motion(

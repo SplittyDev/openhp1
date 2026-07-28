@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 use crate::Rotator;
 
@@ -47,6 +47,8 @@ pub struct SceneActor {
     pub mesh_name: Option<String>,
     pub animation: Option<SceneActorAnimation>,
     pub render: Option<SceneActorRenderRange>,
+    pub(crate) mesh_transform: Option<Mat4>,
+    pub(crate) mesh_to_object: Option<Mat4>,
     /// Decode or rendering limitations attached to this actor.
     pub diagnostics: Vec<String>,
 }
