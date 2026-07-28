@@ -17,6 +17,7 @@ use winit::{
 };
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
+const DEFAULT_CAMERA_CLASS: &str = "BaseCam";
 
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
@@ -217,7 +218,7 @@ impl Graphics {
             .context("Lev_Tut1 has no registered PlayerPawn actor")?;
         let mut deferred_calls = 0;
         let mut last_error = None;
-        match runtime.set_player_view_target_class("BaseCam") {
+        match runtime.set_player_view_target_class(DEFAULT_CAMERA_CLASS) {
             Ok(Some(_)) => {}
             Ok(None) => last_error = Some("the level has no BaseCam actor".to_owned()),
             Err(error) => last_error = Some(format!("player camera setup deferred: {error}")),
@@ -569,7 +570,9 @@ impl Graphics {
         if cutscene_ended(
             &mut self.player_in_cutscene,
             self.runtime.player_state_name(),
-        ) && let Err(error) = self.runtime.clear_player_view_target()
+        ) && let Err(error) = self
+            .runtime
+            .set_player_view_target_class(DEFAULT_CAMERA_CLASS)
         {
             self.last_error = Some(format!("player camera restore failed: {error}"));
         }

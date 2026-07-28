@@ -88,8 +88,8 @@ detachment is a no-op until decals render.
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
-The game startup camera fallback is cleared when the player leaves the `Cut*`
-state family so normal `PlayerCalcView` output resumes with player control.
+The game restores the authored `BaseCam` view target when the player leaves the
+`Cut*` state family so `PlayerCalcView` resumes the normal third-person camera.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
