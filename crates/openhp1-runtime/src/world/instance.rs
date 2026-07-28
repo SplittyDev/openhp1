@@ -2,6 +2,33 @@ use super::execution::{fields, local_fields};
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn load_object_instance(
+        &mut self,
+        object: &ResolvedObject,
+    ) -> DispatchResult<(ResolvedObject, InstanceState)> {
+        let export = object
+            .package
+            .summary()
+            .exports
+            .get(object.export_index)
+            .ok_or(openhp1_package::Error::InvalidExportIndex {
+                package: Arc::clone(&object.package.summary().source),
+                index: object.export_index,
+                export_count: object.package.summary().exports.len(),
+            })?;
+        let class = self
+            .packages
+            .resolve(&object.package, export.class)?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: format!("object export {} has no class", object.export_index),
+            })?;
+        let mut instance = self.load_class_defaults(&class, 0)?;
+        let mut reader = object.package.export_reader(object.export_index)?;
+        reader.read_object_stack(export.object_flags)?;
+        self.apply_properties(&class, &object.package, &mut reader, &mut instance)?;
+        Ok((class, instance))
+    }
+
     pub(super) fn instance_property(
         &mut self,
         class: &ResolvedObject,

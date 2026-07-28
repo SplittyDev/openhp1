@@ -68,6 +68,8 @@ const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
 const CAN_SEE: u16 = 533;
 const SAVE_CONFIG: u16 = 536;
+const COMPARE_GESTURE: u16 = 426;
+const COMPARE_GESTURE_POINT: u16 = 427;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
@@ -405,6 +407,7 @@ pub struct ScriptRuntime {
     function_lookups: HashMap<FunctionLookup, Option<ObjectId>>,
     state_lookups: HashMap<StateLookup, Option<ObjectId>>,
     instances: HashMap<usize, InstanceState>,
+    object_instances: HashMap<ObjectId, (ObjectId, InstanceState)>,
     class_defaults: HashMap<ObjectId, InstanceState>,
     class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,

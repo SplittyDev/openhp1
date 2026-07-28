@@ -742,9 +742,33 @@ impl ScriptRuntime {
         }
         let object = self.object_for_handle(receiver)?;
         let Some(actor) = self.object_actors.get(&object).copied() else {
-            let class = self.resolved_object(&object)?;
-            if !matches!(self.script(&class)?.metadata, ScriptMetadata::Class(_)) {
-                return Err(DispatchError::InvalidActorHandle { handle: receiver });
+            let resolved = self.resolved_object(&object)?;
+            let export = &resolved.package.summary().exports[resolved.export_index];
+            if resolved
+                .package
+                .summary()
+                .class_name(export)
+                .is_some_and(|class| class.eq_ignore_ascii_case("Class"))
+            {
+                let self_handle =
+                    self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                        DispatchError::UnregisteredActor {
+                            actor: current_actor,
+                        },
+                    )?)?;
+                let arguments = arguments
+                    .iter()
+                    .map(|value| concrete_self_value(value, self_handle))
+                    .collect::<Vec<_>>();
+                return self.dispatch_class_context_call(
+                    current_actor,
+                    &resolved,
+                    source,
+                    call,
+                    &arguments,
+                    actions,
+                    depth,
+                );
             }
             let self_handle =
                 self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
@@ -756,15 +780,26 @@ impl ScriptRuntime {
                 .iter()
                 .map(|value| concrete_self_value(value, self_handle))
                 .collect::<Vec<_>>();
-            return self.dispatch_class_context_call(
+            let (class_id, mut instance) = match self.object_instances.remove(&object) {
+                Some(instance) => instance,
+                None => {
+                    let (class, instance) = self.load_object_instance(&resolved)?;
+                    (object_id(&class.package, class.export_index), instance)
+                }
+            };
+            let class = self.resolved_object(&class_id)?;
+            let result = self.dispatch_call(
                 current_actor,
                 &class,
                 source,
                 call,
                 &arguments,
+                &mut instance,
                 actions,
                 depth,
             );
+            self.object_instances.insert(object, (class_id, instance));
+            return result;
         };
         if actor == current_actor {
             return self.dispatch_call(

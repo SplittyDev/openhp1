@@ -9,6 +9,7 @@ impl ScriptRuntime {
             function_lookups: HashMap::default(),
             state_lookups: HashMap::default(),
             instances: HashMap::default(),
+            object_instances: HashMap::default(),
             class_defaults: HashMap::default(),
             class_relations: HashMap::default(),
             fields: HashMap::default(),
