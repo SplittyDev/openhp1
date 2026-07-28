@@ -24,11 +24,6 @@ use crate::{
 };
 
 const NOT_FOR_SERVER: u32 = 0x0020_0000;
-const PHYS_WALKING: u8 = 1;
-const PHYS_FALLING: u8 = 2;
-const PHYS_SWIMMING: u8 = 3;
-const PHYS_FLYING: u8 = 4;
-
 pub struct LoadedScene {
     pub path: PathBuf,
     pub levels: Vec<PathBuf>,
@@ -913,7 +908,6 @@ struct ActorState {
     rotation: Rotator,
     pre_pivot: Vec3,
     collision_height: f32,
-    physics: u8,
     draw_scale: f32,
     draw_type: u8,
     brush: Option<SceneObject>,
@@ -948,7 +942,6 @@ impl Default for ActorState {
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
             collision_height: 0.0,
-            physics: 0,
             draw_scale: 1.0,
             draw_type: 0,
             brush: None,
@@ -989,9 +982,6 @@ impl ActorState {
         }
         if let Some(collision_height) = properties.collision_height {
             self.collision_height = collision_height;
-        }
-        if let Some(physics) = properties.physics {
-            self.physics = physics;
         }
         if let Some(draw_scale) = properties.draw_scale {
             self.draw_scale = draw_scale;
@@ -1277,7 +1267,6 @@ fn append_scene_actor_render(
             .summary()
             .class_name(&mesh_object.package.summary().exports[mesh_object.export_index])
             == Some("SkeletalMesh"),
-        state.physics,
         state.collision_height,
         mesh.origin.z,
     );
@@ -1885,17 +1874,10 @@ fn rotation_matrix(rotation: Rotator) -> Mat4 {
 fn pawn_mesh_offset(
     is_pawn: bool,
     is_skeletal_mesh: bool,
-    physics: u8,
     collision_height: f32,
     mesh_origin_z: f32,
 ) -> Vec3 {
-    if is_pawn
-        && is_skeletal_mesh
-        && matches!(
-            physics,
-            PHYS_WALKING | PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING
-        )
-    {
+    if is_pawn && is_skeletal_mesh {
         Vec3::new(0.0, 0.0, mesh_origin_z - collision_height)
     } else {
         Vec3::ZERO
@@ -2309,23 +2291,23 @@ mod tests {
     #[test]
     fn aligns_only_skeletal_pawns_to_their_collision_feet() {
         assert_eq!(
-            super::pawn_mesh_offset(true, true, 1, 50.0, 0.0),
+            super::pawn_mesh_offset(true, true, 50.0, 0.0),
             glam::Vec3::new(0.0, 0.0, -50.0)
         );
         assert_eq!(
-            super::pawn_mesh_offset(true, true, 1, 40.0, 42.0),
+            super::pawn_mesh_offset(true, true, 40.0, 42.0),
             glam::Vec3::new(0.0, 0.0, 2.0)
         );
         assert_eq!(
-            super::pawn_mesh_offset(true, true, 0, 42.0, 0.0),
+            super::pawn_mesh_offset(true, true, 42.0, 0.0),
+            glam::Vec3::new(0.0, 0.0, -42.0)
+        );
+        assert_eq!(
+            super::pawn_mesh_offset(false, true, 50.0, 0.0),
             glam::Vec3::ZERO
         );
         assert_eq!(
-            super::pawn_mesh_offset(false, true, 1, 50.0, 0.0),
-            glam::Vec3::ZERO
-        );
-        assert_eq!(
-            super::pawn_mesh_offset(true, false, 1, 50.0, 0.0),
+            super::pawn_mesh_offset(true, false, 50.0, 0.0),
             glam::Vec3::ZERO
         );
     }

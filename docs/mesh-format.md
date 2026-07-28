@@ -15,6 +15,8 @@ Mesh placement applies the actor transform, mesh origin, scale, and
 `RotationOrigin` in the established scene transform chain. UE1 object rotation
 uses positive yaw, negative pitch, and negative roll in yaw/pitch/roll
 composition order. It must not be replaced with the inverse camera rotation.
+Skeletal pawns align their mesh origin to the bottom of the collision cylinder
+regardless of the current physics mode; physics changes movement, not rendering.
 
 ## Skeletal coordinates
 
