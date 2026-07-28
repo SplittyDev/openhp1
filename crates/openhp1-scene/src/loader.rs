@@ -1620,6 +1620,9 @@ fn append_scene_actor_render(
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if state.draw_type == 0 {
+        return;
+    }
     if matches!(state.draw_type, 1 | 4) && is_light {
         return;
     }
@@ -1787,9 +1790,6 @@ fn append_scene_actor_sprite(
         return;
     }
     let Some(texture) = state.texture.as_ref() else {
-        scene_actor
-            .diagnostics
-            .push("sprite draw type has no texture assigned".to_owned());
         return;
     };
     let material = actor_surface_material(
