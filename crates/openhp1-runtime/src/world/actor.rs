@@ -322,6 +322,58 @@ impl ScriptRuntime {
             .and_then(|state| state.as_deref())
     }
 
+    pub fn take_player_music(&mut self) -> DispatchResult<Option<PlayerMusic>> {
+        let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = (|| {
+            let transition = self
+                .actor_byte(&class, &instance, "Transition")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            if transition == 0 {
+                return Ok(None);
+            }
+            let song = self
+                .actor_object(&class, &instance, "Song")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            let section = self
+                .actor_byte(&class, &instance, "SongSection")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            self.set_actor_stored(
+                &class,
+                &mut instance,
+                "Transition",
+                StoredValue::Value(Value::Byte(0)),
+            )
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            let clip = song
+                .map(|song| {
+                    let song = self.resolved_object(&song)?;
+                    AudioClip::decode(&song.package, song.export_index).map_err(|error| {
+                        DispatchError::UnresolvedObject {
+                            message: error.to_string(),
+                        }
+                    })
+                })
+                .transpose()?;
+            Ok(Some(PlayerMusic {
+                clip,
+                section,
+                transition,
+            }))
+        })();
+        self.instances.insert(actor, instance);
+        result
+    }
+
     fn set_player_view_target(&mut self, target: Option<ObjectId>) -> DispatchResult<()> {
         let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self

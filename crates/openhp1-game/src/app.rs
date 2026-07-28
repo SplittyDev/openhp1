@@ -2,9 +2,12 @@ use std::{collections::HashSet, f32::consts::TAU, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use glam::Vec3;
+use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, PlayerInput, PlayerView, ScriptRuntime};
-use openhp1_scene::{LoadedScene, apply_runtime_actions, initialize_runtime, unreal_to_render};
+use openhp1_scene::{
+    LoadedScene, apply_runtime_actions_with, initialize_runtime_with, unreal_to_render,
+};
 use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
 use winit::{
@@ -215,6 +218,7 @@ struct Graphics {
     camera: Camera,
     scene: LoadedScene,
     runtime: ScriptRuntime,
+    audio: Option<AudioPlayer>,
     player: usize,
     input: InputState,
     last_frame: Instant,
@@ -230,15 +234,28 @@ struct Graphics {
 
 impl Graphics {
     fn new(window: Arc<Window>, mut scene: LoadedScene) -> Result<Self> {
-        let mut runtime = initialize_runtime(&mut scene)?;
+        let mut last_error = None;
+        let audio = match AudioPlayer::new() {
+            Ok(audio) => Some(audio),
+            Err(error) => {
+                last_error = Some(error.to_string());
+                None
+            }
+        };
+        let mut runtime = initialize_runtime_with(&mut scene, |action| {
+            play_audio_action(audio.as_ref(), action)
+        })?;
         let player = runtime
             .player_actor()
             .context("Lev_Tut1 has no registered PlayerPawn actor")?;
         let mut deferred_calls = 0;
-        let mut last_error = None;
         match runtime.dispatch_player_event("Possess", &[]) {
             Ok(actions) => {
-                deferred_calls += apply_runtime_actions(&mut scene, &mut runtime, actions)?.1;
+                deferred_calls +=
+                    apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
+                        play_audio_action(audio.as_ref(), action)
+                    })?
+                    .1;
             }
             Err(error) => last_error = Some(format!("player possession deferred: {error}")),
         }
@@ -262,7 +279,11 @@ impl Graphics {
         let player_view = match runtime.player_view(fallback_view.location, fallback_view.rotation)
         {
             Ok((view, actions)) => {
-                deferred_calls += apply_runtime_actions(&mut scene, &mut runtime, actions)?.1;
+                deferred_calls +=
+                    apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
+                        play_audio_action(audio.as_ref(), action)
+                    })?
+                    .1;
                 view
             }
             Err(error) => {
@@ -328,6 +349,7 @@ impl Graphics {
             camera,
             scene,
             runtime,
+            audio,
             player,
             input: InputState::default(),
             last_frame: Instant::now(),
@@ -587,6 +609,24 @@ impl Graphics {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("trigger update failed: {error}")),
         }
+        match self.runtime.take_player_music() {
+            Ok(Some(music)) => {
+                if let Some(audio) = self.audio.as_mut() {
+                    let result = match music.clip {
+                        Some(clip) => audio.play_music(&clip, 1.0),
+                        None => {
+                            audio.stop_music();
+                            Ok(())
+                        }
+                    };
+                    if let Err(error) = result {
+                        self.last_error = Some(error.to_string());
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.last_error = Some(format!("music update failed: {error}")),
+        }
         match self.runtime.player_view(location, rotation) {
             Ok((view, actions)) => {
                 self.apply_actions(actions);
@@ -602,7 +642,10 @@ impl Graphics {
     }
 
     fn apply_actions(&mut self, actions: Vec<ActorAction>) {
-        match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
+        let audio = self.audio.as_ref();
+        match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
+            play_audio_action(audio, action)
+        }) {
             Ok((_, deferred, transformed)) => {
                 self.deferred_calls += deferred;
                 if transformed {
@@ -622,6 +665,22 @@ impl Graphics {
                 .reload_scene(&self.device, &self.queue, &self.scene.render);
         }
     }
+}
+
+fn play_audio_action(audio: Option<&AudioPlayer>, action: ActorAction) -> Result<()> {
+    let Some(audio) = audio else {
+        return Ok(());
+    };
+    if let ActorAction::PlaySound {
+        clip,
+        volume,
+        pitch,
+        ..
+    } = action
+    {
+        audio.play_sound(&clip, volume, pitch)?;
+    }
+    Ok(())
 }
 
 fn camera_from_player_view(view: PlayerView, viewport: PhysicalSize<u32>, far: f32) -> Camera {

@@ -11,3 +11,8 @@ audio bytes. HP1 `Sound` exports contain WAV or MPEG Layer II data; all 91
 locally scanned `Music` packages also contain MPEG Layer II data.
 
 Original game packages remain read-only and are never copied into public tests.
+
+The game audio adapter consumes `PlaySound` runtime actions. Background music
+follows the original `PlayerPawn.Song`, `SongSection`, and `Transition`
+properties; the host only turns those authored state changes into playback.
+Transition fading and positional attenuation are not implemented yet.

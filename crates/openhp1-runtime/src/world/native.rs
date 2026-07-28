@@ -265,11 +265,7 @@ impl ScriptRuntime {
             return Ok(Value::None);
         }
         if index == PLAY_SOUND {
-            sound_arguments("PlaySound", arguments)?;
-            actions.push(ActorAction::DeferredCall {
-                actor,
-                message: "PlaySound is not audible yet".to_owned(),
-            });
+            self.play_sound(actor, "PlaySound", arguments, actions)?;
             return Ok(Value::None);
         }
         if index == TRACE_TEXTURE {
@@ -1271,10 +1267,53 @@ pub(super) fn noise_loudness(arguments: &[Value]) -> std::result::Result<f32, St
     Ok(*loudness)
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(super) struct SoundArguments {
+    sound: Option<i32>,
+    slot: u8,
+    volume: f32,
+    no_override: bool,
+    radius: f32,
+    pitch: f32,
+}
+
+impl ScriptRuntime {
+    pub(super) fn play_sound(
+        &mut self,
+        actor: usize,
+        function: &str,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let arguments = sound_arguments(function, arguments)?;
+        let Some(handle) = arguments.sound else {
+            return Ok(());
+        };
+        let object = self
+            .object_for_handle(handle)
+            .map_err(|error| error.to_string())?;
+        let object = self
+            .resolved_object(&object)
+            .map_err(|error| error.to_string())?;
+        let clip = AudioClip::decode(&object.package, object.export_index)
+            .map_err(|error| error.to_string())?;
+        actions.push(ActorAction::PlaySound {
+            actor,
+            clip,
+            slot: arguments.slot,
+            volume: arguments.volume,
+            no_override: arguments.no_override,
+            radius: arguments.radius,
+            pitch: arguments.pitch,
+        });
+        Ok(())
+    }
+}
+
 pub(super) fn sound_arguments(
     function: &str,
     arguments: &[Value],
-) -> std::result::Result<(), String> {
+) -> std::result::Result<SoundArguments, String> {
     let [sound, rest @ ..] = arguments else {
         return Err(format!("{function} expects a sound"));
     };
@@ -1293,7 +1332,39 @@ pub(super) fn sound_arguments(
             return Err(format!("{function} {kind} argument is {}", value.kind()));
         }
     }
-    Ok(())
+    Ok(SoundArguments {
+        sound: match sound {
+            Value::None | Value::Object(0) => None,
+            Value::Object(handle) => Some(*handle),
+            _ => unreachable!(),
+        },
+        slot: optional_byte(rest.first(), 0),
+        volume: optional_float(rest.get(1), 1.0),
+        no_override: optional_bool(rest.get(2), false),
+        radius: optional_float(rest.get(3), 0.0),
+        pitch: optional_float(rest.get(4), 1.0),
+    })
+}
+
+fn optional_byte(value: Option<&Value>, default: u8) -> u8 {
+    match value {
+        Some(Value::Byte(value)) => *value,
+        _ => default,
+    }
+}
+
+fn optional_float(value: Option<&Value>, default: f32) -> f32 {
+    match value {
+        Some(Value::Float(value)) => *value,
+        _ => default,
+    }
+}
+
+fn optional_bool(value: Option<&Value>, default: bool) -> bool {
+    match value {
+        Some(Value::Bool(value)) => *value,
+        _ => default,
+    }
 }
 
 pub(super) fn trace_texture(arguments: &[Value]) -> std::result::Result<Value, String> {

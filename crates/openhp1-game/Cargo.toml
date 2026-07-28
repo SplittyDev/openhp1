@@ -11,6 +11,7 @@ egui.workspace = true
 egui-wgpu.workspace = true
 egui-winit.workspace = true
 glam.workspace = true
+openhp1-audio = { path = "../openhp1-audio", features = ["playback"] }
 openhp1-render = { path = "../openhp1-render" }
 openhp1-runtime = { path = "../openhp1-runtime" }
 openhp1-scene = { path = "../openhp1-scene" }

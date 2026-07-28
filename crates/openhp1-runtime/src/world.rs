@@ -1,5 +1,6 @@
 use std::{path::Path, sync::Arc};
 
+use openhp1_audio::AudioClip;
 use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
     ResolvedObject,
@@ -140,6 +141,13 @@ const PROBE_EVENTS: [&str; 64] = [
 pub type DispatchResult<T> = std::result::Result<T, DispatchError>;
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct PlayerMusic {
+    pub clip: Option<AudioClip>,
+    pub section: u8,
+    pub transition: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ActorAction {
     PlayAnimation {
         actor: usize,
@@ -155,6 +163,15 @@ pub enum ActorAction {
     },
     AwaitAnimation {
         actor: usize,
+    },
+    PlaySound {
+        actor: usize,
+        clip: AudioClip,
+        slot: u8,
+        volume: f32,
+        no_override: bool,
+        radius: f32,
+        pitch: f32,
     },
     SpawnActor {
         actor: usize,
@@ -202,6 +219,7 @@ impl ActorAction {
             Self::PlayAnimation { actor, .. }
             | Self::LoopAnimation { actor, .. }
             | Self::AwaitAnimation { actor }
+            | Self::PlaySound { actor, .. }
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }
             | Self::SetRotation { actor, .. }

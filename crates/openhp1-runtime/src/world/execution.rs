@@ -361,12 +361,8 @@ impl ScriptRuntime {
                 if class.eq_ignore_ascii_case("Actor")
                     && function_name.eq_ignore_ascii_case("PlayOwnedSound")
                 {
-                    super::native::sound_arguments("PlayOwnedSound", arguments)
+                    self.play_sound(actor, "PlayOwnedSound", arguments, actions)
                         .map_err(|message| DispatchError::UnresolvedObject { message })?;
-                    actions.push(ActorAction::DeferredCall {
-                        actor,
-                        message: "PlaySound is not audible yet".to_owned(),
-                    });
                     return Ok(Value::None);
                 }
                 if let Some(value) = named_native(class, function_name, arguments) {
@@ -1317,7 +1313,7 @@ impl ScriptRuntime {
             .ok_or(DispatchError::InvalidActorHandle { handle })
     }
 
-    fn object_for_handle(&self, handle: i32) -> DispatchResult<ObjectId> {
+    pub(super) fn object_for_handle(&self, handle: i32) -> DispatchResult<ObjectId> {
         let index = usize::try_from(handle - 1)
             .ok()
             .filter(|index| *index < self.handle_objects.len())

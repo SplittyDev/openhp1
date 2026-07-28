@@ -7,7 +7,7 @@ use thiserror::Error;
 
 mod world;
 
-pub use world::{ActorAction, DispatchError, DispatchResult, ScriptRuntime};
+pub use world::{ActorAction, DispatchError, DispatchResult, PlayerMusic, ScriptRuntime};
 
 pub type Result<T> = std::result::Result<T, Error>;
 const MAX_EXPRESSION_DEPTH: usize = 64;

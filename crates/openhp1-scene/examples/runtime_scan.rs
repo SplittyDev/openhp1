@@ -14,6 +14,8 @@ struct ScanStats {
     animations_requested: usize,
     animations_applied: usize,
     animated_actors: HashSet<usize>,
+    sounds: usize,
+    music_changes: usize,
     spawned: usize,
     locations: usize,
     relocated: usize,
@@ -166,6 +168,7 @@ fn main() -> Result<()> {
                 let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
                 timer_actions += actions.len();
                 apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+                stats.music_changes += usize::from(runtime.take_player_music()?.is_some());
             }
         }
         let timer_callbacks = runtime.timer_callbacks() - timer_callbacks;
@@ -205,6 +208,8 @@ fn main() -> Result<()> {
         "{}/{} runtime animations applied",
         stats.animations_applied, stats.animations_requested
     );
+    println!("{} sounds requested", stats.sounds);
+    println!("{} music changes requested", stats.music_changes);
     println!("{state_resumes} state frames resumed");
     println!("{} actors spawned", stats.spawned);
     println!(
@@ -273,6 +278,9 @@ fn apply_actions(
                 if !scene.actor_animation_playing(actor) {
                     actions.extend(runtime.animation_finished(actor)?);
                 }
+            }
+            ActorAction::PlaySound { .. } => {
+                stats.sounds += 1;
             }
             ActorAction::SpawnActor {
                 actor,

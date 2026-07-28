@@ -8,6 +8,13 @@ use tracing::info;
 use crate::{LoadedScene, Rotator};
 
 pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
+    initialize_runtime_with(scene, |_| Ok(()))
+}
+
+pub fn initialize_runtime_with(
+    scene: &mut LoadedScene,
+    mut external: impl FnMut(ActorAction) -> Result<()>,
+) -> Result<ScriptRuntime> {
     let game_root = scene
         .path
         .parent()
@@ -46,7 +53,7 @@ pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
         runtime.set_actor_animation_groups(actor, scene.actor_animation_groups(actor));
     }
     let game_actions = runtime.initialize_game()?;
-    apply_runtime_actions(scene, &mut runtime, game_actions)?;
+    apply_runtime_actions_with(scene, &mut runtime, game_actions, &mut external)?;
     let mut events = 0;
     let mut animations = 0;
     let mut deferred = 0;
@@ -60,7 +67,8 @@ pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
             match runtime.dispatch_event(actor, package, export, event) {
                 Ok(actions) => {
                     events += 1;
-                    let applied = apply_runtime_actions(scene, &mut runtime, actions)?;
+                    let applied =
+                        apply_runtime_actions_with(scene, &mut runtime, actions, &mut external)?;
                     animations += applied.0;
                     deferred += applied.1;
                 }
@@ -81,6 +89,15 @@ pub fn apply_runtime_actions(
     scene: &mut LoadedScene,
     runtime: &mut ScriptRuntime,
     actions: Vec<ActorAction>,
+) -> Result<(usize, usize, bool)> {
+    apply_runtime_actions_with(scene, runtime, actions, |_| Ok(()))
+}
+
+pub fn apply_runtime_actions_with(
+    scene: &mut LoadedScene,
+    runtime: &mut ScriptRuntime,
+    actions: Vec<ActorAction>,
+    mut external: impl FnMut(ActorAction) -> Result<()>,
 ) -> Result<(usize, usize, bool)> {
     let mut animations = 0;
     let mut deferred = 0;
@@ -123,6 +140,7 @@ pub fn apply_runtime_actions(
                     actions.extend(runtime.animation_finished(actor)?);
                 }
             }
+            action @ ActorAction::PlaySound { .. } => external(action)?,
             ActorAction::SpawnActor {
                 actor,
                 name,
