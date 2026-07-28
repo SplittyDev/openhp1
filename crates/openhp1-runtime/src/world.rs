@@ -47,6 +47,7 @@ const TRACE: u16 = 0x115;
 const SET_TIMER: u16 = 0x118;
 const IS_IN_STATE: u16 = 0x119;
 const IS_ANIMATING: u16 = 0x11a;
+const SET_COLLISION_SIZE: u16 = 0x11b;
 const GET_STATE_NAME: u16 = 0x11c;
 const TRACE_TEXTURE: u16 = 0x11d;
 const SET_BASE: u16 = 0x12a;

@@ -537,6 +537,35 @@ impl ScriptRuntime {
             // ponytail: these flags become collision behavior when BSP movement exists.
             return Ok(Value::None);
         }
+        if index == SET_COLLISION_SIZE {
+            let [Value::Float(radius), Value::Float(height)] = arguments else {
+                return Err(format!(
+                    "SetCollisionSize expects radius and height floats, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if !radius.is_finite() || !height.is_finite() || *radius < 0.0 || *height < 0.0 {
+                return Err("SetCollisionSize dimensions are invalid".to_owned());
+            }
+            self.set_actor_value(
+                actor_class,
+                instance,
+                "CollisionRadius",
+                Value::Float(*radius),
+            )?;
+            self.set_actor_value(
+                actor_class,
+                instance,
+                "CollisionHeight",
+                Value::Float(*height),
+            )?;
+            self.refresh_cached_collision_actor(actor, actor_class, instance)?;
+            return Ok(Value::Bool(true));
+        }
         if index == SET_PHYSICS {
             let [Value::Byte(physics)] = arguments else {
                 return Err(format!(
