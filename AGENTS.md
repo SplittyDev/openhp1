@@ -52,6 +52,8 @@ committed copies.
 - Package-specific mesh decoding and pose sampling belong in `openhp1-mesh`.
   Keep playback orchestration with its current consumer until another consumer
   creates a genuinely reusable animation responsibility.
+- Package-specific audio decoding and platform playback belong in
+  `openhp1-audio`; keep game/runtime audio policy out of the renderer.
 - `openhp1-viewer` uses eframe for its UI and displays the renderer's offscreen
   target. `openhp1-render` must remain independent of eframe.
 - `openhp1-game` owns its winit/wgpu event loop. Do not make eframe own the game

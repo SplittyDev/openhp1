@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/openhp1-audio",
     "crates/openhp1-game",
     "crates/openhp1-map",
     "crates/openhp1-mesh",

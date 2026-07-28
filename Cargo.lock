@@ -1856,6 +1856,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "openhp1-audio"
+version = "0.1.0"
+dependencies = [
+ "openhp1-package",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "openhp1-game"
 version = "0.1.0"
 dependencies = [
