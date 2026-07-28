@@ -90,6 +90,10 @@ visibility tests. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
 The game restores the authored `BaseCam` view target when the player leaves the
 `Cut*` state family so `PlayerCalcView` resumes the normal third-person camera.
+Desktop input follows the original ground controls: W/S or up/down move,
+A/D or left/right turn, left click/Control/Space jump, and right click/Alt
+cast. Mouse deltas reach the player script only while casting, when movement
+axes are held at zero for spell aiming.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.

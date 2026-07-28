@@ -132,7 +132,7 @@ impl ApplicationHandler for GameApp {
 struct InputState {
     keys: HashSet<KeyCode>,
     mouse_delta: (f64, f64),
-    alt_fire: bool,
+    cast_mouse: bool,
     jump_requested: bool,
     captured: bool,
 }
@@ -141,17 +141,27 @@ impl InputState {
     fn set_key(&mut self, key: KeyCode, state: ElementState) {
         match state {
             ElementState::Pressed => {
-                if matches!(
-                    key,
-                    KeyCode::Space | KeyCode::ControlLeft | KeyCode::ControlRight
-                ) {
+                let first_press = self.keys.insert(key);
+                if first_press
+                    && matches!(
+                        key,
+                        KeyCode::Space | KeyCode::ControlLeft | KeyCode::ControlRight
+                    )
+                {
                     self.jump_requested = true;
                 }
-                self.keys.insert(key);
             }
             ElementState::Released => {
                 self.keys.remove(&key);
             }
+        }
+    }
+
+    fn set_mouse_button(&mut self, button: MouseButton, state: ElementState) {
+        match button {
+            MouseButton::Left if state == ElementState::Pressed => self.jump_requested = true,
+            MouseButton::Right => self.cast_mouse = state == ElementState::Pressed,
+            _ => {}
         }
     }
 
@@ -163,14 +173,24 @@ impl InputState {
         let backward = pressed(&self.keys, &[KeyCode::KeyS, KeyCode::ArrowDown]);
         let left = pressed(&self.keys, &[KeyCode::KeyA, KeyCode::ArrowLeft]);
         let right = pressed(&self.keys, &[KeyCode::KeyD, KeyCode::ArrowRight]);
+        let casting =
+            self.cast_mouse || pressed(&self.keys, &[KeyCode::AltLeft, KeyCode::AltRight]) != 0.0;
         let mouse_scale = 16.0 * 6.0 / (delta_time.max(0.000_001) * 150.0);
         let input = PlayerInput {
-            base_x: (right - left) * 3_000.0,
-            base_y: forward * 6_000.0 - backward * 3_000.0,
-            strafe: (right - left) * 6_000.0,
-            mouse_x: self.mouse_delta.0 as f32 * mouse_scale,
-            mouse_y: self.mouse_delta.1 as f32 * mouse_scale,
-            alt_fire: self.alt_fire,
+            base_x: if casting {
+                0.0
+            } else {
+                (right - left) * 3_000.0
+            },
+            base_y: if casting {
+                0.0
+            } else {
+                forward * 6_000.0 - backward * 3_000.0
+            },
+            strafe: 0.0,
+            mouse_x: casting as u8 as f32 * self.mouse_delta.0 as f32 * mouse_scale,
+            mouse_y: casting as u8 as f32 * self.mouse_delta.1 as f32 * mouse_scale,
+            alt_fire: casting,
             jump: self.jump_requested,
         };
         self.mouse_delta = (0.0, 0.0);
@@ -181,7 +201,7 @@ impl InputState {
     fn clear(&mut self) {
         self.keys.clear();
         self.mouse_delta = (0.0, 0.0);
-        self.alt_fire = false;
+        self.cast_mouse = false;
         self.jump_requested = false;
     }
 }
@@ -344,15 +364,8 @@ impl Graphics {
     fn mouse_button(&mut self, button: MouseButton, state: ElementState) {
         if !self.input.captured && state == ElementState::Pressed {
             self.capture_input();
-            return;
         }
-        match button {
-            MouseButton::Left => self.input.alt_fire = state == ElementState::Pressed,
-            MouseButton::Right if state == ElementState::Pressed => {
-                self.input.jump_requested = true;
-            }
-            _ => {}
-        }
+        self.input.set_mouse_button(button, state);
     }
 
     fn capture_input(&mut self) {
@@ -519,8 +532,9 @@ impl Graphics {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
                 ui.separator();
-                ui.label("WASD/arrows move · mouse looks · Ctrl/Space jumps");
-                ui.label("Left click casts · Esc releases mouse · F1 toggles diagnostics");
+                ui.label("W/S or ↑/↓ move · A/D or ←/→ turn");
+                ui.label("Left click/Ctrl/Space jump · Right click/Alt cast");
+                ui.label("Mouse aims while casting · Esc releases mouse · F1 toggles diagnostics");
             });
     }
 
@@ -692,11 +706,27 @@ mod tests {
         let player = input.player_input(1.0 / 60.0);
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
-        assert_eq!(player.strafe, 6_000.0);
-        assert!((player.mouse_x - 76.8).abs() < 0.000_01);
-        assert!((player.mouse_y + 38.4).abs() < 0.000_01);
+        assert_eq!(player.strafe, 0.0);
+        assert_eq!(player.mouse_x, 0.0);
+        assert_eq!(player.mouse_y, 0.0);
+        assert!(!player.alt_fire);
         assert!(player.jump);
         assert!(!input.player_input(1.0 / 60.0).jump);
+
+        input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
+        input.mouse_delta = (2.0, -1.0);
+        let player = input.player_input(1.0 / 60.0);
+        assert_eq!(player.base_x, 0.0);
+        assert_eq!(player.base_y, 0.0);
+        assert!((player.mouse_x - 76.8).abs() < 0.000_01);
+        assert!((player.mouse_y + 38.4).abs() < 0.000_01);
+        assert!(player.alt_fire);
+
+        input.set_mouse_button(MouseButton::Right, ElementState::Released);
+        input.set_mouse_button(MouseButton::Left, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).jump);
+        input.set_key(KeyCode::AltLeft, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).alt_fire);
     }
 
     #[test]
