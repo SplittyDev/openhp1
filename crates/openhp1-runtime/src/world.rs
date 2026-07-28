@@ -167,6 +167,7 @@ pub enum ActorAction {
     PlaySound {
         actor: usize,
         clip: AudioClip,
+        location: [f32; 3],
         slot: u8,
         volume: f32,
         no_override: bool,

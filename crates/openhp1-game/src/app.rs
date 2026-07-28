@@ -1,7 +1,7 @@
 use std::{collections::HashSet, f32::consts::TAU, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
-use glam::Vec3;
+use glam::{Mat3, Quat, Vec3};
 use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, PlayerInput, PlayerView, ScriptRuntime};
@@ -235,7 +235,8 @@ struct Graphics {
 impl Graphics {
     fn new(window: Arc<Window>, mut scene: LoadedScene) -> Result<Self> {
         let mut last_error = None;
-        let mut audio = match AudioPlayer::new() {
+        let (music_volume, sound_volume) = audio_volumes(&scene);
+        let mut audio = match AudioPlayer::new(music_volume, sound_volume) {
             Ok(audio) => Some(audio),
             Err(error) => {
                 last_error = Some(error.to_string());
@@ -636,9 +637,27 @@ impl Graphics {
                     PhysicalSize::new(self.config.width, self.config.height),
                     self.camera.far,
                 );
+                self.update_audio();
             }
             Err(error) => self.last_error = Some(format!("player camera failed: {error}")),
         }
+    }
+
+    fn update_audio(&mut self) {
+        let Some(audio) = self.audio.as_mut() else {
+            return;
+        };
+        let actor_positions = self
+            .scene
+            .actors
+            .iter()
+            .map(|actor| unreal_to_render(actor.location).to_array())
+            .collect::<Vec<_>>();
+        audio.update(
+            self.camera.position.to_array(),
+            camera_orientation(&self.camera),
+            &actor_positions,
+        );
     }
 
     fn apply_actions(&mut self, actions: Vec<ActorAction>) {
@@ -667,20 +686,57 @@ impl Graphics {
     }
 }
 
+fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
+    let subsystem = scene
+        .config_value("Engine.Engine", "AudioDevice")
+        .unwrap_or_else(|| "Galaxy.GalaxyAudioSubsystem".to_owned());
+    let volume = |key, fallback| {
+        scene
+            .config_value(&subsystem, key)
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(fallback)
+            / 255.0
+    };
+    (
+        volume("MusicVolume", 160.0),
+        volume("SoundVolume", 200.0) * 0.5,
+    )
+}
+
 fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Result<()> {
     let Some(audio) = audio else {
         return Ok(());
     };
     if let ActorAction::PlaySound {
+        actor,
         clip,
+        location,
+        slot,
         volume,
+        no_override,
+        radius,
         pitch,
-        ..
     } = action
     {
-        audio.play_sound(&clip, volume, pitch)?;
+        audio.play_sound(
+            actor,
+            &clip,
+            unreal_to_render(Vec3::from_array(location)).to_array(),
+            slot,
+            volume,
+            no_override,
+            radius,
+            pitch,
+        )?;
     }
     Ok(())
+}
+
+fn camera_orientation(camera: &Camera) -> [f32; 4] {
+    let forward = camera.forward();
+    let right = camera.right();
+    let up = Quat::from_axis_angle(forward, camera.roll) * right.cross(forward);
+    Quat::from_mat3(&Mat3::from_cols(right, up, -forward)).to_array()
 }
 
 fn camera_from_player_view(view: PlayerView, viewport: PhysicalSize<u32>, far: f32) -> Camera {

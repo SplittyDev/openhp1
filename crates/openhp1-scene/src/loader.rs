@@ -67,6 +67,10 @@ struct ActorRenderContext {
 }
 
 impl LoadedScene {
+    pub fn config_value(&self, section: &str, key: &str) -> Option<String> {
+        self.actor_render.packages.config_value(section, key)
+    }
+
     pub fn load(path: PathBuf) -> Result<Self> {
         let path = path
             .canonicalize()

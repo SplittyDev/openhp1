@@ -265,7 +265,14 @@ impl ScriptRuntime {
             return Ok(Value::None);
         }
         if index == PLAY_SOUND {
-            self.play_sound(actor, "PlaySound", arguments, actions)?;
+            self.play_sound(
+                actor,
+                actor_class,
+                instance,
+                "PlaySound",
+                arguments,
+                actions,
+            )?;
             return Ok(Value::None);
         }
         if index == TRACE_TEXTURE {
@@ -1270,17 +1277,19 @@ pub(super) fn noise_loudness(arguments: &[Value]) -> std::result::Result<f32, St
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(super) struct SoundArguments {
     sound: Option<i32>,
-    slot: u8,
-    volume: f32,
+    slot: Option<u8>,
+    volume: Option<f32>,
     no_override: bool,
-    radius: f32,
-    pitch: f32,
+    radius: Option<f32>,
+    pitch: Option<f32>,
 }
 
 impl ScriptRuntime {
     pub(super) fn play_sound(
         &mut self,
         actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &InstanceState,
         function: &str,
         arguments: &[Value],
         actions: &mut Vec<ActorAction>,
@@ -1297,14 +1306,23 @@ impl ScriptRuntime {
             .map_err(|error| error.to_string())?;
         let clip = AudioClip::decode(&object.package, object.export_index)
             .map_err(|error| error.to_string())?;
+        let volume = match arguments.volume {
+            Some(volume) => volume,
+            None => self.actor_float(actor_class, instance, "TransientSoundVolume")?,
+        };
+        let radius = match arguments.radius {
+            Some(radius) => radius,
+            None => self.actor_float(actor_class, instance, "TransientSoundRadius")?,
+        };
         actions.push(ActorAction::PlaySound {
             actor,
             clip,
-            slot: arguments.slot,
-            volume: arguments.volume,
+            location: self.actor_vector(actor_class, instance, "Location")?,
+            slot: arguments.slot.unwrap_or(1),
+            volume,
             no_override: arguments.no_override,
-            radius: arguments.radius,
-            pitch: arguments.pitch,
+            radius,
+            pitch: arguments.pitch.unwrap_or(1.0),
         });
         Ok(())
     }
@@ -1338,25 +1356,25 @@ pub(super) fn sound_arguments(
             Value::Object(handle) => Some(*handle),
             _ => unreachable!(),
         },
-        slot: optional_byte(rest.first(), 0),
-        volume: optional_float(rest.get(1), 1.0),
+        slot: optional_byte(rest.first()),
+        volume: optional_float(rest.get(1)),
         no_override: optional_bool(rest.get(2), false),
-        radius: optional_float(rest.get(3), 0.0),
-        pitch: optional_float(rest.get(4), 1.0),
+        radius: optional_float(rest.get(3)),
+        pitch: optional_float(rest.get(4)),
     })
 }
 
-fn optional_byte(value: Option<&Value>, default: u8) -> u8 {
+fn optional_byte(value: Option<&Value>) -> Option<u8> {
     match value {
-        Some(Value::Byte(value)) => *value,
-        _ => default,
+        Some(Value::Byte(value)) => Some(*value),
+        _ => None,
     }
 }
 
-fn optional_float(value: Option<&Value>, default: f32) -> f32 {
+fn optional_float(value: Option<&Value>) -> Option<f32> {
     match value {
-        Some(Value::Float(value)) => *value,
-        _ => default,
+        Some(Value::Float(value)) => Some(*value),
+        _ => None,
     }
 }
 
@@ -1364,6 +1382,26 @@ fn optional_bool(value: Option<&Value>, default: bool) -> bool {
     match value {
         Some(Value::Bool(value)) => *value,
         _ => default,
+    }
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_sound_arguments_remain_authored_defaults() {
+        assert_eq!(
+            sound_arguments("PlaySound", &[Value::Object(1)]).unwrap(),
+            SoundArguments {
+                sound: Some(1),
+                slot: None,
+                volume: None,
+                no_override: false,
+                radius: None,
+                pitch: None,
+            }
+        );
     }
 }
 

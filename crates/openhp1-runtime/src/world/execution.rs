@@ -361,8 +361,15 @@ impl ScriptRuntime {
                 if class.eq_ignore_ascii_case("Actor")
                     && function_name.eq_ignore_ascii_case("PlayOwnedSound")
                 {
-                    self.play_sound(actor, "PlayOwnedSound", arguments, actions)
-                        .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                    self.play_sound(
+                        actor,
+                        actor_class,
+                        instance,
+                        "PlayOwnedSound",
+                        arguments,
+                        actions,
+                    )
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
                     return Ok(Value::None);
                 }
                 if let Some(value) = named_native(class, function_name, arguments) {

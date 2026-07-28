@@ -22,6 +22,7 @@ pub struct ResolvedObject {
 pub struct PackageStore {
     paths: HashMap<String, PathBuf>,
     loaded: HashMap<String, Arc<Package>>,
+    config: String,
 }
 
 impl PackageStore {
@@ -52,7 +53,12 @@ impl PackageStore {
         Ok(Self {
             paths,
             loaded: HashMap::new(),
+            config: ini,
         })
+    }
+
+    pub fn config_value(&self, section: &str, key: &str) -> Option<String> {
+        localization_value(&self.config, section, key)
     }
 
     pub fn package_path(&self, name: &str) -> Option<&Path> {

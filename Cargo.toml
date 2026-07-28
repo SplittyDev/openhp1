@@ -30,6 +30,7 @@ egui-winit = { version = "0.35", default-features = false, features = ["wayland"
 glam = "0.30"
 pollster = "0.4"
 kira = { version = "0.12", default-features = false, features = ["cpal", "mp2", "pcm", "wav"] }
+mint = "0.5"
 rustc-hash = "2.1"
 thiserror = "2.0"
 tracing = "0.1"

@@ -19,4 +19,7 @@ Original game packages remain read-only and are never copied into public tests.
 The game audio adapter consumes `PlaySound` runtime actions. Background music
 follows the original `PlayerPawn.Song`, `SongSection`, and `Transition`
 properties; the host only turns those authored state changes into playback.
-Transition fading and positional attenuation are not implemented yet.
+Sound volume, pitch, radius, actor attachment, spatialization, and actor/slot
+replacement follow the values supplied by the original runtime. Global music
+and sound volume come from the audio subsystem selected by the original
+`Default.ini`. Transition fading is not implemented yet.
