@@ -52,6 +52,42 @@ impl ScriptRuntime {
                 .map(Value::Bool)
                 .map_err(|error| error.to_string());
         }
+        if index == CLASS_IS_CHILD_OF {
+            let [test, parent] = arguments else {
+                return Err(format!(
+                    "ClassIsChildOf expects two classes, found {}",
+                    arguments.len()
+                ));
+            };
+            let Some(test) = object_value(test) else {
+                return Err(format!(
+                    "ClassIsChildOf test class is {}, expected object",
+                    test.kind()
+                ));
+            };
+            let Some(parent) = object_value(parent) else {
+                return Err(format!(
+                    "ClassIsChildOf parent class is {}, expected object",
+                    parent.kind()
+                ));
+            };
+            let Some(test) = self
+                .resolve_class_value(source, test)
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(Value::Bool(false));
+            };
+            let Some(parent) = self
+                .resolve_class_value(source, parent)
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(Value::Bool(false));
+            };
+            return self
+                .class_is_a(test, &parent)
+                .map(Value::Bool)
+                .map_err(|error| error.to_string());
+        }
         if index == DESTROY {
             return self
                 .destroy_actor(actor, actor_class, instance, actions)

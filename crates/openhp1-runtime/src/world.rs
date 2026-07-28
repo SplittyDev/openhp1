@@ -33,6 +33,7 @@ const DESTROY: u16 = 0x117;
 const ALL_ACTORS: u16 = 0x130;
 const TRACE_ACTORS: u16 = 0x135;
 const SLEEP: u16 = 0x100;
+const CLASS_IS_CHILD_OF: u16 = 0x102;
 const PLAY_ANIM: u16 = 0x103;
 const LOOP_ANIM: u16 = 0x104;
 const FINISH_ANIM: u16 = 0x105;

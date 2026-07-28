@@ -1386,7 +1386,7 @@ impl ScriptRuntime {
         duration.map_err(|message| DispatchError::UnresolvedObject { message })
     }
 
-    fn class_is_a(
+    pub(super) fn class_is_a(
         &mut self,
         mut class: ResolvedObject,
         base: &ResolvedObject,
