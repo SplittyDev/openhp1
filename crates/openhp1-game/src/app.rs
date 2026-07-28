@@ -143,6 +143,7 @@ struct InputState {
     keys: HashSet<KeyCode>,
     mouse_delta: (f64, f64),
     cast_mouse: bool,
+    cast_requested: bool,
     jump_requested: bool,
     captured: bool,
 }
@@ -152,13 +153,12 @@ impl InputState {
         match state {
             ElementState::Pressed => {
                 let first_press = self.keys.insert(key);
-                if first_press
-                    && matches!(
-                        key,
-                        KeyCode::Space | KeyCode::ControlLeft | KeyCode::ControlRight
-                    )
-                {
-                    self.jump_requested = true;
+                if first_press {
+                    if matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight) {
+                        self.jump_requested = true;
+                    } else if matches!(key, KeyCode::AltLeft | KeyCode::AltRight) {
+                        self.cast_requested = true;
+                    }
                 }
             }
             ElementState::Released => {
@@ -169,13 +169,16 @@ impl InputState {
 
     fn set_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         match button {
-            MouseButton::Left if state == ElementState::Pressed => self.jump_requested = true,
-            MouseButton::Right => self.cast_mouse = state == ElementState::Pressed,
+            MouseButton::Left => {
+                self.cast_mouse = state == ElementState::Pressed;
+                self.cast_requested |= state == ElementState::Pressed;
+            }
+            MouseButton::Right if state == ElementState::Pressed => self.jump_requested = true,
             _ => {}
         }
     }
 
-    fn player_input(&mut self, delta_time: f32) -> PlayerInput {
+    fn player_input(&mut self) -> PlayerInput {
         let pressed = |keys: &HashSet<KeyCode>, choices: &[KeyCode]| {
             choices.iter().any(|key| keys.contains(key)) as u8 as f32
         };
@@ -185,25 +188,18 @@ impl InputState {
         let right = pressed(&self.keys, &[KeyCode::KeyD, KeyCode::ArrowRight]);
         let casting =
             self.cast_mouse || pressed(&self.keys, &[KeyCode::AltLeft, KeyCode::AltRight]) != 0.0;
-        let mouse_scale = 16.0 * 6.0 / (delta_time.max(0.000_001) * 150.0);
         let input = PlayerInput {
-            base_x: if casting {
-                0.0
-            } else {
-                (right - left) * 3_000.0
-            },
-            base_y: if casting {
-                0.0
-            } else {
-                forward * 6_000.0 - backward * 3_000.0
-            },
+            base_x: (right - left) * 3_000.0,
+            base_y: forward * 6_000.0 - backward * 3_000.0,
             strafe: 0.0,
-            mouse_x: casting as u8 as f32 * self.mouse_delta.0 as f32 * mouse_scale,
-            mouse_y: -(casting as u8 as f32) * self.mouse_delta.1 as f32 * mouse_scale,
+            mouse_x: self.mouse_delta.0 as f32 * 16.0 * 6.0,
+            mouse_y: self.mouse_delta.1 as f32 * 16.0 * 6.0,
             alt_fire: casting,
+            alt_fire_pressed: self.cast_requested,
             jump: self.jump_requested,
         };
         self.mouse_delta = (0.0, 0.0);
+        self.cast_requested = false;
         self.jump_requested = false;
         input
     }
@@ -212,6 +208,7 @@ impl InputState {
         self.keys.clear();
         self.mouse_delta = (0.0, 0.0);
         self.cast_mouse = false;
+        self.cast_requested = false;
         self.jump_requested = false;
     }
 }
@@ -432,7 +429,7 @@ impl Graphics {
         } else {
             1
         };
-        let mut input = self.input.player_input(delta_time);
+        let mut input = self.input.player_input();
         for _ in 0..ticks {
             self.renderer.advance_time(delta_time);
             self.update_animations(delta_time);
@@ -595,8 +592,8 @@ impl Graphics {
                 }
                 ui.separator();
                 ui.label("W/S or ↑/↓ move · A/D or ←/→ turn");
-                ui.label("Left click/Ctrl/Space jump · Right click/Alt cast");
-                ui.label("Mouse aims while casting · Esc releases mouse · F1 toggles diagnostics");
+                ui.label("Right click/Ctrl jump · Left click/Alt cast");
+                ui.label("Mouse aims · Esc releases mouse · F1 toggles diagnostics");
                 ui.label("Hold + or F to fast-forward normal game ticks at 16x");
             });
     }
@@ -783,6 +780,7 @@ fn repeated_player_input(input: PlayerInput) -> PlayerInput {
     PlayerInput {
         mouse_x: 0.0,
         mouse_y: 0.0,
+        alt_fire_pressed: false,
         jump: false,
         ..input
     }
@@ -900,32 +898,37 @@ mod tests {
         let mut input = InputState::default();
         input.set_key(KeyCode::KeyW, ElementState::Pressed);
         input.set_key(KeyCode::KeyD, ElementState::Pressed);
-        input.set_key(KeyCode::Space, ElementState::Pressed);
+        input.set_key(KeyCode::ControlLeft, ElementState::Pressed);
         input.mouse_delta = (2.0, -1.0);
-        let player = input.player_input(1.0 / 60.0);
+        let player = input.player_input();
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
         assert_eq!(player.strafe, 0.0);
-        assert_eq!(player.mouse_x, 0.0);
-        assert_eq!(player.mouse_y, 0.0);
+        assert_eq!(player.mouse_x, 192.0);
+        assert_eq!(player.mouse_y, -96.0);
         assert!(!player.alt_fire);
+        assert!(!player.alt_fire_pressed);
         assert!(player.jump);
-        assert!(!input.player_input(1.0 / 60.0).jump);
+        assert!(!input.player_input().jump);
 
-        input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
-        input.mouse_delta = (2.0, -1.0);
-        let player = input.player_input(1.0 / 60.0);
-        assert_eq!(player.base_x, 0.0);
-        assert_eq!(player.base_y, 0.0);
-        assert!((player.mouse_x - 76.8).abs() < 0.000_01);
-        assert!((player.mouse_y - 38.4).abs() < 0.000_01);
-        assert!(player.alt_fire);
-
-        input.set_mouse_button(MouseButton::Right, ElementState::Released);
         input.set_mouse_button(MouseButton::Left, ElementState::Pressed);
-        assert!(input.player_input(1.0 / 60.0).jump);
+        input.mouse_delta = (2.0, -1.0);
+        let player = input.player_input();
+        assert_eq!(player.base_x, 3_000.0);
+        assert_eq!(player.base_y, 6_000.0);
+        assert_eq!(player.mouse_x, 192.0);
+        assert_eq!(player.mouse_y, -96.0);
+        assert!(player.alt_fire);
+        assert!(player.alt_fire_pressed);
+        assert!(!input.player_input().alt_fire_pressed);
+
+        input.set_mouse_button(MouseButton::Left, ElementState::Released);
+        input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
+        assert!(input.player_input().jump);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);
-        assert!(input.player_input(1.0 / 60.0).alt_fire);
+        let player = input.player_input();
+        assert!(player.alt_fire);
+        assert!(player.alt_fire_pressed);
     }
 
     #[test]
@@ -934,12 +937,14 @@ mod tests {
             base_y: 6_000.0,
             mouse_x: 76.8,
             alt_fire: true,
+            alt_fire_pressed: true,
             jump: true,
             ..PlayerInput::default()
         });
         assert_eq!(repeated.base_y, 6_000.0);
         assert!(repeated.alt_fire);
         assert_eq!(repeated.mouse_x, 0.0);
+        assert!(!repeated.alt_fire_pressed);
         assert!(!repeated.jump);
 
         assert!(is_fast_forward_key(KeyCode::Equal));

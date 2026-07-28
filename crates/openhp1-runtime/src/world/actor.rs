@@ -713,7 +713,12 @@ impl ScriptRuntime {
         self.set_player_input(input)?;
         let arguments = [Value::Float(delta_time)];
         let result = (|| {
-            let mut actions = self.dispatch_player_event("PlayerInput", &arguments)?;
+            let mut actions = if input.alt_fire_pressed {
+                self.dispatch_player_event("AltFire", &[Value::Float(0.0)])?
+            } else {
+                Vec::new()
+            };
+            actions.extend(self.dispatch_player_event("PlayerInput", &arguments)?);
             actions.extend(self.dispatch_player_event("PlayerTick", &arguments)?);
             Ok(actions)
         })();

@@ -138,9 +138,11 @@ that view target. Returning Harry to `PlayerWalking` is not the end of the
 cutscene camera sequence: its later `ExitCutState` action restores the saved
 third-person camera state and position.
 Desktop input follows the original ground controls: W/S or up/down move,
-A/D or left/right turn, left click/Control/Space jump, and right click/Alt
-cast. Mouse deltas reach the player script only while casting, when movement
-axes are held at zero for spell aiming.
+A/D or left/right turn, right click/Control jump, and left click/Alt cast.
+Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
+of 16, followed by the authored `Speed=6.0`. Pressing cast dispatches the
+original `AltFire` exec before `PlayerInput` while its button property remains
+held, so Harry's authored aiming state owns sound, animation, and spell logic.
 Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary world, animation, player,
 trigger, camera, and audio-action ticks per rendered frame. This debug
 fast-forward preserves event ordering and latent callbacks rather than
