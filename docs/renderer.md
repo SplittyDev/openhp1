@@ -108,7 +108,8 @@ the brush model's `Polys` export and follows UE1's
 `Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
 therefore pivots around `Location`, not the mesh-actor
 `Location + PrePivot` origin. Sprite actors use texture-sized quads aligned to
-the active UE1 view axes. Corona and particle actor paths remain unsupported.
+the active UE1 view axes. `Light` textures are editor icons and are excluded
+from that path; corona and particle actor paths remain unsupported.
 Water-backed `WetTexture` exports animate independently of actor scripts.
 Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
 `TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.

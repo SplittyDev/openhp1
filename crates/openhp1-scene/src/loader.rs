@@ -308,6 +308,7 @@ impl LoadedScene {
             0,
         );
         let is_pawn = class_state.is_pawn;
+        let is_light = class_state.is_light;
         let mut state = class_state.actor;
         state.location = location;
         state.rotation = rotation;
@@ -340,6 +341,7 @@ impl LoadedScene {
             &mut actor,
             &state,
             is_pawn,
+            is_light,
             actor_index,
             &mut self.render.mesh,
             &mut self.render.textures,
@@ -1089,6 +1091,7 @@ struct ActorState {
 struct ClassState {
     actor: ActorState,
     is_pawn: bool,
+    is_light: bool,
     diagnostics: Vec<String>,
 }
 
@@ -1327,6 +1330,7 @@ fn load_actors(
         );
         scene_actor.diagnostics.extend(class_state.diagnostics);
         let is_pawn = class_state.is_pawn;
+        let is_light = class_state.is_light;
         let mut state = class_state.actor;
         if let Err(error) = state.apply(&mut actor_render.packages, map, &actor.properties) {
             warn!(export_index, %error, "could not resolve actor properties");
@@ -1342,6 +1346,7 @@ fn load_actors(
             &mut scene_actor,
             &state,
             is_pawn,
+            is_light,
             actors.len(),
             render_mesh,
             textures,
@@ -1361,6 +1366,7 @@ fn append_scene_actor_render(
     scene_actor: &mut SceneActor,
     state: &ActorState,
     is_pawn: bool,
+    is_light: bool,
     actor_index: usize,
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
@@ -1369,6 +1375,9 @@ fn append_scene_actor_render(
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if matches!(state.draw_type, 1 | 4) && is_light {
+        return;
+    }
     if matches!(state.draw_type, 1 | 4) {
         append_scene_actor_sprite(
             actor_render,
@@ -1702,6 +1711,7 @@ fn class_state(
         return ClassState {
             actor: ActorState::default(),
             is_pawn: false,
+            is_light: false,
             diagnostics: vec!["class inheritance exceeds 32 levels".to_owned()],
         };
     }
@@ -1723,6 +1733,7 @@ fn class_state(
             let state = ClassState {
                 actor: ActorState::default(),
                 is_pawn: class.name().eq_ignore_ascii_case("Pawn"),
+                is_light: class.name().eq_ignore_ascii_case("Light"),
                 diagnostics: vec![error],
             };
             cache.insert(key, state.clone());
@@ -1735,12 +1746,14 @@ fn class_state(
             ClassState {
                 actor: base.actor,
                 is_pawn: base.is_pawn,
+                is_light: base.is_light,
                 diagnostics: Vec::new(),
             }
         }
         Ok(None) => ClassState {
             actor: ActorState::default(),
             is_pawn: false,
+            is_light: false,
             diagnostics: Vec::new(),
         },
         Err(error) => {
@@ -1748,6 +1761,7 @@ fn class_state(
             ClassState {
                 actor: ActorState::default(),
                 is_pawn: false,
+                is_light: false,
                 diagnostics: vec![error],
             }
         }
@@ -1761,6 +1775,7 @@ fn class_state(
         state.diagnostics.push(error);
     }
     state.is_pawn |= class.name().eq_ignore_ascii_case("Pawn");
+    state.is_light |= class.name().eq_ignore_ascii_case("Light");
     cache.insert(key, state.clone());
     state
 }
