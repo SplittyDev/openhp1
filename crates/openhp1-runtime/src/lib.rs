@@ -406,8 +406,14 @@ pub(crate) enum FrameResponse {
         value: Value,
         outputs: Vec<(usize, Value)>,
     },
-    Iterator(Vec<Value>),
+    Iterator(Vec<IteratorValue>),
     Suspend(Value),
+}
+
+#[derive(Clone)]
+pub(crate) struct IteratorValue {
+    value: Value,
+    outputs: Vec<(usize, Value)>,
 }
 
 impl FrameResponse {
@@ -420,7 +426,7 @@ impl FrameResponse {
         }
     }
 
-    fn into_iterator(self) -> std::result::Result<Vec<Value>, String> {
+    fn into_iterator(self) -> std::result::Result<Vec<IteratorValue>, String> {
         match self {
             Self::Iterator(values) => Ok(values),
             Self::Value(_) | Self::ValueWithOutputs { .. } | Self::Suspend(_) => {
@@ -432,12 +438,14 @@ impl FrameResponse {
 
 struct PendingIterator {
     target: Slot,
-    values: Vec<Value>,
+    output_targets: Vec<(usize, Slot)>,
+    values: Vec<IteratorValue>,
 }
 
 struct ActiveIterator {
     target: Slot,
-    values: std::vec::IntoIter<Value>,
+    output_targets: Vec<(usize, Slot)>,
+    values: std::vec::IntoIter<IteratorValue>,
     start: usize,
     end: usize,
 }
@@ -740,6 +748,7 @@ impl<'a> Frame<'a> {
                     let iterator = self.pending_iterator.take().ok_or(Error::MissingIterator)?;
                     self.iterators.push(ActiveIterator {
                         target: iterator.target,
+                        output_targets: iterator.output_targets,
                         values: iterator.values.into_iter(),
                         start: self.instruction_pointer,
                         end,
@@ -1079,6 +1088,14 @@ impl<'a> Frame<'a> {
                 Some(Expression::Slot(target)) => target.clone(),
                 _ => return Err(Error::NotAssignable),
             };
+            let output_targets = arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| match argument {
+                    Expression::Slot(target) if index != 1 => Some((index, target.clone())),
+                    _ => None,
+                })
+                .collect();
             let mut values = Vec::with_capacity(arguments.len());
             for (index, argument) in arguments.into_iter().enumerate() {
                 values.push(if index == 1 {
@@ -1102,6 +1119,7 @@ impl<'a> Frame<'a> {
             })?;
             self.pending_iterator = Some(PendingIterator {
                 target,
+                output_targets,
                 values: iterator,
             });
             return Ok(Value::None);
@@ -1311,13 +1329,32 @@ impl<'a> Frame<'a> {
             &mut HashMap<i32, Value>,
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<()> {
-        let (target, value, jump) = {
+        let (target, value, outputs, jump) = {
             let iterator = self.iterators.last_mut().ok_or(Error::MissingIterator)?;
             let value = iterator.values.next();
+            let has_value = value.is_some();
+            let (value, outputs) = value.map_or_else(
+                || (Value::Object(0), Vec::new()),
+                |value| {
+                    let outputs = value
+                        .outputs
+                        .into_iter()
+                        .filter_map(|(index, value)| {
+                            iterator
+                                .output_targets
+                                .iter()
+                                .find(|(target_index, _)| *target_index == index)
+                                .map(|(_, target)| (target.clone(), value))
+                        })
+                        .collect();
+                    (value.value, outputs)
+                },
+            );
             (
                 iterator.target.clone(),
-                value.clone().unwrap_or(Value::Object(0)),
-                if value.is_some() {
+                value,
+                outputs,
+                if has_value {
                     iterator.start
                 } else {
                     iterator.end
@@ -1325,6 +1362,9 @@ impl<'a> Frame<'a> {
             )
         };
         self.assign_slot(target, value, host)?;
+        for (target, value) in outputs {
+            self.assign_slot(target, value, host)?;
+        }
         self.jump(jump)
     }
 
@@ -2018,6 +2058,8 @@ mod tests {
         bytes.extend(1_i32.to_le_bytes());
         bytes.push(0x00);
         bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x00);
+        bytes.extend(9_i32.to_le_bytes());
         bytes.push(0x16);
         let end_offset = bytes.len();
         bytes.extend(0_u16.to_le_bytes());
@@ -2048,10 +2090,16 @@ mod tests {
                     arguments,
                     ..
                 } => {
-                    assert_eq!(arguments, vec![Value::Object(1), Value::None]);
+                    assert_eq!(arguments, vec![Value::Object(1), Value::None, Value::None]);
                     Ok(FrameResponse::Iterator(vec![
-                        Value::Object(11),
-                        Value::Object(22),
+                        IteratorValue {
+                            value: Value::Object(11),
+                            outputs: vec![(2, Value::Int(101))],
+                        },
+                        IteratorValue {
+                            value: Value::Object(22),
+                            outputs: vec![(2, Value::Int(202))],
+                        },
                     ]))
                 }
                 _ => unreachable!(),
@@ -2059,6 +2107,7 @@ mod tests {
             .unwrap();
         assert_eq!(result, Value::Object(22));
         assert_eq!(frame.local(7), Some(&Value::Object(0)));
+        assert_eq!(frame.local(9), Some(&Value::Int(202)));
     }
 
     #[test]

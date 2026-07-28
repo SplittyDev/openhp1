@@ -29,10 +29,10 @@ pub(super) struct CachedCollisionActor {
     fields: CollisionFields,
 }
 
-struct ActorSweep {
-    actor: usize,
-    fraction: f32,
-    normal: Vec3,
+pub(super) struct ActorSweep {
+    pub(super) actor: usize,
+    pub(super) fraction: f32,
+    pub(super) normal: Vec3,
     blocking: bool,
 }
 
@@ -62,6 +62,61 @@ pub(super) struct MovementHit {
 }
 
 impl ScriptRuntime {
+    pub(super) fn trace_collision_actors(
+        &mut self,
+        start: Vec3,
+        end: Vec3,
+        extent: Vec3,
+        current_actor: usize,
+        current_instance: &InstanceState,
+    ) -> std::result::Result<Vec<ActorSweep>, String> {
+        self.ensure_collision_actors(current_actor, current_instance)?;
+        let trace = CollisionActor {
+            actor: current_actor,
+            location: start,
+            height: extent.z,
+            radius: extent.x,
+            width: extent.y,
+            rotation: Mat3::IDENTITY,
+            collide_type: 0,
+            collide_actors: true,
+            block_actors: false,
+            block_players: false,
+            player_collision: false,
+            brush: None,
+            pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
+        };
+        let delta = end - start;
+        let mut hits = Vec::new();
+        for actor in 0..self.collision_actors.len() {
+            if actor == current_actor || self.destroyed.contains(&actor) {
+                continue;
+            }
+            let Some(other) = self.collision_actors[actor]
+                .as_ref()
+                .map(|cached| &cached.actor)
+            else {
+                continue;
+            };
+            let Some(hit) = sweep_collision_actors(&trace, other, delta) else {
+                continue;
+            };
+            hits.push(ActorSweep {
+                actor,
+                fraction: hit.fraction,
+                normal: hit.normal,
+                blocking: false,
+            });
+        }
+        hits.sort_by(|left, right| {
+            left.fraction
+                .total_cmp(&right.fraction)
+                .then_with(|| left.actor.cmp(&right.actor))
+        });
+        Ok(hits)
+    }
+
     pub fn update_player_touches(
         &mut self,
         location: [f32; 3],

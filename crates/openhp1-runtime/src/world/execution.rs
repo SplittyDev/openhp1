@@ -1,5 +1,6 @@
 use super::native::runtime_name;
 use super::*;
+use crate::IteratorValue;
 use glam::Vec3;
 
 struct CallOutput {
@@ -885,7 +886,7 @@ impl ScriptRuntime {
         call: FunctionCall,
         arguments: &[Value],
         current_instance: &InstanceState,
-    ) -> DispatchResult<Vec<Value>> {
+    ) -> DispatchResult<Vec<IteratorValue>> {
         if receiver != -1 {
             self.actor_for_handle(receiver)?;
         }
@@ -897,9 +898,7 @@ impl ScriptRuntime {
             .into());
         };
         if index == TRACE_ACTORS {
-            // ponytail: BSP Trace handles the camera; return no actor hits until
-            // gameplay needs TraceActors output locations and normals.
-            return Ok(Vec::new());
+            return self.trace_actors_iterator(current_actor, source, arguments, current_instance);
         }
         if index != ALL_ACTORS {
             return Err(crate::Error::Call {
@@ -992,7 +991,144 @@ impl ScriptRuntime {
                 .get(&actor)
                 .cloned()
                 .ok_or(DispatchError::UnregisteredActor { actor })?;
-            values.push(Value::Object(self.object_handle(object)?));
+            values.push(IteratorValue {
+                value: Value::Object(self.object_handle(object)?),
+                outputs: Vec::new(),
+            });
+        }
+        Ok(values)
+    }
+
+    fn trace_actors_iterator(
+        &mut self,
+        current_actor: usize,
+        source: &Arc<Package>,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<IteratorValue>> {
+        let [
+            Value::Object(base_class),
+            _,
+            _,
+            _,
+            Value::Vector(end),
+            rest @ ..,
+        ] = arguments
+        else {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "TraceActors expects a class, output actor, hit vectors, and end point, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        };
+        if rest.len() > 2 {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "TraceActors expects at most 7 arguments, found {}",
+                    arguments.len()
+                ),
+            });
+        }
+        let base_class = self
+            .resolve_class_value(source, *base_class)?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "TraceActors base class is null".to_owned(),
+            })?;
+        let current_class = self.actor_classes.get(&current_actor).cloned().ok_or(
+            DispatchError::UnregisteredActor {
+                actor: current_actor,
+            },
+        )?;
+        let current_class = self.resolved_object(&current_class)?;
+        let start = match rest.first() {
+            Some(Value::Vector(start)) => Vec3::from_array(*start),
+            Some(Value::None) | None => Vec3::from_array(
+                self.actor_vector(&current_class, current_instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            ),
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("TraceActors start is {}", value.kind()),
+                });
+            }
+        };
+        let extent = match rest.get(1) {
+            Some(Value::Vector(extent)) => Vec3::from_array(*extent).abs(),
+            Some(Value::None) | None => Vec3::ZERO,
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("TraceActors extent is {}", value.kind()),
+                });
+            }
+        };
+        let end = Vec3::from_array(*end);
+        if !start.is_finite() || !end.is_finite() || !extent.is_finite() {
+            return Err(DispatchError::UnresolvedObject {
+                message: "TraceActors coordinates are not finite".to_owned(),
+            });
+        }
+
+        // UE1's iterator tests from End back toward Start.
+        let trace_start = end;
+        let trace_end = start;
+        let mut hits = self
+            .trace_collision_actors(
+                trace_start,
+                trace_end,
+                extent,
+                current_actor,
+                current_instance,
+            )
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+            .into_iter()
+            .map(|hit| (hit.fraction, hit.actor, hit.normal))
+            .collect::<Vec<_>>();
+        if let Some(hit) = self
+            .collision
+            .as_ref()
+            .and_then(|collision| collision.sweep_aabb(trace_start, trace_end, extent))
+            && let Some(level) = self.level_info
+        {
+            hits.push((hit.fraction, level, hit.normal));
+        }
+        hits.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+
+        let delta = trace_end - trace_start;
+        let mut values = Vec::new();
+        for (fraction, actor, normal) in hits {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            if !self.class_is_a(class, &base_class)? {
+                continue;
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(IteratorValue {
+                value: Value::Object(self.object_handle(object)?),
+                outputs: vec![
+                    (
+                        2,
+                        Value::Vector((trace_start + delta * fraction).to_array()),
+                    ),
+                    (3, Value::Vector(normal.to_array())),
+                ],
+            });
         }
         Ok(values)
     }
