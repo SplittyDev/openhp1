@@ -1,7 +1,7 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
 use glam::{Mat3, Vec3};
-use openhp1_map::{BspNode, Model, PolyFlags, bsp_zone_at};
+use openhp1_map::{BspNode, BspVertex, Model, PolyFlags, bsp_zone_at};
 use openhp1_package::ObjectReference;
 use thiserror::Error;
 
@@ -29,6 +29,8 @@ pub struct BspCollision {
     hulls: Vec<ConvexHull>,
     hulls_by_min_x: Vec<usize>,
     zone_nodes: Vec<BspNode>,
+    points: Vec<Vec3>,
+    vertices: Vec<BspVertex>,
     zone_actors: Vec<Option<usize>>,
     node_poly_flags: Vec<PolyFlags>,
 }
@@ -213,6 +215,8 @@ impl BspCollision {
             hulls,
             hulls_by_min_x,
             zone_nodes: model.nodes.clone(),
+            points: model.points.clone(),
+            vertices: model.vertices.clone(),
             zone_actors,
             node_poly_flags: model
                 .nodes
@@ -236,7 +240,11 @@ impl BspCollision {
         {
             return None;
         }
-        self.sweep_shape(start, end, SweepShape::Aabb(extents))
+        if extents == Vec3::ZERO {
+            self.line_trace(start, end)
+        } else {
+            self.sweep_shape(start, end, SweepShape::Aabb(extents))
+        }
     }
 
     pub fn sweep_cylinder(
@@ -425,6 +433,109 @@ impl BspCollision {
             }
         }
         nearest.map(|(_, hit)| hit)
+    }
+
+    fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {
+        let delta = end - start;
+        let distance = delta.length();
+        if distance <= f32::EPSILON || self.zone_nodes.is_empty() {
+            return None;
+        }
+        let direction = delta / distance;
+        let trace_distance = distance + TRACE_MARGIN;
+        let mut nearest = None;
+        self.line_trace_node(0, start, direction, trace_distance, &mut nearest);
+        nearest.map(|(hit_distance, normal, node)| CollisionHit {
+            fraction: ((hit_distance - TRACE_MARGIN).max(0.0) / distance).min(1.0),
+            normal,
+            node,
+        })
+    }
+
+    fn line_trace_node(
+        &self,
+        node_index: usize,
+        origin: Vec3,
+        direction: Vec3,
+        maximum: f32,
+        nearest: &mut Option<(f32, Vec3, usize)>,
+    ) {
+        let Some(node) = self.zone_nodes.get(node_index) else {
+            return;
+        };
+        let mut polygon_index = Some(node_index);
+        while let Some(index) = polygon_index {
+            let Some(polygon) = self.zone_nodes.get(index) else {
+                break;
+            };
+            if !self.node_poly_flags[index].contains(PolyFlags::NOT_SOLID)
+                && let Some(distance) =
+                    self.node_ray_intersection(polygon, origin, direction, maximum)
+                && nearest.is_none_or(|(current, _, _)| distance < current)
+            {
+                let mut normal =
+                    Vec3::from_array([polygon.plane[0], polygon.plane[1], polygon.plane[2]]);
+                if normal.dot(direction) > 0.0 {
+                    normal = -normal;
+                }
+                *nearest = Some((distance, normal, index));
+            }
+            polygon_index = usize::try_from(polygon.coplanar).ok();
+        }
+
+        let from_side = plane_side(node.plane, origin);
+        let to_side = plane_side(node.plane, origin + direction * maximum);
+        if let Ok(front) = usize::try_from(node.front)
+            && (from_side >= 0.0 || to_side >= 0.0)
+        {
+            self.line_trace_node(front, origin, direction, maximum, nearest);
+        }
+        if let Ok(back) = usize::try_from(node.back)
+            && (from_side <= 0.0 || to_side <= 0.0)
+        {
+            self.line_trace_node(back, origin, direction, maximum, nearest);
+        }
+    }
+
+    fn node_ray_intersection(
+        &self,
+        node: &BspNode,
+        origin: Vec3,
+        direction: Vec3,
+        maximum: f32,
+    ) -> Option<f32> {
+        if node.vertex_count < 3 {
+            return None;
+        }
+        let from_side = plane_side(node.plane, origin);
+        let to_side = plane_side(node.plane, origin + direction * maximum);
+        if from_side.is_sign_positive() == to_side.is_sign_positive()
+            && from_side != 0.0
+            && to_side != 0.0
+        {
+            return None;
+        }
+        let first = usize::try_from(node.vertex_pool).ok()?;
+        let polygon = self
+            .vertices
+            .get(first..first.checked_add(usize::from(node.vertex_count))?)?;
+        let point = |vertex: &BspVertex| {
+            usize::try_from(vertex.point)
+                .ok()
+                .and_then(|index| self.points.get(index))
+                .copied()
+        };
+        let a = point(&polygon[0])?;
+        let mut b = point(&polygon[1])?;
+        let mut nearest = None;
+        for vertex in &polygon[2..] {
+            let c = point(vertex)?;
+            if let Some(distance) = ray_triangle(origin, direction, maximum, [a, b, c]) {
+                nearest = Some(nearest.map_or(distance, |current: f32| current.min(distance)));
+            }
+            b = c;
+        }
+        nearest
     }
 
     pub fn hull_count(&self) -> usize {
@@ -917,6 +1028,33 @@ fn opposite_axis_signs(first: Vec3, second: Vec3, axis: Vec3) -> bool {
     (first < 0.0 && second > 0.0) || (first > 0.0 && second < 0.0)
 }
 
+fn plane_side(plane: [f32; 4], point: Vec3) -> f32 {
+    Vec3::from_array([plane[0], plane[1], plane[2]]).dot(point) - plane[3]
+}
+
+fn ray_triangle(origin: Vec3, direction: Vec3, maximum: f32, points: [Vec3; 3]) -> Option<f32> {
+    let edge1 = points[1] - points[0];
+    let edge2 = points[2] - points[0];
+    let p = direction.cross(edge2);
+    let determinant = edge1.dot(p);
+    if determinant.abs() < f32::EPSILON {
+        return None;
+    }
+    let inverse = determinant.recip();
+    let t = origin - points[0];
+    let u = t.dot(p) * inverse;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = t.cross(edge1);
+    let v = direction.dot(q) * inverse;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let distance = edge2.dot(q) * inverse;
+    (distance > f32::EPSILON && distance <= maximum).then_some(distance)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,6 +1157,59 @@ mod tests {
             ),
             Some((Vec3::new(100.0, 0.0, 0.0), Vec3::splat(10.1)))
         );
+    }
+
+    #[test]
+    fn point_trace_hits_bsp_polygons_from_both_sides() {
+        let mut model = empty_model();
+        model.points = vec![
+            Vec3::new(0.0, -10.0, -10.0),
+            Vec3::new(0.0, 10.0, -10.0),
+            Vec3::new(0.0, 10.0, 10.0),
+            Vec3::new(0.0, -10.0, 10.0),
+        ];
+        model.vertices = (0..4).map(|point| BspVertex { point, side: -1 }).collect();
+        model.surfaces.push(BspSurface {
+            texture: ObjectReference::None,
+            poly_flags: PolyFlags::default(),
+            base_point: 0,
+            normal: 0,
+            texture_u: 0,
+            texture_v: 0,
+            light_map: -1,
+            brush_poly: -1,
+            pan_u: 0,
+            pan_v: 0,
+            brush_actor: ObjectReference::None,
+        });
+        model.nodes.push(BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: 0,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [0; 2],
+            vertex_count: 4,
+            leaves: [0; 2],
+        });
+
+        let collision = BspCollision::from_model(&model).unwrap();
+        let front = collision
+            .sweep_aabb(Vec3::X * 10.0, Vec3::NEG_X * 10.0, Vec3::ZERO)
+            .unwrap();
+        let back = collision
+            .sweep_aabb(Vec3::NEG_X * 10.0, Vec3::X * 10.0, Vec3::ZERO)
+            .unwrap();
+
+        assert!((front.fraction - 0.45).abs() < 0.0001);
+        assert_eq!(front.normal, Vec3::X);
+        assert!((back.fraction - 0.45).abs() < 0.0001);
+        assert_eq!(back.normal, Vec3::NEG_X);
     }
 
     #[test]
