@@ -826,6 +826,10 @@ mod tests {
             Ok(Value::Bool(true))
         );
         assert_eq!(
+            scalar_native(0xf2, &[Value::None, Value::Bool(false)]),
+            Ok(Value::Bool(true))
+        );
+        assert_eq!(
             scalar_native(0x98, &[Value::Int(2), Value::Int(2)]),
             Ok(Value::Bool(true))
         );

@@ -2477,6 +2477,17 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             (left == right) == (native == ScalarNative::EqualEqual_ObjectObject),
         ));
     }
+    if matches!(
+        native,
+        ScalarNative::EqualEqual_BoolBool | ScalarNative::NotEqual_BoolBool
+    ) && let [left, right] = arguments
+    {
+        let equal = left.truthy().map_err(|error| error.to_string())?
+            == right.truthy().map_err(|error| error.to_string())?;
+        return Ok(Value::Bool(
+            equal == (native == ScalarNative::EqualEqual_BoolBool),
+        ));
+    }
     if native == ScalarNative::Divide_IntInt
         && let [Value::Int(left), Value::Int(right)] = arguments
     {
@@ -2685,12 +2696,6 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Clamp, [Value::Int(value), Value::Int(min), Value::Int(max)]) => {
             Value::Int((*value).min(*max).max(*min))
-        }
-        (ScalarNative::EqualEqual_BoolBool, [Value::Bool(left), Value::Bool(right)]) => {
-            Value::Bool(left == right)
-        }
-        (ScalarNative::NotEqual_BoolBool, [Value::Bool(left), Value::Bool(right)]) => {
-            Value::Bool(left != right)
         }
         (ScalarNative::Chr, [Value::Int(value)]) => {
             Value::String(char::from(*value as u8).to_string())
