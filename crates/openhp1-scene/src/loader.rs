@@ -608,22 +608,58 @@ impl LoadedScene {
                 system.residue -= count as f32;
                 for index in 0..count {
                     let fraction = (index as f32 + 0.5) / count.max(1) as f32;
-                    let center = if system.config.system_relative {
+                    let owner_mesh_position = (system.config.distribution == 2)
+                        .then(|| {
+                            system
+                                .config
+                                .owner
+                                .and_then(|owner| self.actors.get(owner))
+                                .and_then(|owner| owner.render.as_ref())
+                                .and_then(|render| {
+                                    random_mesh_position(
+                                        &self.render.mesh.positions,
+                                        &self.render.mesh.indices[render.indices.clone()],
+                                        &mut system.random,
+                                    )
+                                })
+                        })
+                        .flatten();
+                    let center = owner_mesh_position
+                        .map(|position| {
+                            if system.config.system_relative {
+                                position - owner.location
+                            } else {
+                                position
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            if system.config.system_relative {
+                                Vec3::ZERO
+                            } else {
+                                system.last_location.lerp(owner.location, fraction)
+                            }
+                        });
+                    let source = if owner_mesh_position.is_some() {
                         Vec3::ZERO
                     } else {
-                        system.last_location.lerp(owner.location, fraction)
+                        Vec3::new(
+                            random_signed(&mut system.random)
+                                * sample_particle_float(
+                                    system.config.source_depth,
+                                    &mut system.random,
+                                ),
+                            random_signed(&mut system.random)
+                                * sample_particle_float(
+                                    system.config.source_width,
+                                    &mut system.random,
+                                ),
+                            random_signed(&mut system.random)
+                                * sample_particle_float(
+                                    system.config.source_height,
+                                    &mut system.random,
+                                ),
+                        ) * 0.5
                     };
-                    let source = Vec3::new(
-                        random_signed(&mut system.random)
-                            * sample_particle_float(system.config.source_depth, &mut system.random),
-                        random_signed(&mut system.random)
-                            * sample_particle_float(system.config.source_width, &mut system.random),
-                        random_signed(&mut system.random)
-                            * sample_particle_float(
-                                system.config.source_height,
-                                &mut system.random,
-                            ),
-                    ) * 0.5;
                     let pattern = pattern_position(
                         &system.config.pattern,
                         system.config.period.base
@@ -1414,6 +1450,18 @@ fn uniform_particle_distance(
         * last as f32
         * draw_scale
         * period.random
+}
+
+fn random_mesh_position(positions: &[Vec3], indices: &[u32], random: &mut u32) -> Option<Vec3> {
+    let triangles = indices.len() / 3;
+    let triangle = (random_unit(random) * triangles as f32) as usize;
+    let indices = indices.get(triangle * 3..triangle * 3 + 3)?;
+    let a = *positions.get(indices[0] as usize)?;
+    let b = *positions.get(indices[1] as usize)?;
+    let c = *positions.get(indices[2] as usize)?;
+    let first = random_unit(random);
+    let second = random_unit(random);
+    Some(a * (first * second) + b * (first * (1.0 - second)) + c * (1.0 - first))
 }
 
 fn random_signed(random: &mut u32) -> f32 {
@@ -3021,6 +3069,7 @@ mod tests {
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
         let mut emitter = ParticleEmitter {
             actor: 0,
+            owner: None,
             emit: true,
             prime: false,
             distribution: 0,
@@ -3107,6 +3156,18 @@ mod tests {
         assert!(direction.is_finite());
         assert!((direction.length() - 1.0).abs() < 0.0001);
         assert!(!direction.abs_diff_eq(glam::Vec3::X, 0.0001));
+    }
+
+    #[test]
+    fn owner_mesh_distribution_samples_authored_triangle_vertices() {
+        let mut random = 0;
+        let point = super::random_mesh_position(
+            &[glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            &[0, 1, 2],
+            &mut random,
+        )
+        .unwrap();
+        assert!(point.x >= 0.0 && point.y >= 0.0 && point.x + point.y <= 1.0001);
     }
 
     #[test]

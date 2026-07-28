@@ -287,8 +287,13 @@ impl ScriptRuntime {
                 _ => Vec::new(),
             };
             let pattern = self.particle_pattern(&class, &instance)?;
+            let owner = match self.instance_property(&class, &instance, "Owner")? {
+                Some(StoredValue::Object(Some(owner))) => self.object_actors.get(&owner).copied(),
+                _ => None,
+            };
             emitters.push(ParticleEmitter {
                 actor,
+                owner,
                 emit: particle_bool(self.instance_property(&class, &instance, "bEmit")?),
                 prime: particle_bool(self.instance_property(&class, &instance, "bPrime")?),
                 distribution: particle_byte(self.instance_property(

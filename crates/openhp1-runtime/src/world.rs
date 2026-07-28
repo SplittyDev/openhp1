@@ -174,6 +174,7 @@ pub struct ParticleTexture {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParticleEmitter {
     pub actor: usize,
+    pub owner: Option<usize>,
     pub emit: bool,
     pub prime: bool,
     pub distribution: u8,
