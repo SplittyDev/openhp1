@@ -1146,6 +1146,16 @@ impl ScriptRuntime {
         if reference == 0 {
             return Ok(None);
         }
+        let handle_object = usize::try_from(reference - 1)
+            .ok()
+            .and_then(|index| self.handle_objects.get(index))
+            .cloned();
+        if let Some(object) = handle_object.as_ref() {
+            let object = self.resolved_object(object)?;
+            if self.is_spawn_class(&object) {
+                return Ok(Some(object));
+            }
+        }
         let reference_object = object_reference(reference);
         let reference_in_bounds = match reference_object {
             ObjectReference::None => false,
@@ -1158,25 +1168,18 @@ impl ScriptRuntime {
         {
             return Ok(Some(object));
         }
-        let index = usize::try_from(reference - 1)
-            .ok()
-            .filter(|index| *index < self.handle_objects.len())
-            .ok_or(DispatchError::InvalidObjectHandle { handle: reference })?;
-        let object = self.handle_objects[index].clone();
+        let object =
+            handle_object.ok_or(DispatchError::InvalidObjectHandle { handle: reference })?;
         let object = self.resolved_object(&object)?;
-        if self.is_spawn_class(&object) {
-            Ok(Some(object))
-        } else {
-            let summary = object.package.summary();
-            let export = &summary.exports[object.export_index];
-            Err(DispatchError::UnresolvedObject {
-                message: format!(
-                    "Spawn object {} `{}` is not a class",
-                    summary.class_name(export).unwrap_or("<unknown>"),
-                    summary.name(export.object_name)
-                ),
-            })
-        }
+        let summary = object.package.summary();
+        let export = &summary.exports[object.export_index];
+        Err(DispatchError::UnresolvedObject {
+            message: format!(
+                "Spawn object {} `{}` is not a class",
+                summary.class_name(export).unwrap_or("<unknown>"),
+                summary.name(export.object_name)
+            ),
+        })
     }
 
     fn is_spawn_class(&mut self, object: &ResolvedObject) -> bool {

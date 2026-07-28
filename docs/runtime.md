@@ -75,6 +75,8 @@ Runtime-spawned actors use the same class-default mesh, material, lighting, and
 animation assembly as actors serialized in the map. Adding their geometry may
 grow the scene topology, so render consumers reload their GPU scene resources
 when an in-place vertex update no longer fits.
+Class-valued native arguments are runtime object handles and take precedence
+over numerically overlapping serialized package references.
 Spawning a collision-enabled actor at an occupied blocking location fails
 without allocating an actor handle. Spawned pawns link themselves into
 `Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping

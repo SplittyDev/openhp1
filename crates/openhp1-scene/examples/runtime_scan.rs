@@ -120,6 +120,13 @@ fn main() -> Result<()> {
         }
         let player = runtime.player_actor();
         if let Some(player) = player {
+            anyhow::ensure!(
+                scene
+                    .actors
+                    .iter()
+                    .any(|actor| actor.class_name.eq_ignore_ascii_case("CamTarget")),
+                "authored player setup did not spawn its camera target"
+            );
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
