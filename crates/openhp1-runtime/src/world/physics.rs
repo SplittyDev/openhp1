@@ -10,6 +10,7 @@ pub(super) const PHYS_WALKING: u8 = 1;
 pub(super) const PHYS_FALLING: u8 = 2;
 pub(super) const PHYS_SWIMMING: u8 = 3;
 pub(super) const PHYS_FLYING: u8 = 4;
+const PHYS_ROTATING: u8 = 5;
 const PHYS_PROJECTILE: u8 = 6;
 const PHYS_ROLLING: u8 = 7;
 const PHYS_INTERPOLATING: u8 = 8;
@@ -149,13 +150,22 @@ impl ScriptRuntime {
                 .instances
                 .remove(&actor)
                 .ok_or(DispatchError::ActiveActorContext { actor })?;
+            let mode = self
+                .actor_byte(&class, &instance, "Physics")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
             let result = self.tick_actor_physics(actor, &class, &mut instance, delta_time, actions);
             self.instances.insert(actor, instance);
-            if let Err(message) = result {
-                actions.push(ActorAction::DeferredCall {
-                    actor,
-                    message: format!("Physics: {message}"),
-                });
+            match result {
+                Ok(()) => {
+                    self.failed_physics.remove(&actor);
+                }
+                Err(message) if self.failed_physics.insert(actor, mode) != Some(mode) => {
+                    actions.push(ActorAction::DeferredCall {
+                        actor,
+                        message: format!("Physics: {message}"),
+                    });
+                }
+                Err(_) => {}
             }
         }
         Ok(())
@@ -190,6 +200,7 @@ impl ScriptRuntime {
                 PHYS_FLYING => {
                     self.tick_flying(actor, class, instance, elapsed, actions, false)?;
                 }
+                PHYS_ROTATING => {}
                 PHYS_PROJECTILE => {
                     self.tick_projectile(actor, class, instance, elapsed, actions)?;
                 }
@@ -205,7 +216,7 @@ impl ScriptRuntime {
                 PHYS_TRAILER => {
                     self.tick_trailer(actor, class, instance, actions)?;
                 }
-                _ => {}
+                _ => return Err(format!("physics mode {mode} is not implemented")),
             }
             self.tick_rotating(actor, class, instance, elapsed, actions)?;
         }

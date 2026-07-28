@@ -428,6 +428,7 @@ pub struct ScriptRuntime {
     state_resumes: usize,
     tick_functions: HashMap<usize, ResolvedObject>,
     failed_ticks: HashSet<usize>,
+    failed_physics: HashMap<usize, u8>,
     disabled_events: HashMap<(usize, String), HashSet<String>>,
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,
