@@ -578,7 +578,7 @@ impl ScriptRuntime {
     ) -> DispatchResult<CallOutput> {
         if index == TRACE {
             return self
-                .trace_native(actor_class, arguments, instance)
+                .trace_native(actor, actor_class, arguments, instance)
                 .map_err(|message| crate::Error::Call {
                     call: FunctionCall::Native(index),
                     message,
@@ -630,6 +630,7 @@ impl ScriptRuntime {
 
     fn trace_native(
         &mut self,
+        actor: usize,
         actor_class: &ResolvedObject,
         arguments: &[Value],
         instance: &InstanceState,
@@ -653,10 +654,11 @@ impl ScriptRuntime {
             }
             Some(value) => return Err(format!("Trace start is {}", value.kind())),
         };
-        match rest.get(1) {
-            Some(Value::Bool(_) | Value::None) | None => {}
+        let trace_actors = match rest.get(1) {
+            Some(Value::Bool(trace_actors)) => *trace_actors,
+            Some(Value::None) | None => false,
             Some(value) => return Err(format!("Trace actor flag is {}", value.kind())),
-        }
+        };
         let extent = match rest.get(2) {
             Some(Value::Vector(extent)) => Vec3::from_array(*extent).abs(),
             Some(Value::None) | None => Vec3::ZERO,
@@ -666,32 +668,41 @@ impl ScriptRuntime {
         if !start.is_finite() || !end.is_finite() || !extent.is_finite() {
             return Err("Trace coordinates are not finite".to_owned());
         }
-        // ponytail: the cutscene camera only needs BSP hits; add actor hits when
-        // gameplay starts consuming Trace's returned actor.
-        let hit = self
+        let actor_hit = trace_actors
+            .then(|| {
+                self.trace_collision_actors(start, end, extent, actor, instance)
+                    .map(|hits| {
+                        hits.into_iter()
+                            .next()
+                            .map(|hit| (hit.fraction, hit.actor, hit.normal))
+                    })
+            })
+            .transpose()?
+            .flatten();
+        let bsp_hit = self
             .collision
             .as_ref()
-            .and_then(|collision| collision.sweep_aabb(start, end, extent));
-        let (value, location, normal) = if let Some(hit) = hit {
-            let level = self
-                .level_info
-                .ok_or_else(|| "Trace hit BSP without a registered LevelInfo".to_owned())?;
-            let object = self
-                .actor_objects
-                .get(&level)
-                .cloned()
-                .ok_or_else(|| format!("LevelInfo actor {level} has no object identity"))?;
-            (
-                Value::Object(
-                    self.object_handle(object)
-                        .map_err(|error| error.to_string())?,
-                ),
-                start + (end - start) * hit.fraction,
-                hit.normal,
-            )
-        } else {
-            (Value::Object(0), end, Vec3::ZERO)
-        };
+            .and_then(|collision| collision.sweep_aabb(start, end, extent))
+            .map(|hit| (hit.fraction, hit.normal));
+        let (value, location, normal) =
+            if let Some((fraction, hit_actor, normal)) = closest_trace_hit(actor_hit, bsp_hit) {
+                let hit_actor = hit_actor
+                    .or(self.level_info)
+                    .ok_or_else(|| "Trace hit BSP without a registered LevelInfo".to_owned())?;
+                let object = self.actor_objects.get(&hit_actor).cloned().ok_or_else(|| {
+                    format!("Trace hit actor {hit_actor} without object identity")
+                })?;
+                (
+                    Value::Object(
+                        self.object_handle(object)
+                            .map_err(|error| error.to_string())?,
+                    ),
+                    start + (end - start) * fraction,
+                    normal,
+                )
+            } else {
+                (Value::Object(0), end, Vec3::ZERO)
+            };
         let mut output_arguments = arguments.to_vec();
         output_arguments[0] = Value::Vector(location.to_array());
         output_arguments[1] = Value::Vector(normal.to_array());
@@ -1669,6 +1680,20 @@ fn copy_native_output_arguments(
     Ok(())
 }
 
+fn closest_trace_hit(
+    actor: Option<(f32, usize, Vec3)>,
+    bsp: Option<(f32, Vec3)>,
+) -> Option<(f32, Option<usize>, Vec3)> {
+    match (actor, bsp) {
+        (Some((fraction, actor, normal)), Some((bsp_fraction, _))) if fraction < bsp_fraction => {
+            Some((fraction, Some(actor), normal))
+        }
+        (_, Some((fraction, normal))) => Some((fraction, None, normal)),
+        (Some((fraction, actor, normal)), None) => Some((fraction, Some(actor), normal)),
+        (None, None) => None,
+    }
+}
+
 pub(super) fn local_fields(bytecode: &Bytecode) -> impl Iterator<Item = i32> + '_ {
     fields(bytecode, 0x00)
 }
@@ -1810,6 +1835,19 @@ mod tests {
                 Value::Vector([4.0, 5.0, 6.0]),
                 Value::Rotator([7, 8, 9]),
             ]
+        );
+    }
+
+    #[test]
+    fn trace_returns_the_closest_actor_or_bsp_hit() {
+        let normal = Vec3::Z;
+        assert_eq!(
+            closest_trace_hit(Some((0.25, 7, normal)), Some((0.75, Vec3::X))),
+            Some((0.25, Some(7), normal))
+        );
+        assert_eq!(
+            closest_trace_hit(Some((0.75, 7, normal)), Some((0.25, Vec3::X))),
+            Some((0.25, None, Vec3::X))
         );
     }
 

@@ -102,10 +102,11 @@ Engine side effects without an OpenHP1 surface do not abort scripts:
 `SaveConfig` is read-only, `ConsoleCommand` returns an empty string, and decal
 detachment is a no-op until decals render.
 
-Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
-visibility tests. BSP trace hits return the active `LevelInfo`, as UE1
-UnrealScript expects. `TraceActors` currently yields no actor hits; add actor
-iteration when gameplay needs its output locations and normals.
+Cutscene cameras use UE1 vector/rotator transforms, `Trace`, and pawn visibility
+tests. BSP trace hits return the active `LevelInfo`, as UE1 UnrealScript
+expects; when `bTraceActors` is true, the closest actor or BSP hit wins.
+`TraceActors` returns actor and BSP hits with their output locations and
+normals.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.
