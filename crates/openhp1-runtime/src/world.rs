@@ -69,6 +69,7 @@ const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
 const LOG: u16 = 0x0e7;
+const V_RAND: u16 = 0x0fc;
 const CLASS_ABSTRACT: u32 = 0x0000_0001;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
@@ -517,7 +518,8 @@ mod tests {
         actor::update_touching_array,
         native::{
             animation_parameters, bone_number, collision_updates, log_arguments, noise_loudness,
-            random_float, random_int, scalar_native, sound_arguments, target_score, trace_texture,
+            random_float, random_int, random_unit_vector, scalar_native, sound_arguments,
+            target_score, trace_texture,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -975,6 +977,15 @@ mod tests {
             assert!((0.0..1.0).contains(&random_float(&mut state)));
         }
         assert_eq!(random_int(&mut state, 0), 0);
+    }
+
+    #[test]
+    fn random_vectors_are_normalized_and_deterministic() {
+        let mut first = 0x6d2b_79f5;
+        let mut second = first;
+        let vector = random_unit_vector(&mut first);
+        assert!((vector.length() - 1.0).abs() < 1.0e-6);
+        assert_eq!(vector, random_unit_vector(&mut second));
     }
 
     #[test]

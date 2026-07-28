@@ -795,6 +795,17 @@ impl ScriptRuntime {
             }
             return Ok(Value::Float(random_float(&mut self.random_state)));
         }
+        if index == V_RAND {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "VRand expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            return Ok(Value::Vector(
+                random_unit_vector(&mut self.random_state).to_array(),
+            ));
+        }
         if index == RAND_RANGE {
             let [Value::Float(min), Value::Float(max)] = arguments else {
                 return Err(format!(
@@ -2358,6 +2369,20 @@ pub(super) fn random_int(state: &mut u32, max: i32) -> i32 {
 
 pub(super) fn random_float(state: &mut u32) -> f32 {
     (next_random(state) >> 8) as f32 / 16_777_216.0
+}
+
+pub(super) fn random_unit_vector(state: &mut u32) -> Vec3 {
+    loop {
+        let vector = Vec3::new(
+            random_float(state) * 2.0 - 1.0,
+            random_float(state) * 2.0 - 1.0,
+            random_float(state) * 2.0 - 1.0,
+        );
+        let length_squared = vector.length_squared();
+        if length_squared > f32::EPSILON && length_squared <= 1.0 {
+            return vector / length_squared.sqrt();
+        }
+    }
 }
 
 fn object_value(value: &Value) -> Option<i32> {
