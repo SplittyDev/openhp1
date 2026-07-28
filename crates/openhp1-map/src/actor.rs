@@ -33,6 +33,7 @@ pub struct ActorProperties {
     pub anim_rate: Option<f32>,
     pub texture_u_pan_speed: Option<f32>,
     pub texture_v_pan_speed: Option<f32>,
+    pub corona: Option<bool>,
     pub hidden: Option<bool>,
     pub unlit: Option<bool>,
 }
@@ -130,6 +131,9 @@ impl ActorProperties {
                 }
                 ("TexVPanSpeed", PropertyKind::Float, _) => {
                     properties.texture_v_pan_speed = Some(value.read_f32()?);
+                }
+                ("bCorona", PropertyKind::Bool, _) => {
+                    properties.corona = property.bool_value;
                 }
                 ("bHidden", PropertyKind::Bool, _) => {
                     properties.hidden = property.bool_value;

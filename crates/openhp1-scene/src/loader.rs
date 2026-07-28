@@ -1585,6 +1585,7 @@ struct ActorState {
     anim_frame: f32,
     anim_rate: f32,
     texture_pan_speed: Vec2,
+    corona: bool,
     hidden: bool,
     unlit: bool,
 }
@@ -1621,6 +1622,7 @@ impl Default for ActorState {
             anim_frame: 0.0,
             anim_rate: 0.0,
             texture_pan_speed: Vec2::ONE,
+            corona: false,
             hidden: false,
             unlit: false,
         }
@@ -1717,6 +1719,9 @@ impl ActorState {
         }
         if let Some(speed) = properties.texture_v_pan_speed {
             self.texture_pan_speed.y = speed;
+        }
+        if let Some(corona) = properties.corona {
+            self.corona = corona;
         }
         if let Some(hidden) = properties.hidden {
             self.hidden = hidden;
@@ -1899,6 +1904,20 @@ fn append_scene_actor_render(
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if is_light && !state.editor_sprite && state.texture.is_some() {
+        append_scene_actor_sprite(
+            actor_render,
+            scene_actor,
+            state,
+            actor_index,
+            render_mesh,
+            textures,
+            materials,
+            sprites,
+            water_animations,
+        );
+        return;
+    }
     if state.draw_type == 0 {
         return;
     }
