@@ -37,6 +37,7 @@ pub struct SceneActor {
     pub location: Vec3,
     pub rotation: Rotator,
     pub pre_pivot: Vec3,
+    pub main_scale: Vec3,
     pub draw_scale: f32,
     pub draw_type: u8,
     pub hidden: bool,

@@ -1505,7 +1505,7 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(());
         };
-        let (is_base, is_hidden) = {
+        let (is_base, is_hidden, is_pre_pivot) = {
             let field = self.resolved_object(&field)?;
             let name = field
                 .package
@@ -1514,6 +1514,7 @@ impl ScriptRuntime {
             (
                 name.eq_ignore_ascii_case("Base"),
                 name.eq_ignore_ascii_case("bHidden"),
+                name.eq_ignore_ascii_case("PrePivot"),
             )
         };
         let self_handle =
@@ -1534,6 +1535,10 @@ impl ScriptRuntime {
             (true, StoredValue::Value(Value::Bool(hidden))) => Some(*hidden),
             _ => None,
         };
+        let pre_pivot = match (is_pre_pivot, &value) {
+            (true, StoredValue::Value(Value::Vector(pre_pivot))) => Some(*pre_pivot),
+            _ => None,
+        };
         if actor == current_actor {
             current_instance.insert(field.clone(), value);
             self.update_cached_collision_property(actor, &field, Some(current_instance))
@@ -1548,6 +1553,9 @@ impl ScriptRuntime {
         }
         if let Some(hidden) = hidden {
             actions.push(ActorAction::SetHidden { actor, hidden });
+        }
+        if let Some(pre_pivot) = pre_pivot {
+            actions.push(ActorAction::SetPrePivot { actor, pre_pivot });
         }
         Ok(())
     }

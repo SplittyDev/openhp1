@@ -196,6 +196,10 @@ pub enum ActorAction {
         actor: usize,
         rotation: [i32; 3],
     },
+    SetPrePivot {
+        actor: usize,
+        pre_pivot: [f32; 3],
+    },
     SetHidden {
         actor: usize,
         hidden: bool,
@@ -229,6 +233,7 @@ impl ActorAction {
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }
             | Self::SetRotation { actor, .. }
+            | Self::SetPrePivot { actor, .. }
             | Self::SetHidden { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }

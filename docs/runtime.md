@@ -22,7 +22,8 @@ by following their shared `Next` link.
 
 Runtime actions update both persistent actor state and the corresponding scene
 state. In particular, later animation ticks must not undo `SetLocation` or
-other transform changes.
+other transform changes. Direct `PrePivot` assignments also move rendered
+geometry; HP1 uses this while temporarily shrinking Harry's mount collision.
 
 ## State execution
 

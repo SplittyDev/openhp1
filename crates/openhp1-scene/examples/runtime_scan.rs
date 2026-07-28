@@ -344,6 +344,9 @@ fn apply_actions(
                     },
                 )?);
             }
+            ActorAction::SetPrePivot { actor, pre_pivot } => {
+                scene.set_actor_pre_pivot(actor, Vec3::from_array(pre_pivot))?;
+            }
             ActorAction::SetHidden { actor, hidden } => {
                 stats.visibility += 1;
                 stats.visibility_changed += usize::from(scene.set_actor_hidden(actor, hidden)?);

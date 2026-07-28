@@ -203,6 +203,9 @@ pub fn apply_runtime_actions_with(
                     },
                 )?;
             }
+            ActorAction::SetPrePivot { actor, pre_pivot } => {
+                transformed |= scene.set_actor_pre_pivot(actor, Vec3::from_array(pre_pivot))?;
+            }
             ActorAction::SetHidden { actor, hidden } => {
                 transformed |= scene.set_actor_hidden(actor, hidden)?;
             }

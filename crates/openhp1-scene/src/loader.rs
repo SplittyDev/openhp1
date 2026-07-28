@@ -318,6 +318,7 @@ impl LoadedScene {
             location: Vec3::ZERO,
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
             draw_scale: 1.0,
             draw_type: 0,
             hidden: false,
@@ -461,6 +462,40 @@ impl LoadedScene {
             animation.normal_transform = Mat3::from_mat4(animation.transform).inverse().transpose();
         }
         // ponytail: retain baked actor lighting until moving lights/zones are observable.
+        Ok(true)
+    }
+
+    pub fn set_actor_pre_pivot(&mut self, actor_index: usize, pre_pivot: Vec3) -> Result<bool> {
+        ensure!(pre_pivot.is_finite(), "actor pre-pivot is not finite");
+        let actor = self
+            .actors
+            .get(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        if actor.pre_pivot == pre_pivot {
+            return Ok(false);
+        }
+        let delta = pre_pivot_translation(actor, pre_pivot);
+        let hidden = actor.hidden;
+        let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
+        self.actors[actor_index].pre_pivot = pre_pivot;
+        if let Some(vertices) = vertices {
+            if hidden {
+                let positions = self
+                    .hidden_actor_positions
+                    .get_mut(&actor_index)
+                    .context("hidden actor has no saved render positions")?;
+                translate_positions(positions, delta);
+            } else {
+                translate_positions(&mut self.render.mesh.positions[vertices], delta);
+            }
+        }
+        if let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        {
+            animation.transform = Mat4::from_translation(delta) * animation.transform;
+        }
         Ok(true)
     }
 
@@ -863,6 +898,15 @@ fn translate_positions(positions: &mut [Vec3], delta: Vec3) {
     }
 }
 
+fn pre_pivot_translation(actor: &SceneActor, pre_pivot: Vec3) -> Vec3 {
+    if actor.draw_type == 3 {
+        rotation_matrix(actor.rotation)
+            .transform_vector3(actor.main_scale * (actor.pre_pivot - pre_pivot))
+    } else {
+        pre_pivot - actor.pre_pivot
+    }
+}
+
 fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
     for position in positions {
         *position = transform.transform_point3(*position);
@@ -1131,6 +1175,7 @@ fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
         location: Vec3::ZERO,
         rotation: Rotator::default(),
         pre_pivot: Vec3::ZERO,
+        main_scale: Vec3::ONE,
         draw_scale: 1.0,
         draw_type: 0,
         hidden: false,
@@ -1185,6 +1230,7 @@ fn load_actors(
             location: Vec3::ZERO,
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
             draw_scale: 1.0,
             draw_type: 0,
             hidden: false,
@@ -1571,6 +1617,7 @@ fn apply_scene_actor_state(actor: &mut SceneActor, state: &ActorState) {
     actor.location = state.location;
     actor.rotation = state.rotation;
     actor.pre_pivot = state.pre_pivot;
+    actor.main_scale = state.main_scale;
     actor.draw_scale = state.draw_scale;
     actor.draw_type = state.draw_type;
     actor.hidden = state.hidden;
@@ -2359,6 +2406,22 @@ mod tests {
                 glam::Vec3::new(3.0, 4.0, 5.0)
             ]
         );
+    }
+
+    #[test]
+    fn pre_pivot_changes_follow_mesh_and_brush_transform_conventions() {
+        let mut actor = super::runtime_actor_placeholder(0);
+        actor.pre_pivot = glam::Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(
+            super::pre_pivot_translation(&actor, glam::Vec3::new(4.0, 6.0, 8.0)),
+            glam::Vec3::new(3.0, 4.0, 5.0)
+        );
+
+        actor.draw_type = 3;
+        actor.main_scale = glam::Vec3::splat(2.0);
+        actor.rotation.yaw = 16_384;
+        let delta = super::pre_pivot_translation(&actor, glam::Vec3::new(2.0, 2.0, 3.0));
+        assert!(delta.abs_diff_eq(glam::Vec3::new(0.0, -2.0, 0.0), 1.0e-5));
     }
 
     #[test]
