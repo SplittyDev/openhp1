@@ -243,12 +243,6 @@ impl ParticleEmitter {
         if self.wind_modifier != 0.0 {
             diagnostics.push("particle wind response is unsupported");
         }
-        if self.spin_rate != ParticleFloat::default() {
-            diagnostics.push("particle sprite spin is unsupported");
-        }
-        if self.drip_time != ParticleFloat::default() {
-            diagnostics.push("particle drip scaling is unsupported");
-        }
         if self.parent_blend != 0.0 {
             diagnostics.push("particle parent parameter blending is unsupported");
         }
@@ -274,10 +268,6 @@ mod particle_tests {
         let unsupported = ParticleEmitter {
             render_primitive: 0,
             gravity_modifier: 1.0,
-            spin_rate: ParticleFloat {
-                base: 2.0,
-                random: 0.0,
-            },
             ..Default::default()
         };
         assert_eq!(
@@ -285,7 +275,6 @@ mod particle_tests {
             [
                 "particle render primitive is not a billboard",
                 "particle zone-gravity response is unsupported",
-                "particle sprite spin is unsupported",
             ]
         );
     }

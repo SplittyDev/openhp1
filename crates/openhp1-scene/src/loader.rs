@@ -591,6 +591,7 @@ impl LoadedScene {
             };
             system.particles.retain_mut(|particle| {
                 particle.age += delta_time;
+                particle.spin += particle.spin_rate * delta_time;
                 particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
                 particle.velocity *= particle_damping(system.config.damping, delta_time);
                 particle.location += particle.velocity * delta_time;
@@ -724,6 +725,16 @@ impl LoadedScene {
                             &mut system.random,
                         )
                         .max(0.0),
+                        spin: 0.0,
+                        spin_rate: sample_particle_float(
+                            system.config.spin_rate,
+                            &mut system.random,
+                        ),
+                        drip_time: sample_particle_float(
+                            system.config.drip_time,
+                            &mut system.random,
+                        )
+                        .max(0.0),
                     });
                     system.emitted += 1;
                 }
@@ -746,15 +757,21 @@ impl LoadedScene {
                     } else {
                         1.0
                     };
+                    let drip = if particle.drip_time > 0.0 {
+                        (particle.age / particle.drip_time).min(1.0)
+                    } else {
+                        1.0
+                    };
                     let location = if system.config.system_relative {
                         owner.location + particle.location
                     } else {
                         particle.location
                     };
-                    let positions = sprite_positions(
+                    let positions = particle_sprite_positions(
                         unreal_to_render(location),
-                        particle.half_size * grow * shrink,
+                        particle.half_size * grow * shrink * drip,
                         self.particle_view_rotation,
+                        particle.spin,
                     );
                     self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
                 } else {
@@ -1429,6 +1446,9 @@ struct Particle {
     lifetime: f32,
     half_size: Vec2,
     end_scale: f32,
+    spin: f32,
+    spin_rate: f32,
+    drip_time: f32,
 }
 
 fn particle_capacity(emitter: &ParticleEmitter) -> usize {
@@ -2191,6 +2211,25 @@ fn append_scene_actor_sprite(
 fn sprite_positions(center: Vec3, half_size: Vec2, view_rotation: Mat4) -> [Vec3; 4] {
     let side = view_rotation.transform_vector3(Vec3::Y) * half_size.x;
     let up = view_rotation.transform_vector3(Vec3::Z) * half_size.y;
+    [
+        center - side - up,
+        center + side - up,
+        center + side + up,
+        center - side + up,
+    ]
+}
+
+fn particle_sprite_positions(
+    center: Vec3,
+    half_size: Vec2,
+    view_rotation: Mat4,
+    spin: f32,
+) -> [Vec3; 4] {
+    let (sin, cos) = spin.sin_cos();
+    let view_side = view_rotation.transform_vector3(Vec3::Y);
+    let view_up = view_rotation.transform_vector3(Vec3::Z);
+    let side = (view_side * cos + view_up * sin) * half_size.x;
+    let up = (view_up * cos - view_side * sin) * half_size.y;
     [
         center - side - up,
         center + side - up,
@@ -3458,5 +3497,17 @@ mod tests {
         let positions = super::sprite_positions(center, glam::Vec2::new(2.0, 1.0), rotation);
         assert!(positions[0].abs_diff_eq(glam::Vec3::new(3.0, 2.0, 2.0), 1.0e-5));
         assert!(positions[2].abs_diff_eq(glam::Vec3::new(-1.0, 2.0, 4.0), 1.0e-5));
+    }
+
+    #[test]
+    fn particle_sprite_spin_rotates_within_the_view_plane() {
+        let positions = super::particle_sprite_positions(
+            glam::Vec3::ZERO,
+            glam::Vec2::new(2.0, 1.0),
+            glam::Mat4::IDENTITY,
+            std::f32::consts::FRAC_PI_2,
+        );
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(0.0, 1.0, -2.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(0.0, -1.0, 2.0), 1.0e-5));
     }
 }
