@@ -180,6 +180,7 @@ pub struct ParticleEmitter {
     pub particles_max: usize,
     pub particles_emitted: usize,
     pub particles_per_second: ParticleFloat,
+    pub period: ParticleFloat,
     pub lifetime: ParticleFloat,
     pub speed: ParticleFloat,
     pub source_width: ParticleFloat,
@@ -190,8 +191,10 @@ pub struct ParticleEmitter {
     pub size_end_scale: ParticleFloat,
     pub size_delay: f32,
     pub size_grow_period: f32,
+    pub draw_scale: f32,
     pub system_relative: bool,
     pub gravity: [f32; 3],
+    pub pattern: Vec<[f32; 3]>,
     pub textures: Vec<ParticleTexture>,
 }
 

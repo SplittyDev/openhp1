@@ -285,6 +285,7 @@ impl ScriptRuntime {
                     .collect(),
                 _ => Vec::new(),
             };
+            let pattern = self.particle_pattern(&class, &instance)?;
             emitters.push(ParticleEmitter {
                 actor,
                 emit: particle_bool(self.instance_property(&class, &instance, "bEmit")?),
@@ -311,6 +312,7 @@ impl ScriptRuntime {
                     &instance,
                     "ParticlesPerSec",
                 )?),
+                period: particle_float(self.instance_property(&class, &instance, "Period")?),
                 lifetime: particle_float(self.instance_property(&class, &instance, "Lifetime")?),
                 speed: particle_float(self.instance_property(&class, &instance, "Speed")?),
                 source_width: particle_float(self.instance_property(
@@ -353,16 +355,55 @@ impl ScriptRuntime {
                     &instance,
                     "SizeGrowPeriod",
                 )?),
+                draw_scale: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "DrawScale",
+                )?),
                 system_relative: particle_bool(self.instance_property(
                     &class,
                     &instance,
                     "bSystemRelative",
                 )?),
                 gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
+                pattern,
                 textures,
             });
         }
         Ok(emitters)
+    }
+
+    fn particle_pattern(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> DispatchResult<Vec<[f32; 3]>> {
+        let Some(StoredValue::Object(Some(pattern))) =
+            self.instance_property(class, instance, "Pattern")?
+        else {
+            return Ok(Vec::new());
+        };
+        let pattern = self.resolved_object(&pattern)?;
+        let export = &pattern.package.summary().exports[pattern.export_index];
+        let Some(pattern_class) = self.packages.resolve(&pattern.package, export.class)? else {
+            return Ok(Vec::new());
+        };
+        let mut values = self.load_class_defaults(&pattern_class, 0)?;
+        let mut reader = pattern.package.export_reader(pattern.export_index)?;
+        reader.read_object_stack(export.object_flags)?;
+        self.apply_properties(&pattern_class, &pattern.package, &mut reader, &mut values)?;
+        Ok(
+            match self.instance_property(&pattern_class, &values, "Points")? {
+                Some(StoredValue::Array(points)) => points
+                    .into_iter()
+                    .filter_map(|point| match point {
+                        StoredValue::Value(Value::Vector(point)) => Some(point),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+        )
     }
 
     pub fn weapon_attachments(&mut self) -> DispatchResult<Vec<WeaponAttachment>> {

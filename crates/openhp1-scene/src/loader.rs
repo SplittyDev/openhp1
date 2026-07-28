@@ -580,7 +580,9 @@ impl LoadedScene {
             let rate =
                 sample_particle_float(system.config.particles_per_second, &mut system.random)
                     .max(0.0);
-            if system.config.emit && !owner.hidden {
+            let pattern_finished =
+                !system.config.pattern.is_empty() && system.config.period.base > 1.0;
+            if system.config.emit && !owner.hidden && !pattern_finished {
                 if system.config.prime && !system.primed {
                     system.residue += rate
                         * sample_particle_float(system.config.lifetime, &mut system.random)
@@ -615,6 +617,18 @@ impl LoadedScene {
                                 &mut system.random,
                             ),
                     ) * 0.5;
+                    let pattern = pattern_position(
+                        &system.config.pattern,
+                        sample_particle_float(system.config.period, &mut system.random),
+                    )
+                    .map(|point| {
+                        rotation_matrix(owner.rotation).transform_vector3(Vec3::new(
+                            0.0,
+                            (point.x - 0.5) * system.config.draw_scale,
+                            (0.5 - point.y) * system.config.draw_scale,
+                        ))
+                    })
+                    .unwrap_or(Vec3::ZERO);
                     let speed =
                         sample_particle_float(system.config.speed, &mut system.random).max(0.0);
                     let direction = if system.config.system_relative {
@@ -623,7 +637,7 @@ impl LoadedScene {
                         rotation_matrix(owner.rotation).transform_vector3(Vec3::X)
                     } * speed;
                     system.particles.push(Particle {
-                        location: center + source,
+                        location: center + source + pattern,
                         velocity: direction,
                         age: 0.0,
                         lifetime: sample_particle_float(system.config.lifetime, &mut system.random)
@@ -1351,6 +1365,19 @@ fn particle_capacity(emitter: &ParticleEmitter) -> usize {
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
     value.base + value.random * random_unit(random)
+}
+
+fn pattern_position(points: &[[f32; 3]], progress: f32) -> Option<Vec3> {
+    let last = points.len().checked_sub(1)?;
+    if last == 0 {
+        return Some(Vec3::from_array(points[0]));
+    }
+    let position = progress.clamp(0.0, 1.0) * last as f32;
+    let index = (position.floor() as usize).min(last - 1);
+    Some(
+        Vec3::from_array(points[index])
+            .lerp(Vec3::from_array(points[index + 1]), position - index as f32),
+    )
 }
 
 fn random_signed(random: &mut u32) -> f32 {
@@ -2933,6 +2960,7 @@ mod tests {
                 base: 10.0,
                 random: 5.0,
             },
+            period: ParticleFloat::default(),
             lifetime: ParticleFloat {
                 base: 1.0,
                 random: 1.0,
@@ -2946,14 +2974,29 @@ mod tests {
             size_end_scale: ParticleFloat::default(),
             size_delay: 0.0,
             size_grow_period: 0.0,
+            draw_scale: 1.0,
             system_relative: false,
             gravity: [0.0; 3],
+            pattern: Vec::new(),
             textures: Vec::new(),
         };
         assert_eq!(super::particle_capacity(&emitter), 7);
         emitter.particles_alive = 0;
         emitter.particles_max = 0;
         assert_eq!(super::particle_capacity(&emitter), 30);
+    }
+
+    #[test]
+    fn particle_patterns_interpolate_authored_gesture_points() {
+        let points = [[0.0, 0.0, 0.0], [0.25, 1.0, 0.0], [1.0, 1.0, 0.0]];
+        assert_eq!(
+            super::pattern_position(&points, 0.25),
+            Some(glam::Vec3::new(0.125, 0.5, 0.0))
+        );
+        assert_eq!(
+            super::pattern_position(&points, 0.75),
+            Some(glam::Vec3::new(0.625, 1.0, 0.0))
+        );
     }
 
     #[test]
