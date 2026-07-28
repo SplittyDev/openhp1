@@ -868,7 +868,7 @@ mod tests {
         );
         let quarter_yaw = Value::Rotator([0, 16_384, 0]);
         let Value::Vector(rotated) = scalar_native(
-            0x113,
+            0x114,
             &[Value::Vector([1.0, 0.0, 0.0]), quarter_yaw.clone()],
         )
         .unwrap() else {
@@ -876,7 +876,7 @@ mod tests {
         };
         assert!(glam::Vec3::from_array(rotated).abs_diff_eq(glam::Vec3::Y, 1.0e-6));
         let Value::Vector(unrotated) =
-            scalar_native(0x114, &[Value::Vector(rotated), quarter_yaw]).unwrap()
+            scalar_native(0x113, &[Value::Vector(rotated), quarter_yaw]).unwrap()
         else {
             panic!("expected inverse vector rotation");
         };

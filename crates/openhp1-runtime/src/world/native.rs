@@ -2060,9 +2060,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         ) => {
             let [x, y, z] = crate::rotator_axes(*rotation);
             Value::Vector([
-                x[0] * vector[0] + y[0] * vector[1] + z[0] * vector[2],
-                x[1] * vector[0] + y[1] * vector[1] + z[1] * vector[2],
-                x[2] * vector[0] + y[2] * vector[1] + z[2] * vector[2],
+                x[0] * vector[0] + x[1] * vector[1] + x[2] * vector[2],
+                y[0] * vector[0] + y[1] * vector[1] + y[2] * vector[2],
+                z[0] * vector[0] + z[1] * vector[1] + z[2] * vector[2],
             ])
         }
         (
@@ -2071,9 +2071,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         ) => {
             let [x, y, z] = crate::rotator_axes(*rotation);
             Value::Vector([
-                x[0] * vector[0] + x[1] * vector[1] + x[2] * vector[2],
-                y[0] * vector[0] + y[1] * vector[1] + y[2] * vector[2],
-                z[0] * vector[0] + z[1] * vector[1] + z[2] * vector[2],
+                x[0] * vector[0] + y[0] * vector[1] + z[0] * vector[2],
+                x[1] * vector[0] + y[1] * vector[1] + z[1] * vector[2],
+                x[2] * vector[0] + y[2] * vector[1] + z[2] * vector[2],
             ])
         }
         (ScalarNative::EqualEqual_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
