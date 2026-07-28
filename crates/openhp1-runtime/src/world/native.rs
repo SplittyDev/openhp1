@@ -2078,13 +2078,13 @@ fn nearest_gesture_distance(point: [f32; 2], points: &[[f32; 2]]) -> f32 {
 }
 
 fn compare_gesture(drawn: &[[f32; 2]], template: &[[f32; 2]], accuracy: f32) -> f32 {
-    let mut matched = 0;
+    let mut penalty = 0;
     let mut total = 0;
     for &point in template {
         let distance = nearest_gesture_distance(point, drawn);
-        if distance <= accuracy {
+        if distance > accuracy {
             let weight = (distance / (accuracy * 5.0) + 1.0).round().min(2.0) as i32;
-            matched += weight;
+            penalty += weight;
             total += weight;
         } else {
             total += 2;
@@ -2092,20 +2092,20 @@ fn compare_gesture(drawn: &[[f32; 2]], template: &[[f32; 2]], accuracy: f32) -> 
     }
     for &point in drawn {
         let distance = nearest_gesture_distance(point, template);
-        if distance <= accuracy {
+        if distance > accuracy {
             let weight = (distance / accuracy).round().min(3.0) as i32;
-            matched += weight;
+            penalty += weight;
             total += weight;
         }
     }
     if drawn.len() < 10 {
-        matched += 500;
+        penalty += 500;
         total += 500;
     }
     if total == 0 {
         return 0.0;
     }
-    (1.0 - matched as f32 / total as f32).clamp(0.0, 1.0)
+    (1.0 - penalty as f32 / total as f32).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -2114,11 +2114,22 @@ mod gesture_tests {
 
     #[test]
     fn gesture_comparison_matches_the_original_resampling_and_coverage_score() {
-        let template = resample_gesture(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
-        assert_eq!(template.len(), 9);
+        let template = resample_gesture(&[[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+        assert_eq!(template.len(), 17);
         assert_eq!(nearest_gesture_distance([0.5, 0.25], &template), 0.25);
-        assert_eq!(compare_gesture(&template, &template, 0.1), 0.0);
-        assert!(compare_gesture(&template[..4], &template, 0.1) > 0.0);
+        assert_eq!(compare_gesture(&template, &template, 0.1), 1.0);
+        assert!(compare_gesture(&template[..4], &template, 0.1) < 1.0);
+        assert_eq!(
+            compare_gesture(
+                &template
+                    .iter()
+                    .map(|[x, y]| [x + 2.0, y + 2.0])
+                    .collect::<Vec<_>>(),
+                &template,
+                0.1,
+            ),
+            0.0
+        );
     }
 }
 
