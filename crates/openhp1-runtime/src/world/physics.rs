@@ -1293,23 +1293,23 @@ impl ScriptRuntime {
         elapsed: f32,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
-        let rotate_to_desired = self.actor_bool(class, instance, "bRotateToDesired")?;
-        let fixed_direction = self.actor_bool(class, instance, "bFixedRotationDir")?;
         let mut rotation = self.actor_rotator(class, instance, "Rotation")?;
         let rate = self.actor_rotator(class, instance, "RotationRate")?;
         let before = rotation;
-
-        if rotate_to_desired {
+        if self
+            .class_has_name(class, "Pawn")
+            .map_err(|error| error.to_string())?
+        {
+            self.set_actor_value(class, instance, "bRotateToDesired", Value::Bool(true))?;
+            self.set_actor_value(class, instance, "bFixedRotationDir", Value::Bool(false))?;
             let desired = self.actor_rotator(class, instance, "DesiredRotation")?;
             if !rotators_equal(rotation, desired) {
-                for index in 0..3 {
-                    let step = (rate[index] as f32 * elapsed) as i32;
-                    rotation[index] = if fixed_direction {
-                        turn_to_fixed(rotation[index], desired[index], step)
-                    } else {
-                        turn_to_shortest(rotation[index], desired[index], step.abs())
-                    };
-                }
+                rotation[1] = turn_to_shortest(
+                    rotation[1],
+                    desired[1],
+                    (rate[1] as f32 * elapsed).abs() as i32,
+                );
+                rotation[0] = clamp_pawn_pitch(desired[0], rate[0]);
                 if rotators_equal(rotation, desired) {
                     actions.push(ActorAction::DispatchEvent {
                         actor,
@@ -1318,10 +1318,33 @@ impl ScriptRuntime {
                     });
                 }
             }
-        } else if fixed_direction {
-            for index in 0..3 {
-                rotation[index] =
-                    rotation[index].wrapping_add((rate[index] as f32 * elapsed) as i32);
+        } else {
+            let rotate_to_desired = self.actor_bool(class, instance, "bRotateToDesired")?;
+            let fixed_direction = self.actor_bool(class, instance, "bFixedRotationDir")?;
+            if rotate_to_desired {
+                let desired = self.actor_rotator(class, instance, "DesiredRotation")?;
+                if !rotators_equal(rotation, desired) {
+                    for index in 0..3 {
+                        let step = (rate[index] as f32 * elapsed) as i32;
+                        rotation[index] = if fixed_direction {
+                            turn_to_fixed(rotation[index], desired[index], step)
+                        } else {
+                            turn_to_shortest(rotation[index], desired[index], step.abs())
+                        };
+                    }
+                    if rotators_equal(rotation, desired) {
+                        actions.push(ActorAction::DispatchEvent {
+                            actor,
+                            event: "EndedRotation",
+                            arguments: Vec::new(),
+                        });
+                    }
+                }
+            } else if fixed_direction {
+                for index in 0..3 {
+                    rotation[index] =
+                        rotation[index].wrapping_add((rate[index] as f32 * elapsed) as i32);
+                }
             }
         }
 
@@ -1825,6 +1848,17 @@ fn rotators_equal(left: [i32; 3], right: [i32; 3]) -> bool {
         .all(|(left, right)| left as u16 == right as u16)
 }
 
+fn clamp_pawn_pitch(desired: i32, rate: i32) -> i32 {
+    let desired = desired & 0xffff;
+    if desired < 0x8000 {
+        desired.max(rate)
+    } else if desired < 0x10000 - rate {
+        0x10000 - rate
+    } else {
+        desired
+    }
+}
+
 fn turn_to_shortest(from: i32, to: i32, speed: i32) -> i32 {
     let from = from & 0xffff;
     let to = to & 0xffff;
@@ -1868,6 +1902,14 @@ mod tests {
         assert_eq!(turn_to_fixed(65_000, 100, 1_000), 100);
         assert_eq!(turn_to_fixed(100, 65_000, -1_000), 65_000);
         assert!(rotators_equal([-1, 0, 65_536], [65_535, 0, 0]));
+    }
+
+    #[test]
+    fn pawn_pitch_uses_ue1_rotation_rate_bounds() {
+        assert_eq!(clamp_pawn_pitch(1_000, 3_072), 3_072);
+        assert_eq!(clamp_pawn_pitch(-1_000, 3_072), 64_536);
+        assert_eq!(clamp_pawn_pitch(16_384, 3_072), 16_384);
+        assert_eq!(clamp_pawn_pitch(-16_384, 3_072), 62_464);
     }
 
     #[test]
