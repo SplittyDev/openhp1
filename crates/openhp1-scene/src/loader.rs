@@ -45,6 +45,7 @@ pub struct LoadedScene {
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
     animations: Vec<AnimatedActorMesh>,
+    sprites: Vec<SpriteActor>,
     root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     water_animations: Vec<AnimatedWaterTexture>,
@@ -162,6 +163,7 @@ impl LoadedScene {
             .collect::<HashSet<_>>()
             .len();
         let mut animations = Vec::new();
+        let mut sprites = Vec::new();
         let vertex_lighting = model
             .vertex_lighting(&package)
             .context("failed to decode actor vertex lighting")?;
@@ -184,6 +186,7 @@ impl LoadedScene {
             &mut textures,
             &mut surface_materials,
             &mut animations,
+            &mut sprites,
             &mut water_animations,
         );
         let mut hidden_actor_positions = HashMap::new();
@@ -254,6 +257,7 @@ impl LoadedScene {
             zone_nodes: actor_render.model.nodes.clone(),
             zone_count: actor_render.model.zones.len(),
             animations,
+            sprites,
             root_motions: Vec::new(),
             hidden_actor_positions,
             water_animations,
@@ -341,6 +345,7 @@ impl LoadedScene {
             &mut self.render.textures,
             &mut self.render.surface_materials,
             &mut self.animations,
+            &mut self.sprites,
             &mut self.water_animations,
         );
         if let Some(render) = &actor.render {
@@ -416,6 +421,30 @@ impl LoadedScene {
         }
         // ponytail: retain baked actor lighting until moving lights/zones are observable.
         Ok(true)
+    }
+
+    pub fn update_sprite_billboards(&mut self, view_rotation: Rotator) -> bool {
+        let rotation = rotation_matrix(view_rotation);
+        let mut changed = false;
+        for sprite in &self.sprites {
+            let Some(actor) = self.actors.get(sprite.actor_index) else {
+                continue;
+            };
+            let Some(render) = actor.render.as_ref() else {
+                continue;
+            };
+            if actor.hidden {
+                continue;
+            }
+            let center = actor.location + actor.pre_pivot;
+            let positions = sprite_positions(center, sprite.half_size, rotation);
+            let target = &mut self.render.mesh.positions[render.vertices.clone()];
+            if target != positions {
+                target.copy_from_slice(&positions);
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub fn set_actor_rotation(&mut self, actor_index: usize, rotation: Rotator) -> Result<bool> {
@@ -964,6 +993,11 @@ struct AnimatedWaterTexture {
     animation: WaterAnimation,
 }
 
+struct SpriteActor {
+    actor_index: usize,
+    half_size: Vec2,
+}
+
 impl AnimatedActorMesh {
     fn sequences(&self) -> &[MeshAnimationSequence] {
         self.skeletal_animation
@@ -1206,6 +1240,7 @@ fn load_actors(
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
+    sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> Vec<SceneActor> {
     let mut actors = Vec::new();
@@ -1312,6 +1347,7 @@ fn load_actors(
             textures,
             materials,
             animations,
+            sprites,
             water_animations,
         );
         actors.push(scene_actor);
@@ -1330,8 +1366,23 @@ fn append_scene_actor_render(
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
+    sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) {
+    if matches!(state.draw_type, 1 | 4) {
+        append_scene_actor_sprite(
+            actor_render,
+            scene_actor,
+            state,
+            actor_index,
+            render_mesh,
+            textures,
+            materials,
+            sprites,
+            water_animations,
+        );
+        return;
+    }
     if state.draw_type == 3 {
         append_scene_actor_brush(
             actor_render,
@@ -1461,6 +1512,99 @@ fn append_scene_actor_render(
                 .push(format!("mesh assembly failed: {error}"));
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_scene_actor_sprite(
+    actor_render: &mut ActorRenderContext,
+    scene_actor: &mut SceneActor,
+    state: &ActorState,
+    actor_index: usize,
+    render_mesh: &mut openhp1_map::TriangleMesh,
+    textures: &mut Vec<TextureImage>,
+    materials: &mut Vec<SurfaceMaterial>,
+    sprites: &mut Vec<SpriteActor>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+) {
+    let Some(texture) = state.texture.as_ref() else {
+        scene_actor
+            .diagnostics
+            .push("sprite draw type has no texture assigned".to_owned());
+        return;
+    };
+    let material = actor_surface_material(
+        &mut actor_render.packages,
+        Some(texture),
+        PolyFlags::TWO_SIDED.bits(),
+        state,
+        textures,
+        &mut actor_render.decoded_textures,
+        &mut actor_render.images,
+        water_animations,
+    );
+    let Some(texture_index) = material.texture else {
+        scene_actor
+            .diagnostics
+            .push("sprite texture could not be decoded".to_owned());
+        return;
+    };
+    let dimensions = Vec2::new(
+        textures[texture_index].width as f32,
+        textures[texture_index].height as f32,
+    );
+    let surface = materials.len();
+    materials.push(SurfaceMaterial {
+        unlit: true,
+        ..material
+    });
+    let half_size = dimensions * state.draw_scale * 0.5;
+    let first_vertex = render_mesh.positions.len();
+    let first_index = render_mesh.indices.len();
+    let center = state.location + state.pre_pivot;
+    for (position, uv) in sprite_positions(center, half_size, Mat4::IDENTITY)
+        .into_iter()
+        .zip([
+            Vec2::ZERO,
+            Vec2::new(dimensions.x, 0.0),
+            dimensions,
+            Vec2::new(0.0, dimensions.y),
+        ])
+    {
+        render_mesh.positions.push(position);
+        render_mesh.texture_coordinates.push(uv);
+        render_mesh.lightmap_coordinates.push(Vec2::ZERO);
+        render_mesh.vertex_lightmaps.push(None);
+        render_mesh
+            .vertex_colors
+            .push(Vec3::splat(state.scale_glow.clamp(0.0, 1.0)));
+        render_mesh.vertex_surfaces.push(surface);
+    }
+    let base = first_vertex as u32;
+    render_mesh
+        .indices
+        .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+    render_mesh
+        .triangle_surfaces
+        .extend_from_slice(&[surface, surface]);
+    scene_actor.render = Some(SceneActorRenderRange {
+        vertices: first_vertex..render_mesh.positions.len(),
+        indices: first_index..render_mesh.indices.len(),
+    });
+    sprites.push(SpriteActor {
+        actor_index,
+        half_size,
+    });
+}
+
+fn sprite_positions(center: Vec3, half_size: Vec2, view_rotation: Mat4) -> [Vec3; 4] {
+    let side = view_rotation.transform_vector3(Vec3::Y) * half_size.x;
+    let up = view_rotation.transform_vector3(Vec3::Z) * half_size.y;
+    [
+        center - side - up,
+        center + side - up,
+        center + side + up,
+        center - side + up,
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2535,5 +2679,17 @@ mod tests {
             roll.transform_vector3(glam::Vec3::Y)
                 .abs_diff_eq(-glam::Vec3::Z, 1.0e-6)
         );
+    }
+
+    #[test]
+    fn sprite_quad_follows_the_view_axes() {
+        let center = glam::Vec3::new(1.0, 2.0, 3.0);
+        let rotation = super::rotation_matrix(openhp1_map::Rotator {
+            yaw: 16_384,
+            ..Default::default()
+        });
+        let positions = super::sprite_positions(center, glam::Vec2::new(2.0, 1.0), rotation);
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(3.0, 2.0, 2.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(-1.0, 2.0, 4.0), 1.0e-5));
     }
 }

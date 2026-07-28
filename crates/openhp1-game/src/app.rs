@@ -6,7 +6,7 @@ use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, RenderStats, Renderer};
 use openhp1_runtime::{ActorAction, PlayerInput, PlayerView, ScriptRuntime};
 use openhp1_scene::{
-    LoadedScene, apply_runtime_actions_with, initialize_runtime_with, unreal_to_render,
+    LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with, unreal_to_render,
 };
 use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
@@ -677,6 +677,13 @@ impl Graphics {
                     PhysicalSize::new(self.config.width, self.config.height),
                     self.camera.far,
                 );
+                if self.scene.update_sprite_billboards(Rotator {
+                    pitch: view.rotation[0],
+                    yaw: view.rotation[1],
+                    roll: view.rotation[2],
+                }) {
+                    self.update_vertices();
+                }
                 self.update_audio();
             }
             Err(error) => self.last_error = Some(format!("player camera failed: {error}")),
