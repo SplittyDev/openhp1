@@ -463,6 +463,24 @@ impl LoadedScene {
     pub fn sync_particle_emitters(&mut self, emitters: Vec<ParticleEmitter>) -> Result<bool> {
         let mut changed = false;
         for emitter in emitters {
+            if let Some(actor) = self.actors.get_mut(emitter.actor) {
+                for diagnostic in emitter.capability_diagnostics() {
+                    if !actor
+                        .diagnostics
+                        .iter()
+                        .any(|existing| existing == diagnostic)
+                    {
+                        warn!(
+                            actor = emitter.actor,
+                            actor_name = actor.name,
+                            class = actor.class_name,
+                            diagnostic,
+                            "particle capability diagnostic"
+                        );
+                        actor.diagnostics.push(diagnostic.to_owned());
+                    }
+                }
+            }
             if emitter.textures.is_empty() {
                 continue;
             }
@@ -3135,6 +3153,17 @@ mod tests {
             system_relative: false,
             damping: 0.0,
             gravity: [0.0; 3],
+            render_primitive: 1,
+            velocity_relative: false,
+            gravity_modifier: 0.0,
+            chaos: 0.0,
+            attraction: [0.0; 3],
+            elasticity: 0.0,
+            wind_modifier: 0.0,
+            spin_rate: ParticleFloat::default(),
+            drip_time: ParticleFloat::default(),
+            parent_blend: 0.0,
+            color_palette: false,
             pattern: Vec::new(),
             textures: Vec::new(),
         };

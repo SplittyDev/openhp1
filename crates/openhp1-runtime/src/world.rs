@@ -171,7 +171,7 @@ pub struct ParticleTexture {
     pub export_index: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParticleEmitter {
     pub actor: usize,
     pub owner: Option<usize>,
@@ -201,8 +201,94 @@ pub struct ParticleEmitter {
     pub system_relative: bool,
     pub damping: f32,
     pub gravity: [f32; 3],
+    pub render_primitive: u8,
+    pub velocity_relative: bool,
+    pub gravity_modifier: f32,
+    pub chaos: f32,
+    pub attraction: [f32; 3],
+    pub elasticity: f32,
+    pub wind_modifier: f32,
+    pub spin_rate: ParticleFloat,
+    pub drip_time: ParticleFloat,
+    pub parent_blend: f32,
+    pub color_palette: bool,
     pub pattern: Vec<[f32; 3]>,
     pub textures: Vec<ParticleTexture>,
+}
+
+impl ParticleEmitter {
+    pub fn capability_diagnostics(&self) -> Vec<&'static str> {
+        let mut diagnostics = Vec::new();
+        if self.render_primitive != 1 {
+            diagnostics.push("particle render primitive is not a billboard");
+        }
+        if self.textures.len() > 1 {
+            diagnostics.push("particle random texture selection is unsupported");
+        }
+        if self.velocity_relative {
+            diagnostics.push("particle owner-velocity inheritance is unsupported");
+        }
+        if self.gravity_modifier != 0.0 {
+            diagnostics.push("particle zone-gravity response is unsupported");
+        }
+        if self.chaos != 0.0 {
+            diagnostics.push("particle chaos movement is unsupported");
+        }
+        if self.attraction != [0.0; 3] {
+            diagnostics.push("particle attraction is unsupported");
+        }
+        if self.elasticity != 0.0 {
+            diagnostics.push("particle collision elasticity is unsupported");
+        }
+        if self.wind_modifier != 0.0 {
+            diagnostics.push("particle wind response is unsupported");
+        }
+        if self.spin_rate != ParticleFloat::default() {
+            diagnostics.push("particle sprite spin is unsupported");
+        }
+        if self.drip_time != ParticleFloat::default() {
+            diagnostics.push("particle drip scaling is unsupported");
+        }
+        if self.parent_blend != 0.0 {
+            diagnostics.push("particle parent parameter blending is unsupported");
+        }
+        if self.color_palette {
+            diagnostics.push("particle palette color cycling is unsupported");
+        }
+        diagnostics
+    }
+}
+
+#[cfg(test)]
+mod particle_tests {
+    use super::*;
+
+    #[test]
+    fn reports_only_authored_particle_features_outside_the_supported_subset() {
+        let supported = ParticleEmitter {
+            render_primitive: 1,
+            ..Default::default()
+        };
+        assert!(supported.capability_diagnostics().is_empty());
+
+        let unsupported = ParticleEmitter {
+            render_primitive: 0,
+            gravity_modifier: 1.0,
+            spin_rate: ParticleFloat {
+                base: 2.0,
+                random: 0.0,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            unsupported.capability_diagnostics(),
+            [
+                "particle render primitive is not a billboard",
+                "particle zone-gravity response is unsupported",
+                "particle sprite spin is unsupported",
+            ]
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

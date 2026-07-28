@@ -389,6 +389,48 @@ impl ScriptRuntime {
                 )?),
                 damping: particle_scalar(self.instance_property(&class, &instance, "Damping")?),
                 gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
+                render_primitive: particle_byte(self.instance_property(
+                    &class,
+                    &instance,
+                    "RenderPrimitive",
+                )?),
+                velocity_relative: particle_bool(self.instance_property(
+                    &class,
+                    &instance,
+                    "bVelocityRelative",
+                )?),
+                gravity_modifier: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "GravityModifier",
+                )?),
+                chaos: particle_scalar(self.instance_property(&class, &instance, "Chaos")?),
+                attraction: particle_vector(self.instance_property(
+                    &class,
+                    &instance,
+                    "Attraction",
+                )?),
+                elasticity: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "Elasticity",
+                )?),
+                wind_modifier: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "WindModifier",
+                )?),
+                spin_rate: particle_float(self.instance_property(&class, &instance, "SpinRate")?),
+                drip_time: particle_float(self.instance_property(&class, &instance, "DripTime")?),
+                parent_blend: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "ParentBlend",
+                )?),
+                color_palette: matches!(
+                    self.instance_property(&class, &instance, "ColorPalette")?,
+                    Some(StoredValue::Object(Some(_)))
+                ),
                 pattern,
                 textures,
             });

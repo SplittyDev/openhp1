@@ -83,7 +83,8 @@ scale are applied over each particle's lifetime. Particle velocity uses the
 authored exponential `Damping` decay. A `Gesture` assigned to
 `Pattern` places emissions along its authored point segments; `Period` selects
 the active normalized range, which is how spell lessons progressively draw
-their visible template.
+their visible template. Authored particle modes that are not implemented are
+retained as per-actor capability diagnostics rather than silently discarded.
 
 ## Movement and spawning
 
