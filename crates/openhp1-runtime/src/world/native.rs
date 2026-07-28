@@ -1810,6 +1810,7 @@ enum ScalarNative {
     EqualEqual_FloatFloat,
     NotEqual_FloatFloat,
     Abs,
+    Tan,
     Sqrt,
     Subtract_PreVector,
     Multiply_VectorFloat,
@@ -1885,6 +1886,7 @@ impl TryFrom<u16> for ScalarNative {
             0xb4 => Ok(Self::EqualEqual_FloatFloat),
             0xb5 => Ok(Self::NotEqual_FloatFloat),
             0xba => Ok(Self::Abs),
+            0xbd => Ok(Self::Tan),
             0xc1 => Ok(Self::Sqrt),
             0xd3 => Ok(Self::Subtract_PreVector),
             0xd4 => Ok(Self::Multiply_VectorFloat),
@@ -2120,6 +2122,7 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             Value::Bool(left != right)
         }
         (ScalarNative::Abs, [Value::Float(value)]) => Value::Float(value.abs()),
+        (ScalarNative::Tan, [Value::Float(value)]) => Value::Float(value.tan()),
         (ScalarNative::Sqrt, [Value::Float(value)]) => Value::Float(value.sqrt()),
         (ScalarNative::Subtract_PreVector, [Value::Vector(value)]) => {
             Value::Vector([-value[0], -value[1], -value[2]])

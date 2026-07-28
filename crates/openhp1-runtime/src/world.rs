@@ -594,6 +594,16 @@ mod tests {
     }
 
     #[test]
+    fn tangent_uses_radians() {
+        let Value::Float(value) =
+            scalar_native(0xbd, &[Value::Float(std::f32::consts::FRAC_PI_4)]).unwrap()
+        else {
+            panic!("expected float");
+        };
+        assert!((value - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
     fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
         assert_eq!(
             scalar_native(0x97, &[Value::Byte(1), Value::Int(0)]),
