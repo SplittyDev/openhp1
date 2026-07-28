@@ -520,6 +520,11 @@ impl Graphics {
         let player = self.scene.actors.get(self.player);
         let player_name = player.map_or("<missing>", |actor| actor.name.as_str());
         let location = player.map_or(Vec3::ZERO, |actor| actor.location);
+        let camera_location = self
+            .scene
+            .actors
+            .get(self.view_actor)
+            .map_or(Vec3::ZERO, |actor| actor.location);
         let rotation = player.map_or([0; 3], |actor| {
             [
                 actor.rotation.pitch,
@@ -552,6 +557,10 @@ impl Graphics {
                     rotation[0], rotation[1], rotation[2]
                 ));
                 ui.monospace(format!("camera actor: #{}", self.view_actor));
+                ui.monospace(format!(
+                    "camera location: {:.1}, {:.1}, {:.1}",
+                    camera_location.x, camera_location.y, camera_location.z
+                ));
                 ui.separator();
                 ui.monospace(format!(
                     "{} actors  {} triangles  {} draw calls",
