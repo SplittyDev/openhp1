@@ -1842,6 +1842,7 @@ enum ScalarNative {
     AndAnd_BoolBool,
     XorXor_BoolBool,
     OrOr_BoolBool,
+    Subtract_PreInt,
     Multiply_IntInt,
     Divide_IntInt,
     Add_IntInt,
@@ -1881,6 +1882,7 @@ enum ScalarNative {
     Dot_VectorVector,
     VSize,
     Normal,
+    MirrorVectorByNormal,
     FMin,
     FMax,
     FClamp,
@@ -1918,6 +1920,7 @@ impl TryFrom<u16> for ScalarNative {
             0x82 => Ok(Self::AndAnd_BoolBool),
             0x83 => Ok(Self::XorXor_BoolBool),
             0x84 => Ok(Self::OrOr_BoolBool),
+            0x8f => Ok(Self::Subtract_PreInt),
             0x90 => Ok(Self::Multiply_IntInt),
             0x91 => Ok(Self::Divide_IntInt),
             0x92 => Ok(Self::Add_IntInt),
@@ -1957,6 +1960,7 @@ impl TryFrom<u16> for ScalarNative {
             0xdb => Ok(Self::Dot_VectorVector),
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
+            0x12c => Ok(Self::MirrorVectorByNormal),
             0xea => Ok(Self::Right),
             0xeb => Ok(Self::Caps),
             0xec => Ok(Self::Chr),
@@ -2072,6 +2076,7 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
             left.truthy().map_err(|error| error.to_string())?
                 || right.truthy().map_err(|error| error.to_string())?,
         ),
+        (ScalarNative::Subtract_PreInt, [Value::Int(value)]) => Value::Int(value.wrapping_neg()),
         (ScalarNative::Multiply_IntInt, [Value::Int(left), Value::Int(right)]) => {
             Value::Int(left * right)
         }
@@ -2238,6 +2243,15 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
                 Value::Vector([0.0; 3])
             }
         }
+        (ScalarNative::MirrorVectorByNormal, [Value::Vector(vector), Value::Vector(normal)]) => {
+            let scale =
+                2.0 * (vector[0] * normal[0] + vector[1] * normal[1] + vector[2] * normal[2]);
+            Value::Vector([
+                vector[0] - scale * normal[0],
+                vector[1] - scale * normal[1],
+                vector[2] - scale * normal[2],
+            ])
+        }
         (ScalarNative::Clamp, [Value::Int(value), Value::Int(min), Value::Int(max)]) => {
             Value::Int((*value).min(*max).max(*min))
         }
@@ -2294,7 +2308,8 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
 
 fn null_numeric_value(native: ScalarNative) -> Option<Value> {
     Some(match native {
-        ScalarNative::Multiply_IntInt
+        ScalarNative::Subtract_PreInt
+        | ScalarNative::Multiply_IntInt
         | ScalarNative::Divide_IntInt
         | ScalarNative::Add_IntInt
         | ScalarNative::Subtract_IntInt

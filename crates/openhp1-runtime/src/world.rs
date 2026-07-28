@@ -873,6 +873,7 @@ mod tests {
 
     #[test]
     fn basic_vector_arithmetic_matches_unreal_natives() {
+        assert_eq!(scalar_native(0x8f, &[Value::Int(7)]), Ok(Value::Int(-7)));
         assert_eq!(
             scalar_native(
                 0xd9,
@@ -922,6 +923,16 @@ mod tests {
             panic!("expected inverse vector rotation");
         };
         assert!(glam::Vec3::from_array(unrotated).abs_diff_eq(glam::Vec3::X, 1.0e-6));
+        assert_eq!(
+            scalar_native(
+                0x12c,
+                &[
+                    Value::Vector([1.0, -2.0, 3.0]),
+                    Value::Vector([0.0, 1.0, 0.0])
+                ],
+            ),
+            Ok(Value::Vector([1.0, 2.0, 3.0]))
+        );
     }
 
     #[test]
