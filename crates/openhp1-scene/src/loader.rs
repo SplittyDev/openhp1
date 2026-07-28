@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId,
-    SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
+    SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal, unreal_to_render,
 };
 
 const NOT_FOR_SERVER: u32 = 0x0020_0000;
@@ -608,9 +608,9 @@ impl LoadedScene {
                     };
                     let source = Vec3::new(
                         random_signed(&mut system.random)
-                            * sample_particle_float(system.config.source_width, &mut system.random),
-                        random_signed(&mut system.random)
                             * sample_particle_float(system.config.source_depth, &mut system.random),
+                        random_signed(&mut system.random)
+                            * sample_particle_float(system.config.source_width, &mut system.random),
                         random_signed(&mut system.random)
                             * sample_particle_float(
                                 system.config.source_height,
@@ -622,11 +622,14 @@ impl LoadedScene {
                         sample_particle_float(system.config.period, &mut system.random),
                     )
                     .map(|point| {
-                        rotation_matrix(owner.rotation).transform_vector3(Vec3::new(
-                            0.0,
-                            (point.x - 0.5) * system.config.draw_scale,
-                            (0.5 - point.y) * system.config.draw_scale,
-                        ))
+                        rotate_unreal(
+                            owner.rotation,
+                            Vec3::new(
+                                0.0,
+                                (point.x - 0.5) * system.config.draw_scale,
+                                (0.5 - point.y) * system.config.draw_scale,
+                            ),
+                        )
                     })
                     .unwrap_or(Vec3::ZERO);
                     let speed =
@@ -634,7 +637,7 @@ impl LoadedScene {
                     let direction = if system.config.system_relative {
                         Vec3::X
                     } else {
-                        rotation_matrix(owner.rotation).transform_vector3(Vec3::X)
+                        rotate_unreal(owner.rotation, Vec3::X)
                     } * speed;
                     system.particles.push(Particle {
                         location: center + source + pattern,
@@ -679,7 +682,7 @@ impl LoadedScene {
                         particle.location
                     };
                     let positions = sprite_positions(
-                        location,
+                        unreal_to_render(location),
                         particle.half_size * grow * shrink,
                         self.particle_view_rotation,
                     );
@@ -2593,6 +2596,25 @@ fn rotation_matrix(rotation: Rotator) -> Mat4 {
         * Mat4::from_rotation_x(-radians.z)
 }
 
+fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
+    let radians = rotation.radians();
+    let (pitch_sin, pitch_cos) = radians.x.sin_cos();
+    let (yaw_sin, yaw_cos) = radians.y.sin_cos();
+    let (roll_sin, roll_cos) = radians.z.sin_cos();
+    let forward = Vec3::new(pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin);
+    let right = Vec3::new(
+        -roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
+        -roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
+        -roll_sin * pitch_cos,
+    );
+    let up = Vec3::new(
+        roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
+        roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
+        roll_cos * pitch_cos,
+    );
+    forward * vector.x + right * vector.y + up * vector.z
+}
+
 fn pawn_mesh_offset(
     is_pawn: bool,
     is_skeletal_mesh: bool,
@@ -2996,6 +3018,19 @@ mod tests {
         assert_eq!(
             super::pattern_position(&points, 0.75),
             Some(glam::Vec3::new(0.625, 1.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn particle_vectors_stay_in_unreal_space_until_rendering() {
+        let yaw_right = super::Rotator {
+            yaw: 16_384,
+            ..super::Rotator::default()
+        };
+        assert!(super::rotate_unreal(yaw_right, glam::Vec3::X).abs_diff_eq(glam::Vec3::Y, 0.0001));
+        assert_eq!(
+            crate::unreal_to_render(glam::Vec3::new(1.0, 2.0, 3.0)),
+            glam::Vec3::new(2.0, 3.0, -1.0)
         );
     }
 
