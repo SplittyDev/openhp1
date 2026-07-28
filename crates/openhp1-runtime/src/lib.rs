@@ -1739,6 +1739,7 @@ enum CompoundAssignment {
     DivideEqual_VectorFloat,
     AddEqual_VectorVector,
     SubtractEqual_VectorVector,
+    MultiplyEqual_VectorVector,
 }
 
 impl TryFrom<u16> for CompoundAssignment {
@@ -1755,6 +1756,7 @@ impl TryFrom<u16> for CompoundAssignment {
             0xde => Ok(Self::DivideEqual_VectorFloat),
             0xdf => Ok(Self::AddEqual_VectorVector),
             0xe0 => Ok(Self::SubtractEqual_VectorVector),
+            0x129 => Ok(Self::MultiplyEqual_VectorVector),
             _ => Err(()),
         }
     }
@@ -1808,6 +1810,11 @@ fn compound_assignment(
             Value::Vector(left),
             Value::Vector(right),
         ) => Value::Vector([left[0] - right[0], left[1] - right[1], left[2] - right[2]]),
+        (
+            CompoundAssignment::MultiplyEqual_VectorVector,
+            Value::Vector(left),
+            Value::Vector(right),
+        ) => Value::Vector([left[0] * right[0], left[1] * right[1], left[2] * right[2]]),
         (_, left, right) => {
             return Err(Error::Type {
                 expected: "matching compound arithmetic operands",
@@ -2478,6 +2485,15 @@ mod tests {
             )
             .unwrap(),
             Value::Float(-1.0)
+        );
+        assert_eq!(
+            compound_assignment(
+                CompoundAssignment::MultiplyEqual_VectorVector,
+                &Value::Vector([2.0, 3.0, 4.0]),
+                &Value::Vector([5.0, 6.0, 7.0]),
+            )
+            .unwrap(),
+            Value::Vector([10.0, 18.0, 28.0])
         );
     }
 
