@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use anyhow::{Context, Result};
 use glam::Vec3;
 use openhp1_runtime::{ActorAction, ScriptRuntime};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{LoadedScene, Rotator};
 
@@ -208,16 +208,22 @@ pub fn apply_runtime_actions_with(
             }
             ActorAction::DeferredCall { actor, message } => {
                 deferred += 1;
-                if scene.actors[actor]
-                    .diagnostics
-                    .iter()
-                    .filter(|diagnostic| diagnostic.starts_with("runtime deferred"))
-                    .count()
-                    < 3
-                {
-                    scene.actors[actor]
+                let diagnostic = format!("runtime deferred call: {message}");
+                if !scene.actors[actor].diagnostics.contains(&diagnostic)
+                    && scene.actors[actor]
                         .diagnostics
-                        .push(format!("runtime deferred call: {message}"));
+                        .iter()
+                        .filter(|diagnostic| diagnostic.starts_with("runtime deferred"))
+                        .count()
+                        < 3
+                {
+                    warn!(
+                        actor,
+                        actor_name = scene.actors[actor].name,
+                        message,
+                        "deferred UnrealScript call"
+                    );
+                    scene.actors[actor].diagnostics.push(diagnostic);
                 }
             }
             ActorAction::DispatchEvent {
