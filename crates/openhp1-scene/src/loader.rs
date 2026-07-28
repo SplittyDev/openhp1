@@ -930,6 +930,16 @@ impl LoadedScene {
     }
 
     pub fn destroy_actor(&mut self, actor_index: usize) -> Result<bool> {
+        let mut changed = if let Some(particles) = self.particles.remove(&actor_index) {
+            ensure!(
+                particles.vertices.start <= particles.vertices.end
+                    && particles.vertices.end <= self.render.mesh.positions.len(),
+                "particle render range is outside the scene mesh"
+            );
+            collapse_positions(&mut self.render.mesh.positions[particles.vertices])
+        } else {
+            false
+        };
         let actor = self
             .actors
             .get_mut(actor_index)
@@ -944,7 +954,7 @@ impl LoadedScene {
             self.animated_actor_meshes = self.animated_actor_meshes.saturating_sub(1);
         }
         let Some(render) = render else {
-            return Ok(false);
+            return Ok(changed);
         };
         ensure!(
             render.vertices.start <= render.vertices.end
@@ -952,9 +962,8 @@ impl LoadedScene {
             "actor render range is outside the scene mesh"
         );
         self.actor_meshes = self.actor_meshes.saturating_sub(1);
-        Ok(collapse_positions(
-            &mut self.render.mesh.positions[render.vertices],
-        ))
+        changed |= collapse_positions(&mut self.render.mesh.positions[render.vertices]);
+        Ok(changed)
     }
 
     pub fn tick_animations(&mut self, delta_time: f32) -> Result<bool> {
