@@ -51,6 +51,7 @@ const TRACE_TEXTURE: u16 = 0x11d;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
+const TWEEN_ANIM: u16 = 0x126;
 const FINISH_INTERPOLATION: u16 = 0x12d;
 const IS_A: u16 = 0x12f;
 const MOVE_TO: u16 = 500;
@@ -364,7 +365,8 @@ pub struct ScriptRuntime {
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
     player_actor: Option<usize>,
-    animation_groups: HashMap<usize, HashMap<String, String>>,
+    animation_sequences: HashMap<usize, HashMap<String, AnimationSequence>>,
+    animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,
     player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
@@ -430,6 +432,22 @@ struct ActorTimer {
     remaining: f32,
     rate: f32,
     looping: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AnimationSequence {
+    group: String,
+    rate: f32,
+    frame_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct AnimationCommand {
+    sequence: String,
+    relative_rate: f32,
+    tween_time: f32,
+    looping: bool,
+    tween_only: bool,
 }
 
 struct StateFrame {

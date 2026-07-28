@@ -39,7 +39,8 @@ impl ScriptRuntime {
             level_package: None,
             level_info: None,
             player_actor: None,
-            animation_groups: HashMap::default(),
+            animation_sequences: HashMap::default(),
+            animation_commands: HashMap::default(),
             animating: HashSet::default(),
             player_probe_touching: HashSet::default(),
             collision_fields: HashMap::default(),
@@ -62,18 +63,29 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    pub fn set_actor_animation_groups(
+    pub fn set_actor_animation_sequences(
         &mut self,
         actor: usize,
-        groups: impl IntoIterator<Item = (String, String)>,
-    ) {
-        self.animation_groups.insert(
+        sequences: impl IntoIterator<Item = (String, String, f32, usize)>,
+    ) -> DispatchResult<()> {
+        self.animation_sequences.insert(
             actor,
-            groups
+            sequences
                 .into_iter()
-                .map(|(sequence, group)| (sequence.to_ascii_lowercase(), group))
+                .map(|(sequence, group, rate, frame_count)| {
+                    (
+                        sequence.to_ascii_lowercase(),
+                        AnimationSequence {
+                            group,
+                            rate,
+                            frame_count,
+                        },
+                    )
+                })
                 .collect(),
         );
+        self.synchronize_animation_command(actor)
+            .map_err(|message| DispatchError::UnresolvedObject { message })
     }
 
     pub fn register_actor(
@@ -608,6 +620,8 @@ impl ScriptRuntime {
         if !delta_time.is_finite() || delta_time < 0.0 {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
+        let mut actions = Vec::new();
+        self.tick_animation_properties(delta_time, &mut actions);
         self.collision_actors.clear();
         self.collision_actors_by_min_x.clear();
         let mut actors = self
@@ -625,7 +639,6 @@ impl ScriptRuntime {
             })
             .collect::<Vec<_>>();
         actors.sort_unstable_by_key(|(actor, _)| *actor);
-        let mut actions = Vec::new();
         for (actor, function) in actors {
             if event_disabled(
                 &self.disabled_events,
@@ -781,6 +794,74 @@ impl ScriptRuntime {
         Ok(actions)
     }
 
+    fn tick_animation_properties(&mut self, delta_time: f32, actions: &mut Vec<ActorAction>) {
+        let mut actors = self.animating.iter().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let result = (|| {
+                let class = self
+                    .actor_classes
+                    .get(&actor)
+                    .cloned()
+                    .ok_or_else(|| format!("animation actor {actor} is not registered"))?;
+                let class = self
+                    .resolved_object(&class)
+                    .map_err(|error| error.to_string())?;
+                let mut instance = self
+                    .instances
+                    .remove(&actor)
+                    .ok_or_else(|| format!("animation actor {actor} is active"))?;
+                let result = (|| {
+                    let frame = self.actor_signed_float(&class, &instance, "AnimFrame")?;
+                    let rate = self.actor_signed_float(&class, &instance, "AnimRate")?;
+                    let rate = if rate >= 0.0 {
+                        rate
+                    } else {
+                        self.actor_float(&class, &instance, "AnimMinRate")?.max(
+                            -rate
+                                * glam::Vec3::from_array(
+                                    self.actor_vector(&class, &instance, "Velocity")?,
+                                )
+                                .length(),
+                        )
+                    };
+                    let next = advance_animation_frame(
+                        frame,
+                        rate,
+                        self.actor_float(&class, &instance, "TweenRate")?,
+                        self.actor_float(&class, &instance, "AnimLast")?,
+                        self.actor_bool(&class, &instance, "bAnimLoop")?,
+                        delta_time,
+                    );
+                    self.set_actor_value(&class, &mut instance, "AnimFrame", Value::Float(next))
+                })();
+                self.instances.insert(actor, instance);
+                result
+            })();
+            if let Err(message) = result {
+                actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("Animation: {message}"),
+                });
+            }
+        }
+    }
+
+    pub(super) fn actor_signed_float(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> std::result::Result<f32, String> {
+        match self.required_actor_property(class, instance, name)? {
+            StoredValue::Value(Value::Float(value)) if value.is_finite() => Ok(value),
+            value => Err(format!("actor property {name} is {value:?}")),
+        }
+    }
+
     fn tick_lifespans(
         &mut self,
         delta_time: f32,
@@ -839,7 +920,6 @@ impl ScriptRuntime {
     }
 
     pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
-        self.animating.remove(&actor);
         if let Some(frame) = self.state_frames.get_mut(&actor)
             && frame.latent == LatentAction::FinishAnimation
         {
@@ -848,6 +928,29 @@ impl ScriptRuntime {
         let Some(class) = self.actor_classes.get(&actor).cloned() else {
             return Ok(Vec::new());
         };
+        let resolved = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let looping = self
+            .actor_bool(&resolved, &instance, "bAnimLoop")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        let result = (|| {
+            let last = self.actor_float(&resolved, &instance, "AnimLast")?;
+            self.set_actor_value(&resolved, &mut instance, "AnimFrame", Value::Float(last))?;
+            if !looping {
+                self.set_actor_value(&resolved, &mut instance, "AnimRate", Value::Float(0.0))?;
+                self.set_actor_value(&resolved, &mut instance, "bAnimFinished", Value::Bool(true))?;
+            }
+            Ok(())
+        })();
+        self.instances.insert(actor, instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        if !looping {
+            self.animating.remove(&actor);
+            self.animation_commands.remove(&actor);
+        }
         self.dispatch_event(
             actor,
             Path::new(class.package.as_ref()),
@@ -949,6 +1052,24 @@ impl ScriptRuntime {
     }
 }
 
+fn advance_animation_frame(
+    frame: f32,
+    rate: f32,
+    tween_rate: f32,
+    last: f32,
+    looping: bool,
+    delta_time: f32,
+) -> f32 {
+    if frame < 0.0 {
+        return (frame + tween_rate * delta_time).min(0.0);
+    }
+    if looping {
+        (frame + rate * delta_time).rem_euclid(1.0)
+    } else {
+        (frame + rate * delta_time).min(last)
+    }
+}
+
 pub(super) fn decode_latent_action(index: i32) -> LatentAction {
     match index {
         0 => LatentAction::Continue,
@@ -1001,5 +1122,22 @@ pub(super) fn update_touching_array(values: &mut [StoredValue], other: ObjectId,
         }
     } else if let Some(index) = current {
         values[index] = StoredValue::Object(None);
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::advance_animation_frame;
+
+    #[test]
+    fn animation_frames_follow_ue_tween_and_loop_rules() {
+        assert_eq!(
+            advance_animation_frame(-0.1, 1.0, 2.0, 0.9, false, 0.025),
+            -0.05
+        );
+        assert_eq!(advance_animation_frame(0.2, 0.3, 0.0, 0.9, false, 1.0), 0.5);
+        assert!(
+            (advance_animation_frame(0.9, 0.2, 0.0, 0.95, true, 1.0) - 0.1).abs() < f32::EPSILON
+        );
     }
 }

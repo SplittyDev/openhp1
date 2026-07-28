@@ -530,7 +530,7 @@ impl LoadedScene {
         Ok(self.tick_animations_with_completions(delta_time)?.0)
     }
 
-    pub(crate) fn actor_animation_groups(&self, actor: usize) -> Vec<(String, String)> {
+    pub fn actor_animation_sequences(&self, actor: usize) -> Vec<(String, String, f32, usize)> {
         self.animations
             .iter()
             .find(|animation| animation.actor_index == actor)
@@ -538,7 +538,14 @@ impl LoadedScene {
                 animation
                     .sequences()
                     .iter()
-                    .map(|sequence| (sequence.name.clone(), sequence.group.clone()))
+                    .map(|sequence| {
+                        (
+                            sequence.name.clone(),
+                            sequence.group.clone(),
+                            sequence.rate,
+                            sequence.frame_count,
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -576,10 +583,13 @@ impl LoadedScene {
                 animation.playing = playing;
                 finished
             } else {
-                false
+                tween == Some(1.0) && animation.rate == 0.0
             };
             if finished {
                 completed.push(animation.actor_index);
+                if tween.is_some() {
+                    animation.playing = false;
+                }
             }
             let hidden = {
                 let actor = self

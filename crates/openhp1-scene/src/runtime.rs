@@ -50,7 +50,14 @@ pub fn initialize_runtime_with(
                 .diagnostics
                 .push(format!("runtime registration failed: {error}"));
         }
-        runtime.set_actor_animation_groups(actor, scene.actor_animation_groups(actor));
+        runtime
+            .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))
+            .with_context(|| {
+                format!(
+                    "could not register animation sequences for {}",
+                    scene.actors[actor].name
+                )
+            })?;
     }
     let game_actions = runtime.initialize_game()?;
     apply_runtime_actions_with(scene, &mut runtime, game_actions, &mut external)?;
@@ -163,6 +170,8 @@ pub fn apply_runtime_actions_with(
                         roll: rotation[2],
                     },
                 )?;
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
                 transformed = true;
             }
             ActorAction::SetLocation { actor, location } => {

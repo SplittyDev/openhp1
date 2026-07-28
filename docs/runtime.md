@@ -44,6 +44,10 @@ offsets.
 ## Animation actions
 
 - `PlayAnim` and `LoopAnim` use the scene's existing animation path.
+- Their native calls also update the persistent UE animation fields before the
+  actor's next script tick. `AnimFrame` advances before `Tick`, including
+  tweening and velocity-scaled rates, so authored transition guards observe
+  the displayed animation state.
 - Animation completion occurs at `AnimLast`, before the sampler wraps toward
   frame zero.
 - Repeated `LoopAnim` calls preserve the current phase.

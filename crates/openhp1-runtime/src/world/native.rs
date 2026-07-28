@@ -176,6 +176,16 @@ impl ScriptRuntime {
         {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("PlayAnim", rest)?;
+            self.start_animation(
+                actor,
+                actor_class,
+                instance,
+                name.clone(),
+                rate,
+                tween_time,
+                false,
+                false,
+            )?;
             actions.push(ActorAction::PlayAnimation {
                 actor,
                 sequence: name,
@@ -190,6 +200,16 @@ impl ScriptRuntime {
         {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("LoopAnim", rest)?;
+            self.start_animation(
+                actor,
+                actor_class,
+                instance,
+                name.clone(),
+                rate,
+                tween_time,
+                true,
+                false,
+            )?;
             actions.push(ActorAction::LoopAnimation {
                 actor,
                 sequence: name,
@@ -197,6 +217,40 @@ impl ScriptRuntime {
                 tween_time,
             });
             self.animating.insert(actor);
+            return Ok(Value::None);
+        }
+        if index == TWEEN_ANIM
+            && let [name, rest @ ..] = arguments
+        {
+            let name = runtime_name(source, name)?;
+            let tween_time = match rest {
+                [] | [Value::None] => 0.0,
+                [Value::Float(value)] if value.is_finite() => value.max(0.0),
+                [Value::Float(_)] => return Err("TweenAnim time is not finite".to_owned()),
+                [value] => return Err(format!("TweenAnim time is {}", value.kind())),
+                _ => {
+                    return Err(format!(
+                        "TweenAnim expects a name and time, found {} arguments",
+                        arguments.len()
+                    ));
+                }
+            };
+            self.start_animation(
+                actor,
+                actor_class,
+                instance,
+                name.clone(),
+                0.0,
+                tween_time,
+                false,
+                true,
+            )?;
+            actions.push(ActorAction::PlayAnimation {
+                actor,
+                sequence: name,
+                rate: 0.0,
+                tween_time,
+            });
             return Ok(Value::None);
         }
         if index == IS_ANIMATING {
@@ -246,6 +300,10 @@ impl ScriptRuntime {
             }
             if self.active_state_actor != Some(actor) {
                 return Err("FinishAnim is only valid in state code".to_owned());
+            }
+            self.set_actor_value(actor_class, instance, "bAnimLoop", Value::Bool(false))?;
+            if let Some(command) = self.animation_commands.get_mut(&actor) {
+                command.looping = false;
             }
             self.pending_latent = Some(LatentAction::FinishAnimation);
             actions.push(ActorAction::AwaitAnimation { actor });
@@ -321,10 +379,10 @@ impl ScriptRuntime {
             };
             let sequence = runtime_name(source, sequence)?.to_ascii_lowercase();
             return Ok(Value::NameText(
-                self.animation_groups
+                self.animation_sequences
                     .get(&actor)
-                    .and_then(|groups| groups.get(&sequence))
-                    .cloned()
+                    .and_then(|sequences| sequences.get(&sequence))
+                    .map(|sequence| sequence.group.clone())
                     .unwrap_or_else(|| "None".to_owned()),
             ));
         }
@@ -1139,6 +1197,152 @@ impl ScriptRuntime {
         } else {
             Value::Object(handle)
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_animation(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        sequence: String,
+        relative_rate: f32,
+        tween_time: f32,
+        looping: bool,
+        tween_only: bool,
+    ) -> std::result::Result<(), String> {
+        let command = AnimationCommand {
+            sequence,
+            relative_rate,
+            tween_time,
+            looping,
+            tween_only,
+        };
+        self.animation_commands.insert(actor, command.clone());
+        self.configure_animation_instance(actor, class, instance, &command)
+    }
+
+    pub(super) fn synchronize_animation_command(
+        &mut self,
+        actor: usize,
+    ) -> std::result::Result<(), String> {
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("animation actor {actor} is not registered"))?;
+        let class = self
+            .resolved_object(&class)
+            .map_err(|error| error.to_string())?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| format!("animation actor {actor} is active"))?;
+        let result = if let Some(command) = self.animation_commands.get(&actor).cloned() {
+            self.configure_animation_instance(actor, &class, &mut instance, &command)
+        } else {
+            let anim_rate = self.actor_signed_float(&class, &instance, "AnimRate")?;
+            let anim_frame = self.actor_signed_float(&class, &instance, "AnimFrame")?;
+            let tween_rate = self.actor_float(&class, &instance, "TweenRate")?;
+            if anim_rate != 0.0 || anim_frame < 0.0 && tween_rate != 0.0 {
+                self.animating.insert(actor);
+            }
+            Ok(())
+        };
+        self.instances.insert(actor, instance);
+        result
+    }
+
+    fn configure_animation_instance(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        command: &AnimationCommand,
+    ) -> std::result::Result<(), String> {
+        let current_sequence =
+            match self.required_actor_property(class, instance, "AnimSequence")? {
+                StoredValue::Name(name) => name,
+                value => return Err(format!("actor property AnimSequence is {value:?}")),
+            };
+        let repeated_loop = command.looping
+            && self.animating.contains(&actor)
+            && self.actor_bool(class, instance, "bAnimLoop")?
+            && current_sequence.eq_ignore_ascii_case(&command.sequence);
+        self.set_actor_stored(
+            class,
+            instance,
+            "AnimSequence",
+            StoredValue::Name(command.sequence.clone()),
+        )?;
+        self.set_actor_value(class, instance, "bAnimLoop", Value::Bool(command.looping))?;
+        self.set_actor_value(class, instance, "bAnimNotify", Value::Bool(false))?;
+        self.set_actor_value(class, instance, "bAnimFinished", Value::Bool(false))?;
+
+        let Some(sequence) = self
+            .animation_sequences
+            .get(&actor)
+            .and_then(|sequences| sequences.get(&command.sequence.to_ascii_lowercase()))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let frames = sequence.frame_count.max(1) as f32;
+        let tween_rate = if command.tween_time > 0.0 {
+            1.0 / (command.tween_time * frames)
+        } else {
+            0.0
+        };
+        if repeated_loop && sequence.frame_count > 1 {
+            let anim_rate = command.relative_rate * sequence.rate / frames;
+            for (name, value) in [("AnimRate", anim_rate), ("TweenRate", tween_rate)] {
+                self.set_actor_value(class, instance, name, Value::Float(value))?;
+            }
+            return Ok(());
+        }
+        let (anim_frame, anim_last, anim_rate) = if command.tween_only {
+            (
+                if command.tween_time > 0.0 {
+                    -1.0 / frames
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+            )
+        } else if sequence.frame_count > 1 {
+            (
+                if command.tween_time > 0.0 {
+                    -1.0 / frames
+                } else {
+                    0.0
+                },
+                1.0 - 1.0 / frames,
+                command.relative_rate * sequence.rate / frames,
+            )
+        } else {
+            (-1.0, 0.0, 0.0)
+        };
+        let tween_rate = if sequence.frame_count == 1 && command.tween_time == 0.0 {
+            10.0
+        } else {
+            tween_rate
+        };
+        for (name, value) in [
+            ("AnimFrame", anim_frame),
+            ("AnimLast", anim_last),
+            ("AnimRate", anim_rate),
+            ("AnimMinRate", 0.0),
+            ("TweenRate", tween_rate),
+        ] {
+            self.set_actor_value(class, instance, name, Value::Float(value))?;
+        }
+        if anim_rate != 0.0 || tween_rate != 0.0 {
+            self.animating.insert(actor);
+        } else {
+            self.animating.remove(&actor);
+        }
+        Ok(())
     }
 
     pub(super) fn resolve_class_value(

@@ -95,6 +95,7 @@ fn main() -> Result<()> {
                     &mut deferred,
                 );
             }
+            runtime.set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
         }
         let actions = runtime.initialize_game()?;
         apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
@@ -127,7 +128,8 @@ fn main() -> Result<()> {
                     .actors
                     .iter()
                     .any(|actor| actor.class_name.eq_ignore_ascii_case("CamTarget")),
-                "authored player setup did not spawn its camera target"
+                "{}: authored player setup did not spawn its camera target",
+                scene.path.display()
             );
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
