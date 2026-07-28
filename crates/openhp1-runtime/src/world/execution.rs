@@ -709,7 +709,32 @@ impl ScriptRuntime {
                 depth,
             );
         }
-        let actor = self.actor_for_handle(receiver)?;
+        let object = self.object_for_handle(receiver)?;
+        let Some(actor) = self.object_actors.get(&object).copied() else {
+            let class = self.resolved_object(&object)?;
+            if !matches!(self.script(&class)?.metadata, ScriptMetadata::Class(_)) {
+                return Err(DispatchError::InvalidActorHandle { handle: receiver });
+            }
+            let self_handle =
+                self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                    DispatchError::UnregisteredActor {
+                        actor: current_actor,
+                    },
+                )?)?;
+            let arguments = arguments
+                .iter()
+                .map(|value| concrete_self_value(value, self_handle))
+                .collect::<Vec<_>>();
+            return self.dispatch_class_context_call(
+                current_actor,
+                &class,
+                source,
+                call,
+                &arguments,
+                actions,
+                depth,
+            );
+        };
         if actor == current_actor {
             return self.dispatch_call(
                 current_actor,
@@ -770,6 +795,68 @@ impl ScriptRuntime {
                 .ok_or(DispatchError::ActiveActorContext {
                     actor: current_actor,
                 })?;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_class_context_call(
+        &mut self,
+        current_actor: usize,
+        class: &ResolvedObject,
+        source: &Arc<Package>,
+        call: FunctionCall,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> DispatchResult<CallOutput> {
+        let mut instance = self.load_class_defaults(class, 0)?;
+        let result = match call {
+            FunctionCall::Virtual(name) | FunctionCall::Global(name) => {
+                let name = usize::try_from(name)
+                    .ok()
+                    .filter(|name| *name < source.summary().names.len())
+                    .map(|name| source.summary().name(name).to_owned())
+                    .ok_or_else(|| crate::Error::Call {
+                        call,
+                        message: "invalid function name".to_owned(),
+                    })?;
+                let Some(function) = self.find_function(
+                    ResolvedObject {
+                        package: Arc::clone(&class.package),
+                        export_index: class.export_index,
+                    },
+                    &name,
+                    depth,
+                )?
+                else {
+                    return Ok(CallOutput::value(Value::None));
+                };
+                let mut output_arguments = Vec::new();
+                self.execute_function_with_outputs(
+                    current_actor,
+                    class,
+                    &function,
+                    arguments,
+                    &mut instance,
+                    actions,
+                    depth,
+                    Some(&mut output_arguments),
+                )
+                .map(|value| CallOutput::from_arguments(value, arguments, output_arguments))
+            }
+            _ => self.dispatch_call(
+                current_actor,
+                class,
+                source,
+                call,
+                arguments,
+                &mut instance,
+                actions,
+                depth,
+            ),
+        };
+        self.class_defaults
+            .insert(object_id(&class.package, class.export_index), instance);
         result
     }
 
