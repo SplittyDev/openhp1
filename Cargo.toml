@@ -29,6 +29,7 @@ egui-wgpu = { version = "0.35", default-features = false }
 egui-winit = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 glam = "0.30"
 pollster = "0.4"
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp2", "wav"] }
 rustc-hash = "2.1"
 thiserror = "2.0"
 tracing = "0.1"

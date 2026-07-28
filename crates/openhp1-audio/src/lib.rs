@@ -5,6 +5,12 @@ use std::sync::Arc;
 use openhp1_package::Package;
 use thiserror::Error;
 
+#[cfg(feature = "playback")]
+mod playback;
+
+#[cfg(feature = "playback")]
+pub use playback::AudioPlayer;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +82,10 @@ pub enum Error {
 
     #[error("`{package}` audio export {export} has a negative data size")]
     NegativeDataSize { package: Arc<str>, export: usize },
+
+    #[cfg(feature = "playback")]
+    #[error("audio playback failed: {0}")]
+    Playback(String),
 }
 
 #[cfg(test)]

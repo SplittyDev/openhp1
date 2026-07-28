@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+playback = ["dep:rodio"]
+
 [dependencies]
 openhp1-package = { path = "../openhp1-package" }
+rodio = { workspace = true, optional = true }
 thiserror.workspace = true
