@@ -120,7 +120,6 @@ fn main() -> Result<()> {
         }
         let player = runtime.player_actor();
         if let Some(player) = player {
-            runtime.set_player_view_target_class("BaseCam")?;
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
@@ -137,6 +136,10 @@ fn main() -> Result<()> {
             anyhow::ensure!(
                 view.location.iter().all(|value| value.is_finite()),
                 "player camera location is invalid"
+            );
+            anyhow::ensure!(
+                view.actor != player,
+                "authored player setup did not select a camera actor"
             );
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
         }

@@ -88,10 +88,10 @@ detachment is a no-op until decals render.
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
-The game selects the authored `BaseCam` view target during startup and leaves
-cutscene camera ownership with the scripts. In particular, returning Harry to
-`PlayerWalking` is not the end of the cutscene camera sequence; its later
-`ExitCutState` action restores the saved third-person camera state and position.
+Harry's authored `PostBeginPlay` selects `BaseCam`; the game does not override
+that view target. Returning Harry to `PlayerWalking` is not the end of the
+cutscene camera sequence: its later `ExitCutState` action restores the saved
+third-person camera state and position.
 Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, left click/Control/Space jump, and right click/Alt
 cast. Mouse deltas reach the player script only while casting, when movement
