@@ -1774,6 +1774,7 @@ enum ScalarNative {
     Subtract_PreFloat,
     Multiply_FloatFloat,
     Divide_FloatFloat,
+    Percent_FloatFloat,
     Add_FloatFloat,
     Subtract_FloatFloat,
     Less_FloatFloat,
@@ -1848,6 +1849,7 @@ impl TryFrom<u16> for ScalarNative {
             0xa9 => Ok(Self::Subtract_PreFloat),
             0xab => Ok(Self::Multiply_FloatFloat),
             0xac => Ok(Self::Divide_FloatFloat),
+            0xad => Ok(Self::Percent_FloatFloat),
             0xae => Ok(Self::Add_FloatFloat),
             0xaf => Ok(Self::Subtract_FloatFloat),
             0xb0 => Ok(Self::Less_FloatFloat),
@@ -2063,6 +2065,9 @@ pub(super) fn scalar_native(index: u16, arguments: &[Value]) -> std::result::Res
         }
         (ScalarNative::Divide_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
             Value::Float(left / right)
+        }
+        (ScalarNative::Percent_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
+            Value::Float(left % right)
         }
         (ScalarNative::Add_FloatFloat, [Value::Float(left), Value::Float(right)]) => {
             Value::Float(left + right)

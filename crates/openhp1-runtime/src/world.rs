@@ -584,6 +584,14 @@ mod tests {
     }
 
     #[test]
+    fn float_remainder_uses_unreal_dividend_sign() {
+        assert_eq!(
+            scalar_native(0xad, &[Value::Float(-7.5), Value::Float(2.0)]),
+            Ok(Value::Float(-1.5))
+        );
+    }
+
+    #[test]
     fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
         assert_eq!(
             scalar_native(0x97, &[Value::Byte(1), Value::Int(0)]),
