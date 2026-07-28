@@ -1,22 +1,54 @@
 mod app;
 
-use std::{env, ffi::OsString, path::PathBuf};
+use std::{
+    env,
+    ffi::OsString,
+    fs::{self, File},
+    path::PathBuf,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use app::GameApp;
 use openhp1_scene::LoadedScene;
-use tracing_subscriber::EnvFilter;
+use tracing::info;
+use tracing_subscriber::{
+    EnvFilter, Layer, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
+};
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    let log_path = init_logging()?;
+    info!(path = %log_path.display(), "logging game diagnostics");
 
     let scene = LoadedScene::load(level_path()?)?;
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut GameApp::new(scene))?;
     Ok(())
+}
+
+fn init_logging() -> Result<PathBuf> {
+    let directory = PathBuf::from("logs");
+    fs::create_dir_all(&directory).context("could not create logs directory")?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_millis();
+    let path = directory.join(format!("openhp1-game-{timestamp}.log"));
+    let file = File::create(&path)
+        .with_context(|| format!("could not create diagnostic log {}", path.display()))?;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(EnvFilter::from_default_env()))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(Mutex::new(file))
+                .with_filter(LevelFilter::INFO),
+        )
+        .try_init()
+        .context("could not initialize diagnostic logging")?;
+    Ok(path)
 }
 
 fn level_path() -> Result<PathBuf> {

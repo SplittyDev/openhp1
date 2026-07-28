@@ -1,9 +1,11 @@
 # cargo
 debug/
 target/
+logs/
 
 # backup files
 **/*.rs.bk
+.DS_Store
 
 # game files
 res/
