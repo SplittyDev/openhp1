@@ -73,10 +73,13 @@ subsystem exists; they must not silently claim successful behavior.
 `ParticleFX` configuration remains live UnrealScript instance state. The scene
 samples inherited and script-mutated emission, lifetime, source, size, speed,
 gravity, texture, style, and unlit fields each frame. A zero `ParticlesMax`
-uses the emitter's maximum authored emission rate multiplied by its maximum
-lifetime, matching the size needed for a steady emitter rather than disabling
-it. Emission is interpolated between the actor's previous and current location
-so moving spell and creature effects leave continuous trails.
+means unlimited total emission; `ParticlesAlive` limits the live set, with the
+maximum authored emission rate multiplied by maximum lifetime used when that
+limit is zero. `ParticlesEmitted` is synchronized back into UnrealScript so
+the original `Shutdown` logic can stop finite effects. World-relative emitters
+interpolate emission between locations, while `bSystemRelative` particles
+remain attached to their moving system. Authored size growth, delay, and end
+scale are applied over each particle's lifetime.
 
 ## Movement and spawning
 

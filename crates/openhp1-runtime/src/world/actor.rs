@@ -291,10 +291,20 @@ impl ScriptRuntime {
                 prime: particle_bool(self.instance_property(&class, &instance, "bPrime")?),
                 style: particle_byte(self.instance_property(&class, &instance, "Style")?),
                 unlit: particle_bool(self.instance_property(&class, &instance, "bUnlit")?),
+                particles_alive: particle_int(self.instance_property(
+                    &class,
+                    &instance,
+                    "ParticlesAlive",
+                )?),
                 particles_max: particle_int(self.instance_property(
                     &class,
                     &instance,
                     "ParticlesMax",
+                )?),
+                particles_emitted: particle_int(self.instance_property(
+                    &class,
+                    &instance,
+                    "ParticlesEmitted",
                 )?),
                 particles_per_second: particle_float(self.instance_property(
                     &class,
@@ -328,11 +338,52 @@ impl ScriptRuntime {
                     &instance,
                     "SizeLength",
                 )?),
+                size_end_scale: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "SizeEndScale",
+                )?),
+                size_delay: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "SizeDelay",
+                )?),
+                size_grow_period: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "SizeGrowPeriod",
+                )?),
+                system_relative: particle_bool(self.instance_property(
+                    &class,
+                    &instance,
+                    "bSystemRelative",
+                )?),
                 gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
                 textures,
             });
         }
         Ok(emitters)
+    }
+
+    pub fn set_particle_counts(&mut self, actor: usize, emitted: usize) -> DispatchResult<()> {
+        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(());
+        };
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = self
+            .set_actor_value(
+                &class,
+                &mut instance,
+                "ParticlesEmitted",
+                Value::Int(i32::try_from(emitted).unwrap_or(i32::MAX)),
+            )
+            .map_err(|message| DispatchError::UnresolvedObject { message });
+        self.instances.insert(actor, instance);
+        result
     }
 
     pub fn initialize_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
@@ -1235,6 +1286,13 @@ fn particle_byte(value: Option<StoredValue>) -> u8 {
     match value {
         Some(StoredValue::Value(Value::Byte(value))) => value,
         _ => 0,
+    }
+}
+
+fn particle_scalar(value: Option<StoredValue>) -> f32 {
+    match value {
+        Some(StoredValue::Value(Value::Float(value))) if value.is_finite() => value,
+        _ => 0.0,
     }
 }
 

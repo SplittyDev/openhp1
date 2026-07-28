@@ -537,6 +537,7 @@ impl LoadedScene {
                 debug_assert_eq!(vertices.start + slot * 4, base as usize);
             }
             let actor = emitter.actor;
+            let emitted = emitter.particles_emitted;
             self.particles.insert(
                 actor,
                 ParticleSystem {
@@ -548,6 +549,7 @@ impl LoadedScene {
                     last_location: self.actors[actor].location,
                     random: actor as u32 ^ 0xa341_316c,
                     primed: false,
+                    emitted,
                 },
             );
             changed = true;
@@ -581,12 +583,22 @@ impl LoadedScene {
                     system.primed = true;
                 }
                 system.residue += rate * delta_time;
+                let remaining = if system.config.particles_max == 0 {
+                    usize::MAX
+                } else {
+                    system.config.particles_max.saturating_sub(system.emitted)
+                };
                 let count = (system.residue.floor() as usize)
+                    .min(remaining)
                     .min(system.capacity.saturating_sub(system.particles.len()));
                 system.residue -= count as f32;
                 for index in 0..count {
                     let fraction = (index as f32 + 0.5) / count.max(1) as f32;
-                    let center = system.last_location.lerp(owner.location, fraction);
+                    let center = if system.config.system_relative {
+                        Vec3::ZERO
+                    } else {
+                        system.last_location.lerp(owner.location, fraction)
+                    };
                     let source = Vec3::new(
                         random_signed(&mut system.random)
                             * sample_particle_float(system.config.source_width, &mut system.random),
@@ -600,8 +612,11 @@ impl LoadedScene {
                     ) * 0.5;
                     let speed =
                         sample_particle_float(system.config.speed, &mut system.random).max(0.0);
-                    let direction =
-                        rotation_matrix(owner.rotation).transform_vector3(Vec3::X) * speed;
+                    let direction = if system.config.system_relative {
+                        Vec3::X
+                    } else {
+                        rotation_matrix(owner.rotation).transform_vector3(Vec3::X)
+                    } * speed;
                     system.particles.push(Particle {
                         location: center + source,
                         velocity: direction,
@@ -612,16 +627,41 @@ impl LoadedScene {
                             sample_particle_float(system.config.size_width, &mut system.random),
                             sample_particle_float(system.config.size_length, &mut system.random),
                         ) * 0.5,
+                        end_scale: sample_particle_float(
+                            system.config.size_end_scale,
+                            &mut system.random,
+                        )
+                        .max(0.0),
                     });
+                    system.emitted += 1;
                 }
             }
             system.last_location = owner.location;
             for slot in 0..system.capacity {
                 let target = system.vertices.start + slot * 4;
                 if let Some(particle) = system.particles.get(slot) {
+                    let progress = (particle.age / particle.lifetime).clamp(0.0, 1.0);
+                    let grow = if system.config.size_grow_period > 0.0 {
+                        (progress / system.config.size_grow_period).min(1.0)
+                    } else {
+                        1.0
+                    };
+                    let shrink = if particle.age > system.config.size_delay {
+                        let duration =
+                            (particle.lifetime - system.config.size_delay).max(f32::EPSILON);
+                        1.0 + (particle.end_scale - 1.0)
+                            * ((particle.age - system.config.size_delay) / duration).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let location = if system.config.system_relative {
+                        owner.location + particle.location
+                    } else {
+                        particle.location
+                    };
                     let positions = sprite_positions(
-                        particle.location,
-                        particle.half_size,
+                        location,
+                        particle.half_size * grow * shrink,
                         self.particle_view_rotation,
                     );
                     self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
@@ -632,6 +672,13 @@ impl LoadedScene {
             changed = true;
         }
         changed
+    }
+
+    pub fn particle_counts(&self) -> Vec<(usize, usize)> {
+        self.particles
+            .iter()
+            .map(|(&actor, system)| (actor, system.emitted))
+            .collect()
     }
 
     pub fn set_actor_rotation(&mut self, actor_index: usize, rotation: Rotator) -> Result<bool> {
@@ -1194,6 +1241,7 @@ struct ParticleSystem {
     last_location: Vec3,
     random: u32,
     primed: bool,
+    emitted: usize,
 }
 
 struct Particle {
@@ -1202,15 +1250,21 @@ struct Particle {
     age: f32,
     lifetime: f32,
     half_size: Vec2,
+    end_scale: f32,
 }
 
 fn particle_capacity(emitter: &ParticleEmitter) -> usize {
-    if emitter.particles_max != 0 {
-        return emitter.particles_max;
+    if emitter.particles_alive != 0 {
+        return emitter.particles_alive;
     }
     let rate = emitter.particles_per_second.base.abs() + emitter.particles_per_second.random.abs();
     let lifetime = emitter.lifetime.base.abs() + emitter.lifetime.random.abs();
-    (rate * lifetime).ceil().max(1.0) as usize
+    let capacity = (rate * lifetime).ceil().max(1.0) as usize;
+    if emitter.particles_max == 0 {
+        capacity
+    } else {
+        capacity.min(emitter.particles_max)
+    }
 }
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
@@ -2762,14 +2816,16 @@ mod tests {
     use crate::SurfaceMode;
 
     #[test]
-    fn particle_capacity_uses_authored_limit_or_emission_lifetime() {
+    fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
         let mut emitter = ParticleEmitter {
             actor: 0,
             emit: true,
             prime: false,
             style: 3,
             unlit: true,
+            particles_alive: 7,
             particles_max: 7,
+            particles_emitted: 0,
             particles_per_second: ParticleFloat {
                 base: 10.0,
                 random: 5.0,
@@ -2784,10 +2840,15 @@ mod tests {
             source_depth: ParticleFloat::default(),
             size_width: ParticleFloat::default(),
             size_length: ParticleFloat::default(),
+            size_end_scale: ParticleFloat::default(),
+            size_delay: 0.0,
+            size_grow_period: 0.0,
+            system_relative: false,
             gravity: [0.0; 3],
             textures: Vec::new(),
         };
         assert_eq!(super::particle_capacity(&emitter), 7);
+        emitter.particles_alive = 0;
         emitter.particles_max = 0;
         assert_eq!(super::particle_capacity(&emitter), 30);
     }

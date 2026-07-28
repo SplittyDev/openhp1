@@ -302,6 +302,9 @@ impl Graphics {
         };
         scene.sync_particle_emitters(runtime.particle_emitters()?)?;
         scene.tick_particles(1.0 / 60.0);
+        for (actor, emitted) in scene.particle_counts() {
+            runtime.set_particle_counts(actor, emitted)?;
+        }
 
         let size = nonzero_size(window.inner_size());
         let instance = wgpu::Instance::default();
@@ -689,6 +692,12 @@ impl Graphics {
             Ok(topology_changed) => {
                 if topology_changed || self.scene.tick_particles(delta_time) {
                     self.update_vertices();
+                }
+                for (actor, emitted) in self.scene.particle_counts() {
+                    if let Err(error) = self.runtime.set_particle_counts(actor, emitted) {
+                        self.last_error = Some(format!("particle count update failed: {error}"));
+                        break;
+                    }
                 }
             }
             Err(error) => self.last_error = Some(format!("particle update failed: {error}")),
