@@ -72,6 +72,8 @@ enum Opcode {
     GotoLabel,
     Let,
     LetBool,
+    DynArrayElement,
+    DynArrayToInt,
     Unknown0x15,
     EndFunctionParms,
     SelfObject,
@@ -125,6 +127,7 @@ impl From<u8> for Opcode {
             0x0c => Self::LabelTable,
             0x0d => Self::GotoLabel,
             0x0f => Self::Let,
+            0x10 => Self::DynArrayElement,
             0x14 => Self::LetBool,
             0x15 => Self::Unknown0x15,
             0x16 => Self::EndFunctionParms,
@@ -156,6 +159,7 @@ impl From<u8> for Opcode {
             0x30 => Self::IteratorPop,
             0x31 => Self::IteratorNext,
             0x36 => Self::StructMember,
+            0x37 => Self::DynArrayToInt,
             0x38 => Self::GlobalFunction,
             0x39..=0x60 => Self::Conversion(opcode.into()),
             0x61..=0x6f => Self::ExtendedNative(u16::from(opcode - 0x60) << 8),
@@ -357,6 +361,10 @@ enum Slot {
         member: StructMember,
     },
     ArrayElement {
+        target: Box<Slot>,
+        index: i32,
+    },
+    DynArrayElement {
         target: Box<Slot>,
         index: i32,
     },
@@ -875,6 +883,26 @@ impl<'a> Frame<'a> {
                     target => Expression::Value(array_element(&self.value(target, host)?, index)?),
                 }
             }
+            Opcode::DynArrayElement => {
+                let index = self.expression(host)?;
+                let index = match self.value(index, host)? {
+                    Value::Byte(index) => i32::from(index),
+                    Value::Int(index) => index,
+                    value => {
+                        return Err(Error::Type {
+                            expected: "integer array index",
+                            actual: value.kind(),
+                        });
+                    }
+                };
+                let Expression::Slot(target) = self.expression(host)? else {
+                    return Err(Error::NotAssignable);
+                };
+                Expression::Slot(Slot::DynArrayElement {
+                    target: Box::new(target),
+                    index,
+                })
+            }
             Opcode::VirtualFunction => {
                 let name = self.read_i32()?;
                 Expression::Value(self.call(FunctionCall::Virtual(name), host)?)
@@ -954,6 +982,21 @@ impl<'a> Frame<'a> {
                     }),
                     target => Expression::Value(member.get(self.value(target, host)?)?),
                 }
+            }
+            Opcode::DynArrayToInt => {
+                let value = self.expression(host)?;
+                let value = self.value(value, host)?;
+                let length = match value {
+                    Value::Array(values) => values.len(),
+                    Value::None => 0,
+                    value => {
+                        return Err(Error::Type {
+                            expected: "array",
+                            actual: value.kind(),
+                        });
+                    }
+                };
+                Expression::Value(Value::Int(length as i32))
             }
             Opcode::GlobalFunction => {
                 let name = self.read_i32()?;
@@ -1266,6 +1309,25 @@ impl<'a> Frame<'a> {
                 *element = value;
                 self.assign_slot(*target, target_value, host)?;
             }
+            Slot::DynArrayElement { target, index } => {
+                let mut target_value = self.slot(&target, host)?.unwrap_or(Value::None);
+                if matches!(target_value, Value::None) {
+                    target_value = Value::Array(Vec::new());
+                }
+                let Value::Array(values) = &mut target_value else {
+                    return Err(Error::Type {
+                        expected: "array",
+                        actual: target_value.kind(),
+                    });
+                };
+                let index = usize::try_from(index).map_err(|_| Error::ArrayIndex {
+                    index,
+                    length: values.len(),
+                })?;
+                values.resize(index.saturating_add(1), Value::None);
+                values[index] = value;
+                self.assign_slot(*target, target_value, host)?;
+            }
         }
         Ok(())
     }
@@ -1319,6 +1381,26 @@ impl<'a> Frame<'a> {
                 .slot(target, host)?
                 .map(|value| array_element(&value, *index))
                 .transpose()?,
+            Slot::DynArrayElement { target, index } => {
+                let mut target_value = self.slot(target, host)?.unwrap_or(Value::None);
+                if matches!(target_value, Value::None) {
+                    target_value = Value::Array(Vec::new());
+                }
+                let Value::Array(values) = &mut target_value else {
+                    return Err(Error::Type {
+                        expected: "array",
+                        actual: target_value.kind(),
+                    });
+                };
+                let index = usize::try_from(*index).map_err(|_| Error::ArrayIndex {
+                    index: *index,
+                    length: values.len(),
+                })?;
+                values.resize(index.saturating_add(1), Value::None);
+                let value = values[index].clone();
+                self.assign_slot((**target).clone(), target_value, host)?;
+                Some(value)
+            }
         })
     }
 
@@ -1477,6 +1559,8 @@ impl StructMember {
             (Self::Pitch, Value::Rotator(value)) => Value::Int(value[0]),
             (Self::Yaw, Value::Rotator(value)) => Value::Int(value[1]),
             (Self::Roll, Value::Rotator(value)) => Value::Int(value[2]),
+            (Self::X | Self::Y | Self::Z, Value::None) => Value::Float(0.0),
+            (Self::Pitch | Self::Yaw | Self::Roll, Value::None) => Value::Int(0),
             (Self::Field { name, zero }, Value::Struct(mut values)) => {
                 values.remove(name).unwrap_or_else(|| zero.clone())
             }
@@ -1491,10 +1575,14 @@ impl StructMember {
     }
 
     fn set(&self, target: &mut Value, value: Value) -> Result<()> {
+        if matches!(target, Value::None) {
+            *target = match self {
+                Self::X | Self::Y | Self::Z => Value::Vector([0.0; 3]),
+                Self::Pitch | Self::Yaw | Self::Roll => Value::Rotator([0; 3]),
+                Self::Field { .. } => Value::Struct(HashMap::new()),
+            };
+        }
         if let Self::Field { name, .. } = self {
-            if matches!(target, Value::None) {
-                *target = Value::Struct(HashMap::new());
-            }
             if let Value::Struct(values) = target {
                 values.insert(name.clone(), value);
                 return Ok(());
@@ -2242,6 +2330,16 @@ mod tests {
         let mut plane = Value::Struct(HashMap::new());
         StructMember::Z.set(&mut plane, Value::Float(42.0)).unwrap();
         assert_eq!(StructMember::Z.get(plane).unwrap(), Value::Float(42.0));
+
+        let mut uninitialized = Value::None;
+        StructMember::Z
+            .set(&mut uninitialized, Value::Float(42.0))
+            .unwrap();
+        assert_eq!(
+            uninitialized,
+            Value::Vector([0.0, 0.0, 42.0]),
+            "dynamic arrays zero-initialize vector elements"
+        );
     }
 
     #[test]
@@ -2286,11 +2384,40 @@ mod tests {
 
     #[test]
     fn reads_and_writes_fixed_array_elements() {
-        let mut bytes = vec![0x0f, 0x1a, 0x26, 0x00];
+        for opcode in [0x1a, 0x10] {
+            let mut bytes = vec![0x0f, opcode, 0x26, 0x00];
+            bytes.extend(7_i32.to_le_bytes());
+            bytes.push(0x1d);
+            bytes.extend(42_i32.to_le_bytes());
+            bytes.extend([0x04, opcode, 0x26, 0x00]);
+            bytes.extend(7_i32.to_le_bytes());
+            let bytecode = Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            };
+            let mut frame = Frame::new(&bytecode);
+            frame.set_local(7, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+
+            assert_eq!(
+                frame.execute(|_, _| unreachable!()).unwrap(),
+                Value::Int(42)
+            );
+            assert_eq!(
+                frame.local(7),
+                Some(&Value::Array(vec![Value::Int(1), Value::Int(42)]))
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_arrays_grow_on_access_and_report_their_length() {
+        let mut bytes = vec![0x0f, 0x10, 0x2c, 3, 0x00];
         bytes.extend(7_i32.to_le_bytes());
         bytes.push(0x1d);
         bytes.extend(42_i32.to_le_bytes());
-        bytes.extend([0x04, 0x1a, 0x26, 0x00]);
+        bytes.extend([0x04, 0x37, 0x00]);
         bytes.extend(7_i32.to_le_bytes());
         let bytecode = Bytecode {
             version: 76,
@@ -2299,15 +2426,17 @@ mod tests {
             tokens: Vec::new(),
         };
         let mut frame = Frame::new(&bytecode);
-        frame.set_local(7, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+        frame.set_local(7, Value::Array(Vec::new()));
 
-        assert_eq!(
-            frame.execute(|_, _| unreachable!()).unwrap(),
-            Value::Int(42)
-        );
+        assert_eq!(frame.execute(|_, _| unreachable!()).unwrap(), Value::Int(4));
         assert_eq!(
             frame.local(7),
-            Some(&Value::Array(vec![Value::Int(1), Value::Int(42)]))
+            Some(&Value::Array(vec![
+                Value::None,
+                Value::None,
+                Value::None,
+                Value::Int(42)
+            ]))
         );
     }
 

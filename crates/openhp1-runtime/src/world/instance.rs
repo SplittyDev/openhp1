@@ -460,6 +460,7 @@ impl ScriptRuntime {
             "ObjectProperty" | "ClassProperty" => Value::Object(0),
             "NameProperty" => Value::NameText("None".to_owned()),
             "StrProperty" | "StringProperty" => Value::String(String::new()),
+            "ArrayProperty" => Value::Array(Vec::new()),
             "StructProperty" => {
                 if let Some(struct_type) = metadata.struct_type
                     && let Some(struct_type) = self.packages.resolve(&field.package, struct_type)?
