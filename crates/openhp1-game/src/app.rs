@@ -199,7 +199,7 @@ impl InputState {
             },
             strafe: 0.0,
             mouse_x: casting as u8 as f32 * self.mouse_delta.0 as f32 * mouse_scale,
-            mouse_y: casting as u8 as f32 * self.mouse_delta.1 as f32 * mouse_scale,
+            mouse_y: -(casting as u8 as f32) * self.mouse_delta.1 as f32 * mouse_scale,
             alt_fire: casting,
             jump: self.jump_requested,
         };
@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(player.base_x, 0.0);
         assert_eq!(player.base_y, 0.0);
         assert!((player.mouse_x - 76.8).abs() < 0.000_01);
-        assert!((player.mouse_y + 38.4).abs() < 0.000_01);
+        assert!((player.mouse_y - 38.4).abs() < 0.000_01);
         assert!(player.alt_fire);
 
         input.set_mouse_button(MouseButton::Right, ElementState::Released);
