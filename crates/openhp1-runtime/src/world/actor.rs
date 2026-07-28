@@ -316,6 +316,16 @@ impl ScriptRuntime {
                 period: particle_float(self.instance_property(&class, &instance, "Period")?),
                 lifetime: particle_float(self.instance_property(&class, &instance, "Lifetime")?),
                 speed: particle_float(self.instance_property(&class, &instance, "Speed")?),
+                angular_spread_width: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "AngularSpreadWidth",
+                )?),
+                angular_spread_height: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "AngularSpreadHeight",
+                )?),
                 source_width: particle_float(self.instance_property(
                     &class,
                     &instance,

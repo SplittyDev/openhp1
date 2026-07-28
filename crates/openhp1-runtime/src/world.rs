@@ -185,6 +185,8 @@ pub struct ParticleEmitter {
     pub period: ParticleFloat,
     pub lifetime: ParticleFloat,
     pub speed: ParticleFloat,
+    pub angular_spread_width: ParticleFloat,
+    pub angular_spread_height: ParticleFloat,
     pub source_width: ParticleFloat,
     pub source_height: ParticleFloat,
     pub source_depth: ParticleFloat,

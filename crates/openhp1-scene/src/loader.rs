@@ -634,11 +634,18 @@ impl LoadedScene {
                     .unwrap_or(Vec3::ZERO);
                     let speed =
                         sample_particle_float(system.config.speed, &mut system.random).max(0.0);
-                    let direction = if system.config.system_relative {
-                        Vec3::X
-                    } else {
-                        rotate_unreal(owner.rotation, Vec3::X)
-                    } * speed;
+                    let direction = particle_direction(
+                        owner.rotation,
+                        sample_particle_float(
+                            system.config.angular_spread_width,
+                            &mut system.random,
+                        ),
+                        sample_particle_float(
+                            system.config.angular_spread_height,
+                            &mut system.random,
+                        ),
+                        &mut system.random,
+                    ) * speed;
                     system.particles.push(Particle {
                         location: center + source + pattern,
                         velocity: direction,
@@ -1390,6 +1397,23 @@ fn random_signed(random: &mut u32) -> f32 {
 fn random_unit(random: &mut u32) -> f32 {
     *random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     (*random >> 8) as f32 / 16_777_216.0
+}
+
+fn particle_direction(
+    rotation: Rotator,
+    width_degrees: f32,
+    height_degrees: f32,
+    random: &mut u32,
+) -> Vec3 {
+    let units_per_degree = 65_536.0 / 360.0;
+    let rotation = Rotator {
+        pitch: rotation.pitch
+            + (random_signed(random) * height_degrees * units_per_degree).round() as i32,
+        yaw: rotation.yaw
+            + (random_signed(random) * width_degrees * units_per_degree).round() as i32,
+        roll: rotation.roll,
+    };
+    rotate_unreal(rotation, Vec3::X)
 }
 
 impl AnimatedActorMesh {
@@ -2988,6 +3012,8 @@ mod tests {
                 random: 1.0,
             },
             speed: ParticleFloat::default(),
+            angular_spread_width: ParticleFloat::default(),
+            angular_spread_height: ParticleFloat::default(),
             source_width: ParticleFloat::default(),
             source_height: ParticleFloat::default(),
             source_depth: ParticleFloat::default(),
@@ -3032,6 +3058,16 @@ mod tests {
             crate::unreal_to_render(glam::Vec3::new(1.0, 2.0, 3.0)),
             glam::Vec3::new(2.0, 3.0, -1.0)
         );
+    }
+
+    #[test]
+    fn particle_spread_uses_authored_horizontal_and_vertical_angles() {
+        let mut random = 0;
+        let direction =
+            super::particle_direction(super::Rotator::default(), 180.0, 180.0, &mut random);
+        assert!(direction.is_finite());
+        assert!((direction.length() - 1.0).abs() < 0.0001);
+        assert!(!direction.abs_diff_eq(glam::Vec3::X, 0.0001));
     }
 
     #[test]
