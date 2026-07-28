@@ -991,7 +991,7 @@ impl ScriptRuntime {
             .remove(&actor)
             .ok_or(DispatchError::ActiveActorContext { actor })?;
         let mut actions = Vec::new();
-        let result = self.move_actor(actor, &class, delta, &mut instance, &mut actions);
+        let result = self.move_actor_smooth(actor, &class, delta, &mut instance, &mut actions);
         self.instances.insert(actor, instance);
         result.map_err(|message| DispatchError::UnresolvedObject { message })?;
         Ok(actions)

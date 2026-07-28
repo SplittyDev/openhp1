@@ -56,7 +56,8 @@ offsets.
 - `FinishAnim` ends the current loop.
 - Tween-time arguments blend from the displayed pose.
 - HP1's `RootBone='Move'` argument extracts skeletal root translation from the
-  rendered pose and applies it to the actor through normal collision movement.
+  rendered pose and applies it through UE1 smooth movement so a blocked forward
+  component can slide upward during a mount.
 - `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions.
 
 Unsupported actions should remain nonfatal actor diagnostics until their
