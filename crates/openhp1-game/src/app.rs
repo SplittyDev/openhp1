@@ -235,7 +235,7 @@ struct Graphics {
 impl Graphics {
     fn new(window: Arc<Window>, mut scene: LoadedScene) -> Result<Self> {
         let mut last_error = None;
-        let audio = match AudioPlayer::new() {
+        let mut audio = match AudioPlayer::new() {
             Ok(audio) => Some(audio),
             Err(error) => {
                 last_error = Some(error.to_string());
@@ -243,7 +243,7 @@ impl Graphics {
             }
         };
         let mut runtime = initialize_runtime_with(&mut scene, |action| {
-            play_audio_action(audio.as_ref(), action)
+            play_audio_action(audio.as_mut(), action)
         })?;
         let player = runtime
             .player_actor()
@@ -253,7 +253,7 @@ impl Graphics {
             Ok(actions) => {
                 deferred_calls +=
                     apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
-                        play_audio_action(audio.as_ref(), action)
+                        play_audio_action(audio.as_mut(), action)
                     })?
                     .1;
             }
@@ -281,7 +281,7 @@ impl Graphics {
             Ok((view, actions)) => {
                 deferred_calls +=
                     apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
-                        play_audio_action(audio.as_ref(), action)
+                        play_audio_action(audio.as_mut(), action)
                     })?
                     .1;
                 view
@@ -642,9 +642,9 @@ impl Graphics {
     }
 
     fn apply_actions(&mut self, actions: Vec<ActorAction>) {
-        let audio = self.audio.as_ref();
+        let audio = &mut self.audio;
         match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
-            play_audio_action(audio, action)
+            play_audio_action(audio.as_mut(), action)
         }) {
             Ok((_, deferred, transformed)) => {
                 self.deferred_calls += deferred;
@@ -667,7 +667,7 @@ impl Graphics {
     }
 }
 
-fn play_audio_action(audio: Option<&AudioPlayer>, action: ActorAction) -> Result<()> {
+fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Result<()> {
     let Some(audio) = audio else {
         return Ok(());
     };

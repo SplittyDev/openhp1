@@ -5,6 +5,10 @@
 container and bounds-checked object reader; runtime actions carry decoded audio
 without exposing package offsets to the game loop.
 
+Kira owns device output, decoding, mixing, playback-rate changes, and the
+spatial audio backend. Game and runtime code retain the original game's audio
+policy rather than duplicating it in the renderer.
+
 Both export classes serialize tagged properties followed by a format name, a
 lazy-array offset in newer packages, a compact data size, and the embedded
 audio bytes. HP1 `Sound` exports contain WAV or MPEG Layer II data; all 91

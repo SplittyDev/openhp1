@@ -58,6 +58,9 @@ committed copies.
   target. `openhp1-render` must remain independent of eframe.
 - `openhp1-game` owns its winit/wgpu event loop. Do not make eframe own the game
   loop, raw input, cursor grabbing, fullscreen behavior, or frame scheduling.
+- Use `kira` for PCM playback, mixing, spatial sound, and streaming. Keep
+  package decoding and platform playback in `openhp1-audio`, and keep the
+  original game's playback policy in the runtime and game.
 - Preserve UE1 BSP collision and movement semantics rather than substituting a
   generic physics engine.
 - Prefer the standard library and existing dependencies. Do not add an ECS,
