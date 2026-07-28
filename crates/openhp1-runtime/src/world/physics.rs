@@ -603,7 +603,12 @@ impl ScriptRuntime {
             .collision
             .clone()
             .ok_or_else(|| "Mount requires a configured BSP collision model".to_owned())?;
-        if !collision.node_has_poly_flag(node, PolyFlags::HIGH_LEDGE) {
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let radius = self.actor_float(class, instance, "CollisionRadius")?;
+        let surface = collision
+            .line_trace(location, location - hit.normal * (radius * 2.0 + 1.0))
+            .map_or(node, |surface| surface.node);
+        if !collision.node_has_poly_flag(surface, PolyFlags::HIGH_LEDGE) {
             return Ok(false);
         }
         let rotation = self.actor_rotator(class, instance, "Rotation")?;
@@ -612,8 +617,6 @@ impl ScriptRuntime {
             return Ok(false);
         }
 
-        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
-        let radius = self.actor_float(class, instance, "CollisionRadius")?;
         let height = self.actor_float(class, instance, "CollisionHeight")?;
         let up = Vec3::Z;
         let inward = Vec3::new(-hit.normal.x, -hit.normal.y, 0.0).normalize_or_zero();

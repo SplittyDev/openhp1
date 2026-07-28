@@ -435,7 +435,7 @@ impl BspCollision {
         nearest.map(|(_, hit)| hit)
     }
 
-    fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {
+    pub fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {
         let delta = end - start;
         let distance = delta.length();
         if distance <= f32::EPSILON || self.zone_nodes.is_empty() {
