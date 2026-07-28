@@ -96,6 +96,9 @@ detachment is a no-op until decals render.
 Cutscene cameras use UE1 vector/rotator transforms, BSP `Trace`, and pawn
 visibility tests. `TraceActors` currently yields no actor hits; add actor
 iteration when gameplay needs its output locations and normals.
+UE1 `GetAxes` and `vector(Rotator)` use the coordinate-frame axes returned by
+`FRotation`, whose yaw direction is opposite the local-vector `<<` transform.
+Do not implement both operations with the same matrix.
 Harry's authored `PostBeginPlay` selects `BaseCam`; the game does not override
 that view target. Returning Harry to `PlayerWalking` is not the end of the
 cutscene camera sequence: its later `ExitCutState` action restores the saved

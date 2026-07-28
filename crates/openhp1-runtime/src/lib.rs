@@ -1061,7 +1061,7 @@ impl<'a> Frame<'a> {
                     actual: rotation.kind(),
                 });
             };
-            let mut axes = rotator_axes(rotation);
+            let mut axes = script_rotator_axes(rotation);
             if index == 0xe6 {
                 axes = [
                     [axes[0][0], axes[1][0], axes[2][0]],
@@ -1736,10 +1736,7 @@ fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
     };
     Ok(match (opcode, value) {
         (ConversionOpcode::RotatorToVector, Value::Rotator([pitch, yaw, _])) => {
-            let units_to_radians = std::f32::consts::TAU / 65_536.0;
-            let (pitch_sin, pitch_cos) = ((pitch as f32) * units_to_radians).sin_cos();
-            let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
-            Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
+            Value::Vector(script_rotator_axes([pitch, yaw, 0])[0])
         }
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
@@ -1838,6 +1835,10 @@ fn rotator_axes([pitch, yaw, roll]: [i32; 3]) -> [[f32; 3]; 3] {
             roll_cos * pitch_cos,
         ],
     ]
+}
+
+fn script_rotator_axes([pitch, yaw, roll]: [i32; 3]) -> [[f32; 3]; 3] {
+    rotator_axes([pitch, yaw.wrapping_neg(), roll])
 }
 
 #[cfg(test)]
@@ -2093,7 +2094,7 @@ mod tests {
         };
 
         assert!(close(direction([0, 0, 0]), [1.0, 0.0, 0.0]));
-        assert!(close(direction([0, 16_384, 0]), [0.0, 1.0, 0.0]));
+        assert!(close(direction([0, 16_384, 0]), [0.0, -1.0, 0.0]));
         assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, -1.0]));
     }
 
@@ -2152,10 +2153,10 @@ mod tests {
         let Value::Vector(x) = frame.execute(|_, _| unreachable!()).unwrap() else {
             unreachable!()
         };
-        assert!(close(x, [0.0, 1.0, 0.0]));
+        assert!(close(x, [0.0, -1.0, 0.0]));
         assert!(matches!(
             frame.local(8),
-            Some(Value::Vector(y)) if close(*y, [-1.0, 0.0, 0.0])
+            Some(Value::Vector(y)) if close(*y, [1.0, 0.0, 0.0])
         ));
         assert!(matches!(
             frame.local(9),

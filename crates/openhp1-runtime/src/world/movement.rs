@@ -656,7 +656,7 @@ impl ScriptRuntime {
                 value => return Err(format!("actor property PeripheralVision is {value:?}")),
             };
         let forward = Vec3::from_array(
-            crate::rotator_axes(self.actor_rotator(class, instance, "Rotation")?)[0],
+            crate::script_rotator_axes(self.actor_rotator(class, instance, "Rotation")?)[0],
         );
         if !within_sight(
             eye,

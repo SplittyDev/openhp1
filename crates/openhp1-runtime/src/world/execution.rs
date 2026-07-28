@@ -1407,7 +1407,7 @@ fn copy_native_output_arguments(
                 .join(", ")
         ));
     };
-    let mut axes = crate::rotator_axes(*rotation);
+    let mut axes = crate::script_rotator_axes(*rotation);
     if index == 0xe6 {
         axes = [
             [axes[0][0], axes[1][0], axes[2][0]],
