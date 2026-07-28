@@ -36,6 +36,7 @@ impl ScriptRuntime {
             handle_objects: Vec::new(),
             next_actor: 0,
             collision: None,
+            reach_specs: Vec::new(),
             level_package: None,
             level_info: None,
             player_actor: None,
@@ -60,6 +61,36 @@ impl ScriptRuntime {
         level_package: impl AsRef<Path>,
     ) -> DispatchResult<()> {
         let package = self.packages.load_path(level_package)?;
+        let level_export = package
+            .summary()
+            .exports
+            .iter()
+            .position(|export| package.summary().class_name(export) == Some("Level"))
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "level package has no Level export".to_owned(),
+            })?;
+        let level = Level::decode(&package, level_export).map_err(|error| {
+            DispatchError::UnresolvedObject {
+                message: error.to_string(),
+            }
+        })?;
+        self.reach_specs.clear();
+        for spec in level.reach_specs {
+            let Some(start) = self.packages.resolve(&package, spec.start_actor)? else {
+                continue;
+            };
+            let Some(end) = self.packages.resolve(&package, spec.end_actor)? else {
+                continue;
+            };
+            self.reach_specs.push(NavigationReachSpec {
+                distance: spec.distance,
+                start: object_id(&start.package, start.export_index),
+                end: object_id(&end.package, end.export_index),
+                collision_radius: spec.collision_radius,
+                collision_height: spec.collision_height,
+                pruned: spec.pruned,
+            });
+        }
         self.collision = Some(collision);
         self.level_package = Some(Arc::clone(&package.summary().source));
         Ok(())

@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use openhp1_audio::AudioClip;
-use openhp1_map::Model;
+use openhp1_map::{Level, Model};
 use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
     ResolvedObject,
@@ -71,6 +71,7 @@ const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
 const LOG: u16 = 0x0e7;
 const V_RAND: u16 = 0x0fc;
+const FIND_PATH: u16 = 0x229;
 const CLASS_ABSTRACT: u32 = 0x0000_0001;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
@@ -375,6 +376,7 @@ pub struct ScriptRuntime {
     handle_objects: Vec<ObjectId>,
     next_actor: usize,
     collision: Option<Arc<BspCollision>>,
+    reach_specs: Vec<NavigationReachSpec>,
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
     player_actor: Option<usize>,
@@ -465,6 +467,16 @@ struct AnimationCommand {
     tween_only: bool,
 }
 
+#[derive(Clone, Debug)]
+struct NavigationReachSpec {
+    distance: i32,
+    start: ObjectId,
+    end: ObjectId,
+    collision_radius: i32,
+    collision_height: i32,
+    pruned: bool,
+}
+
 struct StateFrame {
     state: ObjectId,
     frame: FrameSnapshot,
@@ -518,9 +530,9 @@ mod tests {
         actor::decode_latent_action,
         actor::update_touching_array,
         native::{
-            animation_parameters, bone_number, collision_updates, log_arguments, noise_loudness,
-            random_float, random_int, random_unit_vector, scalar_native, sound_arguments,
-            target_score, trace_texture,
+            animation_parameters, bone_number, collision_updates, log_arguments,
+            next_navigation_step, noise_loudness, random_float, random_int, random_unit_vector,
+            scalar_native, sound_arguments, target_score, trace_texture,
         },
         state::{event_disabled, probe_event_index, set_event_disabled},
     };
@@ -934,6 +946,33 @@ mod tests {
             ),
             Ok(Value::Vector([1.0, 2.0, 3.0]))
         );
+    }
+
+    #[test]
+    fn navigation_uses_the_shortest_unpruned_reachable_step() {
+        let start = runtime_actor_id(1);
+        let short = runtime_actor_id(2);
+        let long = runtime_actor_id(3);
+        let target = runtime_actor_id(4);
+        let spec = |start, end, distance| NavigationReachSpec {
+            distance,
+            start,
+            end,
+            collision_radius: 40,
+            collision_height: 40,
+            pruned: false,
+        };
+        let specs = [
+            spec(start.clone(), long.clone(), 10),
+            spec(long, target.clone(), 10),
+            spec(start.clone(), short.clone(), 3),
+            spec(short.clone(), target.clone(), 3),
+        ];
+        assert_eq!(
+            next_navigation_step(&specs, &start, &target, 20, 20),
+            Some(short)
+        );
+        assert_eq!(next_navigation_step(&specs, &start, &target, 50, 20), None);
     }
 
     #[test]

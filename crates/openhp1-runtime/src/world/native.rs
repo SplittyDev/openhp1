@@ -899,6 +899,56 @@ impl ScriptRuntime {
             // config properties when settings need to survive process exit.
             return Ok(Value::None);
         }
+        if index == FIND_PATH {
+            let [start, destination] = arguments else {
+                return Err(format!(
+                    "FindPath expects a start point and destination name, found {}",
+                    arguments.len()
+                ));
+            };
+            let start = match start {
+                Value::None | Value::Object(0) => return Ok(Value::Object(0)),
+                Value::Object(handle) => self
+                    .object_for_handle(*handle)
+                    .map_err(|error| error.to_string())?,
+                value => return Err(format!("FindPath start point is {}", value.kind())),
+            };
+            let destination = runtime_name(source, destination)?;
+            let objects = self
+                .reach_specs
+                .iter()
+                .flat_map(|spec| [&spec.start, &spec.end])
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut target = None;
+            for object in objects {
+                let resolved = self
+                    .resolved_object(&object)
+                    .map_err(|error| error.to_string())?;
+                let summary = resolved.package.summary();
+                if summary
+                    .name(summary.exports[resolved.export_index].object_name)
+                    .eq_ignore_ascii_case(&destination)
+                {
+                    target = Some(object);
+                    break;
+                }
+            }
+            let Some(target) = target else {
+                return Ok(Value::Object(0));
+            };
+            let radius = self.actor_float(actor_class, instance, "CollisionRadius")? as i32;
+            let height = self.actor_float(actor_class, instance, "CollisionHeight")? as i32;
+            let Some(next) =
+                next_navigation_step(&self.reach_specs, &start, &target, radius, height)
+            else {
+                return Ok(Value::Object(0));
+            };
+            return self
+                .object_handle(next)
+                .map(Value::Object)
+                .map_err(|error| error.to_string());
+        }
         scalar_native(index, arguments)
     }
 
@@ -1591,6 +1641,61 @@ impl ScriptRuntime {
         instance.insert(field, value);
         Ok(())
     }
+}
+
+pub(super) fn next_navigation_step(
+    specs: &[NavigationReachSpec],
+    start: &ObjectId,
+    target: &ObjectId,
+    radius: i32,
+    height: i32,
+) -> Option<ObjectId> {
+    if start == target {
+        return Some(target.clone());
+    }
+    let mut distances = HashMap::default();
+    let mut previous = HashMap::default();
+    let mut pending = vec![start.clone()];
+    distances.insert(start.clone(), 0_i32);
+    while !pending.is_empty() {
+        let index = pending
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, node)| distances.get(*node).copied().unwrap_or(i32::MAX))?
+            .0;
+        let current = pending.swap_remove(index);
+        let distance = distances[&current];
+        if current == *target {
+            break;
+        }
+        for spec in specs.iter().filter(|spec| {
+            spec.start == current
+                && !spec.pruned
+                && spec.collision_radius >= radius
+                && spec.collision_height >= height
+        }) {
+            let candidate = distance.saturating_add(spec.distance.max(0));
+            if distances
+                .get(&spec.end)
+                .is_some_and(|known| *known <= candidate)
+            {
+                continue;
+            }
+            distances.insert(spec.end.clone(), candidate);
+            previous.insert(spec.end.clone(), current.clone());
+            if !pending.contains(&spec.end) {
+                pending.push(spec.end.clone());
+            }
+        }
+    }
+    let mut step = target.clone();
+    while let Some(parent) = previous.get(&step) {
+        if parent == start {
+            return Some(step);
+        }
+        step = parent.clone();
+    }
+    None
 }
 
 pub(super) fn log_arguments(
