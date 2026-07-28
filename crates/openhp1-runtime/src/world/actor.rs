@@ -291,6 +291,11 @@ impl ScriptRuntime {
                 actor,
                 emit: particle_bool(self.instance_property(&class, &instance, "bEmit")?),
                 prime: particle_bool(self.instance_property(&class, &instance, "bPrime")?),
+                distribution: particle_byte(self.instance_property(
+                    &class,
+                    &instance,
+                    "Distribution",
+                )?),
                 style: particle_byte(self.instance_property(&class, &instance, "Style")?),
                 unlit: particle_bool(self.instance_property(&class, &instance, "bUnlit")?),
                 particles_alive: particle_int(self.instance_property(

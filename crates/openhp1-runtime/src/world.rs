@@ -176,6 +176,7 @@ pub struct ParticleEmitter {
     pub actor: usize,
     pub emit: bool,
     pub prime: bool,
+    pub distribution: u8,
     pub style: u8,
     pub unlit: bool,
     pub particles_alive: usize,

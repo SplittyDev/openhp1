@@ -580,16 +580,23 @@ impl LoadedScene {
             let rate =
                 sample_particle_float(system.config.particles_per_second, &mut system.random)
                     .max(0.0);
-            let pattern_finished =
-                !system.config.pattern.is_empty() && system.config.period.base > 1.0;
-            if system.config.emit && !owner.hidden && !pattern_finished {
+            if system.config.emit && !owner.hidden {
                 if system.config.prime && !system.primed {
                     system.residue += rate
                         * sample_particle_float(system.config.lifetime, &mut system.random)
                             .max(0.0);
                     system.primed = true;
                 }
-                system.residue += rate * delta_time;
+                system.residue += if system.config.distribution == 1 && rate > 0.0 {
+                    uniform_particle_distance(
+                        &system.config.pattern,
+                        system.config.period,
+                        system.config.draw_scale,
+                        system.last_location.distance(owner.location),
+                    ) / rate
+                } else {
+                    rate * delta_time
+                };
                 let remaining = if system.config.particles_max == 0 {
                     usize::MAX
                 } else {
@@ -619,7 +626,8 @@ impl LoadedScene {
                     ) * 0.5;
                     let pattern = pattern_position(
                         &system.config.pattern,
-                        sample_particle_float(system.config.period, &mut system.random),
+                        system.config.period.base
+                            + random_unit(&mut system.random) * system.config.period.random,
                     )
                     .map(|point| {
                         rotate_unreal(
@@ -1388,6 +1396,24 @@ fn pattern_position(points: &[[f32; 3]], progress: f32) -> Option<Vec3> {
         Vec3::from_array(points[index])
             .lerp(Vec3::from_array(points[index + 1]), position - index as f32),
     )
+}
+
+fn uniform_particle_distance(
+    pattern: &[[f32; 3]],
+    period: ParticleFloat,
+    draw_scale: f32,
+    moved: f32,
+) -> f32 {
+    let last = match pattern.len().checked_sub(1) {
+        Some(0) | None => return moved,
+        Some(last) => last,
+    };
+    let midpoint = (period.base + period.random * 0.5).clamp(0.0, 1.0) * last as f32;
+    let index = (midpoint.floor() as usize).min(last - 1);
+    Vec3::from_array(pattern[index]).distance(Vec3::from_array(pattern[index + 1]))
+        * last as f32
+        * draw_scale
+        * period.random
 }
 
 fn random_signed(random: &mut u32) -> f32 {
@@ -2997,6 +3023,7 @@ mod tests {
             actor: 0,
             emit: true,
             prime: false,
+            distribution: 0,
             style: 3,
             unlit: true,
             particles_alive: 7,
@@ -3044,6 +3071,18 @@ mod tests {
         assert_eq!(
             super::pattern_position(&points, 0.75),
             Some(glam::Vec3::new(0.625, 1.0, 0.0))
+        );
+        assert_eq!(
+            super::uniform_particle_distance(
+                &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                ParticleFloat {
+                    base: 0.25,
+                    random: 0.25,
+                },
+                100.0,
+                0.0,
+            ),
+            25.0
         );
     }
 
