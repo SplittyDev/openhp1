@@ -9,6 +9,18 @@ use crate::{
 pub struct Level {
     pub actors: Vec<ObjectReference>,
     pub model: ObjectReference,
+    pub reach_specs: Vec<ReachSpec>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReachSpec {
+    pub distance: i32,
+    pub start_actor: ObjectReference,
+    pub end_actor: ObjectReference,
+    pub collision_radius: i32,
+    pub collision_height: i32,
+    pub reach_flags: i32,
+    pub pruned: bool,
 }
 
 impl Level {
@@ -36,7 +48,24 @@ impl Level {
         reader.read_i32()?; // port
         reader.read_u32()?; // legacy URL field
         let model = reader.read_object_reference()?;
-        Ok(Self { actors, model })
+        let reach_spec_count = compact_count(&mut reader, 19, "level reach specs")?;
+        let mut reach_specs = Vec::with_capacity(reach_spec_count);
+        for _ in 0..reach_spec_count {
+            reach_specs.push(ReachSpec {
+                distance: reader.read_i32()?,
+                start_actor: reader.read_object_reference()?,
+                end_actor: reader.read_object_reference()?,
+                collision_radius: reader.read_i32()?,
+                collision_height: reader.read_i32()?,
+                reach_flags: reader.read_i32()?,
+                pruned: reader.read_u8()? != 0,
+            });
+        }
+        Ok(Self {
+            actors,
+            model,
+            reach_specs,
+        })
     }
 }
 

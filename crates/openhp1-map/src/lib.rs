@@ -16,7 +16,7 @@ pub use bsp::{
     BspNode, BspSurface, BspVertex, ConvexLeaf, LightMap, PolyFlags, PrimitiveBounds, Zone,
 };
 pub use error::{Error, Result};
-pub use level::{Level, world_model_export};
+pub use level::{Level, ReachSpec, world_model_export};
 pub use lighting::{
     ActorVertexLighting, LightmapImage, VertexLighting, bsp_zone_at, bsp_zone_at_checked,
 };

@@ -11,6 +11,10 @@ model happens to be the world in inspected maps, but relying on size would be a
 heuristic. The authoritative reference is serialized by the map's `Level`
 export after its actor array and travel URL fields.
 
+The model reference is followed by a compact-counted `ReachSpec` array used by
+UE1 navigation. Each entry stores distance, start and end navigation actors,
+required collision radius and height, reach flags, and a pruned marker.
+
 `Entry.unr` is a valid version-72 package whose referenced world model is
 empty: it contains no points, nodes, surfaces, or triangles. Renderers must
 treat that as an empty scene rather than trying to bind zero-length buffers.
