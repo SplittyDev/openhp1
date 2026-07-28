@@ -98,6 +98,11 @@ Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, left click/Control/Space jump, and right click/Alt
 cast. Mouse deltas reach the player script only while casting, when movement
 axes are held at zero for spell aiming.
+Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary world, animation, player,
+trigger, camera, and audio-action ticks per rendered frame. This debug
+fast-forward preserves event ordering and latent callbacks rather than
+jumping runtime state; held movement/casting input repeats while one-shot
+jump and mouse input do not.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.

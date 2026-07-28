@@ -20,6 +20,7 @@ use winit::{
 };
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
+const DEBUG_FAST_FORWARD_TICKS: usize = 16;
 
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
@@ -82,6 +83,13 @@ impl ApplicationHandler for GameApp {
         {
             graphics.overlay_visible = !graphics.overlay_visible;
             graphics.release_input();
+            return;
+        }
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && let PhysicalKey::Code(code) = event.physical_key
+            && is_fast_forward_key(code)
+        {
+            graphics.input.set_key(code, event.state);
             return;
         }
         if egui_response.consumed {
@@ -413,9 +421,18 @@ impl Graphics {
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.frame_time_ms = delta_time * 1_000.0;
-        self.renderer.advance_time(delta_time);
-        self.update_animations(delta_time);
-        self.update_runtime(delta_time);
+        let ticks = if self.input.keys.iter().copied().any(is_fast_forward_key) {
+            DEBUG_FAST_FORWARD_TICKS
+        } else {
+            1
+        };
+        let mut input = self.input.player_input(delta_time);
+        for _ in 0..ticks {
+            self.renderer.advance_time(delta_time);
+            self.update_animations(delta_time);
+            self.update_runtime(delta_time, input);
+            input = repeated_player_input(input);
+        }
 
         let frame = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => frame,
@@ -543,6 +560,12 @@ impl Graphics {
                     self.render_stats.draw_calls
                 ));
                 ui.monospace(format!("{} deferred runtime calls", self.deferred_calls));
+                if self.input.keys.iter().copied().any(is_fast_forward_key) {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        format!("{DEBUG_FAST_FORWARD_TICKS}x debug fast-forward"),
+                    );
+                }
                 if let Some(error) = &self.last_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -550,6 +573,7 @@ impl Graphics {
                 ui.label("W/S or ↑/↓ move · A/D or ←/→ turn");
                 ui.label("Left click/Ctrl/Space jump · Right click/Alt cast");
                 ui.label("Mouse aims while casting · Esc releases mouse · F1 toggles diagnostics");
+                ui.label("Hold + or F to fast-forward normal game ticks at 16x");
             });
     }
 
@@ -585,13 +609,12 @@ impl Graphics {
         }
     }
 
-    fn update_runtime(&mut self, delta_time: f32) {
+    fn update_runtime(&mut self, delta_time: f32, input: PlayerInput) {
         match self.runtime.tick(delta_time) {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("runtime tick failed: {error}")),
         }
 
-        let input = self.input.player_input(delta_time);
         match self.runtime.tick_player(input, delta_time) {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("player tick failed: {error}")),
@@ -684,6 +707,19 @@ impl Graphics {
                 .reload_scene(&self.device, &self.queue, &self.scene.render);
         }
     }
+}
+
+fn repeated_player_input(input: PlayerInput) -> PlayerInput {
+    PlayerInput {
+        mouse_x: 0.0,
+        mouse_y: 0.0,
+        jump: false,
+        ..input
+    }
+}
+
+fn is_fast_forward_key(key: KeyCode) -> bool {
+    matches!(key, KeyCode::Equal | KeyCode::NumpadAdd | KeyCode::KeyF)
 }
 
 fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
@@ -817,5 +853,25 @@ mod tests {
         assert!(input.player_input(1.0 / 60.0).jump);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);
         assert!(input.player_input(1.0 / 60.0).alt_fire);
+    }
+
+    #[test]
+    fn fast_forward_repeats_held_but_not_transient_input() {
+        let repeated = repeated_player_input(PlayerInput {
+            base_y: 6_000.0,
+            mouse_x: 76.8,
+            alt_fire: true,
+            jump: true,
+            ..PlayerInput::default()
+        });
+        assert_eq!(repeated.base_y, 6_000.0);
+        assert!(repeated.alt_fire);
+        assert_eq!(repeated.mouse_x, 0.0);
+        assert!(!repeated.jump);
+
+        assert!(is_fast_forward_key(KeyCode::Equal));
+        assert!(is_fast_forward_key(KeyCode::NumpadAdd));
+        assert!(is_fast_forward_key(KeyCode::KeyF));
+        assert!(!is_fast_forward_key(KeyCode::F2));
     }
 }

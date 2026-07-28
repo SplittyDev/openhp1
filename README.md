@@ -55,6 +55,10 @@ cargo run -p openhp1-game # debug build
 cargo run --release -p openhp1-game # release build
 ```
 
+Hold + (main keyboard or numpad) or F to run the normal game simulation at 16x speed. This debug
+fast-forward still processes scripts, animation completions, triggers, and
+other runtime events in order.
+
 ### Docs
 
 See [`docs/`](docs/) for the reverse-engineered package, map, texture, and
