@@ -1,6 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use openhp1_audio::AudioClip;
+use openhp1_map::Model;
 use openhp1_package::{
     ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
     ResolvedObject,
@@ -370,6 +371,7 @@ pub struct ScriptRuntime {
     animating: HashSet<usize>,
     player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
+    brush_collisions: HashMap<ObjectId, Arc<BspCollision>>,
     collision_actors: Vec<Option<movement::CachedCollisionActor>>,
     collision_actors_by_min_x: Vec<usize>,
     actor_bases: HashMap<usize, Option<ObjectId>>,

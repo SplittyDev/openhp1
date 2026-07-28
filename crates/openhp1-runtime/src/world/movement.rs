@@ -19,7 +19,9 @@ struct CollisionActor {
     block_actors: bool,
     block_players: bool,
     player_collision: bool,
-    has_brush: bool,
+    brush: Option<Arc<BspCollision>>,
+    pre_pivot: Vec3,
+    main_scale: Vec3,
 }
 
 pub(super) struct CachedCollisionActor {
@@ -46,6 +48,8 @@ pub(super) struct CollisionFields {
     block_actors: ObjectId,
     block_players: ObjectId,
     brush: ObjectId,
+    pre_pivot: ObjectId,
+    main_scale: Option<ObjectId>,
     player_collision: bool,
 }
 
@@ -86,7 +90,7 @@ impl ScriptRuntime {
             .map_err(DispatchError::PlayerTouchCollision)?;
 
         let mut touching = HashSet::default();
-        if current.collide_actors && !current.has_brush {
+        if current.collide_actors && current.brush.is_none() {
             let current_extents = collision_actor_world_extents(&current);
             let query_minimum = current.location - current_extents;
             let query_maximum = current.location + current_extents;
@@ -98,12 +102,16 @@ impl ScriptRuntime {
                     continue;
                 }
                 let other = &self.collision_actors[actor].as_ref().unwrap().actor;
-                let other_extents = collision_actor_world_extents(other);
-                if other.location.x + other_extents.x < query_minimum.x
-                    || other.location.y + other_extents.y < query_minimum.y
-                    || other.location.y - other_extents.y > query_maximum.y
-                    || other.location.z + other_extents.z < query_minimum.z
-                    || other.location.z - other_extents.z > query_maximum.z
+                let Some((other_location, other_extents)) =
+                    collision_actor_world_bounds(other).filter(|_| other.brush.is_none())
+                else {
+                    continue;
+                };
+                if other_location.x + other_extents.x < query_minimum.x
+                    || other_location.y + other_extents.y < query_minimum.y
+                    || other_location.y - other_extents.y > query_maximum.y
+                    || other_location.z + other_extents.z < query_minimum.z
+                    || other_location.z - other_extents.z > query_maximum.z
                     || actors_block(&current, other)
                 {
                     continue;
@@ -246,7 +254,7 @@ impl ScriptRuntime {
         }
         let current = self.collision_actor(actor, actor_class, instance)?;
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let world_hit = if collide_world && !current.has_brush {
+        let world_hit = if collide_world && current.brush.is_none() {
             let collision = self
                 .collision
                 .as_ref()
@@ -282,8 +290,8 @@ impl ScriptRuntime {
             }
         };
 
-        let mut hits = if current.collide_actors && !current.has_brush {
-            self.actor_sweeps(&current, delta, actor, instance)?
+        let mut hits = if (current.collide_actors || collide_world) && current.brush.is_none() {
+            self.actor_sweeps(&current, delta, collide_world, actor, instance)?
         } else {
             Vec::new()
         };
@@ -510,6 +518,7 @@ impl ScriptRuntime {
         &mut self,
         current: &CollisionActor,
         delta: Vec3,
+        collide_world: bool,
         current_actor: usize,
         current_instance: &InstanceState,
     ) -> std::result::Result<Vec<ActorSweep>, String> {
@@ -530,12 +539,19 @@ impl ScriptRuntime {
                 continue;
             }
             let other = &self.collision_actors[actor].as_ref().unwrap().actor;
-            let other_extents = collision_actor_world_extents(other);
-            if other.location.x + other_extents.x < query_minimum.x
-                || other.location.y + other_extents.y < query_minimum.y
-                || other.location.y - other_extents.y > query_maximum.y
-                || other.location.z + other_extents.z < query_minimum.z
-                || other.location.z - other_extents.z > query_maximum.z
+            if (other.brush.is_some() && !collide_world)
+                || (other.brush.is_none() && !current.collide_actors)
+            {
+                continue;
+            }
+            let Some((other_location, other_extents)) = collision_actor_world_bounds(other) else {
+                continue;
+            };
+            if other_location.x + other_extents.x < query_minimum.x
+                || other_location.y + other_extents.y < query_minimum.y
+                || other_location.y - other_extents.y > query_maximum.y
+                || other_location.z + other_extents.z < query_minimum.z
+                || other_location.z - other_extents.z > query_maximum.z
             {
                 continue;
             }
@@ -620,7 +636,7 @@ impl ScriptRuntime {
         instance: &InstanceState,
     ) -> std::result::Result<CollisionActor, String> {
         let fields = self.collision_fields(class)?;
-        collision_actor_from_fields(actor, instance, &fields)
+        self.collision_actor_from_fields(actor, instance, &fields)
     }
 
     fn collision_actor_by_index(
@@ -702,14 +718,15 @@ impl ScriptRuntime {
                 self.collision_fields(&class)?
             };
             let instance = if actor == current_actor {
-                current_instance
+                current_instance.clone()
             } else {
                 self.instances
                     .get(&actor)
                     .ok_or_else(|| format!("actor {actor} instance is active"))?
+                    .clone()
             };
             self.collision_actors[actor] = Some(CachedCollisionActor {
-                actor: collision_actor_from_fields(actor, instance, &fields)?,
+                actor: self.collision_actor_from_fields(actor, &instance, &fields)?,
                 fields,
             });
         }
@@ -720,7 +737,10 @@ impl ScriptRuntime {
             .filter_map(|(actor, cached)| {
                 cached
                     .as_ref()
-                    .is_some_and(|cached| cached.actor.collide_actors && !cached.actor.has_brush)
+                    .is_some_and(|cached| {
+                        cached.actor.collide_actors
+                            && collision_actor_world_bounds(&cached.actor).is_some()
+                    })
                     .then_some(actor)
             })
             .collect();
@@ -747,7 +767,7 @@ impl ScriptRuntime {
             self.collision_actors.resize_with(actor + 1, || None);
         }
         self.collision_actors[actor] = Some(CachedCollisionActor {
-            actor: collision_actor_from_fields(actor, instance, &fields)?,
+            actor: self.collision_actor_from_fields(actor, instance, &fields)?,
             fields,
         });
         self.reindex_cached_collision_actor(actor);
@@ -768,14 +788,15 @@ impl ScriptRuntime {
             return Ok(());
         }
         let instance = match current_instance {
-            Some(instance) => instance,
+            Some(instance) => instance.clone(),
             None => self
                 .instances
                 .get(&actor)
-                .ok_or_else(|| format!("actor {actor} instance is active"))?,
+                .ok_or_else(|| format!("actor {actor} instance is active"))?
+                .clone(),
         };
         self.collision_actors[actor] = Some(CachedCollisionActor {
-            actor: collision_actor_from_fields(actor, instance, &fields)?,
+            actor: self.collision_actor_from_fields(actor, &instance, &fields)?,
             fields,
         });
         self.reindex_cached_collision_actor(actor);
@@ -793,10 +814,13 @@ impl ScriptRuntime {
         let Some(Some(cached)) = self.collision_actors.get(actor) else {
             return;
         };
-        if !cached.actor.collide_actors || cached.actor.has_brush {
+        if !cached.actor.collide_actors {
             return;
         }
-        let minimum = cached.actor.location.x - collision_actor_world_extents(&cached.actor).x;
+        let Some((location, extents)) = collision_actor_world_bounds(&cached.actor) else {
+            return;
+        };
+        let minimum = location.x - extents.x;
         let index = self
             .collision_actors_by_min_x
             .binary_search_by(|&candidate| {
@@ -832,6 +856,10 @@ impl ScriptRuntime {
             block_actors: field("bBlockActors")?,
             block_players: field("bBlockPlayers")?,
             brush: field("Brush")?,
+            pre_pivot: field("PrePivot")?,
+            main_scale: self
+                .find_property(class, "MainScale", 0)
+                .map_err(|error| error.to_string())?,
             player_collision: self
                 .class_has_name(class, "PlayerPawn")
                 .map_err(|error| error.to_string())?
@@ -841,6 +869,38 @@ impl ScriptRuntime {
         };
         self.collision_fields.insert(class_id, fields.clone());
         Ok(fields)
+    }
+
+    fn collision_actor_from_fields(
+        &mut self,
+        actor: usize,
+        instance: &InstanceState,
+        fields: &CollisionFields,
+    ) -> std::result::Result<CollisionActor, String> {
+        let brush = collision_actor_brush(instance, fields)?
+            .map(|object| self.brush_collision(object))
+            .transpose()?;
+        collision_actor_from_fields(actor, instance, fields, brush)
+    }
+
+    fn brush_collision(
+        &mut self,
+        object: ObjectId,
+    ) -> std::result::Result<Arc<BspCollision>, String> {
+        if let Some(collision) = self.brush_collisions.get(&object) {
+            return Ok(Arc::clone(collision));
+        }
+        let brush = self
+            .resolved_object(&object)
+            .map_err(|error| error.to_string())?;
+        let model = Model::decode(&brush.package, brush.export_index)
+            .map_err(|error| format!("could not decode brush model: {error}"))?;
+        let collision = Arc::new(
+            BspCollision::from_model(&model)
+                .map_err(|error| format!("could not build brush collision: {error}"))?,
+        );
+        self.brush_collisions.insert(object, Arc::clone(&collision));
+        Ok(collision)
     }
 
     fn actors_share_base_chain(&self, first: usize, second: usize) -> DispatchResult<bool> {
@@ -991,8 +1051,21 @@ impl CollisionFields {
             &self.block_actors,
             &self.block_players,
             &self.brush,
+            &self.pre_pivot,
         ]
         .contains(&field)
+            || self.main_scale.as_ref() == Some(field)
+    }
+}
+
+fn collision_actor_brush(
+    instance: &InstanceState,
+    fields: &CollisionFields,
+) -> std::result::Result<Option<ObjectId>, String> {
+    match instance.get(&fields.brush) {
+        Some(StoredValue::Object(value)) => Ok(value.clone()),
+        Some(value) => Err(format!("actor property Brush is {value:?}")),
+        None => Ok(None),
     }
 }
 
@@ -1000,6 +1073,7 @@ fn collision_actor_from_fields(
     actor: usize,
     instance: &InstanceState,
     fields: &CollisionFields,
+    brush: Option<Arc<BspCollision>>,
 ) -> std::result::Result<CollisionActor, String> {
     let vector = |field: &ObjectId, name| match instance.get(field) {
         Some(StoredValue::Value(Value::Vector(value)))
@@ -1032,10 +1106,24 @@ fn collision_actor_from_fields(
         Some(value) => Err(format!("actor property {name} is {value:?}")),
         None => Ok([0; 3]),
     };
-    let has_brush = match instance.get(&fields.brush) {
-        Some(StoredValue::Object(value)) => value.is_some(),
-        Some(value) => return Err(format!("actor property Brush is {value:?}")),
-        None => false,
+    let main_scale = match fields
+        .main_scale
+        .as_ref()
+        .and_then(|field| instance.get(field))
+    {
+        Some(StoredValue::Value(Value::Struct(value))) => match value
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("Scale"))
+            .map(|(_, value)| value)
+        {
+            Some(Value::Vector(value)) if value.iter().all(|component| component.is_finite()) => {
+                Vec3::from_array(*value)
+            }
+            Some(value) => return Err(format!("actor property MainScale.Scale is {value:?}")),
+            None => Vec3::ONE,
+        },
+        Some(value) => return Err(format!("actor property MainScale is {value:?}")),
+        None => Vec3::ONE,
     };
     let rotation = crate::rotator_axes(rotator(&fields.rotation, "Rotation")?);
     Ok(CollisionActor {
@@ -1054,7 +1142,9 @@ fn collision_actor_from_fields(
         block_actors: boolean(&fields.block_actors, "bBlockActors")?,
         block_players: boolean(&fields.block_players, "bBlockPlayers")?,
         player_collision: fields.player_collision,
-        has_brush,
+        brush,
+        pre_pivot: vector(&fields.pre_pivot, "PrePivot")?,
+        main_scale,
     })
 }
 
@@ -1074,12 +1164,39 @@ fn collision_actor_world_extents(actor: &CollisionActor) -> Vec3 {
     }
 }
 
+fn collision_actor_world_bounds(actor: &CollisionActor) -> Option<(Vec3, Vec3)> {
+    match &actor.brush {
+        Some(brush) => brush.transformed_bounds(
+            actor.location,
+            actor.rotation,
+            actor.pre_pivot,
+            actor.main_scale,
+        ),
+        None => Some((actor.location, collision_actor_world_extents(actor))),
+    }
+}
+
 fn sweep_collision_actors(
     current: &CollisionActor,
     other: &CollisionActor,
     delta: Vec3,
 ) -> Option<openhp1_physics::ActorCollisionHit> {
-    if other.collide_type == COLLIDE_BOX {
+    if let Some(brush) = &other.brush {
+        brush
+            .sweep_transformed_aabb(
+                current.location,
+                current.location + delta,
+                collision_actor_world_extents(current),
+                other.location,
+                other.rotation,
+                other.pre_pivot,
+                other.main_scale,
+            )
+            .map(|hit| openhp1_physics::ActorCollisionHit {
+                fraction: hit.fraction,
+                normal: hit.normal,
+            })
+    } else if other.collide_type == COLLIDE_BOX {
         sweep_box(
             current.location,
             current.location + delta,
@@ -1111,7 +1228,9 @@ fn sweep_collision_actors(
 }
 
 fn collision_actors_overlap(first: &CollisionActor, second: &CollisionActor) -> bool {
-    if second.collide_type == COLLIDE_BOX {
+    if first.brush.is_some() || second.brush.is_some() {
+        false
+    } else if second.collide_type == COLLIDE_BOX {
         boxes_overlap(
             first.location,
             collision_actor_world_extents(first),
@@ -1141,7 +1260,8 @@ fn collision_actors_overlap(first: &CollisionActor, second: &CollisionActor) -> 
 
 fn collision_actor_min_x(actors: &[Option<CachedCollisionActor>], actor: usize) -> f32 {
     let actor = &actors[actor].as_ref().unwrap().actor;
-    actor.location.x - collision_actor_world_extents(actor).x
+    let (location, extents) = collision_actor_world_bounds(actor).unwrap();
+    location.x - extents.x
 }
 
 fn actors_block(first: &CollisionActor, second: &CollisionActor) -> bool {
@@ -1204,7 +1324,9 @@ mod tests {
             block_actors: false,
             block_players,
             player_collision: actor == 0,
-            has_brush: false,
+            brush: None,
+            pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
         }
     }
 

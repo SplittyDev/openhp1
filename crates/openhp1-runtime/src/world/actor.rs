@@ -44,6 +44,7 @@ impl ScriptRuntime {
             animating: HashSet::default(),
             player_probe_touching: HashSet::default(),
             collision_fields: HashMap::default(),
+            brush_collisions: HashMap::default(),
             collision_actors: Vec::new(),
             collision_actors_by_min_x: Vec::new(),
             actor_bases: HashMap::default(),

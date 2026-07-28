@@ -8,11 +8,9 @@ rust-version.workspace = true
 [dependencies]
 glam.workspace = true
 openhp1-audio = { path = "../openhp1-audio" }
+openhp1-map = { path = "../openhp1-map" }
 openhp1-package = { path = "../openhp1-package" }
 openhp1-physics = { path = "../openhp1-physics" }
 openhp1-script = { path = "../openhp1-script" }
 rustc-hash.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-openhp1-map = { path = "../openhp1-map" }

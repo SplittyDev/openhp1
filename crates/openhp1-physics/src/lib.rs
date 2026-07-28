@@ -237,6 +237,70 @@ impl BspCollision {
         self.sweep_shape(start, end, SweepShape::Cylinder { radius, height })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn sweep_transformed_aabb(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        extents: Vec3,
+        location: Vec3,
+        rotation: Mat3,
+        pre_pivot: Vec3,
+        scale: Vec3,
+    ) -> Option<CollisionHit> {
+        if !start.is_finite()
+            || !end.is_finite()
+            || !extents.is_finite()
+            || !location.is_finite()
+            || !rotation.is_finite()
+            || !pre_pivot.is_finite()
+            || !scale.is_finite()
+            || extents.cmplt(Vec3::ZERO).any()
+            || scale.abs().cmple(Vec3::splat(f32::EPSILON)).any()
+        {
+            return None;
+        }
+        let world_to_local = rotation.transpose();
+        let to_local = |point| world_to_local * (point - location) / scale + pre_pivot;
+        self.sweep_aabb(to_local(start), to_local(end), extents / scale.abs())
+            .map(|mut hit| {
+                hit.normal = (rotation * (hit.normal / scale)).normalize();
+                hit
+            })
+    }
+
+    pub fn transformed_bounds(
+        &self,
+        location: Vec3,
+        rotation: Mat3,
+        pre_pivot: Vec3,
+        scale: Vec3,
+    ) -> Option<(Vec3, Vec3)> {
+        if !location.is_finite()
+            || !rotation.is_finite()
+            || !pre_pivot.is_finite()
+            || !scale.is_finite()
+        {
+            return None;
+        }
+        let minimum = self
+            .hulls
+            .iter()
+            .map(|hull| hull.bounds.minimum)
+            .reduce(Vec3::min)?;
+        let maximum = self
+            .hulls
+            .iter()
+            .map(|hull| hull.bounds.maximum)
+            .reduce(Vec3::max)?;
+        let center = (minimum + maximum) * 0.5;
+        let extents = (maximum - minimum) * 0.5;
+        Some((
+            location + rotation * ((center - pre_pivot) * scale),
+            rotation.abs() * (extents * scale.abs()) + Vec3::splat(BOX_EPSILON),
+        ))
+    }
+
     fn sweep_shape(&self, start: Vec3, end: Vec3, shape: SweepShape) -> Option<CollisionHit> {
         let extents = shape.bounds();
         let delta = end - start;
@@ -863,6 +927,30 @@ mod tests {
             hit.fraction
         );
         assert_eq!(hit.normal, Vec3::X);
+
+        let rotation = Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let hit = collision
+            .sweep_transformed_aabb(
+                Vec3::new(100.0, 20.0, 0.0),
+                Vec3::new(100.0, 0.0, 0.0),
+                Vec3::ONE,
+                Vec3::new(100.0, 0.0, 0.0),
+                rotation,
+                Vec3::ZERO,
+                Vec3::ONE,
+            )
+            .unwrap();
+        assert!(hit.fraction > 0.35 && hit.fraction < 0.45);
+        assert!(hit.normal.abs_diff_eq(Vec3::Y, 1.0e-6));
+        assert_eq!(
+            collision.transformed_bounds(
+                Vec3::new(100.0, 0.0, 0.0),
+                rotation,
+                Vec3::ZERO,
+                Vec3::ONE,
+            ),
+            Some((Vec3::new(100.0, 0.0, 0.0), Vec3::splat(10.1)))
+        );
     }
 
     #[test]
