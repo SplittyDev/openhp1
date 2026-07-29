@@ -1456,13 +1456,29 @@ fn particle_capacity(emitter: &ParticleEmitter) -> usize {
         return emitter.particles_alive;
     }
     let rate = emitter.particles_per_second.base.abs() + emitter.particles_per_second.random.abs();
-    let lifetime = emitter.lifetime.base.abs() + emitter.lifetime.random.abs();
-    let capacity = (rate * lifetime).ceil().max(1.0) as usize;
+    let capacity = if emitter.distribution == 1 && emitter.pattern.len() > 1 {
+        let spacing = (emitter.particles_per_second.base.abs()
+            - emitter.particles_per_second.random.abs())
+        .max(f32::EPSILON);
+        (pattern_length(&emitter.pattern) * emitter.draw_scale.abs() / spacing)
+            .ceil()
+            .max(1.0) as usize
+    } else {
+        let lifetime = emitter.lifetime.base.abs() + emitter.lifetime.random.abs();
+        (rate * lifetime).ceil().max(1.0) as usize
+    };
     if emitter.particles_max == 0 {
         capacity
     } else {
         capacity.min(emitter.particles_max)
     }
+}
+
+fn pattern_length(points: &[[f32; 3]]) -> f32 {
+    points
+        .windows(2)
+        .map(|points| Vec3::from_array(points[0]).distance(Vec3::from_array(points[1])))
+        .sum()
 }
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
@@ -3210,6 +3226,15 @@ mod tests {
         emitter.particles_alive = 0;
         emitter.particles_max = 0;
         assert_eq!(super::particle_capacity(&emitter), 30);
+        emitter.distribution = 1;
+        emitter.particles_per_second = ParticleFloat {
+            base: 2.0,
+            random: 0.0,
+        };
+        emitter.lifetime.base = 100_000_000.0;
+        emitter.draw_scale = 10.0;
+        emitter.pattern = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+        assert_eq!(super::particle_capacity(&emitter), 10);
     }
 
     #[test]
