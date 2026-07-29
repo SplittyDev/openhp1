@@ -49,6 +49,7 @@ pub struct LoadedScene {
     sprites: Vec<SpriteActor>,
     root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
+    attached_weapons: HashSet<usize>,
     water_animations: Vec<AnimatedWaterTexture>,
     particles: HashMap<usize, ParticleSystem>,
     particle_view_rotation: Mat4,
@@ -263,6 +264,7 @@ impl LoadedScene {
             sprites,
             root_motions: Vec::new(),
             hidden_actor_positions,
+            attached_weapons: HashSet::new(),
             water_animations,
             particles: HashMap::new(),
             particle_view_rotation: Mat4::IDENTITY,
@@ -818,6 +820,27 @@ impl LoadedScene {
 
     pub fn sync_weapon_attachments(&mut self, attachments: Vec<WeaponAttachment>) -> Result<bool> {
         let mut changed = false;
+        let attached_weapons = attachments
+            .iter()
+            .map(|attachment| attachment.weapon)
+            .collect::<HashSet<_>>();
+        for weapon in self.attached_weapons.difference(&attached_weapons) {
+            if !self.actors[*weapon].hidden {
+                continue;
+            }
+            let Some(render) = self.actors[*weapon].render.as_ref() else {
+                continue;
+            };
+            let saved = self
+                .hidden_actor_positions
+                .get(weapon)
+                .context("detached hidden weapon has no saved render positions")?;
+            changed |= sync_hidden_attachment(
+                &mut self.render.mesh.positions[render.vertices.clone()],
+                saved,
+                false,
+            );
+        }
         for attachment in attachments {
             let Some(points) = self
                 .animations
@@ -851,6 +874,7 @@ impl LoadedScene {
                     .get_mut(&attachment.weapon)
                     .context("hidden attached weapon has no saved render positions")?;
                 transform_positions(positions, delta);
+                sync_hidden_attachment(&mut self.render.mesh.positions[render], positions, true);
             } else {
                 transform_positions(&mut self.render.mesh.positions[render], delta);
             }
@@ -865,6 +889,7 @@ impl LoadedScene {
             }
             changed = true;
         }
+        self.attached_weapons = attached_weapons;
         Ok(changed)
     }
 
@@ -1543,6 +1568,15 @@ fn particle_attraction(
         owner_location
     };
     (target - location) * Vec3::from_array(attraction)
+}
+
+fn sync_hidden_attachment(rendered: &mut [Vec3], saved: &[Vec3], attached: bool) -> bool {
+    if attached {
+        rendered.copy_from_slice(saved);
+        true
+    } else {
+        collapse_positions(rendered)
+    }
 }
 
 fn pattern_position(points: &[[f32; 3]], progress: f32) -> Option<Vec3> {
@@ -3344,6 +3378,16 @@ mod tests {
             ),
             glam::Vec3::new(4.0, -3.0, 0.0)
         );
+    }
+
+    #[test]
+    fn hidden_inventory_weapons_render_only_while_attached() {
+        let saved = [glam::Vec3::X, glam::Vec3::Y];
+        let mut rendered = [glam::Vec3::ZERO; 2];
+        assert!(super::sync_hidden_attachment(&mut rendered, &saved, true));
+        assert_eq!(rendered, saved);
+        assert!(super::sync_hidden_attachment(&mut rendered, &saved, false));
+        assert_eq!(rendered, [glam::Vec3::X; 2]);
     }
 
     #[test]
