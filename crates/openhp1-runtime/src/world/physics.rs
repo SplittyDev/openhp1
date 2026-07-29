@@ -1307,10 +1307,13 @@ impl ScriptRuntime {
         let mut rotation = self.actor_rotator(class, instance, "Rotation")?;
         let rate = self.actor_rotator(class, instance, "RotationRate")?;
         let before = rotation;
-        if self
+        let pawn = self
             .class_has_name(class, "Pawn")
-            .map_err(|error| error.to_string())?
-        {
+            .map_err(|error| error.to_string())?;
+        let player_pawn = self
+            .class_has_name(class, "PlayerPawn")
+            .map_err(|error| error.to_string())?;
+        if pawn && !player_pawn {
             self.set_actor_value(class, instance, "bRotateToDesired", Value::Bool(true))?;
             self.set_actor_value(class, instance, "bFixedRotationDir", Value::Bool(false))?;
             let desired = self.actor_rotator(class, instance, "DesiredRotation")?;
