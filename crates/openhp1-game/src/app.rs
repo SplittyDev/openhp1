@@ -154,7 +154,10 @@ impl InputState {
             ElementState::Pressed => {
                 let first_press = self.keys.insert(key);
                 if first_press {
-                    if matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight) {
+                    if matches!(
+                        key,
+                        KeyCode::Space | KeyCode::ControlLeft | KeyCode::ControlRight
+                    ) {
                         self.jump_requested = true;
                     } else if matches!(key, KeyCode::AltLeft | KeyCode::AltRight) {
                         self.cast_requested = true;
@@ -592,7 +595,7 @@ impl Graphics {
                 }
                 ui.separator();
                 ui.label("W/S or ↑/↓ move · A/D or ←/→ turn");
-                ui.label("Right click/Ctrl jump · Left click/Alt cast");
+                ui.label("Right click/Ctrl/Space jump · Left click/Alt cast");
                 ui.label("Mouse aims · Esc releases mouse · F1 toggles diagnostics");
                 ui.label("Hold + or F to fast-forward normal game ticks at 16x");
             });
@@ -898,7 +901,7 @@ mod tests {
         let mut input = InputState::default();
         input.set_key(KeyCode::KeyW, ElementState::Pressed);
         input.set_key(KeyCode::KeyD, ElementState::Pressed);
-        input.set_key(KeyCode::ControlLeft, ElementState::Pressed);
+        input.set_key(KeyCode::Space, ElementState::Pressed);
         input.mouse_delta = (2.0, -1.0);
         let player = input.player_input();
         assert_eq!(player.base_x, 3_000.0);
