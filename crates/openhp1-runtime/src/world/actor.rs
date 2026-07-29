@@ -44,6 +44,7 @@ impl ScriptRuntime {
             player_actor: None,
             animation_sequences: HashMap::default(),
             actor_bone_names: HashMap::default(),
+            actor_visual_bounds: HashMap::default(),
             animation_commands: HashMap::default(),
             animating: HashSet::default(),
             player_probe_touching: HashSet::default(),
@@ -126,6 +127,28 @@ impl ScriptRuntime {
     pub fn set_actor_bone_names(&mut self, actor: usize, bones: impl IntoIterator<Item = String>) {
         self.actor_bone_names
             .insert(actor, bones.into_iter().collect());
+    }
+
+    pub fn set_actor_visual_bounds(
+        &mut self,
+        actor: usize,
+        minimum: [f32; 3],
+        maximum: [f32; 3],
+    ) -> DispatchResult<()> {
+        if !self.actor_classes.contains_key(&actor) {
+            return Err(DispatchError::UnregisteredActor { actor });
+        }
+        let minimum = Vec3::from_array(minimum);
+        let maximum = Vec3::from_array(maximum);
+        if !minimum.is_finite() || !maximum.is_finite() || minimum.cmpgt(maximum).any() {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "actor {actor} visual bounds {minimum:?}..{maximum:?} are invalid"
+                ),
+            });
+        }
+        self.actor_visual_bounds.insert(actor, (minimum, maximum));
+        Ok(())
     }
 
     pub fn register_actor(

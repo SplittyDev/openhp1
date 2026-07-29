@@ -62,6 +62,27 @@ pub(super) struct MovementHit {
 }
 
 impl ScriptRuntime {
+    pub(super) fn world_collision_box(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        visual: bool,
+    ) -> std::result::Result<(Vec3, Vec3), String> {
+        let actor_state = self.collision_actor(actor, class, instance)?;
+        if visual && let Some(&(minimum, maximum)) = self.actor_visual_bounds.get(&actor) {
+            return Ok(transform_visual_bounds(
+                minimum,
+                maximum,
+                actor_state.location + actor_state.pre_pivot,
+                actor_state.rotation,
+            ));
+        }
+        let (center, extents) = collision_actor_world_bounds(&actor_state)
+            .ok_or_else(|| format!("actor {actor} has no collision bounds"))?;
+        Ok((center - extents, center + extents))
+    }
+
     pub(super) fn trace_collision_actors(
         &mut self,
         start: Vec3,
@@ -1237,6 +1258,17 @@ fn collision_actor_world_bounds(actor: &CollisionActor) -> Option<(Vec3, Vec3)> 
     }
 }
 
+fn transform_visual_bounds(
+    minimum: Vec3,
+    maximum: Vec3,
+    location: Vec3,
+    rotation: Mat3,
+) -> (Vec3, Vec3) {
+    let center = location + rotation * ((minimum + maximum) * 0.5);
+    let extents = rotation.abs() * ((maximum - minimum) * 0.5);
+    (center - extents, center + extents)
+}
+
 fn sweep_collision_actors(
     current: &CollisionActor,
     other: &CollisionActor,
@@ -1424,6 +1456,18 @@ mod tests {
         let mut pawn = pawn;
         pawn.location.x = 0.0;
         assert!(sweep_collision_actors(&pawn, &wall, Vec3::Y * 60.0).is_some());
+    }
+
+    #[test]
+    fn visual_bounds_follow_actor_translation_and_rotation() {
+        let (minimum, maximum) = transform_visual_bounds(
+            Vec3::new(-1.0, -2.0, -3.0),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(10.0, 20.0, 30.0),
+            Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        );
+        assert!(minimum.abs_diff_eq(Vec3::new(8.0, 19.0, 27.0), 1.0e-5));
+        assert!(maximum.abs_diff_eq(Vec3::new(12.0, 21.0, 33.0), 1.0e-5));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use openhp1_package::{ObjectReader, Package};
 
 use crate::{
     Error, Mesh, MeshAnimationNotify, MeshAnimationSequence, Result,
-    geometry::{animation_normals, classic_triangles, lod_triangles},
+    geometry::{animation_normals, classic_triangles, lod_triangles, mirror_skeletal_position},
 };
 
 impl Mesh {
@@ -16,7 +16,15 @@ impl Mesh {
 
         let mut reader = package.export_reader(export_index)?;
         while reader.next_property()?.is_some() {}
-        skip_primitive(&mut reader)?;
+        let bounds = read_primitive(&mut reader)?.map(|(minimum, maximum)| {
+            if class == "SkeletalMesh" {
+                let minimum = mirror_skeletal_position(minimum);
+                let maximum = mirror_skeletal_position(maximum);
+                (minimum.min(maximum), minimum.max(maximum))
+            } else {
+                (minimum, maximum)
+            }
+        });
 
         let vertices_end = lazy_end(&mut reader)?;
         let vertices = read_vec(&mut reader, "mesh vertices", |reader| {
@@ -121,6 +129,7 @@ impl Mesh {
             triangles: geometry.triangles,
             textures,
             animation_sequences,
+            bounds,
             frame_vertices,
             animation_frames,
             scale,
@@ -141,14 +150,35 @@ impl Mesh {
     }
 }
 
-fn skip_primitive(reader: &mut ObjectReader<'_>) -> Result<()> {
-    skip_box(reader)?;
-    skip_sphere(reader)
+fn read_primitive(reader: &mut ObjectReader<'_>) -> Result<Option<(Vec3, Vec3)>> {
+    let bounds = read_box(reader)?;
+    skip_sphere(reader)?;
+    Ok(bounds)
 }
 
 fn skip_box(reader: &mut ObjectReader<'_>) -> Result<()> {
-    reader.read_bytes(6 * 4 + 1)?;
+    read_box(reader)?;
     Ok(())
+}
+
+fn read_box(reader: &mut ObjectReader<'_>) -> Result<Option<(Vec3, Vec3)>> {
+    let minimum = read_vec3(reader)?;
+    let maximum = read_vec3(reader)?;
+    if reader.read_u8()? == 0 {
+        return Ok(None);
+    }
+    for value in minimum.to_array().into_iter().chain(maximum.to_array()) {
+        if !value.is_finite() {
+            return Err(Error::InvalidFloat {
+                field: "mesh bounds",
+                value,
+            });
+        }
+    }
+    if minimum.cmpgt(maximum).any() {
+        return Err(Error::InvalidBounds { minimum, maximum });
+    }
+    Ok(Some((minimum, maximum)))
 }
 
 fn skip_sphere(reader: &mut ObjectReader<'_>) -> Result<()> {
@@ -356,6 +386,10 @@ mod tests {
         assert_eq!(sequence.rate, 10.0);
         assert_eq!(sequence.notifications[0].time, 0.25);
         assert_eq!(sequence.notifications[0].function, "Step");
+        assert_eq!(
+            mesh.bounds,
+            Some((Vec3::new(-1.0, -2.0, -3.0), Vec3::new(4.0, 5.0, 6.0)))
+        );
         assert_eq!(mesh.frame_vertices, 3);
         assert_eq!(mesh.animation_frames, 2);
 
@@ -377,7 +411,11 @@ mod tests {
             "None", "Core", "Class", "Mesh", "TestMesh", "Idle", "Movement", "Step",
         ];
         let mut payload = vec![0];
-        payload.extend([0; 25 + 12]);
+        for value in [-1.0, -2.0, -3.0, 4.0, 5.0, 6.0] {
+            push_f32(&mut payload, value);
+        }
+        payload.push(1);
+        payload.extend([0; 12]);
         payload.push(6);
         for (x, y, z) in [
             (0, 0, 0),

@@ -102,6 +102,9 @@ Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 `CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
 the default aligned cylinder. A sweep that starts inside an existing overlap
 may move out instead of treating the exit surface as a new impact.
+`GetWorldCollisionBox(true)` transforms the mesh's serialized primitive bounds
+through its mesh and current actor transforms; the default form returns the
+actor's collision bounds instead.
 Movers participate in world collision through their transformed brush-model
 hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
 Pawn mounting follows HP1's native `APawn::Mount` path: only BSP surfaces with

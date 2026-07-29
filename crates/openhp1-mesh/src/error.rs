@@ -1,3 +1,4 @@
+use glam::Vec3;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -55,6 +56,8 @@ pub enum Error {
     },
     #[error("{field} has invalid floating-point value {value}")]
     InvalidFloat { field: &'static str, value: f32 },
+    #[error("mesh bounds minimum {minimum} exceeds maximum {maximum}")]
+    InvalidBounds { minimum: Vec3, maximum: Vec3 },
     #[error(
         "skeletal animation track has {quaternions} rotations, {positions} positions, and {times} times"
     )]

@@ -43,6 +43,8 @@ pub struct Mesh {
     pub triangles: Vec<MeshTriangle>,
     pub textures: Vec<ObjectReference>,
     pub animation_sequences: Vec<MeshAnimationSequence>,
+    /// Serialized primitive bounds covering the mesh and its animation frames.
+    pub bounds: Option<(Vec3, Vec3)>,
     pub frame_vertices: usize,
     pub animation_frames: usize,
     pub scale: Vec3,

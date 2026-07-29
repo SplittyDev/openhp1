@@ -342,6 +342,7 @@ impl LoadedScene {
             render: None,
             mesh_transform: None,
             mesh_to_object: None,
+            visual_bounds: None,
             diagnostics: class_state.diagnostics,
         };
         apply_scene_actor_state(&mut actor, &state);
@@ -1082,6 +1083,13 @@ impl LoadedScene {
             .find(|animation| animation.actor_index == actor)
             .map(|animation| animation.mesh.bone_names().map(str::to_owned).collect())
             .unwrap_or_default()
+    }
+
+    pub fn actor_visual_bounds(&self, actor: usize) -> Option<([f32; 3], [f32; 3])> {
+        self.actors
+            .get(actor)
+            .and_then(|actor| actor.visual_bounds)
+            .map(|(minimum, maximum)| (minimum.to_array(), maximum.to_array()))
     }
 
     pub fn tick_animations_with_completions(
@@ -1914,6 +1922,7 @@ fn runtime_actor_placeholder(actor_index: usize) -> SceneActor {
         render: None,
         mesh_transform: None,
         mesh_to_object: None,
+        visual_bounds: None,
         diagnostics: vec!["spawn action was lost after a deferred script failure".to_owned()],
     }
 }
@@ -1972,6 +1981,7 @@ fn load_actors(
             render: None,
             mesh_transform: None,
             mesh_to_object: None,
+            visual_bounds: None,
             diagnostics: Vec::new(),
         };
         let actor = match Actor::decode(map, export_index) {
@@ -2218,6 +2228,7 @@ fn append_scene_actor_render(
             scene_actor.animation = appended.animation;
             scene_actor.mesh_transform = Some(appended.transform);
             scene_actor.mesh_to_object = Some(appended.mesh_to_object);
+            scene_actor.visual_bounds = appended.visual_bounds;
         }
         Ok(None) => scene_actor
             .diagnostics
@@ -2531,6 +2542,7 @@ struct AppendedActorMesh {
     animation: Option<SceneActorAnimation>,
     transform: Mat4,
     mesh_to_object: Mat4,
+    visual_bounds: Option<(Vec3, Vec3)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2671,11 +2683,17 @@ fn append_actor_mesh(
         roll: mesh.rotation_origin.z,
     }) * Mat4::from_scale(mesh.scale)
         * Mat4::from_translation(-mesh.origin);
-    let transform = Mat4::from_translation(actor.location + actor.pre_pivot)
-        * rotation_matrix(actor.rotation)
-        * Mat4::from_translation(mesh_offset)
+    let local_transform = Mat4::from_translation(mesh_offset)
         * Mat4::from_scale(Vec3::splat(actor.draw_scale))
         * mesh_to_object;
+    let visual_bounds = mesh.bounds.map(|(minimum, maximum)| {
+        let center = local_transform.transform_point3((minimum + maximum) * 0.5);
+        let extents = Mat3::from_mat4(local_transform).abs() * ((maximum - minimum) * 0.5);
+        (center - extents, center + extents)
+    });
+    let transform = Mat4::from_translation(actor.location + actor.pre_pivot)
+        * rotation_matrix(actor.rotation)
+        * local_transform;
     let normal_transform = Mat3::from_mat4(transform).inverse().transpose();
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
@@ -2800,6 +2818,7 @@ fn append_actor_mesh(
             animation,
             transform,
             mesh_to_object,
+            visual_bounds,
         }),
     )
 }

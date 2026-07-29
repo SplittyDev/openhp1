@@ -17,6 +17,9 @@ uses positive yaw, negative pitch, and negative roll in yaw/pitch/roll
 composition order. It must not be replaced with the inverse camera rotation.
 Skeletal pawns align their mesh origin to the bottom of the collision cylinder
 regardless of the current physics mode; physics changes movement, not rendering.
+The serialized primitive box covers the mesh's animation frames and supplies
+visual world bounds; skeletal boxes mirror and reorder their Y limits with the
+rest of the ActorX geometry.
 
 ## Skeletal coordinates
 

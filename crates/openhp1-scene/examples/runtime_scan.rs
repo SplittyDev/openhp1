@@ -96,6 +96,10 @@ fn main() -> Result<()> {
                 );
             }
             runtime.set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+            runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+            if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+            }
         }
         let actions = runtime.initialize_game()?;
         apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
@@ -327,6 +331,12 @@ fn apply_actions(
                         roll: rotation[2],
                     },
                 )?;
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+                runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
                 stats.spawned += 1;
             }
             ActorAction::SetLocation { actor, location } => {

@@ -744,6 +744,28 @@ impl ScriptRuntime {
                     .unwrap_or_else(|| "None".to_owned()),
             ));
         }
+        if index == GET_WORLD_COLLISION_BOX {
+            let visual = match arguments {
+                [] | [Value::None] => false,
+                [Value::Bool(visual)] => *visual,
+                _ => {
+                    return Err(format!(
+                        "GetWorldCollisionBox expects an optional bool, found {}",
+                        arguments
+                            .iter()
+                            .map(Value::kind)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            };
+            let (minimum, maximum) =
+                self.world_collision_box(actor, actor_class, instance, visual)?;
+            return Ok(Value::Struct(std::collections::HashMap::from([
+                ("Min".to_owned(), Value::Vector(minimum.to_array())),
+                ("Max".to_owned(), Value::Vector(maximum.to_array())),
+            ])));
+        }
         if index == SET_COLLISION {
             for (name, value) in ["bCollideActors", "bBlockActors", "bBlockPlayers"]
                 .into_iter()

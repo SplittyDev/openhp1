@@ -59,6 +59,9 @@ pub fn initialize_runtime_with(
                 )
             })?;
         runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+        if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+            runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+        }
     }
     let game_actions = runtime.initialize_game()?;
     apply_runtime_actions_with(scene, &mut runtime, game_actions, &mut external)?;
@@ -202,6 +205,9 @@ pub fn apply_runtime_actions_with(
                 runtime
                     .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
                 runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
                 transformed = true;
             }
             ActorAction::SetLocation { actor, location } => {

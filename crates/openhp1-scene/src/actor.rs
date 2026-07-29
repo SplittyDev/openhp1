@@ -49,6 +49,7 @@ pub struct SceneActor {
     pub render: Option<SceneActorRenderRange>,
     pub(crate) mesh_transform: Option<Mat4>,
     pub(crate) mesh_to_object: Option<Mat4>,
+    pub(crate) visual_bounds: Option<(Vec3, Vec3)>,
     /// Decode or rendering limitations attached to this actor.
     pub diagnostics: Vec<String>,
 }

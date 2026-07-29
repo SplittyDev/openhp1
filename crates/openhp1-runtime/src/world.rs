@@ -1,5 +1,6 @@
 use std::{path::Path, sync::Arc};
 
+use glam::Vec3;
 use openhp1_audio::AudioClip;
 use openhp1_map::{Level, Model};
 use openhp1_package::{
@@ -52,6 +53,7 @@ const IS_ANIMATING: u16 = 0x11a;
 const SET_COLLISION_SIZE: u16 = 0x11b;
 const GET_STATE_NAME: u16 = 0x11c;
 const TRACE_TEXTURE: u16 = 0x11d;
+const GET_WORLD_COLLISION_BOX: u16 = 0x11e;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
 const GET_ANIM_GROUP: u16 = 0x125;
@@ -540,6 +542,7 @@ pub struct ScriptRuntime {
     player_actor: Option<usize>,
     animation_sequences: HashMap<usize, HashMap<String, AnimationSequence>>,
     actor_bone_names: HashMap<usize, Vec<String>>,
+    actor_visual_bounds: HashMap<usize, (Vec3, Vec3)>,
     animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,
     player_probe_touching: HashSet<usize>,
