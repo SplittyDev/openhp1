@@ -1010,7 +1010,13 @@ impl ScriptRuntime {
             })
             .collect::<Vec<_>>();
         actors.sort_unstable_by_key(|(actor, _)| *actor);
+        let player = self.player_actor;
+        let mut player_ticked = false;
         for (actor, function) in actors {
+            if !player_ticked && player.is_some_and(|player| player < actor) {
+                self.tick_player_events(delta_time, &mut actions)?;
+                player_ticked = true;
+            }
             if event_disabled(
                 &self.disabled_events,
                 actor,
@@ -1019,6 +1025,10 @@ impl ScriptRuntime {
                     .and_then(|state| state.as_deref()),
                 "Tick",
             ) {
+                if player == Some(actor) {
+                    self.tick_player_events(delta_time, &mut actions)?;
+                    player_ticked = true;
+                }
                 continue;
             }
             let Some(class) = self.actor_classes.get(&actor).cloned() else {
@@ -1041,6 +1051,13 @@ impl ScriptRuntime {
                     });
                 }
             }
+            if player == Some(actor) {
+                self.tick_player_events(delta_time, &mut actions)?;
+                player_ticked = true;
+            }
+        }
+        if player.is_some() && !player_ticked {
+            self.tick_player_events(delta_time, &mut actions)?;
         }
         self.tick_lifespans(delta_time, &mut actions)?;
 
@@ -1183,6 +1200,17 @@ impl ScriptRuntime {
             }
         }
         Ok(actions)
+    }
+
+    fn tick_player_events(
+        &mut self,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        let arguments = [Value::Float(delta_time)];
+        actions.extend(self.dispatch_player_event("PlayerInput", &arguments)?);
+        actions.extend(self.dispatch_player_event("PlayerTick", &arguments)?);
+        self.clear_player_motion_input()
     }
 
     fn tick_level_time(&mut self, delta_time: f32) -> DispatchResult<()> {

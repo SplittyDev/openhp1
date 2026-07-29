@@ -184,13 +184,13 @@ fn main() -> Result<()> {
                 let actions = runtime.animation_finished(actor)?;
                 apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             }
+            if player.is_some() {
+                runtime.set_player_input(PlayerInput::default())?;
+            }
             let actions = runtime.tick(1.0 / 60.0)?;
             timer_actions += actions.len();
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             if player.is_some() {
-                let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
-                timer_actions += actions.len();
-                apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
                 stats.music_changes += usize::from(runtime.take_player_music()?.is_some());
             }
         }

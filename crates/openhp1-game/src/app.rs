@@ -642,14 +642,13 @@ impl Graphics {
     }
 
     fn update_runtime(&mut self, delta_time: f32, input: PlayerInput) {
-        match self.runtime.tick(delta_time) {
+        match self
+            .runtime
+            .set_player_input(input)
+            .and_then(|_| self.runtime.tick(delta_time))
+        {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("runtime tick failed: {error}")),
-        }
-
-        match self.runtime.tick_player(input, delta_time) {
-            Ok(actions) => self.apply_actions(actions),
-            Err(error) => self.last_error = Some(format!("player tick failed: {error}")),
         }
         let Some(player) = self.scene.actors.get(self.player) else {
             self.last_error = Some("the player disappeared from the scene".to_owned());
