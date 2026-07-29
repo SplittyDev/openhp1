@@ -972,6 +972,7 @@ impl ScriptRuntime {
         if !delta_time.is_finite() || delta_time < 0.0 {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
+        self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
         self.tick_animation_properties(delta_time, &mut actions);
         self.collision_actors.clear();
@@ -1164,6 +1165,42 @@ impl ScriptRuntime {
             }
         }
         Ok(actions)
+    }
+
+    fn tick_level_time(&mut self, delta_time: f32) -> DispatchResult<()> {
+        let actor = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
+        let time = self
+            .actor_float_property(actor, "TimeSeconds")?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "LevelInfo.TimeSeconds is not a float".to_owned(),
+            })?;
+        let dilation = self
+            .actor_float_property(actor, "TimeDilation")?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "LevelInfo.TimeDilation is not a float".to_owned(),
+            })?;
+        let time = advance_level_time(time, dilation, delta_time).ok_or_else(|| {
+            DispatchError::UnresolvedObject {
+                message: format!(
+                    "LevelInfo time is invalid: time={time}, dilation={dilation}, delta={delta_time}"
+                ),
+            }
+        })?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = self
+            .set_actor_value(&class, &mut instance, "TimeSeconds", Value::Float(time))
+            .map_err(|message| DispatchError::UnresolvedObject { message });
+        self.instances.insert(actor, instance);
+        result
     }
 
     fn tick_animation_properties(&mut self, delta_time: f32, actions: &mut Vec<ActorAction>) {
@@ -1544,6 +1581,11 @@ fn advance_animation_frame(
     }
 }
 
+fn advance_level_time(time: f32, dilation: f32, delta_time: f32) -> Option<f32> {
+    let next = time + dilation * delta_time;
+    (time.is_finite() && dilation.is_finite() && next.is_finite()).then_some(next)
+}
+
 pub(super) fn decode_latent_action(index: i32, actor: usize) -> LatentAction {
     match index {
         0 => LatentAction::Continue,
@@ -1607,7 +1649,7 @@ mod animation_tests {
 
     use super::{
         LatentAction, ParticleColor, StoredValue, Value, advance_animation_frame,
-        decode_latent_action, particle_color,
+        advance_level_time, decode_latent_action, particle_color,
     };
 
     #[test]
@@ -1620,6 +1662,12 @@ mod animation_tests {
         assert!(
             (advance_animation_frame(0.9, 0.2, 0.0, 0.95, true, 1.0) - 0.1).abs() < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn level_time_advances_with_time_dilation() {
+        assert_eq!(advance_level_time(10.0, 0.5, 2.0), Some(11.0));
+        assert_eq!(advance_level_time(f32::NAN, 1.0, 1.0), None);
     }
 
     #[test]
