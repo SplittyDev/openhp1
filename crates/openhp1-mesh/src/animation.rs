@@ -382,6 +382,8 @@ mod tests {
                 weight: 1.0,
                 local_position: Vec3::X,
             }]],
+            weapon_bone: Some(0),
+            weapon_adjust: glam::Mat4::IDENTITY,
         };
         let sampled = animation.sample(&mesh, 0, 0.5).unwrap();
         assert!(sampled[0].abs_diff_eq(Vec3::new(1.707, 0.707, 0.0), 0.002));

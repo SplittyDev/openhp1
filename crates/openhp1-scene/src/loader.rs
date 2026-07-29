@@ -842,7 +842,7 @@ impl LoadedScene {
             );
         }
         for attachment in attachments {
-            let Some(points) = self
+            let Some(attachment_transform) = self
                 .animations
                 .iter()
                 .find(|animation| animation.actor_index == attachment.pawn)
@@ -862,11 +862,9 @@ impl LoadedScene {
             ) else {
                 continue;
             };
-            let Some(desired) =
-                weapon_attachment_transform(points, attachment.scale, mesh_to_object)
-            else {
-                continue;
-            };
+            let desired = attachment_transform
+                * Mat4::from_scale(Vec3::splat(attachment.scale))
+                * mesh_to_object;
             let delta = desired * current.inverse();
             if weapon.hidden {
                 let positions = self
@@ -1411,11 +1409,7 @@ fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
     }
 }
 
-fn weapon_attachment_transform(
-    points: [Vec3; 3],
-    scale: f32,
-    mesh_to_object: Mat4,
-) -> Option<Mat4> {
+fn triangle_attachment_transform(points: [Vec3; 3]) -> Option<Mat4> {
     let x = (points[1] - points[0]).normalize_or_zero();
     let y = x.cross(points[2] - points[0]).normalize_or_zero();
     let z = x.cross(y).normalize_or_zero();
@@ -1425,8 +1419,7 @@ fn weapon_attachment_transform(
             y.extend(0.0),
             z.extend(0.0),
             ((points[0] + points[2]) * 0.5).extend(1.0),
-        ) * Mat4::from_scale(Vec3::splat(scale))
-            * mesh_to_object
+        )
     })
 }
 
@@ -1677,15 +1670,21 @@ impl AnimatedActorMesh {
         }
     }
 
-    fn attachment(&self) -> openhp1_mesh::Result<Option<[Vec3; 3]>> {
+    fn attachment(&self) -> openhp1_mesh::Result<Option<Mat4>> {
         let Some(animation) = &self.skeletal_animation else {
             return Ok(None);
         };
+        if let Some(points) =
+            self.mesh
+                .sample_skeletal_attachment(animation, self.sequence, self.phase)?
+        {
+            return Ok(triangle_attachment_transform(
+                points.map(|point| self.transform.transform_point3(point)),
+            ));
+        }
         self.mesh
-            .sample_skeletal_attachment(animation, self.sequence, self.phase)
-            .map(|attachment| {
-                attachment.map(|points| points.map(|point| self.transform.transform_point3(point)))
-            })
+            .sample_skeletal_weapon_transform(animation, self.sequence, self.phase)
+            .map(|transform| transform.map(|transform| self.transform * transform))
     }
 }
 
@@ -3427,12 +3426,10 @@ mod tests {
 
     #[test]
     fn weapon_attachment_uses_the_authored_special_triangle_axes() {
-        let transform = super::weapon_attachment_transform(
-            [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
-            2.0,
-            glam::Mat4::IDENTITY,
-        )
-        .unwrap();
+        let transform =
+            super::triangle_attachment_transform([glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y])
+                .unwrap()
+                * glam::Mat4::from_scale(glam::Vec3::splat(2.0));
         assert_eq!(
             transform.transform_point3(glam::Vec3::ZERO),
             glam::Vec3::new(0.0, 0.5, 0.0)

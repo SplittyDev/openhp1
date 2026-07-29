@@ -153,6 +153,25 @@ impl Mesh {
         ]))
     }
 
+    pub fn sample_skeletal_weapon_transform(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+    ) -> Result<Option<Mat4>> {
+        if !phase.is_finite() {
+            return Err(Error::InvalidAnimationPhase(phase));
+        }
+        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
+        let (_, _, bones) = animation.sample_pose(skeletal, sequence, phase, false)?;
+        let Some(weapon_bone) = skeletal.weapon_bone else {
+            return Ok(None);
+        };
+        let bone = checked(&bones, weapon_bone, "weapon bone")?;
+        let mirror = Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0));
+        Ok(Some(mirror * bone * skeletal.weapon_adjust * mirror))
+    }
+
     pub fn sample_skeletal_sequence_with_root_motion(
         &self,
         animation: &SkeletalAnimation,
@@ -223,6 +242,8 @@ pub(crate) struct SkeletalMesh {
     pub points: Vec<Vec3>,
     pub bones: Vec<SkeletalBone>,
     pub influences: Vec<Vec<SkeletalInfluence>>,
+    pub weapon_bone: Option<usize>,
+    pub weapon_adjust: Mat4,
 }
 
 #[derive(Clone, Debug)]
@@ -248,7 +269,7 @@ impl SkeletalAnimation {
         phase: f32,
     ) -> Result<Vec<Vec3>> {
         self.sample_pose(mesh, sequence, phase, false)
-            .map(|(points, _)| points)
+            .map(|(points, _, _)| points)
     }
 
     pub(crate) fn sample_with_root_motion(
@@ -258,6 +279,7 @@ impl SkeletalAnimation {
         phase: f32,
     ) -> Result<(Vec<Vec3>, Vec3)> {
         self.sample_pose(mesh, sequence, phase, true)
+            .map(|(points, root_motion, _)| (points, root_motion))
     }
 
     fn sample_pose(
@@ -266,7 +288,7 @@ impl SkeletalAnimation {
         sequence: usize,
         phase: f32,
         extract_root_motion: bool,
-    ) -> Result<(Vec<Vec3>, Vec3)> {
+    ) -> Result<(Vec<Vec3>, Vec3, Vec<Mat4>)> {
         let sequence_index = sequence;
         let sequence = self
             .sequences
@@ -358,7 +380,7 @@ impl SkeletalAnimation {
         points
             .iter_mut()
             .for_each(|point| *point = mirror_skeletal_position(*point));
-        Ok((points, mirror_skeletal_position(root_motion)))
+        Ok((points, mirror_skeletal_position(root_motion), global))
     }
 }
 
@@ -423,6 +445,8 @@ mod tests {
                 weight: 1.0,
                 local_position: Vec3::ZERO,
             }]],
+            weapon_bone: Some(0),
+            weapon_adjust: Mat4::IDENTITY,
         };
         let animation = SkeletalAnimation {
             sequences: vec![MeshAnimationSequence {

@@ -1,4 +1,4 @@
-use glam::{Quat, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use openhp1_package::{ObjectReader, ObjectReference};
 
 use crate::{
@@ -294,10 +294,34 @@ fn decode_skeletal_mesh(reader: &mut ObjectReader<'_>) -> Result<DecodedSkeletal
     let local_points = read_vec(reader, "skeletal mesh local points", read_vec3)?;
     reader.read_u32()?; // skeletal depth
     let default_animation = reader.read_object_reference()?;
-    reader.read_u32()?; // weapon bone
-    for _ in 0..12 {
-        reader.read_f32()?;
+    let weapon_bone = reader.read_u32()?;
+    let weapon_bone = (weapon_bone != u32::MAX).then_some(weapon_bone as usize);
+    if weapon_bone.is_some_and(|weapon_bone| weapon_bone >= bones.len()) {
+        return Err(Error::InvalidIndex {
+            field: "weapon bone",
+            index: weapon_bone.unwrap(),
+            length: bones.len(),
+        });
     }
+    let weapon_origin = read_vec3(reader)?;
+    let weapon_x = read_vec3(reader)?;
+    let weapon_y = read_vec3(reader)?;
+    let weapon_z = read_vec3(reader)?;
+    if ![weapon_origin, weapon_x, weapon_y, weapon_z]
+        .into_iter()
+        .all(Vec3::is_finite)
+    {
+        return Err(Error::InvalidFloat {
+            field: "weapon adjustment",
+            value: f32::NAN,
+        });
+    }
+    let weapon_adjust = Mat4::from_cols(
+        weapon_x.extend(0.0),
+        weapon_y.extend(0.0),
+        weapon_z.extend(0.0),
+        (-weapon_origin).extend(1.0),
+    );
 
     if weight_indices.len() != bones.len() || weights.len() != local_points.len() {
         return Err(Error::InvalidSkeletalWeights {
@@ -339,6 +363,8 @@ fn decode_skeletal_mesh(reader: &mut ObjectReader<'_>) -> Result<DecodedSkeletal
             points,
             bones,
             influences,
+            weapon_bone,
+            weapon_adjust,
         },
     })
 }
