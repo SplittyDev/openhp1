@@ -728,6 +728,24 @@ impl ScriptRuntime {
                 frame.set_local(field, value);
             }
         }
+        for opcode in [0x00, 0x01, 0x02] {
+            for field in fields(bytecode, opcode) {
+                let Some(field_object) = self.resolve_reference(source, field)? else {
+                    continue;
+                };
+                let resolved = self.resolved_object(&field_object)?;
+                let metadata = PropertyMetadata::decode(&resolved.package, resolved.export_index)?;
+                let Some(inner) = metadata.inner_type else {
+                    continue;
+                };
+                let Some(inner) = self.packages.resolve(&resolved.package, inner)? else {
+                    continue;
+                };
+                if let Some(value) = self.zero_field_value(&inner)? {
+                    frame.set_array_element_default(field, value);
+                }
+            }
+        }
         Ok(())
     }
 

@@ -500,6 +500,7 @@ pub struct Frame<'a> {
     locals: HashMap<i32, Value>,
     instance: HashMap<i32, Value>,
     defaults: HashMap<i32, Value>,
+    array_element_defaults: HashMap<i32, Value>,
     struct_members: HashMap<i32, StructMember>,
     hosted_instance: bool,
     creating_iterator: bool,
@@ -521,6 +522,7 @@ impl<'a> Frame<'a> {
             locals: HashMap::new(),
             instance: HashMap::new(),
             defaults: HashMap::new(),
+            array_element_defaults: HashMap::new(),
             struct_members: HashMap::new(),
             hosted_instance: false,
             creating_iterator: false,
@@ -564,6 +566,10 @@ impl<'a> Frame<'a> {
 
     pub(crate) fn set_default(&mut self, field: i32, value: Value) {
         self.defaults.insert(field, value);
+    }
+
+    pub(crate) fn set_array_element_default(&mut self, field: i32, value: Value) {
+        self.array_element_defaults.insert(field, value);
     }
 
     pub fn instance(&self, field: i32) -> Option<&Value> {
@@ -1335,6 +1341,7 @@ impl<'a> Frame<'a> {
                 self.assign_slot(*target, target_value, host)?;
             }
             Slot::DynArrayElement { target, index } => {
+                let default = self.array_element_default(&target);
                 let mut target_value = self.slot(&target, host)?.unwrap_or(Value::None);
                 if matches!(target_value, Value::None) {
                     target_value = Value::Array(Vec::new());
@@ -1349,7 +1356,7 @@ impl<'a> Frame<'a> {
                     index,
                     length: values.len(),
                 })?;
-                values.resize(index.saturating_add(1), Value::None);
+                values.resize(index.saturating_add(1), default);
                 values[index] = value;
                 self.assign_slot(*target, target_value, host)?;
             }
@@ -1421,6 +1428,7 @@ impl<'a> Frame<'a> {
                 .map(|value| array_element(&value, *index))
                 .transpose()?,
             Slot::DynArrayElement { target, index } => {
+                let default = self.array_element_default(target);
                 let mut target_value = self.slot(target, host)?.unwrap_or(Value::None);
                 if matches!(target_value, Value::None) {
                     target_value = Value::Array(Vec::new());
@@ -1435,12 +1443,25 @@ impl<'a> Frame<'a> {
                     index: *index,
                     length: values.len(),
                 })?;
-                values.resize(index.saturating_add(1), Value::None);
+                values.resize(index.saturating_add(1), default);
                 let value = values[index].clone();
                 self.assign_slot((**target).clone(), target_value, host)?;
                 Some(value)
             }
         })
+    }
+
+    fn array_element_default(&self, target: &Slot) -> Value {
+        let field = match target {
+            Slot::Local(field) | Slot::Instance { field, .. } | Slot::Default { field, .. } => {
+                Some(field)
+            }
+            _ => None,
+        };
+        field
+            .and_then(|field| self.array_element_defaults.get(field))
+            .cloned()
+            .unwrap_or(Value::None)
     }
 
     fn next_iterator(
@@ -2473,14 +2494,15 @@ mod tests {
         };
         let mut frame = Frame::new(&bytecode);
         frame.set_local(7, Value::Array(Vec::new()));
+        frame.set_array_element_default(7, Value::Int(0));
 
         assert_eq!(frame.execute(|_, _| unreachable!()).unwrap(), Value::Int(4));
         assert_eq!(
             frame.local(7),
             Some(&Value::Array(vec![
-                Value::None,
-                Value::None,
-                Value::None,
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(0),
                 Value::Int(42)
             ]))
         );
