@@ -52,7 +52,7 @@ pub struct LoadedScene {
     attached_weapons: HashSet<usize>,
     water_animations: Vec<AnimatedWaterTexture>,
     particles: HashMap<usize, ParticleSystem>,
-    particle_view_rotation: Mat4,
+    particle_view_axes: [Vec3; 2],
     actor_render: ActorRenderContext,
 }
 
@@ -267,7 +267,7 @@ impl LoadedScene {
             attached_weapons: HashSet::new(),
             water_animations,
             particles: HashMap::new(),
-            particle_view_rotation: Mat4::IDENTITY,
+            particle_view_axes: billboard_axes(Rotator::default()),
             actor_render,
         })
     }
@@ -439,8 +439,8 @@ impl LoadedScene {
     }
 
     pub fn update_sprite_billboards(&mut self, view_rotation: Rotator) -> bool {
-        let rotation = rotation_matrix(view_rotation);
-        self.particle_view_rotation = rotation;
+        let axes = billboard_axes(view_rotation);
+        self.particle_view_axes = axes;
         let mut changed = false;
         for sprite in &self.sprites {
             let Some(actor) = self.actors.get(sprite.actor_index) else {
@@ -452,8 +452,8 @@ impl LoadedScene {
             if actor.hidden {
                 continue;
             }
-            let center = actor.location + actor.pre_pivot;
-            let positions = sprite_positions(center, sprite.half_size, rotation);
+            let center = unreal_to_render(actor.location + actor.pre_pivot);
+            let positions = sprite_positions(center, sprite.half_size, axes);
             let target = &mut self.render.mesh.positions[render.vertices.clone()];
             if target != positions {
                 target.copy_from_slice(&positions);
@@ -787,7 +787,7 @@ impl LoadedScene {
                     let positions = particle_sprite_positions(
                         unreal_to_render(location),
                         particle.half_size * grow * shrink * drip,
-                        self.particle_view_rotation,
+                        self.particle_view_axes,
                         particle.spin,
                     );
                     self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
@@ -2288,8 +2288,8 @@ fn append_scene_actor_sprite(
     let half_size = dimensions * state.draw_scale * 0.5;
     let first_vertex = render_mesh.positions.len();
     let first_index = render_mesh.indices.len();
-    let center = state.location + state.pre_pivot;
-    for (position, uv) in sprite_positions(center, half_size, Mat4::IDENTITY)
+    let center = unreal_to_render(state.location + state.pre_pivot);
+    for (position, uv) in sprite_positions(center, half_size, billboard_axes(Rotator::default()))
         .into_iter()
         .zip([
             Vec2::ZERO,
@@ -2324,9 +2324,16 @@ fn append_scene_actor_sprite(
     });
 }
 
-fn sprite_positions(center: Vec3, half_size: Vec2, view_rotation: Mat4) -> [Vec3; 4] {
-    let side = view_rotation.transform_vector3(Vec3::Y) * half_size.x;
-    let up = view_rotation.transform_vector3(Vec3::Z) * half_size.y;
+fn billboard_axes(view_rotation: Rotator) -> [Vec3; 2] {
+    [
+        unreal_to_render(rotate_unreal(view_rotation, Vec3::Y)),
+        unreal_to_render(rotate_unreal(view_rotation, Vec3::Z)),
+    ]
+}
+
+fn sprite_positions(center: Vec3, half_size: Vec2, [side, up]: [Vec3; 2]) -> [Vec3; 4] {
+    let side = side * half_size.x;
+    let up = up * half_size.y;
     [
         center - side - up,
         center + side - up,
@@ -2338,12 +2345,10 @@ fn sprite_positions(center: Vec3, half_size: Vec2, view_rotation: Mat4) -> [Vec3
 fn particle_sprite_positions(
     center: Vec3,
     half_size: Vec2,
-    view_rotation: Mat4,
+    [view_side, view_up]: [Vec3; 2],
     spin: f32,
 ) -> [Vec3; 4] {
     let (sin, cos) = spin.sin_cos();
-    let view_side = view_rotation.transform_vector3(Vec3::Y);
-    let view_up = view_rotation.transform_vector3(Vec3::Z);
     let side = (view_side * cos + view_up * sin) * half_size.x;
     let up = (view_up * cos - view_side * sin) * half_size.y;
     [
@@ -3653,13 +3658,13 @@ mod tests {
     #[test]
     fn sprite_quad_follows_the_view_axes() {
         let center = glam::Vec3::new(1.0, 2.0, 3.0);
-        let rotation = super::rotation_matrix(openhp1_map::Rotator {
+        let axes = super::billboard_axes(openhp1_map::Rotator {
             yaw: 16_384,
             ..Default::default()
         });
-        let positions = super::sprite_positions(center, glam::Vec2::new(2.0, 1.0), rotation);
-        assert!(positions[0].abs_diff_eq(glam::Vec3::new(3.0, 2.0, 2.0), 1.0e-5));
-        assert!(positions[2].abs_diff_eq(glam::Vec3::new(-1.0, 2.0, 4.0), 1.0e-5));
+        let positions = super::sprite_positions(center, glam::Vec2::new(2.0, 1.0), axes);
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(1.0, 1.0, 1.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(1.0, 3.0, 5.0), 1.0e-5));
     }
 
     #[test]
@@ -3667,10 +3672,10 @@ mod tests {
         let positions = super::particle_sprite_positions(
             glam::Vec3::ZERO,
             glam::Vec2::new(2.0, 1.0),
-            glam::Mat4::IDENTITY,
+            super::billboard_axes(openhp1_map::Rotator::default()),
             std::f32::consts::FRAC_PI_2,
         );
-        assert!(positions[0].abs_diff_eq(glam::Vec3::new(0.0, 1.0, -2.0), 1.0e-5));
-        assert!(positions[2].abs_diff_eq(glam::Vec3::new(0.0, -1.0, 2.0), 1.0e-5));
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(1.0, -2.0, 0.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(-1.0, 2.0, 0.0), 1.0e-5));
     }
 }
