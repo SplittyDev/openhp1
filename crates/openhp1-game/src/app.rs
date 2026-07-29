@@ -804,10 +804,7 @@ fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
             .unwrap_or(fallback)
             / 255.0
     };
-    (
-        volume("MusicVolume", 160.0),
-        volume("SoundVolume", 200.0) * 0.5,
-    )
+    (volume("MusicVolume", 160.0), volume("SoundVolume", 200.0))
 }
 
 fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Result<()> {
