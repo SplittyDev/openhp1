@@ -177,7 +177,7 @@ impl InputState {
         }
     }
 
-    fn player_input(&mut self) -> PlayerInput {
+    fn player_input(&mut self, delta_time: f32) -> PlayerInput {
         let pressed = |keys: &HashSet<KeyCode>, choices: &[KeyCode]| {
             choices.iter().any(|key| keys.contains(key)) as u8 as f32
         };
@@ -191,8 +191,8 @@ impl InputState {
             base_x: (right - left) * 3_000.0,
             base_y: forward * 6_000.0 - backward * 3_000.0,
             strafe: 0.0,
-            mouse_x: self.mouse_delta.0 as f32 * 16.0 * 6.0,
-            mouse_y: -self.mouse_delta.1 as f32 * 16.0 * 6.0,
+            mouse_x: mouse_axis(self.mouse_delta.0, delta_time, 6.0),
+            mouse_y: mouse_axis(-self.mouse_delta.1, delta_time, 6.0),
             alt_fire: casting,
             jump: self.jump_requested,
         };
@@ -207,6 +207,13 @@ impl InputState {
         self.cast_mouse = false;
         self.jump_requested = false;
     }
+}
+
+fn mouse_axis(delta: f64, delta_time: f32, speed: f32) -> f32 {
+    if !delta_time.is_finite() || delta_time <= 0.0 {
+        return 0.0;
+    }
+    delta as f32 * 16.0 * speed / (delta_time * 150.0)
 }
 
 struct Graphics {
@@ -425,7 +432,7 @@ impl Graphics {
         } else {
             1
         };
-        let mut input = self.input.player_input();
+        let mut input = self.input.player_input(delta_time);
         for _ in 0..ticks {
             self.renderer.advance_time(delta_time);
             self.update_animations(delta_time);
@@ -892,31 +899,36 @@ mod tests {
         input.set_key(KeyCode::KeyD, ElementState::Pressed);
         input.set_key(KeyCode::Space, ElementState::Pressed);
         input.mouse_delta = (2.0, -1.0);
-        let player = input.player_input();
+        let player = input.player_input(1.0 / 60.0);
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
         assert_eq!(player.strafe, 0.0);
-        assert_eq!(player.mouse_x, 192.0);
-        assert_eq!(player.mouse_y, 96.0);
+        assert!((player.mouse_x - 76.8).abs() < 1e-5);
+        assert!((player.mouse_y - 38.4).abs() < 1e-5);
         assert!(!player.alt_fire);
         assert!(player.jump);
-        assert!(!input.player_input().jump);
+        assert!(!input.player_input(1.0 / 60.0).jump);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Pressed);
         input.mouse_delta = (2.0, -1.0);
-        let player = input.player_input();
+        let player = input.player_input(1.0 / 60.0);
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
-        assert_eq!(player.mouse_x, 192.0);
-        assert_eq!(player.mouse_y, 96.0);
+        assert!((player.mouse_x - 76.8).abs() < 1e-5);
+        assert!((player.mouse_y - 38.4).abs() < 1e-5);
         assert!(player.alt_fire);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Released);
         input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
-        assert!(input.player_input().jump);
+        assert!(input.player_input(1.0 / 60.0).jump);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);
-        let player = input.player_input();
+        let player = input.player_input(1.0 / 60.0);
         assert!(player.alt_fire);
+    }
+
+    #[test]
+    fn mouse_axes_are_frame_rate_independent_rates() {
+        assert!((mouse_axis(2.0, 1.0 / 60.0, 6.0) - mouse_axis(4.0, 1.0 / 30.0, 6.0)).abs() < 1e-5);
     }
 
     #[test]
