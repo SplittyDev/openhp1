@@ -78,9 +78,12 @@ subsystem exists; they must not silently claim successful behavior.
 samples inherited and script-mutated emission, lifetime, source, size, speed,
 gravity, texture, style, and unlit fields each frame. A zero `ParticlesMax`
 means unlimited total emission; `ParticlesAlive` limits the live set, with the
-maximum authored emission rate multiplied by maximum lifetime used when that
-limit is zero. `ParticlesEmitted` is synchronized back into UnrealScript so
-the original `Shutdown` logic can stop finite effects. World-relative emitters
+maximum authored emission rate multiplied by maximum finite lifetime used when
+that limit is zero. A particle lifetime of zero means that it remains alive
+until its emitter is removed, matching UE1's native `UParticle::Update`
+semantics. `ParticlesEmitted` is synchronized back into UnrealScript so the
+original `Shutdown` logic can stop finite effects. Removing a `ParticleFX`
+actor also removes its live particles. World-relative emitters
 interpolate emission between locations, while `bSystemRelative` particles
 remain attached to their moving system. Authored size growth, delay, and end
 scale, `DripTime`, and sprite `SpinRate` are applied over each particle's

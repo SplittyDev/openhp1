@@ -465,6 +465,19 @@ impl LoadedScene {
 
     pub fn sync_particle_emitters(&mut self, emitters: Vec<ParticleEmitter>) -> Result<bool> {
         let mut changed = false;
+        let active = emitters
+            .iter()
+            .map(|emitter| emitter.actor)
+            .collect::<HashSet<_>>();
+        self.particles.retain(|actor, system| {
+            if active.contains(actor) {
+                true
+            } else {
+                self.render.mesh.positions[system.vertices.clone()].fill(Vec3::ZERO);
+                changed = true;
+                false
+            }
+        });
         for emitter in emitters {
             if let Some(actor) = self.actors.get_mut(emitter.actor) {
                 for diagnostic in emitter.capability_diagnostics() {
@@ -604,7 +617,7 @@ impl LoadedScene {
                 particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
                 particle.velocity *= particle_damping(system.config.damping, delta_time);
                 particle.location += particle.velocity * delta_time;
-                particle.age < particle.lifetime
+                particle_is_alive(particle.age, particle.lifetime)
             });
             let rate =
                 sample_particle_float(system.config.particles_per_second, &mut system.random)
@@ -723,8 +736,7 @@ impl LoadedScene {
                         location: center + source + pattern,
                         velocity: direction,
                         age: 0.0,
-                        lifetime: sample_particle_float(system.config.lifetime, &mut system.random)
-                            .max(1.0 / 60.0),
+                        lifetime: sample_particle_float(system.config.lifetime, &mut system.random),
                         half_size: Vec2::new(
                             sample_particle_float(system.config.size_width, &mut system.random),
                             sample_particle_float(system.config.size_length, &mut system.random),
@@ -1537,6 +1549,10 @@ fn pattern_length(points: &[[f32; 3]]) -> f32 {
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
     value.base + value.random * random_unit(random)
+}
+
+fn particle_is_alive(age: f32, lifetime: f32) -> bool {
+    lifetime <= 0.0 || age < lifetime
 }
 
 fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
@@ -3377,6 +3393,13 @@ mod tests {
             ),
             25.0
         );
+    }
+
+    #[test]
+    fn zero_lifetime_particles_live_until_the_emitter_is_removed() {
+        assert!(super::particle_is_alive(10_000.0, 0.0));
+        assert!(super::particle_is_alive(0.5, 1.0));
+        assert!(!super::particle_is_alive(1.0, 1.0));
     }
 
     #[test]
