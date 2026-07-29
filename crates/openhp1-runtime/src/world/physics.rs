@@ -1865,7 +1865,7 @@ fn rotators_equal(left: [i32; 3], right: [i32; 3]) -> bool {
 fn clamp_pawn_pitch(desired: i32, rate: i32) -> i32 {
     let desired = desired & 0xffff;
     if desired < 0x8000 {
-        desired.max(rate)
+        desired.min(rate)
     } else if desired < 0x10000 - rate {
         0x10000 - rate
     } else {
@@ -1920,9 +1920,10 @@ mod tests {
 
     #[test]
     fn pawn_pitch_uses_ue1_rotation_rate_bounds() {
-        assert_eq!(clamp_pawn_pitch(1_000, 3_072), 3_072);
+        assert_eq!(clamp_pawn_pitch(0, 3_072), 0);
+        assert_eq!(clamp_pawn_pitch(1_000, 3_072), 1_000);
         assert_eq!(clamp_pawn_pitch(-1_000, 3_072), 64_536);
-        assert_eq!(clamp_pawn_pitch(16_384, 3_072), 16_384);
+        assert_eq!(clamp_pawn_pitch(16_384, 3_072), 3_072);
         assert_eq!(clamp_pawn_pitch(-16_384, 3_072), 62_464);
     }
 
