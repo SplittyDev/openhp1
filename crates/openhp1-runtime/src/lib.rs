@@ -359,7 +359,10 @@ enum Slot {
         receiver: i32,
         field: i32,
     },
-    Default(i32),
+    Default {
+        receiver: i32,
+        field: i32,
+    },
     StructMember {
         target: Box<Slot>,
         member: StructMember,
@@ -821,7 +824,10 @@ impl<'a> Frame<'a> {
                 receiver: self.current_context,
                 field: self.read_i32()?,
             }),
-            Opcode::DefaultVariable => Expression::Slot(Slot::Default(self.read_i32()?)),
+            Opcode::DefaultVariable => Expression::Slot(Slot::Default {
+                receiver: self.current_context,
+                field: self.read_i32()?,
+            }),
             Opcode::Nothing | Opcode::Unknown0x15 => Expression::Value(Value::None),
             Opcode::Let | Opcode::LetBool => {
                 let target = self.expression(host)?;
@@ -1289,8 +1295,23 @@ impl<'a> Frame<'a> {
                 .and_then(FrameResponse::into_value)
                 .map_err(|message| Error::Context { message })?;
             }
-            Slot::Default(field) => {
+            Slot::Default {
+                receiver: -1,
+                field,
+            } => {
                 self.defaults.insert(field, value);
+            }
+            Slot::Default { receiver, field } => {
+                host(
+                    FrameRequest::SetInstance {
+                        receiver,
+                        field,
+                        value,
+                    },
+                    &mut self.instance,
+                )
+                .and_then(FrameResponse::into_value)
+                .map_err(|message| Error::Context { message })?;
             }
             Slot::StructMember { target, member } => {
                 let mut target_value = self.slot(&target, host)?.unwrap_or(Value::None);
@@ -1376,7 +1397,21 @@ impl<'a> Frame<'a> {
                 .and_then(FrameResponse::into_value)
                 .map_err(|message| Error::Context { message })?,
             ),
-            Slot::Default(field) => self.defaults.get(field).cloned(),
+            Slot::Default {
+                receiver: -1,
+                field,
+            } => self.defaults.get(field).cloned(),
+            Slot::Default { receiver, field } => Some(
+                host(
+                    FrameRequest::GetInstance {
+                        receiver: *receiver,
+                        field: *field,
+                    },
+                    &mut self.instance,
+                )
+                .and_then(FrameResponse::into_value)
+                .map_err(|message| Error::Context { message })?,
+            ),
             Slot::StructMember { target, member } => self
                 .slot(target, host)?
                 .map(|value| member.get(value))
@@ -2677,12 +2712,12 @@ mod tests {
     }
 
     #[test]
-    fn class_context_reads_the_resolved_default_object() {
+    fn class_context_reads_the_resolved_class_default() {
         let mut bytes = vec![0x04, 0x12, 0x20];
         bytes.extend((-149_i32).to_le_bytes());
         bytes.extend(5_u16.to_le_bytes());
         bytes.push(4);
-        bytes.push(0x01);
+        bytes.push(0x02);
         bytes.extend(7_i32.to_le_bytes());
         let bytecode = Bytecode {
             version: 76,

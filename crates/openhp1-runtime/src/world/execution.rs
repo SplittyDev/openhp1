@@ -1467,13 +1467,25 @@ impl ScriptRuntime {
             let Some(context_object) = context_object.as_ref() else {
                 return Err(DispatchError::InvalidActorHandle { handle: receiver });
             };
-            let class = self.resolved_object(context_object)?;
-            if !matches!(self.script(&class)?.metadata, ScriptMetadata::Class(_)) {
-                return Err(DispatchError::InvalidActorHandle { handle: receiver });
-            }
-            let defaults = self.load_class_defaults(&class, 0)?;
-            return match defaults.get(&field) {
-                Some(value) => self.frame_value(value),
+            let object = self.resolved_object(context_object)?;
+            let export = &object.package.summary().exports[object.export_index];
+            let value = if export.class == ObjectReference::None {
+                self.load_class_defaults(&object, 0)?.get(&field).cloned()
+            } else {
+                if !self.object_instances.contains_key(context_object) {
+                    let (class, instance) = self.load_object_instance(&object)?;
+                    self.object_instances.insert(
+                        context_object.clone(),
+                        (object_id(&class.package, class.export_index), instance),
+                    );
+                }
+                self.object_instances
+                    .get(context_object)
+                    .and_then(|(_, instance)| instance.get(&field))
+                    .cloned()
+            };
+            return match value {
+                Some(value) => self.frame_value(&value),
                 None => {
                     let field = self.resolved_object(&field)?;
                     Ok(self.zero_field_value(&field)?.unwrap_or(Value::None))
@@ -1545,13 +1557,50 @@ impl ScriptRuntime {
         current_instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> DispatchResult<()> {
+        let Some(field) = self.resolve_reference(source, field)? else {
+            return Ok(());
+        };
+        let self_handle =
+            self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?)?;
+        let value = self.stored_value(source, &concrete_self_value(&value, self_handle))?;
         let actor = if receiver == -1 {
             current_actor
         } else {
-            self.actor_for_handle(receiver)?
-        };
-        let Some(field) = self.resolve_reference(source, field)? else {
-            return Ok(());
+            let object = self.object_for_handle(receiver)?;
+            let Some(actor) = self.object_actors.get(&object).copied() else {
+                let resolved = self.resolved_object(&object)?;
+                let export = &resolved.package.summary().exports[resolved.export_index];
+                if export.class == ObjectReference::None {
+                    self.load_class_defaults(&resolved, 0)?;
+                    self.class_defaults
+                        .get_mut(&object)
+                        .ok_or_else(|| DispatchError::UnresolvedObject {
+                            message: format!("class defaults are missing for {object:?}"),
+                        })?
+                        .insert(field, value);
+                } else {
+                    if !self.object_instances.contains_key(&object) {
+                        let (class, instance) = self.load_object_instance(&resolved)?;
+                        self.object_instances.insert(
+                            object.clone(),
+                            (object_id(&class.package, class.export_index), instance),
+                        );
+                    }
+                    self.object_instances
+                        .get_mut(&object)
+                        .ok_or_else(|| DispatchError::UnresolvedObject {
+                            message: format!("object instance is missing for {object:?}"),
+                        })?
+                        .1
+                        .insert(field, value);
+                }
+                return Ok(());
+            };
+            actor
         };
         let (is_base, is_hidden, is_pre_pivot) = {
             let field = self.resolved_object(&field)?;
@@ -1565,13 +1614,6 @@ impl ScriptRuntime {
                 name.eq_ignore_ascii_case("PrePivot"),
             )
         };
-        let self_handle =
-            self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
-                DispatchError::UnregisteredActor {
-                    actor: current_actor,
-                },
-            )?)?;
-        let value = self.stored_value(source, &concrete_self_value(&value, self_handle))?;
         if is_base {
             let base = match &value {
                 StoredValue::Object(base) => base.clone(),
