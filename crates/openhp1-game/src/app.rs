@@ -235,6 +235,7 @@ struct Graphics {
     view_actor: usize,
     render_stats: RenderStats,
     frame_time_ms: f32,
+    vertices_dirty: bool,
     overlay_visible: bool,
     egui: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
@@ -373,6 +374,7 @@ impl Graphics {
             view_actor: player_view.actor,
             render_stats: RenderStats::default(),
             frame_time_ms: 0.0,
+            vertices_dirty: false,
             overlay_visible: true,
             egui,
             egui_renderer,
@@ -438,6 +440,10 @@ impl Graphics {
             self.update_animations(delta_time);
             self.update_runtime(delta_time, input);
             input = repeated_player_input(input);
+        }
+        self.update_audio();
+        if self.vertices_dirty {
+            self.update_vertices();
         }
 
         let frame = match self.surface.get_current_texture() {
@@ -613,7 +619,7 @@ impl Graphics {
                     }
                 }
                 if changed {
-                    self.update_vertices();
+                    self.vertices_dirty = true;
                 }
                 for actor in completed {
                     match self.runtime.animation_finished(actor) {
@@ -691,7 +697,7 @@ impl Graphics {
         }) {
             Ok(topology_changed) => {
                 if topology_changed || self.scene.tick_particles(delta_time) {
-                    self.update_vertices();
+                    self.vertices_dirty = true;
                 }
                 for (actor, emitted) in self.scene.particle_counts() {
                     if let Err(error) = self.runtime.set_particle_counts(actor, emitted) {
@@ -709,7 +715,7 @@ impl Graphics {
                     message: error.to_string(),
                 })
         }) {
-            Ok(true) => self.update_vertices(),
+            Ok(true) => self.vertices_dirty = true,
             Ok(false) => {}
             Err(error) => self.last_error = Some(format!("weapon attachment failed: {error}")),
         }
@@ -727,9 +733,8 @@ impl Graphics {
                     yaw: view.rotation[1],
                     roll: view.rotation[2],
                 }) {
-                    self.update_vertices();
+                    self.vertices_dirty = true;
                 }
-                self.update_audio();
             }
             Err(error) => self.last_error = Some(format!("player camera failed: {error}")),
         }
@@ -760,7 +765,7 @@ impl Graphics {
             Ok((_, deferred, transformed)) => {
                 self.deferred_calls += deferred;
                 if transformed {
-                    self.update_vertices();
+                    self.vertices_dirty = true;
                 }
             }
             Err(error) => self.last_error = Some(format!("runtime action failed: {error:#}")),
@@ -768,6 +773,7 @@ impl Graphics {
     }
 
     fn update_vertices(&mut self) {
+        self.vertices_dirty = false;
         if !self
             .renderer
             .update_vertices(&self.queue, &self.scene.render.mesh)
