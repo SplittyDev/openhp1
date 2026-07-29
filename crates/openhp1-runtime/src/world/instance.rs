@@ -706,45 +706,66 @@ impl ScriptRuntime {
                 frame.set_local(field, value.clone());
             }
         }
-        self.bind_frame_zero_values(source, &function.bytecode, frame)?;
+        self.bind_frame_zero_values(source, function.export_index, &function.bytecode, frame)?;
         Ok(bindings)
     }
 
     pub(super) fn bind_frame_zero_values(
         &mut self,
         source: &Arc<Package>,
+        export_index: usize,
         bytecode: &Bytecode,
         frame: &mut Frame<'_>,
     ) -> DispatchResult<()> {
-        for field in local_fields(bytecode) {
-            if frame.local(field).is_some() {
-                continue;
-            }
-            let Some(field_object) = self.resolve_reference(source, field)? else {
-                continue;
-            };
-            let resolved = self.resolved_object(&field_object)?;
-            if let Some(value) = self.zero_field_value(&resolved)? {
-                frame.set_local(field, value);
-            }
-        }
-        for opcode in [0x00, 0x01, 0x02] {
-            for field in fields(bytecode, opcode) {
+        let key = object_id(source, export_index);
+        let values = if let Some(values) = self.frame_zero_values.get(&key) {
+            Arc::clone(values)
+        } else {
+            let mut locals = Vec::new();
+            let mut array_elements = Vec::new();
+            for field in local_fields(bytecode) {
                 let Some(field_object) = self.resolve_reference(source, field)? else {
                     continue;
                 };
                 let resolved = self.resolved_object(&field_object)?;
-                let metadata = PropertyMetadata::decode(&resolved.package, resolved.export_index)?;
-                let Some(inner) = metadata.inner_type else {
-                    continue;
-                };
-                let Some(inner) = self.packages.resolve(&resolved.package, inner)? else {
-                    continue;
-                };
-                if let Some(value) = self.zero_field_value(&inner)? {
-                    frame.set_array_element_default(field, value);
+                if let Some(value) = self.zero_field_value(&resolved)? {
+                    locals.push((field, value));
                 }
             }
+            for opcode in [0x00, 0x01, 0x02] {
+                for field in fields(bytecode, opcode) {
+                    let Some(field_object) = self.resolve_reference(source, field)? else {
+                        continue;
+                    };
+                    let resolved = self.resolved_object(&field_object)?;
+                    let metadata =
+                        PropertyMetadata::decode(&resolved.package, resolved.export_index)?;
+                    let Some(inner) = metadata.inner_type else {
+                        continue;
+                    };
+                    let Some(inner) = self.packages.resolve(&resolved.package, inner)? else {
+                        continue;
+                    };
+                    if let Some(value) = self.zero_field_value(&inner)? {
+                        array_elements.push((field, value));
+                    }
+                }
+            }
+            let values = Arc::new(FrameZeroValues {
+                locals,
+                array_elements,
+            });
+            self.frame_zero_values.insert(key, Arc::clone(&values));
+            values
+        };
+        for (field, value) in &values.locals {
+            if frame.local(*field).is_some() {
+                continue;
+            }
+            frame.set_local(*field, value.clone());
+        }
+        for (field, value) in &values.array_elements {
+            frame.set_array_element_default(*field, value.clone());
         }
         Ok(())
     }

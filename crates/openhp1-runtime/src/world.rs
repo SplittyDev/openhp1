@@ -172,6 +172,7 @@ pub struct ScriptRuntime {
     resolved_references: HashMap<(Arc<str>, i32), Option<ObjectId>>,
     zero_values: HashMap<ObjectId, Option<Value>>,
     frame_arguments: HashMap<ObjectId, ArgumentBindings>,
+    frame_zero_values: HashMap<ObjectId, Arc<FrameZeroValues>>,
     struct_members: HashMap<ObjectId, Arc<Vec<(i32, StructMember)>>>,
     actor_classes: HashMap<usize, ObjectId>,
     actor_states: HashMap<usize, Option<String>>,
@@ -317,6 +318,11 @@ enum LatentAction {
 
 type InstanceState = HashMap<ObjectId, StoredValue>;
 type ArgumentBindings = Arc<Vec<(i32, usize, bool)>>;
+
+struct FrameZeroValues {
+    locals: Vec<(i32, Value)>,
+    array_elements: Vec<(i32, Value)>,
+}
 
 fn object_id(package: &Arc<Package>, export_index: usize) -> ObjectId {
     ObjectId {

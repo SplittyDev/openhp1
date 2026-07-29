@@ -28,6 +28,7 @@ impl ScriptRuntime {
             resolved_references: HashMap::default(),
             zero_values: HashMap::default(),
             frame_arguments: HashMap::default(),
+            frame_zero_values: HashMap::default(),
             struct_members: HashMap::default(),
             actor_classes: HashMap::default(),
             actor_states: HashMap::default(),

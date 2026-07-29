@@ -147,7 +147,12 @@ impl ScriptRuntime {
             let mut frame = Frame::from_snapshot(&script.bytecode, state_frame.frame);
             self.bind_struct_members(&state, &script.bytecode, &mut frame)?;
             self.bind_frame_defaults(actor_class, &state.package, &script.bytecode, &mut frame)?;
-            self.bind_frame_zero_values(&state.package, &script.bytecode, &mut frame)?;
+            self.bind_frame_zero_values(
+                &state.package,
+                state.export_index,
+                &script.bytecode,
+                &mut frame,
+            )?;
             let revision = self.state_revision(actor);
             self.state_resumes = self.state_resumes.saturating_add(1);
             self.pending_latent = None;
