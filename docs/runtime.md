@@ -3,6 +3,18 @@
 This document records durable runtime semantics that are easy to lose when
 extending native calls, actor state, or animation actions.
 
+## Module layout
+
+`openhp1-runtime` keeps its public interface in `lib.rs`. The bytecode VM is
+split into frame state, execution, opcode decoding, value operations, and
+focused frame tests. `ScriptRuntime` remains the single owner of package-backed
+world state; its implementation is grouped under `world/` by actor lifecycle,
+script execution, instance decoding, collision/movement, native functions,
+physics modes, and state lookup. Nested modules hold narrower responsibilities
+such as scalar natives, spawning, sound, collision geometry, player state, and
+physics callbacks. Preserve this ownership when adding behavior instead of
+introducing parallel runtime objects.
+
 ## Actor identity and state
 
 Actors use stable package/export identities. Class defaults followed by actor
