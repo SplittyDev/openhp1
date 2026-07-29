@@ -474,6 +474,18 @@ pub enum DispatchError {
     #[error("property `{property}` fixed-array storage is invalid")]
     InvalidArrayProperty { property: String },
 
+    #[error("array property `{property}` has no inner type")]
+    MissingArrayInner { property: String },
+
+    #[error(
+        "array property `{property}` has invalid length {length} for {remaining} payload bytes"
+    )]
+    InvalidDynamicArrayLength {
+        property: String,
+        length: i32,
+        remaining: usize,
+    },
+
     #[error("struct property `{property}` has no struct type")]
     MissingStructType { property: String },
 

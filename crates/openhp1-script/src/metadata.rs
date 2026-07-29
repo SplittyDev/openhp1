@@ -52,6 +52,7 @@ pub struct PropertyMetadata {
     pub category: usize,
     pub replication_offset: Option<u16>,
     pub struct_type: Option<ObjectReference>,
+    pub inner_type: Option<ObjectReference>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,6 +115,10 @@ impl PropertyMetadata {
             .eq_ignore_ascii_case("StructProperty")
             .then(|| reader.read_object_reference())
             .transpose()?;
+        let inner_type = class_name
+            .eq_ignore_ascii_case("ArrayProperty")
+            .then(|| reader.read_object_reference())
+            .transpose()?;
         Ok(Self {
             base_field: field.base_field,
             next_field: field.next_field,
@@ -122,6 +127,7 @@ impl PropertyMetadata {
             category,
             replication_offset,
             struct_type,
+            inner_type,
         })
     }
 }
@@ -446,6 +452,7 @@ mod tests {
         assert_eq!(property.category, 5);
         assert_eq!(property.replication_offset, Some(77));
         assert_eq!(property.struct_type, None);
+        assert_eq!(property.inner_type, None);
     }
 
     #[test]
@@ -458,6 +465,19 @@ mod tests {
         let package = synthetic_package("StructProperty", "Value", payload);
         let property = PropertyMetadata::decode(&package, 0).unwrap();
         assert_eq!(property.struct_type, Some(ObjectReference::None));
+        assert_eq!(property.inner_type, None);
+    }
+
+    #[test]
+    fn decodes_array_property_inner_reference() {
+        let mut payload = vec![0, 0, 0];
+        payload.extend(1_i32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend([5, 0]);
+        let package = synthetic_package("ArrayProperty", "Values", payload);
+        let property = PropertyMetadata::decode(&package, 0).unwrap();
+        assert_eq!(property.struct_type, None);
+        assert_eq!(property.inner_type, Some(ObjectReference::None));
     }
 
     #[test]

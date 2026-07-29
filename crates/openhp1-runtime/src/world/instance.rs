@@ -85,9 +85,10 @@ impl ScriptRuntime {
             let Some(value) = self.read_property(source, reader, &property, &resolved)? else {
                 continue;
             };
+            let metadata = PropertyMetadata::decode(&resolved.package, resolved.export_index)?;
             let zero = self.zero_field_value(&resolved)?.unwrap_or(Value::None);
             let zero = self.stored_value(source, &zero)?;
-            if matches!(zero, StoredValue::Array(_)) {
+            if metadata.array_dimension > 1 {
                 let index = property.array_index.unwrap_or(0);
                 let stored = instance.entry(field).or_insert(zero);
                 let StoredValue::Array(values) = stored else {
@@ -139,6 +140,46 @@ impl ScriptRuntime {
             }
             PropertyKind::String | PropertyKind::Str => {
                 StoredValue::Value(Value::String(value.read_string()?))
+            }
+            PropertyKind::Array => {
+                let name = field
+                    .package
+                    .summary()
+                    .name(field.package.summary().exports[field.export_index].object_name)
+                    .to_owned();
+                let length = value.read_compact_index()?;
+                let count = usize::try_from(length).ok().filter(|count| {
+                    // Every supported inline property consumes at least one byte.
+                    *count <= value.remaining()
+                });
+                let Some(count) = count else {
+                    return Err(DispatchError::InvalidDynamicArrayLength {
+                        property: name,
+                        length,
+                        remaining: value.remaining(),
+                    });
+                };
+                let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
+                let inner =
+                    metadata
+                        .inner_type
+                        .ok_or_else(|| DispatchError::MissingArrayInner {
+                            property: name.clone(),
+                        })?;
+                let inner = self
+                    .packages
+                    .resolve(&field.package, inner)?
+                    .ok_or_else(|| DispatchError::MissingArrayInner {
+                        property: name.clone(),
+                    })?;
+                let inner_metadata = PropertyMetadata::decode(&inner.package, inner.export_index)?;
+                let mut values = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let element =
+                        self.read_inline_property(source, &inner, &inner_metadata, &mut value, 0)?;
+                    values.push(self.stored_value(source, &element)?);
+                }
+                StoredValue::Array(values)
             }
             PropertyKind::Vector => StoredValue::Value(Value::Vector([
                 value.read_f32()?,
