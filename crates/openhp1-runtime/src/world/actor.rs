@@ -161,6 +161,7 @@ impl ScriptRuntime {
             });
         }
         self.actor_visual_bounds.insert(actor, (minimum, maximum));
+        self.update_cached_collision_shape_bounds(actor, (minimum, maximum));
         Ok(())
     }
 

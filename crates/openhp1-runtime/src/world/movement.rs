@@ -10,6 +10,7 @@ use collision::*;
 
 const ACTOR_TRACE_MARGIN: f32 = 1.0;
 const COLLIDE_BOX: u8 = 2;
+const COLLIDE_SHAPE: u8 = 3;
 
 #[derive(Clone)]
 struct CollisionActor {
@@ -27,6 +28,7 @@ struct CollisionActor {
     brush: Option<Arc<BspCollision>>,
     pre_pivot: Vec3,
     main_scale: Vec3,
+    shape_bounds: Option<(Vec3, Vec3)>,
 }
 
 pub(super) struct CachedCollisionActor {
@@ -112,6 +114,7 @@ impl ScriptRuntime {
             brush: None,
             pre_pivot: Vec3::ZERO,
             main_scale: Vec3::ONE,
+            shape_bounds: None,
         };
         let delta = end - start;
         let mut hits = Vec::new();
@@ -917,5 +920,16 @@ impl ScriptRuntime {
             })
             .unwrap_or_else(|index| index);
         self.collision_actors_by_min_x.insert(index, actor);
+    }
+
+    pub(super) fn update_cached_collision_shape_bounds(
+        &mut self,
+        actor: usize,
+        bounds: (Vec3, Vec3),
+    ) {
+        if let Some(Some(cached)) = self.collision_actors.get_mut(actor) {
+            cached.actor.shape_bounds = Some(bounds);
+            self.reindex_cached_collision_actor(actor);
+        }
     }
 }

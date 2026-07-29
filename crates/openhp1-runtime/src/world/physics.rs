@@ -25,6 +25,10 @@ const PHYS_TRAILER: u8 = 11;
 const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
 
+fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
+    !pushable && normal.z.abs() < 0.2
+}
+
 struct ZonePhysics {
     gravity: Vec3,
     velocity: Vec3,
@@ -348,34 +352,18 @@ impl ScriptRuntime {
                     if player && self.try_mount(actor, class, instance, hit, actions)? {
                         return Ok(());
                     }
-                    if let (true, Some(other)) = (player, hit.actor) {
-                        if self
+                    let pushable = if let (true, Some(other)) = (player, hit.actor)
+                        && self
                             .actor_has_class(other, "Decoration")
                             .map_err(|error| error.to_string())?
-                            && self.other_actor_bool(other, "bPushable")?
-                            && hit.normal.dot(move_delta) < -0.9
-                        {
-                            let mass = self.actor_float(class, instance, "Mass")?;
-                            let other_mass = self.other_actor_float(other, "Mass")?;
-                            self.set_actor_value(
-                                class,
-                                instance,
-                                "bJustTeleported",
-                                Value::Bool(true),
-                            )?;
-                            velocity *= mass / (mass + other_mass);
-                            self.set_actor_value(
-                                class,
-                                instance,
-                                "Velocity",
-                                Value::Vector(velocity.to_array()),
-                            )?;
-                            self.call_hit_wall(
-                                actor, class, instance, hit.normal, hit.actor, actions,
-                            )?;
-                            time_left = 0.0;
-                        }
-                    } else if hit.normal.z < 0.2 && hit.normal.z > -0.2 {
+                        && self.other_actor_bool(other, "bPushable")?
+                        && hit.normal.dot(move_delta) < -0.9
+                    {
+                        Some(other)
+                    } else {
+                        None
+                    };
+                    if should_slide_walking_collision(pushable.is_some(), hit.normal) {
                         self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
                         let aligned = (move_delta - hit.normal * move_delta.dot(hit.normal))
                             * (1.0 - hit.fraction);
@@ -396,6 +384,24 @@ impl ScriptRuntime {
                         } else {
                             time_left = 0.0;
                         }
+                    } else if let Some(other) = pushable {
+                        let mass = self.actor_float(class, instance, "Mass")?;
+                        let other_mass = self.other_actor_float(other, "Mass")?;
+                        self.set_actor_value(
+                            class,
+                            instance,
+                            "bJustTeleported",
+                            Value::Bool(true),
+                        )?;
+                        velocity *= mass / (mass + other_mass);
+                        self.set_actor_value(
+                            class,
+                            instance,
+                            "Velocity",
+                            Value::Vector(velocity.to_array()),
+                        )?;
+                        self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
+                        time_left = 0.0;
                     }
                 }
 
@@ -456,5 +462,17 @@ impl ScriptRuntime {
     ) -> std::result::Result<(), String> {
         self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
         self.set_actor_base(actor, class, instance, None, actions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_can_slide_along_non_pushable_actor_collision() {
+        assert!(should_slide_walking_collision(false, Vec3::X));
+        assert!(!should_slide_walking_collision(true, Vec3::X));
+        assert!(!should_slide_walking_collision(false, Vec3::Z));
     }
 }

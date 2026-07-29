@@ -127,10 +127,13 @@ frame once the yaw is within the UE1 arrival threshold.
 Latent `TurnToward` tracks the target actor's current location while turning.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
+Walking players use the same wall-slide response for non-pushable actor
+collisions as for BSP walls.
 Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 `CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
-the default aligned cylinder. A sweep that starts inside an existing overlap
-may move out instead of treating the exit surface as a new impact.
+the default aligned cylinder, while `CT_Shape` uses the mesh's offset, rotated
+primitive bounds. A sweep that starts inside an existing overlap may move out
+instead of treating the exit surface as a new impact.
 `GetWorldCollisionBox(true)` transforms the mesh's serialized primitive bounds
 through its mesh and current actor transforms; the default form returns the
 actor's collision bounds instead.

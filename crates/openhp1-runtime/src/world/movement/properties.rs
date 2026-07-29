@@ -49,7 +49,13 @@ impl ScriptRuntime {
         let brush = collision_actor_brush(instance, fields)?
             .map(|object| self.brush_collision(object))
             .transpose()?;
-        collision_actor_from_fields(actor, instance, fields, brush)
+        collision_actor_from_fields(
+            actor,
+            instance,
+            fields,
+            brush,
+            self.actor_visual_bounds.get(&actor).copied(),
+        )
     }
 
     pub(super) fn brush_collision(

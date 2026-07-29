@@ -16,6 +16,7 @@ pub(super) fn collision_actor_from_fields(
     instance: &InstanceState,
     fields: &CollisionFields,
     brush: Option<Arc<BspCollision>>,
+    shape_bounds: Option<(Vec3, Vec3)>,
 ) -> std::result::Result<CollisionActor, String> {
     let vector = |field: &ObjectId, name| match instance.get(field) {
         Some(StoredValue::Value(Value::Vector(value)))
@@ -87,19 +88,36 @@ pub(super) fn collision_actor_from_fields(
         brush,
         pre_pivot: vector(&fields.pre_pivot, "PrePivot")?,
         main_scale,
+        shape_bounds,
     })
 }
 
 pub(super) fn collision_actor_local_extents(actor: &CollisionActor) -> Vec3 {
-    if actor.collide_type == COLLIDE_BOX {
+    if actor.collide_type == COLLIDE_SHAPE
+        && let Some((minimum, maximum)) = actor.shape_bounds
+    {
+        (maximum - minimum) * 0.5
+    } else if actor.collide_type == COLLIDE_BOX {
         Vec3::new(actor.radius, actor.width, actor.height)
     } else {
         Vec3::new(actor.radius, actor.radius, actor.height)
     }
 }
 
+pub(super) fn collision_actor_center(actor: &CollisionActor) -> Vec3 {
+    if actor.collide_type == COLLIDE_SHAPE
+        && let Some((minimum, maximum)) = actor.shape_bounds
+    {
+        actor.location + actor.pre_pivot + actor.rotation * ((minimum + maximum) * 0.5)
+    } else {
+        actor.location
+    }
+}
+
 pub(super) fn collision_actor_world_extents(actor: &CollisionActor) -> Vec3 {
-    if actor.collide_type == COLLIDE_BOX {
+    if actor.collide_type == COLLIDE_BOX
+        || actor.collide_type == COLLIDE_SHAPE && actor.shape_bounds.is_some()
+    {
         actor.rotation.abs() * collision_actor_local_extents(actor)
     } else {
         collision_actor_local_extents(actor)
@@ -114,7 +132,10 @@ pub(super) fn collision_actor_world_bounds(actor: &CollisionActor) -> Option<(Ve
             actor.pre_pivot,
             actor.main_scale,
         ),
-        None => Some((actor.location, collision_actor_world_extents(actor))),
+        None => Some((
+            collision_actor_center(actor),
+            collision_actor_world_extents(actor),
+        )),
     }
 }
 
@@ -134,11 +155,12 @@ pub(super) fn sweep_collision_actors(
     other: &CollisionActor,
     delta: Vec3,
 ) -> Option<openhp1_physics::ActorCollisionHit> {
+    let current_location = collision_actor_center(current);
     if let Some(brush) = &other.brush {
         brush
             .sweep_transformed_aabb(
-                current.location,
-                current.location + delta,
+                current_location,
+                current_location + delta,
                 collision_actor_world_extents(current),
                 other.location,
                 other.rotation,
@@ -149,19 +171,23 @@ pub(super) fn sweep_collision_actors(
                 fraction: hit.fraction,
                 normal: hit.normal,
             })
-    } else if other.collide_type == COLLIDE_BOX {
+    } else if other.collide_type == COLLIDE_BOX
+        || other.collide_type == COLLIDE_SHAPE && other.shape_bounds.is_some()
+    {
         sweep_box(
-            current.location,
-            current.location + delta,
+            current_location,
+            current_location + delta,
             collision_actor_world_extents(current),
-            other.location,
+            collision_actor_center(other),
             collision_actor_local_extents(other),
             other.rotation,
         )
-    } else if current.collide_type == COLLIDE_BOX {
+    } else if current.collide_type == COLLIDE_BOX
+        || current.collide_type == COLLIDE_SHAPE && current.shape_bounds.is_some()
+    {
         sweep_box(
-            current.location,
-            current.location + delta,
+            current_location,
+            current_location + delta,
             collision_actor_world_extents(current),
             other.location,
             collision_actor_local_extents(other),
@@ -169,8 +195,8 @@ pub(super) fn sweep_collision_actors(
         )
     } else {
         sweep_cylinder(
-            current.location,
-            current.location + delta,
+            current_location,
+            current_location + delta,
             current.height,
             current.radius,
             other.location,
@@ -183,19 +209,23 @@ pub(super) fn sweep_collision_actors(
 pub(super) fn collision_actors_overlap(first: &CollisionActor, second: &CollisionActor) -> bool {
     if first.brush.is_some() || second.brush.is_some() {
         false
-    } else if second.collide_type == COLLIDE_BOX {
+    } else if second.collide_type == COLLIDE_BOX
+        || second.collide_type == COLLIDE_SHAPE && second.shape_bounds.is_some()
+    {
         boxes_overlap(
-            first.location,
+            collision_actor_center(first),
             collision_actor_world_extents(first),
-            second.location,
+            collision_actor_center(second),
             collision_actor_local_extents(second),
             second.rotation,
         )
-    } else if first.collide_type == COLLIDE_BOX {
+    } else if first.collide_type == COLLIDE_BOX
+        || first.collide_type == COLLIDE_SHAPE && first.shape_bounds.is_some()
+    {
         boxes_overlap(
-            second.location,
+            collision_actor_center(second),
             collision_actor_world_extents(second),
-            first.location,
+            collision_actor_center(first),
             collision_actor_local_extents(first),
             first.rotation,
         )
@@ -280,6 +310,7 @@ mod tests {
             brush: None,
             pre_pivot: Vec3::ZERO,
             main_scale: Vec3::ONE,
+            shape_bounds: None,
         }
     }
 
@@ -316,6 +347,20 @@ mod tests {
         let mut pawn = pawn;
         pawn.location.x = 0.0;
         assert!(sweep_collision_actors(&pawn, &wall, Vec3::Y * 60.0).is_some());
+    }
+
+    #[test]
+    fn hp1_shape_collision_uses_offset_mesh_bounds_instead_of_the_cylinder() {
+        let pawn = collision_actor(0, Vec3::new(-40.0, 20.0, 0.0), true);
+        let mut table = collision_actor(1, Vec3::ZERO, true);
+        table.radius = 100.0;
+        table.collide_type = COLLIDE_SHAPE;
+        table.shape_bounds = Some((Vec3::new(0.0, -2.0, -5.0), Vec3::new(40.0, 2.0, 5.0)));
+
+        assert!(sweep_collision_actors(&pawn, &table, Vec3::X * 80.0).is_none());
+        let mut pawn = pawn;
+        pawn.location.y = 0.0;
+        assert!(sweep_collision_actors(&pawn, &table, Vec3::X * 80.0).is_some());
     }
 
     #[test]
