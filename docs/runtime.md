@@ -32,6 +32,10 @@ values across latent `Sleep` and `FinishAnim` actions. `GotoState`,
 `GotoLabel`, and `Stop` operate on that retained frame rather than restarting
 the state body.
 
+Entering a different state restores that state's authored event probe mask.
+Runtime `Enable` and `Disable` changes last only for the current activation;
+re-entering a state must not inherit an event disabled during an earlier visit.
+
 Context latent calls suspend the caller's state while movement and animation
 completion are polled on the actor that received the call.
 `FinishInterpolation` resumes the retained frame when mover physics clears

@@ -21,6 +21,14 @@ impl ScriptRuntime {
             }
             _ => None,
         };
+        clear_state_events_on_entry(
+            &mut self.disabled_events,
+            actor,
+            self.actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref()),
+            state_name.as_deref(),
+        );
         self.actor_states.insert(actor, state_name.clone());
         *self.state_revisions.entry(actor).or_default() += 1;
         self.pending_latent = None;
@@ -477,6 +485,22 @@ fn event_key(actor: usize, state: Option<&str>) -> (usize, String) {
     (actor, state.unwrap_or_default().to_ascii_lowercase())
 }
 
+fn clear_state_events_on_entry(
+    disabled_events: &mut HashMap<(usize, String), HashSet<String>>,
+    actor: usize,
+    old_state: Option<&str>,
+    new_state: Option<&str>,
+) {
+    let changed = match (old_state, new_state) {
+        (Some(old), Some(new)) => !old.eq_ignore_ascii_case(new),
+        (None, None) => false,
+        _ => true,
+    };
+    if changed {
+        disabled_events.remove(&event_key(actor, new_state));
+    }
+}
+
 pub(super) fn set_event_disabled(
     disabled_events: &mut HashMap<(usize, String), HashSet<String>>,
     actor: usize,
@@ -502,4 +526,23 @@ pub(super) fn event_disabled(
     disabled_events
         .get(&event_key(actor, state))
         .is_some_and(|events| events.contains(&event.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entering_a_state_restores_events_disabled_during_its_previous_activation() {
+        let mut disabled = HashMap::default();
+        set_event_disabled(&mut disabled, 7, Some("Judge"), "Tick", true);
+        assert!(event_disabled(&disabled, 7, Some("Judge"), "Tick"));
+
+        clear_state_events_on_entry(&mut disabled, 7, Some("Draw"), Some("Judge"));
+        assert!(!event_disabled(&disabled, 7, Some("Judge"), "Tick"));
+
+        set_event_disabled(&mut disabled, 7, Some("Judge"), "Tick", true);
+        clear_state_events_on_entry(&mut disabled, 7, Some("judge"), Some("JUDGE"));
+        assert!(event_disabled(&disabled, 7, Some("Judge"), "Tick"));
+    }
 }
