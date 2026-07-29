@@ -14,7 +14,7 @@ use openhp1_map::{
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
 use openhp1_physics::BspCollision;
-use openhp1_runtime::{ParticleEmitter, ParticleFloat, WeaponAttachment};
+use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat, WeaponAttachment};
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
@@ -725,6 +725,14 @@ impl LoadedScene {
                             &mut system.random,
                         )
                         .max(0.0),
+                        color_start: sample_particle_color(
+                            system.config.color_start,
+                            &mut system.random,
+                        ),
+                        color_end: sample_particle_color(
+                            system.config.color_end,
+                            &mut system.random,
+                        ),
                         spin: 0.0,
                         spin_rate: sample_particle_float(
                             system.config.spin_rate,
@@ -774,6 +782,18 @@ impl LoadedScene {
                         particle.spin,
                     );
                     self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
+                    let color_progress = if particle.age > system.config.color_delay {
+                        ((particle.age - system.config.color_delay)
+                            / (particle.lifetime - system.config.color_delay).max(f32::EPSILON))
+                        .clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    self.render.mesh.vertex_colors[target..target + 4].fill(
+                        particle
+                            .color_start
+                            .lerp(particle.color_end, color_progress),
+                    );
                 } else {
                     self.render.mesh.positions[target..target + 4].fill(Vec3::ZERO);
                 }
@@ -1446,6 +1466,8 @@ struct Particle {
     lifetime: f32,
     half_size: Vec2,
     end_scale: f32,
+    color_start: Vec3,
+    color_end: Vec3,
     spin: f32,
     spin_rate: f32,
     drip_time: f32,
@@ -1483,6 +1505,20 @@ fn pattern_length(points: &[[f32; 3]]) -> f32 {
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
     value.base + value.random * random_unit(random)
+}
+
+fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
+    let base = Vec3::new(
+        value.base[0] as f32,
+        value.base[1] as f32,
+        value.base[2] as f32,
+    );
+    let range = Vec3::new(
+        value.random[0] as f32,
+        value.random[1] as f32,
+        value.random[2] as f32,
+    );
+    (base + range * random_unit(random)) / 255.0
 }
 
 fn particle_damping(damping: f32, delta_time: f32) -> f32 {
@@ -3166,7 +3202,7 @@ fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
 #[cfg(test)]
 mod tests {
     use openhp1_map::PolyFlags;
-    use openhp1_runtime::{ParticleEmitter, ParticleFloat};
+    use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat};
     use openhp1_texture::TextureRenderFlags;
 
     use crate::SurfaceMode;
@@ -3202,6 +3238,15 @@ mod tests {
             size_width: ParticleFloat::default(),
             size_length: ParticleFloat::default(),
             size_end_scale: ParticleFloat::default(),
+            color_start: ParticleColor {
+                base: [255; 4],
+                random: [0; 4],
+            },
+            color_end: ParticleColor {
+                base: [255; 4],
+                random: [0; 4],
+            },
+            color_delay: 0.0,
             size_delay: 0.0,
             size_grow_period: 0.0,
             draw_scale: 1.0,

@@ -8,8 +8,8 @@ use thiserror::Error;
 mod world;
 
 pub use world::{
-    ActorAction, DispatchError, DispatchResult, ParticleEmitter, ParticleFloat, ParticleTexture,
-    PlayerMusic, ScriptRuntime, WeaponAttachment,
+    ActorAction, DispatchError, DispatchResult, ParticleColor, ParticleEmitter, ParticleFloat,
+    ParticleTexture, PlayerMusic, ScriptRuntime, WeaponAttachment,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;

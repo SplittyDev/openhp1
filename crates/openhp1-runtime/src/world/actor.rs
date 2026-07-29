@@ -367,6 +367,17 @@ impl ScriptRuntime {
                     &instance,
                     "SizeEndScale",
                 )?),
+                color_start: particle_color(self.instance_property(
+                    &class,
+                    &instance,
+                    "ColorStart",
+                )?),
+                color_end: particle_color(self.instance_property(&class, &instance, "ColorEnd")?),
+                color_delay: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "ColorDelay",
+                )?),
                 size_delay: particle_scalar(self.instance_property(
                     &class,
                     &instance,
@@ -1479,6 +1490,31 @@ fn particle_float(value: Option<StoredValue>) -> ParticleFloat {
     }
 }
 
+fn particle_color(value: Option<StoredValue>) -> ParticleColor {
+    let Some(StoredValue::Value(Value::Struct(values))) = value else {
+        return ParticleColor::default();
+    };
+    let color = |name: &str| {
+        let Some(Value::Struct(values)) = values.get(name) else {
+            return [0; 4];
+        };
+        let component = |name: &str| match values.get(name) {
+            Some(Value::Byte(value)) => *value,
+            _ => 0,
+        };
+        [
+            component("R"),
+            component("G"),
+            component("B"),
+            component("A"),
+        ]
+    };
+    ParticleColor {
+        base: color("Base"),
+        random: color("Rand"),
+    }
+}
+
 fn particle_vector(value: Option<StoredValue>) -> [f32; 3] {
     match value {
         Some(StoredValue::Value(Value::Vector(value)))
@@ -1567,7 +1603,12 @@ pub(super) fn update_touching_array(values: &mut [StoredValue], other: ObjectId,
 
 #[cfg(test)]
 mod animation_tests {
-    use super::{LatentAction, advance_animation_frame, decode_latent_action};
+    use std::collections::HashMap;
+
+    use super::{
+        LatentAction, ParticleColor, StoredValue, Value, advance_animation_frame,
+        decode_latent_action, particle_color,
+    };
 
     #[test]
     fn animation_frames_follow_ue_tween_and_loop_rules() {
@@ -1585,5 +1626,27 @@ mod animation_tests {
     fn decodes_turn_toward_latent_state() {
         assert_eq!(decode_latent_action(503, 7), LatentAction::MoveToward(7));
         assert_eq!(decode_latent_action(511, 7), LatentAction::TurnToward(7));
+    }
+
+    #[test]
+    fn decodes_authored_particle_color_ranges() {
+        let color = |red, green, blue| {
+            Value::Struct(HashMap::from([
+                ("R".to_owned(), Value::Byte(red)),
+                ("G".to_owned(), Value::Byte(green)),
+                ("B".to_owned(), Value::Byte(blue)),
+                ("A".to_owned(), Value::Byte(0)),
+            ]))
+        };
+        assert_eq!(
+            particle_color(Some(StoredValue::Value(Value::Struct(HashMap::from([
+                ("Base".to_owned(), color(1, 2, 3)),
+                ("Rand".to_owned(), color(4, 5, 6)),
+            ]))))),
+            ParticleColor {
+                base: [1, 2, 3, 0],
+                random: [4, 5, 6, 0],
+            }
+        );
     }
 }

@@ -165,6 +165,12 @@ pub struct ParticleFloat {
     pub random: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ParticleColor {
+    pub base: [u8; 4],
+    pub random: [u8; 4],
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParticleTexture {
     pub package: String,
@@ -195,6 +201,9 @@ pub struct ParticleEmitter {
     pub size_width: ParticleFloat,
     pub size_length: ParticleFloat,
     pub size_end_scale: ParticleFloat,
+    pub color_start: ParticleColor,
+    pub color_end: ParticleColor,
+    pub color_delay: f32,
     pub size_delay: f32,
     pub size_grow_period: f32,
     pub draw_scale: f32,
