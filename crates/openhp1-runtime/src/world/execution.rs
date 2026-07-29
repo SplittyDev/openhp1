@@ -1602,7 +1602,7 @@ impl ScriptRuntime {
             };
             actor
         };
-        let (is_base, is_hidden, is_pre_pivot, is_draw_type) = {
+        let (is_base, is_hidden, is_pre_pivot, is_draw_type, unsupported_scene_property) = {
             let field = self.resolved_object(&field)?;
             let name = field
                 .package
@@ -1613,6 +1613,7 @@ impl ScriptRuntime {
                 name.eq_ignore_ascii_case("bHidden"),
                 name.eq_ignore_ascii_case("PrePivot"),
                 name.eq_ignore_ascii_case("DrawType"),
+                is_unsupported_scene_property(name).then(|| name.to_owned()),
             )
         };
         if is_base {
@@ -1655,6 +1656,9 @@ impl ScriptRuntime {
         if let Some(draw_type) = draw_type {
             actions.push(ActorAction::SetDrawType { actor, draw_type });
         }
+        if let Some(property) = unsupported_scene_property {
+            actions.push(ActorAction::UnsupportedSceneProperty { actor, property });
+        }
         Ok(())
     }
 
@@ -1673,6 +1677,37 @@ impl ScriptRuntime {
             .ok_or(DispatchError::InvalidObjectHandle { handle })?;
         Ok(self.handle_objects[index].clone())
     }
+}
+
+fn is_unsupported_scene_property(name: &str) -> bool {
+    [
+        "AmbientGlow",
+        "bCorona",
+        "bLensFlare",
+        "bMeshEnviroMap",
+        "bNoSmooth",
+        "bUnlit",
+        "DrawScale",
+        "Fatness",
+        "LightBrightness",
+        "LightEffect",
+        "LightHue",
+        "LightPeriod",
+        "LightPhase",
+        "LightRadius",
+        "LightSaturation",
+        "LightType",
+        "LODBias",
+        "Mesh",
+        "MultiSkins",
+        "ScaleGlow",
+        "Skin",
+        "Style",
+        "Texture",
+        "VolumeBrightness",
+    ]
+    .iter()
+    .any(|property| name.eq_ignore_ascii_case(property))
 }
 
 pub(super) fn named_native(class: &str, function: &str, arguments: &[Value]) -> Option<Value> {
@@ -1891,6 +1926,14 @@ mod tests {
             concrete_self_value(&value, 42),
             Value::Array(vec![Value::Object(42), Value::Object(7)])
         );
+    }
+
+    #[test]
+    fn identifies_scene_properties_that_runtime_does_not_project() {
+        assert!(is_unsupported_scene_property("DrawScale"));
+        assert!(is_unsupported_scene_property("multiskins"));
+        assert!(!is_unsupported_scene_property("DrawType"));
+        assert!(!is_unsupported_scene_property("Velocity"));
     }
 
     #[test]

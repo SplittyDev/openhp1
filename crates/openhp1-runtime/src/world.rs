@@ -358,6 +358,10 @@ pub enum ActorAction {
         actor: usize,
         draw_type: u8,
     },
+    UnsupportedSceneProperty {
+        actor: usize,
+        property: String,
+    },
     DestroyActor {
         actor: usize,
     },
@@ -391,6 +395,7 @@ impl ActorAction {
             | Self::SetPrePivot { actor, .. }
             | Self::SetHidden { actor, .. }
             | Self::SetDrawType { actor, .. }
+            | Self::UnsupportedSceneProperty { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }
             | Self::DeferredCall { actor, .. }

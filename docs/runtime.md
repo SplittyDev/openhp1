@@ -77,6 +77,10 @@ Runtime assignments to `bHidden` and `DrawType` both update scene visibility.
 authored DrawType restoration can reveal the same actor again. Transitions
 between two nonzero DrawTypes require different render topology and remain an
 explicit actor capability diagnostic until that topology can be rebuilt.
+Assignments to other render- or light-affecting Actor properties that are not
+yet projected into scene geometry, materials, or lighting likewise become
+deduplicated actor capability diagnostics. `ParticleFX` is excluded because
+its live instance state is synchronized separately each frame.
 
 ## Particle effects
 

@@ -380,6 +380,15 @@ fn apply_actions(
                 stats.visibility_changed +=
                     usize::from(scene.set_actor_draw_type(actor, draw_type)?);
             }
+            ActorAction::UnsupportedSceneProperty { actor, property } => {
+                if scene.actors[actor].draw_type != 8 {
+                    let diagnostic =
+                        format!("runtime property {property} is not projected into the scene");
+                    if !scene.actors[actor].diagnostics.contains(&diagnostic) {
+                        scene.actors[actor].diagnostics.push(diagnostic);
+                    }
+                }
+            }
             ActorAction::DestroyActor { actor } => {
                 stats.destroyed += usize::from(scene.destroy_actor(actor)?);
             }

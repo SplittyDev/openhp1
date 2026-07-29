@@ -232,6 +232,23 @@ pub fn apply_runtime_actions_with(
             ActorAction::SetDrawType { actor, draw_type } => {
                 transformed |= scene.set_actor_draw_type(actor, draw_type)?;
             }
+            ActorAction::UnsupportedSceneProperty { actor, property } => {
+                // ParticleFX state is projected by sync_particle_emitters each frame.
+                if scene.actors[actor].draw_type == 8 {
+                    continue;
+                }
+                let diagnostic =
+                    format!("runtime property {property} is not projected into the scene");
+                if !scene.actors[actor].diagnostics.contains(&diagnostic) {
+                    warn!(
+                        actor,
+                        actor_name = scene.actors[actor].name,
+                        %diagnostic,
+                        "render capability diagnostic"
+                    );
+                    scene.actors[actor].diagnostics.push(diagnostic);
+                }
+            }
             ActorAction::DestroyActor { actor } => {
                 transformed |= scene.destroy_actor(actor)?;
             }
