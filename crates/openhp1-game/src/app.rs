@@ -193,7 +193,7 @@ impl InputState {
             base_y: forward * 6_000.0 - backward * 3_000.0,
             strafe: 0.0,
             mouse_x: self.mouse_delta.0 as f32 * 16.0 * 6.0,
-            mouse_y: self.mouse_delta.1 as f32 * 16.0 * 6.0,
+            mouse_y: -self.mouse_delta.1 as f32 * 16.0 * 6.0,
             alt_fire: casting,
             alt_fire_pressed: self.cast_requested,
             jump: self.jump_requested,
@@ -905,7 +905,7 @@ mod tests {
         assert_eq!(player.base_y, 6_000.0);
         assert_eq!(player.strafe, 0.0);
         assert_eq!(player.mouse_x, 192.0);
-        assert_eq!(player.mouse_y, -96.0);
+        assert_eq!(player.mouse_y, 96.0);
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
         assert!(player.jump);
@@ -917,7 +917,7 @@ mod tests {
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
         assert_eq!(player.mouse_x, 192.0);
-        assert_eq!(player.mouse_y, -96.0);
+        assert_eq!(player.mouse_y, 96.0);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
         assert!(!input.player_input().alt_fire_pressed);
