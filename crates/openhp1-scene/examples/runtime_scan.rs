@@ -125,6 +125,19 @@ fn main() -> Result<()> {
                 }
             }
         }
+        for actor in &scene.actors {
+            let Some(render) = &actor.render else {
+                continue;
+            };
+            anyhow::ensure!(
+                actor.draw_type != 0
+                    || scene.render.mesh.positions[render.vertices.clone()]
+                        .iter()
+                        .all(|position| *position == Vec3::ZERO),
+                "{} retained visible geometry after switching to DT_None",
+                actor.name
+            );
+        }
         let player = runtime.player_actor();
         if let Some(player) = player {
             anyhow::ensure!(
@@ -231,7 +244,7 @@ fn main() -> Result<()> {
         stats.rotations, stats.rotated
     );
     println!(
-        "{} SetHidden actions, {} actor visibility changes",
+        "{} render visibility actions, {} actor visibility changes",
         stats.visibility, stats.visibility_changed
     );
     println!("{} actors destroyed", stats.destroyed);
@@ -361,6 +374,11 @@ fn apply_actions(
             ActorAction::SetHidden { actor, hidden } => {
                 stats.visibility += 1;
                 stats.visibility_changed += usize::from(scene.set_actor_hidden(actor, hidden)?);
+            }
+            ActorAction::SetDrawType { actor, draw_type } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_actor_draw_type(actor, draw_type)?);
             }
             ActorAction::DestroyActor { actor } => {
                 stats.destroyed += usize::from(scene.destroy_actor(actor)?);

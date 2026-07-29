@@ -229,6 +229,9 @@ pub fn apply_runtime_actions_with(
             ActorAction::SetHidden { actor, hidden } => {
                 transformed |= scene.set_actor_hidden(actor, hidden)?;
             }
+            ActorAction::SetDrawType { actor, draw_type } => {
+                transformed |= scene.set_actor_draw_type(actor, draw_type)?;
+            }
             ActorAction::DestroyActor { actor } => {
                 transformed |= scene.destroy_actor(actor)?;
             }

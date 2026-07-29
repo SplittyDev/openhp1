@@ -403,7 +403,7 @@ impl LoadedScene {
         if delta == Vec3::ZERO {
             return Ok(false);
         }
-        let hidden = actor.hidden;
+        let collapsed = self.hidden_actor_positions.contains_key(&actor_index);
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         if let Some(vertices) = &vertices {
             ensure!(
@@ -417,11 +417,11 @@ impl LoadedScene {
             *transform = Mat4::from_translation(delta) * *transform;
         }
         if let Some(vertices) = vertices {
-            if hidden {
+            if collapsed {
                 let positions = self
                     .hidden_actor_positions
                     .get_mut(&actor_index)
-                    .context("hidden actor has no saved render positions")?;
+                    .context("collapsed actor has no saved render positions")?;
                 translate_positions(positions, delta);
             } else {
                 translate_positions(&mut self.render.mesh.positions[vertices], delta);
@@ -912,7 +912,7 @@ impl LoadedScene {
         if actor.rotation == rotation {
             return Ok(false);
         }
-        let hidden = actor.hidden;
+        let collapsed = self.hidden_actor_positions.contains_key(&actor_index);
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         if let Some(vertices) = &vertices {
             ensure!(
@@ -932,11 +932,11 @@ impl LoadedScene {
             *mesh_transform = transform * *mesh_transform;
         }
         if let Some(vertices) = vertices {
-            if hidden {
+            if collapsed {
                 let positions = self
                     .hidden_actor_positions
                     .get_mut(&actor_index)
-                    .context("hidden actor has no saved render positions")?;
+                    .context("collapsed actor has no saved render positions")?;
                 transform_positions(positions, transform);
             } else {
                 transform_positions(&mut self.render.mesh.positions[vertices], transform);
@@ -964,18 +964,18 @@ impl LoadedScene {
             return Ok(false);
         }
         let delta = pre_pivot_translation(actor, pre_pivot);
-        let hidden = actor.hidden;
+        let collapsed = self.hidden_actor_positions.contains_key(&actor_index);
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         self.actors[actor_index].pre_pivot = pre_pivot;
         if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
             *transform = Mat4::from_translation(delta) * *transform;
         }
         if let Some(vertices) = vertices {
-            if hidden {
+            if collapsed {
                 let positions = self
                     .hidden_actor_positions
                     .get_mut(&actor_index)
-                    .context("hidden actor has no saved render positions")?;
+                    .context("collapsed actor has no saved render positions")?;
                 translate_positions(positions, delta);
             } else {
                 translate_positions(&mut self.render.mesh.positions[vertices], delta);
@@ -1000,6 +1000,42 @@ impl LoadedScene {
             return Ok(false);
         }
         actor.hidden = hidden;
+        self.sync_actor_render_visibility(actor_index)
+    }
+
+    pub fn set_actor_draw_type(&mut self, actor_index: usize, draw_type: u8) -> Result<bool> {
+        let actor = self
+            .actors
+            .get_mut(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        if actor.draw_type == draw_type {
+            return Ok(false);
+        }
+        let previous = actor.draw_type;
+        actor.draw_type = draw_type;
+        if previous != 0 && draw_type != 0 && previous != draw_type {
+            let diagnostic = format!(
+                "runtime DrawType transition from {previous} to {draw_type} is unsupported"
+            );
+            if !actor.diagnostics.contains(&diagnostic) {
+                warn!(
+                    actor = actor_index,
+                    actor_name = actor.name,
+                    %diagnostic,
+                    "render capability diagnostic"
+                );
+                actor.diagnostics.push(diagnostic);
+            }
+            return Ok(false);
+        }
+        self.sync_actor_render_visibility(actor_index)
+    }
+
+    fn sync_actor_render_visibility(&mut self, actor_index: usize) -> Result<bool> {
+        let actor = self
+            .actors
+            .get(actor_index)
+            .context("runtime refers to a missing scene actor")?;
         let Some(render) = &actor.render else {
             return Ok(false);
         };
@@ -1008,8 +1044,13 @@ impl LoadedScene {
                 && render.vertices.end <= self.render.mesh.positions.len(),
             "actor render range is outside the scene mesh"
         );
+        let visible = !actor.hidden && actor.draw_type != 0;
+        let collapsed = self.hidden_actor_positions.contains_key(&actor_index);
+        if visible == !collapsed {
+            return Ok(false);
+        }
         let positions = &mut self.render.mesh.positions[render.vertices.clone()];
-        if hidden {
+        if !visible {
             self.hidden_actor_positions
                 .insert(actor_index, positions.to_vec());
             Ok(collapse_positions(positions))
@@ -1144,7 +1185,7 @@ impl LoadedScene {
                     animation.playing = false;
                 }
             }
-            let hidden = {
+            let collapsed = {
                 let actor = self
                     .actors
                     .get_mut(animation.actor_index)
@@ -1154,7 +1195,8 @@ impl LoadedScene {
                     .as_mut()
                     .context("animated scene actor has no animation state")?;
                 actor_animation.phase = animation.phase;
-                actor.hidden
+                self.hidden_actor_positions
+                    .contains_key(&animation.actor_index)
             };
             let (triangles, root_motion) = animation.sample()?;
             if animation.root_motion {
@@ -1182,11 +1224,11 @@ impl LoadedScene {
                     .zip(tween)
                     .map_or(target, |(from, tween)| from[index].lerp(target, tween));
                 let normal = (animation.normal_transform * vertex.normal).normalize_or_zero();
-                if hidden {
+                if collapsed {
                     self.hidden_actor_positions
                         .get_mut(&animation.actor_index)
-                        .context("hidden animated actor has no saved render positions")?[index] =
-                        position;
+                        .context("collapsed animated actor has no saved render positions")?
+                        [index] = position;
                 } else {
                     self.render.mesh.positions[destination] = position;
                 }

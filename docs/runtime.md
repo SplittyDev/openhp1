@@ -72,6 +72,12 @@ offsets.
 Unsupported actions should remain nonfatal actor diagnostics until their
 subsystem exists; they must not silently claim successful behavior.
 
+Runtime assignments to `bHidden` and `DrawType` both update scene visibility.
+`DT_None` collapses existing render geometry without discarding it, so a later
+authored DrawType restoration can reveal the same actor again. Transitions
+between two nonzero DrawTypes require different render topology and remain an
+explicit actor capability diagnostic until that topology can be rebuilt.
+
 ## Particle effects
 
 `ParticleFX` configuration remains live UnrealScript instance state. The scene

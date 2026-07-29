@@ -354,6 +354,10 @@ pub enum ActorAction {
         actor: usize,
         hidden: bool,
     },
+    SetDrawType {
+        actor: usize,
+        draw_type: u8,
+    },
     DestroyActor {
         actor: usize,
     },
@@ -386,6 +390,7 @@ impl ActorAction {
             | Self::SetRotation { actor, .. }
             | Self::SetPrePivot { actor, .. }
             | Self::SetHidden { actor, .. }
+            | Self::SetDrawType { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }
             | Self::DeferredCall { actor, .. }

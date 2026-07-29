@@ -1602,7 +1602,7 @@ impl ScriptRuntime {
             };
             actor
         };
-        let (is_base, is_hidden, is_pre_pivot) = {
+        let (is_base, is_hidden, is_pre_pivot, is_draw_type) = {
             let field = self.resolved_object(&field)?;
             let name = field
                 .package
@@ -1612,6 +1612,7 @@ impl ScriptRuntime {
                 name.eq_ignore_ascii_case("Base"),
                 name.eq_ignore_ascii_case("bHidden"),
                 name.eq_ignore_ascii_case("PrePivot"),
+                name.eq_ignore_ascii_case("DrawType"),
             )
         };
         if is_base {
@@ -1627,6 +1628,10 @@ impl ScriptRuntime {
         };
         let pre_pivot = match (is_pre_pivot, &value) {
             (true, StoredValue::Value(Value::Vector(pre_pivot))) => Some(*pre_pivot),
+            _ => None,
+        };
+        let draw_type = match (is_draw_type, &value) {
+            (true, StoredValue::Value(Value::Byte(draw_type))) => Some(*draw_type),
             _ => None,
         };
         if actor == current_actor {
@@ -1646,6 +1651,9 @@ impl ScriptRuntime {
         }
         if let Some(pre_pivot) = pre_pivot {
             actions.push(ActorAction::SetPrePivot { actor, pre_pivot });
+        }
+        if let Some(draw_type) = draw_type {
+            actions.push(ActorAction::SetDrawType { actor, draw_type });
         }
         Ok(())
     }
