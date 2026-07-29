@@ -592,6 +592,12 @@ impl LoadedScene {
             system.particles.retain_mut(|particle| {
                 particle.age += delta_time;
                 particle.spin += particle.spin_rate * delta_time;
+                particle.velocity += particle_attraction(
+                    particle.location,
+                    owner.location,
+                    system.config.system_relative,
+                    system.config.attraction,
+                ) * delta_time;
                 particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
                 particle.velocity *= particle_damping(system.config.damping, delta_time);
                 particle.location += particle.velocity * delta_time;
@@ -1523,6 +1529,20 @@ fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
 
 fn particle_damping(damping: f32, delta_time: f32) -> f32 {
     (-damping * delta_time).exp()
+}
+
+fn particle_attraction(
+    location: Vec3,
+    owner_location: Vec3,
+    system_relative: bool,
+    attraction: [f32; 3],
+) -> Vec3 {
+    let target = if system_relative {
+        Vec3::ZERO
+    } else {
+        owner_location
+    };
+    (target - location) * Vec3::from_array(attraction)
 }
 
 fn pattern_position(points: &[[f32; 3]], progress: f32) -> Option<Vec3> {
@@ -3311,6 +3331,19 @@ mod tests {
     fn particle_damping_is_exponential_over_elapsed_time() {
         assert!((super::particle_damping(1.0, 1.0) - std::f32::consts::E.recip()).abs() < 1e-6);
         assert_eq!(super::particle_damping(0.0, 10.0), 1.0);
+    }
+
+    #[test]
+    fn particle_attraction_accelerates_each_authored_axis_toward_the_emitter() {
+        assert_eq!(
+            super::particle_attraction(
+                glam::Vec3::new(8.0, 3.0, 4.0),
+                glam::Vec3::new(10.0, 2.0, 9.0),
+                false,
+                [2.0, 3.0, 0.0],
+            ),
+            glam::Vec3::new(4.0, -3.0, 0.0)
+        );
     }
 
     #[test]

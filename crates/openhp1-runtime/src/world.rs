@@ -243,9 +243,6 @@ impl ParticleEmitter {
         if self.chaos != 0.0 {
             diagnostics.push("particle chaos movement is unsupported");
         }
-        if self.attraction != [0.0; 3] {
-            diagnostics.push("particle attraction is unsupported");
-        }
         if self.elasticity != 0.0 {
             diagnostics.push("particle collision elasticity is unsupported");
         }
