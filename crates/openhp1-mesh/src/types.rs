@@ -160,18 +160,23 @@ impl Mesh {
         animation: &SkeletalAnimation,
         sequence: usize,
         phase: f32,
+        extract_root_motion: bool,
     ) -> Result<Option<Mat4>> {
         if !phase.is_finite() {
             return Err(Error::InvalidAnimationPhase(phase));
         }
         let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
-        let (_, _, bones) = animation.sample_pose(skeletal, sequence, phase, false)?;
+        let (_, _, bones) =
+            animation.sample_pose(skeletal, sequence, phase, extract_root_motion)?;
         let Some(weapon_bone) = skeletal.weapon_bone else {
             return Ok(None);
         };
         let bone = checked(&bones, weapon_bone, "weapon bone")?;
         let mirror = Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0));
-        Ok(Some(mirror * bone * skeletal.weapon_adjust * mirror))
+        let weapon_basis = Mat4::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+        Ok(Some(
+            mirror * bone * skeletal.weapon_adjust * weapon_basis * mirror,
+        ))
     }
 
     pub fn sample_skeletal_sequence_with_root_motion(
@@ -475,8 +480,38 @@ mod tests {
         };
 
         let (points, motion) = animation.sample_with_root_motion(&mesh, 0, 0.5).unwrap();
+        let attached = Mesh {
+            triangles: Vec::new(),
+            textures: Vec::new(),
+            animation_sequences: Vec::new(),
+            bounds: None,
+            frame_vertices: 0,
+            animation_frames: 0,
+            scale: Vec3::ONE,
+            origin: Vec3::ZERO,
+            rotation_origin: IVec3::ZERO,
+            default_animation: ObjectReference::None,
+            vertices: Vec::new(),
+            normals: Vec::new(),
+            face_vertices: Vec::new(),
+            attachment_vertices: None,
+            skeletal: Some(mesh),
+        }
+        .sample_skeletal_weapon_transform(&animation, 0, 0.5, true)
+        .unwrap()
+        .unwrap();
 
         assert_eq!(points, vec![Vec3::ZERO]);
         assert_eq!(motion, Vec3::new(2.0, -1.0, 3.0));
+        assert!(
+            attached
+                .transform_point3(Vec3::ZERO)
+                .abs_diff_eq(Vec3::ZERO, 0.0001)
+        );
+        assert!(
+            attached
+                .transform_vector3(-Vec3::Z)
+                .abs_diff_eq(Vec3::X, 0.0001)
+        );
     }
 }

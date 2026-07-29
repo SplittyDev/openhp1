@@ -1237,6 +1237,7 @@ impl LoadedScene {
             }
             if tween == Some(1.0) {
                 animation.tween_from = None;
+                animation.tween_attachment_from = None;
             }
         }
         Ok((changed, completed))
@@ -1393,6 +1394,10 @@ impl LoadedScene {
         let source_name = source.name.clone();
         let source_rate = source.rate;
         let source_frames = source.frame_count;
+        animation.tween_attachment_from = (tween_time > 0.0)
+            .then(|| animation.local_attachment())
+            .transpose()?
+            .flatten();
         // ponytail: keep the displayed render-space pose until moving actors need
         // concurrent root-motion tweening.
         animation.tween_from = (tween_time > 0.0)
@@ -1485,6 +1490,16 @@ fn triangle_attachment_transform(points: [Vec3; 3]) -> Option<Mat4> {
     })
 }
 
+fn interpolate_transform(from: Mat4, to: Mat4, amount: f32) -> Mat4 {
+    let (from_scale, from_rotation, from_translation) = from.to_scale_rotation_translation();
+    let (to_scale, to_rotation, to_translation) = to.to_scale_rotation_translation();
+    Mat4::from_scale_rotation_translation(
+        from_scale.lerp(to_scale, amount),
+        from_rotation.slerp(to_rotation, amount),
+        from_translation.lerp(to_translation, amount),
+    )
+}
+
 fn rotation_delta(origin: Vec3, old: Rotator, new: Rotator) -> Mat4 {
     Mat4::from_translation(origin)
         * rotation_matrix(new)
@@ -1512,6 +1527,7 @@ struct AnimatedActorMesh {
     root_motion: bool,
     root_motion_position: Vec3,
     tween_from: Option<Vec<Vec3>>,
+    tween_attachment_from: Option<Mat4>,
     tween_elapsed: f32,
     tween_duration: f32,
     vertices: Range<usize>,
@@ -1737,6 +1753,17 @@ impl AnimatedActorMesh {
     }
 
     fn attachment(&self) -> openhp1_mesh::Result<Option<Mat4>> {
+        self.local_attachment().map(|attachment| {
+            attachment.map(|target| {
+                let local = self.tween_attachment_from.map_or(target, |from| {
+                    interpolate_transform(from, target, self.tween_elapsed / self.tween_duration)
+                });
+                self.transform * local
+            })
+        })
+    }
+
+    fn local_attachment(&self) -> openhp1_mesh::Result<Option<Mat4>> {
         let Some(animation) = &self.skeletal_animation else {
             return Ok(None);
         };
@@ -1744,13 +1771,14 @@ impl AnimatedActorMesh {
             self.mesh
                 .sample_skeletal_attachment(animation, self.sequence, self.phase)?
         {
-            return Ok(triangle_attachment_transform(
-                points.map(|point| self.transform.transform_point3(point)),
-            ));
+            return Ok(triangle_attachment_transform(points));
         }
-        self.mesh
-            .sample_skeletal_weapon_transform(animation, self.sequence, self.phase)
-            .map(|transform| transform.map(|transform| self.transform * transform))
+        self.mesh.sample_skeletal_weapon_transform(
+            animation,
+            self.sequence,
+            self.phase,
+            self.root_motion,
+        )
     }
 }
 
@@ -2858,6 +2886,7 @@ fn append_actor_mesh(
             root_motion: false,
             root_motion_position: Vec3::ZERO,
             tween_from: None,
+            tween_attachment_from: None,
             tween_elapsed: 0.0,
             tween_duration: 0.0,
             vertices: first_vertex..render_mesh.positions.len(),
@@ -3525,6 +3554,26 @@ mod tests {
         assert_eq!(
             transform.transform_vector3(glam::Vec3::Y),
             glam::Vec3::Z * 2.0
+        );
+    }
+
+    #[test]
+    fn weapon_attachment_follows_animation_tween() {
+        let from = glam::Mat4::IDENTITY;
+        let to = glam::Mat4::from_translation(glam::Vec3::X * 2.0)
+            * glam::Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let transform = super::interpolate_transform(from, to, 0.5);
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+
+        assert!(
+            transform
+                .transform_point3(glam::Vec3::ZERO)
+                .abs_diff_eq(glam::Vec3::X, 0.0001)
+        );
+        assert!(
+            transform
+                .transform_vector3(glam::Vec3::X)
+                .abs_diff_eq(glam::Vec3::new(diagonal, diagonal, 0.0), 0.0001)
         );
     }
 

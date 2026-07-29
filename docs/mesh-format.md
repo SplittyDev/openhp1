@@ -37,11 +37,16 @@ per-actor or renderer fixes.
 
 ## Weapon attachments
 
-UE1 pawn weapons are rendered from the pawn LOD mesh's first serialized special
-face. Its three sampled vertices define the weapon coordinate axes and midpoint
-for the current pose; the weapon's `ThirdPersonScale` and mesh-to-object
-transform are then applied. The weapon actor's world location alone is not its
-render placement.
+UE1 pawn weapons use the pawn LOD mesh's first serialized special face when
+present. Its three sampled vertices define the weapon coordinate axes and
+midpoint for the current pose. Skeletal meshes without that face use their
+serialized weapon bone and adjustment; the classic weapon mesh's local `-Z`
+length axis maps to the skeletal weapon bone's local `+X` axis. Weapon-bone
+sampling must use the same root-motion extraction mode as the rendered pawn.
+Animation transitions interpolate the previous and next local attachment
+transforms for the same duration as the visible mesh tween.
+The weapon's `ThirdPersonScale` and mesh-to-object transform are then applied.
+The weapon actor's world location alone is not its render placement.
 
 ## Packed rotations
 
