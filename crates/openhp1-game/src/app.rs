@@ -1041,16 +1041,14 @@ impl Graphics {
     fn update_vertices(&mut self) {
         self.vertices_dirty = false;
         let changed_lightmaps = self.scene.take_changed_lightmaps();
-        let vertices_updated = self
-            .renderer
-            .update_vertices(&self.queue, &self.scene.render);
-        let lightmaps_updated = vertices_updated
+        let scene_updated = self.renderer.update_scene(&self.queue, &self.scene.render);
+        let lightmaps_updated = scene_updated
             && self.renderer.update_lightmaps(
                 &self.queue,
                 &self.scene.render.lightmaps,
                 &changed_lightmaps,
             );
-        if !vertices_updated || !lightmaps_updated {
+        if !scene_updated || !lightmaps_updated {
             self.renderer
                 .reload_scene(&self.device, &self.queue, &self.scene.render);
         }

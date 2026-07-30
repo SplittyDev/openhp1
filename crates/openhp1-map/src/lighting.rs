@@ -148,7 +148,7 @@ fn decode_ambient(package: &Package, export_index: usize) -> Result<AmbientLight
     Ok(ambient)
 }
 
-fn hsb_to_rgb(hue: u8, saturation: u8, brightness: u8) -> Vec3 {
+pub fn hsb_to_rgb(hue: u8, saturation: u8, brightness: u8) -> Vec3 {
     let value = 6.512_735 * f32::from(brightness).sqrt();
     if saturation >= 250 {
         return Vec3::splat(value / 255.0);

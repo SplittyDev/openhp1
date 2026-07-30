@@ -10,7 +10,7 @@ pub use actor::{SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObj
 pub use coordinates::{render_to_unreal, unreal_to_render};
 pub use loader::LoadedScene;
 pub use openhp1_map::{LightmapImage, Rotator, SkyZone, TriangleMesh};
-pub use render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
+pub use render::{Corona, RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
 pub use runtime::{
     apply_runtime_actions, apply_runtime_actions_with, initialize_runtime, initialize_runtime_with,
     initialize_runtime_with_console, initialize_runtime_with_console_unstarted,

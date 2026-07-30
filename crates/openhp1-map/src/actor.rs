@@ -35,6 +35,8 @@ pub struct ActorProperties {
     pub anim_rate: Option<f32>,
     pub texture_u_pan_speed: Option<f32>,
     pub texture_v_pan_speed: Option<f32>,
+    pub light_hue: Option<u8>,
+    pub light_saturation: Option<u8>,
     pub corona: Option<bool>,
     pub hidden: Option<bool>,
     pub unlit: Option<bool>,
@@ -140,6 +142,12 @@ impl ActorProperties {
                 }
                 ("TexVPanSpeed", PropertyKind::Float, _) => {
                     properties.texture_v_pan_speed = Some(value.read_f32()?);
+                }
+                ("LightHue", PropertyKind::Byte, _) => {
+                    properties.light_hue = Some(value.read_u8()?);
+                }
+                ("LightSaturation", PropertyKind::Byte, _) => {
+                    properties.light_saturation = Some(value.read_u8()?);
                 }
                 ("bCorona", PropertyKind::Bool, _) => {
                     properties.corona = property.bool_value;

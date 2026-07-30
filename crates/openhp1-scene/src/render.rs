@@ -1,3 +1,4 @@
+use glam::Vec3;
 use openhp1_map::{LightmapImage, SkyZone, TriangleMesh};
 
 #[derive(Clone, Debug)]
@@ -5,6 +6,17 @@ pub struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Corona {
+    pub actor_index: usize,
+    /// Authored UE-space light location.
+    pub location: Vec3,
+    /// Index into [`RenderScene::textures`].
+    pub texture: usize,
+    pub draw_scale: f32,
+    pub color: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -56,6 +68,7 @@ pub struct RenderScene {
     pub mesh: TriangleMesh,
     pub textures: Vec<TextureImage>,
     pub lightmaps: Vec<LightmapImage>,
+    pub coronas: Vec<Corona>,
     /// Material for each BSP surface. Missing textures use the renderer's
     /// checkerboard.
     pub surface_materials: Vec<SurfaceMaterial>,

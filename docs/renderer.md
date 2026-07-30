@@ -20,7 +20,8 @@ on world BSP geometry.
    Unreal rotator.
 8. `openhp1-scene` resolves actor defaults and instance properties, retains
    first-class actor records, and appends visible vertex meshes, skeletal
-   meshes, and moving brushes with their materials and render ranges.
+   meshes, moving brushes, and authored `bCorona`/`Skin` records with their
+   materials and render ranges.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
    backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
 10. `openhp1-render` packs lightmaps with replicated edge gutters into one
@@ -67,8 +68,9 @@ the scene into an `Rgba16Float` target before post-processing it. The modern
 post pass provides:
 
 - selectable AgX, Reinhard, and ACES tone mapping;
-- a small depth-based SSAO implementation that can be disabled;
-- HDR bloom; and
+- view-space SSAO reconstructed from the scene depth buffer;
+- authored UE1 coronas drawn as HDR screen-space sprites;
+- quarter-resolution HDR bright extraction with separable bloom blur; and
 - the existing brightness adjustment after tone mapping.
 
 Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
@@ -147,8 +149,13 @@ therefore pivots around `Location`, not the mesh-actor
 `Location + PrePivot` origin. Sprite actors use texture-sized quads aligned to
 the active UE1 view axes. Engine `S_*` textures and textures from the `HPEdit`
 package are editor viewport icons, not runtime sprites, and are excluded from
-that path. Particle actors use their live `ParticleFX` emitter state; coronas
-remain unsupported.
+that path. Particle actors use their live `ParticleFX` emitter state. In modern
+mode, coronas use their authored `Skin`, `DrawScale`, hue, and saturation; a
+fixed HDR gain supplies the luminance that UE1 did not author so they feed the
+bloom pass. Modern mode applies bounded distance falloff instead of UE1's fixed
+viewport size, and corona positions and lifetimes follow their actors. Their
+quads are depth-tested rather than using UE1's center-point BSP visibility
+trace.
 Water-backed `WetTexture` exports animate independently of actor scripts.
 Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
 `TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.

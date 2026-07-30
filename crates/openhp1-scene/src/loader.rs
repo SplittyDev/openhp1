@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
     Actor, ActorProperties, ActorVertexLighting, BrushPolys, BspNode, Level, Model, PolyFlags,
-    TriangleMesh, VertexLighting, bsp_zone_at,
+    TriangleMesh, VertexLighting, bsp_zone_at, hsb_to_rgb,
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
@@ -22,8 +22,8 @@ use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
 
 use crate::{
-    RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId,
-    SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
+    Corona, RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange,
+    SceneObjectId, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
 };
 
 mod runtime_display;
@@ -177,6 +177,7 @@ impl LoadedScene {
             .len();
         let mut animations = Vec::new();
         let mut sprites = Vec::new();
+        let mut coronas = Vec::new();
         let vertex_lighting = model
             .vertex_lighting(&package)
             .context("failed to decode actor vertex lighting")?;
@@ -200,6 +201,7 @@ impl LoadedScene {
             &mut mesh,
             &mut textures,
             &mut surface_materials,
+            &mut coronas,
             &mut animations,
             &mut sprites,
             &mut water_animations,
@@ -252,6 +254,7 @@ impl LoadedScene {
                 mesh,
                 textures,
                 lightmaps,
+                coronas,
                 surface_materials,
                 sky_zone,
             },
@@ -360,6 +363,14 @@ impl LoadedScene {
             diagnostics: class_state.diagnostics,
         };
         apply_scene_actor_state(&mut actor, &state);
+        append_scene_actor_corona(
+            &mut self.actor_render,
+            actor_index,
+            &state,
+            &mut self.render.textures,
+            &mut self.render.coronas,
+            &mut self.water_animations,
+        );
         append_scene_actor_render(
             &mut self.actor_render,
             &mut actor,
@@ -483,6 +494,14 @@ impl LoadedScene {
 
         self.actors[actor_index].location = location;
         self.actor_states[actor_index].actor.location = location;
+        for corona in self
+            .render
+            .coronas
+            .iter_mut()
+            .filter(|corona| corona.actor_index == actor_index)
+        {
+            corona.location = location;
+        }
         if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
             *transform = Mat4::from_translation(delta) * *transform;
         }
@@ -1102,6 +1121,11 @@ impl LoadedScene {
         } else {
             false
         };
+        let corona_count = self.render.coronas.len();
+        self.render
+            .coronas
+            .retain(|corona| corona.actor_index != actor_index);
+        changed |= self.render.coronas.len() != corona_count;
         let actor = self
             .actors
             .get_mut(actor_index)
@@ -2036,6 +2060,8 @@ struct ActorState {
     anim_frame: f32,
     anim_rate: f32,
     texture_pan_speed: Vec2,
+    light_hue: u8,
+    light_saturation: u8,
     corona: bool,
     hidden: bool,
     unlit: bool,
@@ -2083,6 +2109,8 @@ impl Default for ActorState {
             anim_frame: 0.0,
             anim_rate: 0.0,
             texture_pan_speed: Vec2::ONE,
+            light_hue: 0,
+            light_saturation: 255,
             corona: false,
             hidden: false,
             unlit: false,
@@ -2188,6 +2216,12 @@ impl ActorState {
         if let Some(speed) = properties.texture_v_pan_speed {
             self.texture_pan_speed.y = speed;
         }
+        if let Some(hue) = properties.light_hue {
+            self.light_hue = hue;
+        }
+        if let Some(saturation) = properties.light_saturation {
+            self.light_saturation = saturation;
+        }
         if let Some(corona) = properties.corona {
             self.corona = corona;
         }
@@ -2241,6 +2275,7 @@ fn load_actors(
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
+    coronas: &mut Vec<Corona>,
     animations: &mut Vec<AnimatedActorMesh>,
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
@@ -2355,6 +2390,14 @@ fn load_actors(
             continue;
         }
         apply_scene_actor_state(&mut scene_actor, &state);
+        append_scene_actor_corona(
+            actor_render,
+            actors.len(),
+            &state,
+            textures,
+            coronas,
+            water_animations,
+        );
         append_scene_actor_render(
             actor_render,
             &mut scene_actor,
@@ -2377,6 +2420,43 @@ fn load_actors(
         actors.push(scene_actor);
     }
     (actors, actor_states)
+}
+
+fn append_scene_actor_corona(
+    actor_render: &mut ActorRenderContext,
+    actor_index: usize,
+    state: &ActorState,
+    textures: &mut Vec<TextureImage>,
+    coronas: &mut Vec<Corona>,
+    water_animations: &mut Vec<AnimatedWaterTexture>,
+) {
+    if !state.corona {
+        return;
+    }
+    let Some(skin) = state.skin.as_ref() else {
+        return;
+    };
+    let texture = actor_surface_material(
+        &mut actor_render.packages,
+        Some(skin),
+        0,
+        state,
+        textures,
+        &mut actor_render.decoded_textures,
+        &mut actor_render.images,
+        water_animations,
+    )
+    .texture;
+    let Some(texture) = texture else {
+        return;
+    };
+    coronas.push(Corona {
+        actor_index,
+        location: state.location,
+        texture,
+        draw_scale: state.draw_scale,
+        color: hsb_to_rgb(state.light_hue, state.light_saturation, 255),
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
