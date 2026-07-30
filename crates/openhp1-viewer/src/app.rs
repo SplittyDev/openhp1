@@ -6,7 +6,9 @@ use eframe::{
     wgpu,
 };
 use glam::Vec3;
-use openhp1_render::{Camera, RenderStats, Renderer, RendererSettings};
+use openhp1_render::{
+    AmbientOcclusion, Camera, RenderStats, Renderer, RendererMode, RendererSettings, ToneMapper,
+};
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
     LoadedScene, SceneActor, SceneObjectId, apply_runtime_actions, initialize_runtime,
@@ -118,7 +120,19 @@ impl ViewerApp {
         self.load_error = None;
     }
 
-    fn sidebar(&mut self, ui: &mut egui::Ui, stable_delta_time: f32) -> Option<PathBuf> {
+    fn rebuild_renderer(&mut self, viewport_size: [u32; 2]) {
+        self.renderer = Renderer::new_with_settings(
+            &self.state.device,
+            &self.state.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            &self.scene.render,
+            viewport_size,
+            self.renderer_settings,
+        );
+    }
+
+    fn sidebar(&mut self, ui: &mut egui::Ui, stable_delta_time: f32) -> (Option<PathBuf>, bool) {
+        let previous_renderer_settings = self.renderer_settings;
         let current_level = self
             .scene
             .levels
@@ -143,6 +157,65 @@ impl ViewerApp {
                 if let Some(error) = &self.load_error {
                     ui.colored_label(egui::Color32::RED, error);
                 }
+            });
+        egui::CollapsingHeader::new("Renderer")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::Grid::new("renderer settings").show(ui, |ui| {
+                    ui.label("Mode");
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut self.renderer_settings.mode,
+                            RendererMode::Classic,
+                            "Classic",
+                        );
+                        ui.selectable_value(
+                            &mut self.renderer_settings.mode,
+                            RendererMode::Modern,
+                            "Modern",
+                        );
+                    });
+                    ui.end_row();
+
+                    if self.renderer_settings.mode == RendererMode::Modern {
+                        ui.label("Tone mapper");
+                        egui::ComboBox::from_id_salt("tone mapper selector")
+                            .selected_text(tone_mapper_name(self.renderer_settings.tone_mapper))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.tone_mapper,
+                                    ToneMapper::AgX,
+                                    "AgX",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.tone_mapper,
+                                    ToneMapper::Reinhard,
+                                    "Reinhard",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.tone_mapper,
+                                    ToneMapper::Aces,
+                                    "ACES",
+                                );
+                            });
+                        ui.end_row();
+
+                        ui.label("Effects");
+                        ui.horizontal(|ui| {
+                            let mut ssao =
+                                self.renderer_settings.ambient_occlusion == AmbientOcclusion::Ssao;
+                            if ui.checkbox(&mut ssao, "SSAO").changed() {
+                                self.renderer_settings.ambient_occlusion = if ssao {
+                                    AmbientOcclusion::Ssao
+                                } else {
+                                    AmbientOcclusion::Off
+                                };
+                            }
+                            ui.checkbox(&mut self.renderer_settings.bloom, "Bloom");
+                        });
+                        ui.end_row();
+                    }
+                });
             });
         egui::CollapsingHeader::new(format!("Actors ({})", self.scene.actors.len()))
             .default_open(false)
@@ -255,7 +328,10 @@ impl ViewerApp {
                 ui.label("WASD move · Q/E down/up");
                 ui.label("Hold Shift to move faster");
             });
-        (selected_level != current_level).then(|| self.scene.levels[selected_level].clone())
+        (
+            (selected_level != current_level).then(|| self.scene.levels[selected_level].clone()),
+            self.renderer_settings != previous_renderer_settings,
+        )
     }
 
     fn actor_inspector(&mut self, ui: &mut egui::Ui) {
@@ -544,7 +620,7 @@ impl eframe::App for ViewerApp {
         let full_height = ui.available_height();
         ui.horizontal(|ui| {
             ui.set_min_height(full_height);
-            let requested_level = ui
+            let (requested_level, renderer_settings_changed) = ui
                 .vertical(|ui| {
                     ui.set_width(300.0);
                     egui::ScrollArea::vertical()
@@ -563,6 +639,8 @@ impl eframe::App for ViewerApp {
             self.target.resize(&self.state, size);
             if let Some(path) = requested_level {
                 self.load_level(path, size);
+            } else if renderer_settings_changed {
+                self.rebuild_renderer(size);
             }
             self.renderer.resize(&self.state.device, size);
             let response = ui.add(
@@ -602,6 +680,14 @@ fn level_name(path: &std::path::Path) -> String {
 
 fn mebibytes(bytes: usize) -> String {
     format!("{:.2} MiB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+fn tone_mapper_name(tone_mapper: ToneMapper) -> &'static str {
+    match tone_mapper {
+        ToneMapper::AgX => "AgX",
+        ToneMapper::Reinhard => "Reinhard",
+        ToneMapper::Aces => "ACES",
+    }
 }
 
 fn actor_matches(actor: &SceneActor, query: &str) -> bool {

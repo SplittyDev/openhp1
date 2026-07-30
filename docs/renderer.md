@@ -59,6 +59,43 @@ fixed-function rendering instead of applying modern linear-light sRGB math.
 Zone-zero surfaces inherit the active `LevelInfo` ambient color. Unlit and
 lightmap-less surfaces bypass that multiply.
 
+## Modern rendering
+
+Classic rendering remains the default. `--renderer=modern` keeps the decoded
+UE1 textures, lightmaps, materials, batching, sky, and animation path, but draws
+the scene into an `Rgba16Float` target before post-processing it. The modern
+post pass provides:
+
+- selectable AgX, Reinhard, and ACES tone mapping;
+- a small depth-based SSAO implementation that can be disabled;
+- HDR bloom; and
+- the existing brightness adjustment after tone mapping.
+
+Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
+display-space 2x modulation does not change. The modern HDR target preserves
+values above one produced by that modulation for tone mapping and bloom.
+
+The viewer exposes these choices in its sidebar. They are also available on
+the command line:
+
+```sh
+cargo run --release -p openhp1-viewer -- \
+  res/Maps/Lev5_Chess.unr \
+  --renderer=modern \
+  --tone-mapper=agx \
+  --ambient-occlusion=ssao
+```
+
+`--tone-mapper` accepts `agx`, `reinhard` (or `classic`), and `aces`.
+`--ambient-occlusion` accepts `ssao` and `off`. These settings have no effect
+on the classic renderer.
+
+The original lightmaps remain the modern renderer's static lighting source.
+Dynamic diffuse GI, DDGI volumes, specular materials, and reflection probes are
+not yet implemented. Future GI and reflection captures should remain
+renderer-owned resources built from `RenderScene`; package references and BSP
+serialization details must not cross into the renderer.
+
 ## Verified maps
 
 `Quid_RavenA.unr` was visually verified on macOS through eframe's Metal-backed
@@ -79,8 +116,8 @@ Run a map from the repository root:
 cargo run -p openhp1-viewer -- res/Maps/Lev5_Chess.unr
 ```
 
-The viewer accepts another map path as its only argument. Without an argument,
-it uses the Quidditch map above.
+The viewer accepts one map path followed by renderer options. Without a map
+path, it uses the Quidditch map above.
 
 ## Known omissions
 
