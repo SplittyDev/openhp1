@@ -99,14 +99,30 @@ before arguments are consumed; a qualified call that passes `Self` retains
 the caller's identity.
 
 Runtime assignments to `bHidden` and `DrawType` both update scene visibility.
-`DT_None` collapses existing render geometry without discarding it, so a later
-authored DrawType restoration can reveal the same actor again. Transitions
-between two nonzero DrawTypes require different render topology and remain an
-explicit actor capability diagnostic until that topology can be rebuilt.
-Assignments to other render- or light-affecting Actor properties that are not
-yet projected into scene geometry, materials, or lighting likewise become
-deduplicated actor capability diagnostics. `ParticleFX` is excluded because
-its live instance state is synchronized separately each frame.
+Runtime assignments are compared with the previous effective value before
+scene work or capability reporting, including inherited and typed zero
+defaults. Effective `DrawType`, `Mesh`, `Style`, `Skin`, and `SkelAnim`
+changes reuse the ordinary actor assembly path. Replacement geometry is
+appended while the previous bounded range is collapsed; the current animation
+sequence and phase survive display-only rebuilding. Hot scalar state stays
+in-place: `DrawScale` resizes mesh or sprite vertices and bounds,
+`AmbientGlow` and `ScaleGlow` relight the current vertex range, and `Opacity`
+updates the actor's blended materials. `Mesh=None` removes a weapon's
+standalone geometry, while its `ThirdPersonMesh` remains independently
+attached at the pawn transform, matching UE1's carried-weapon path.
+
+Effective `LightBrightness` changes update movable actor vertex lighting and
+rebuild only BSP lightmaps whose serialized light list references that actor.
+The renderer uploads those changed atlas rectangles, including their filtering
+gutters, without rebuilding the atlas.
+
+Static `bMeshEnviroMap` uses camera-relative reflection coordinates. The
+shipped `spellEcto` case supplies its actor `Texture`; ZoneInfo and LevelInfo
+environment-map fallback remains intentionally unimplemented because no
+shipped class or map authors either value. Effective but unsupported
+`Texture`, `MultiSkins`, `bUnlit`, or dynamic `bMeshEnviroMap` assignments
+remain deduplicated diagnostics. `ParticleFX` is excluded because its live
+instance state is synchronized separately each frame.
 
 ## Particle effects
 
@@ -129,6 +145,13 @@ lifetime. Particle velocity uses the authored exponential `Damping` decay. A
 the active normalized range, which is how spell lessons progressively draw
 their visible template. Authored particle modes that are not implemented are
 retained as per-actor capability diagnostics rather than silently discarded.
+Particle acceleration combines authored `Gravity` with the emitter's active
+zone `ZoneGravity * GravityModifier`, falling back to `LevelInfo` when the BSP
+zone has no actor. The combined acceleration enters before damping and
+position advancement. `Chaos` applies the native per-particle, delayed,
+normalized cube-direction velocity impulse after integration and attraction;
+the impulse is not scaled by frame time. OpenHP1 uses its deterministic
+per-emitter random stream and explicitly starts each chaos timer at zero.
 Native actor destruction marks `bDeleteMe` and dispatches the authored
 `Destroyed` event before removing the actor, allowing effects such as HP1's
 targeting reticle to destroy their child emitters.

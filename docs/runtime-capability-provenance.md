@@ -13,8 +13,11 @@ The evidence was checked in the following order:
 2. The local SurrealEngine clone.
 3. Online references, only if the first two sources were insufficient.
 
-The shipped files were sufficient, so no online source or behavioral guess was
-needed. In this note:
+The shipped files and SurrealEngine were sufficient for every capability
+except the HP1-specific `Opacity` render formula. The original scripts prove
+the authored values and intended fade, but neither SurrealEngine nor available
+UE1 documentation exposes that game-specific field. Its implementation choice
+is called out below. In this note:
 
 - **Game script, high confidence** means a declaration, comment, inheritance
   relationship, or serialized class default in a shipped package.
@@ -22,6 +25,9 @@ needed. In this note:
   `Engine.dll` implementation.
 - **Implementation choice** means a deliberate OpenHP1 detail that is not
   expected to reproduce the original engine bit for bit.
+- **Compatibility assumption** means the original content proves that a
+  behavior exists, but none of the available engine references reveals its
+  exact native formula.
 
 The inspected `res/System/Engine.dll` has SHA-256
 `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc`. It is a
@@ -62,8 +68,27 @@ capabilities:
 | `WizCard_Explo` | 1 | 0 |
 | `WizCard_Explo2` | 1 | 0 |
 
-The same log contains 15 render-property diagnostics. Fourteen belong to two
-spawned `baseWand` actors; the remaining diagnostic is `Ghost0.Style`.
+The same log contains 15 render-property diagnostics:
+
+| Property | Count | Effective in this trace |
+| --- | ---: | --- |
+| `Style` | 3 | `Ghost0` changes; two wand writes do not |
+| `AmbientGlow` | 2 | Both wands change |
+| `DrawScale` | 2 | Neither wand changes |
+| `Mesh` | 2 | Both wands change |
+| `Texture` | 2 | Neither wand changes |
+| `bUnlit` | 2 | Neither wand changes |
+| `bMeshEnviroMap` | 2 | Neither wand changes |
+
+That tutorial trace is not sufficient to decide the engine-wide render scope.
+The follow-up corpus pass decoded all 29 shipped System `.u` packages, all 41
+maps, 1,247 script `TextBuffer` exports, and 46,041 serialized Level actors
+without a decode failure. It compared assignments with inherited class
+defaults and map overrides. A separate neutral-input runtime pass ran 27 maps
+for 120 seconds; the remaining 14 reached scene/runtime setup but stopped at
+the unrelated missing-`HPHud` assertion. Static script and actor coverage is
+therefore the authoritative inventory; neutral runtime execution is supporting
+evidence, not proof that a delayed or triggered branch is unused.
 
 ## Runtime render properties
 
@@ -96,6 +121,40 @@ authored 120-second idle period. The runtime must compare the previous and new
 stored values before reporting or rebuilding scene state; a property assignment
 alone is not evidence of a missing visual capability.
 
+The corpus-wide result adds the following shipped requirements:
+
+| Property | Original-content evidence | Required projection |
+| --- | --- | --- |
+| `Mesh` | 25 assignment lines, including Hagrid/Norbert, Quirrell/Voldemort, gargoyle damage stages, potion bottles, spell firecrackers, confetti, shards, and `None` transitions | Null and arbitrary non-null mesh rebinding |
+| `DrawScale` | 31 lines with direct, compound, random, and per-tick changes | Mesh transform and sprite dimensions |
+| `Style` | Real normal/translucent transitions for Ghost and Peeves/QuidCam paths | Surface blend mode |
+| `AmbientGlow` | Inventory and Weapon toggle 255 and 0 | Actor vertex lighting |
+| `ScaleGlow` | Broom hoops pulse and fade; 164 authored hoops occur in `Lev_Tut2` | Actor vertex lighting |
+| `Skin` | Broom stages select FireTextures; decoration, Pawn, and TV paths also assign it | Actor texture selection |
+| `SkelAnim` | Eight configured `TriggerChangeActorMesh` actors assign it, five together with `Mesh` | Skeletal sequence source and bone metadata |
+| `Opacity` | Invisible Harry and Peeves animate values between 0.3 and 1.0 | Actor fade multiplier |
+| `LightBrightness` | 59 TriggerLights exist across nine maps; a neutral run observed 50 effective writes in eight maps | Dynamic actor lighting and BSP lightmaps |
+
+The neutral runtime pass independently observed:
+
+- 53 wand `Mesh` clears and 53 `AmbientGlow` clears across 40 maps;
+- three `BroomHoopStage` scale changes from 1.7 to 1.333 in `Lev_Tut2`;
+- the `Snitch_Halo` scale change from 1 to 2 in `Lev5_FlyKeys`; and
+- the tutorial Ghost style change exactly at 120 seconds.
+
+`Texture` has one changed direct script path on `ectoMark`, but every spawn of
+that class is commented out and no shipped map contains it. Current live
+`Texture` writes restore unchanged defaults. `MultiSkins` is limited to generic
+network skin selection with no proven shipped level transition. These remain
+changed-value diagnostics rather than speculative runtime implementations.
+
+There are zero effective runtime changes to `bUnlit` or
+`bMeshEnviroMap`. Six classes and six `Lev2_fire1` movers do author static
+`bUnlit` values, which the existing load path already preserves. The only
+static environment-mapped actor is `HPBase.spellEcto`; it has
+`bMeshEnviroMap=true` and an explicit `Texture=Jgreen`. No class or map actor
+authors a ZoneInfo or LevelInfo `EnvironmentMap`.
+
 ### UE1 rendering boundary
 
 **SurrealEngine reference, high confidence:** a carried weapon's third-person
@@ -106,26 +165,60 @@ then uses the weapon actor for its material and lighting properties. Clearing
 `Actor.Mesh` must therefore hide the standalone actor without removing the
 carried wand attachment.
 
-The same reference maps translucent actor style to the translucent mesh pass,
-uses `bUnlit` to bypass dynamic lighting, and adds `bMeshEnviroMap` reflection
-UVs. OpenHP1's existing translucent blend already matches the reference blend.
-None of the logged `Texture`, `bUnlit`, or `bMeshEnviroMap` assignments changes
-value, so the latest trace does not justify implementing those unexercised
-features.
+The same reference reads current `Mesh`, `DrawScale`, `Style`, `Skin`, and
+`MultiSkins` while drawing; sprite dimensions are texture size multiplied by
+`DrawScale`, and mesh transforms include the same scale. It maps translucent
+style to the translucent pass, uses `bUnlit` to bypass dynamic lighting, and
+adds camera-relative reflection UVs for `bMeshEnviroMap`. Actor `Texture`
+precedes the ZoneInfo and LevelInfo environment maps. The shipped
+`spellEcto` case exercises only that first branch.
+
+SurrealEngine's actor vertex-light path reads the light actor's current
+`LightBrightness`. Its lightmap builder also combines each listed light using
+the current brightness. This supports updating both movable actor colors and
+world lightmaps for TriggerLight fades; treating the assignment as an actor
+material property would be incomplete.
+
+### HP1-specific opacity
+
+**Game script, high confidence:** Invisible Harry propagates a live `Opacity`
+value to his weapon while fading out and back in. Tutorial Peeves actors use
+the same 0.3-to-1.0 range together with translucent style. The property is a
+float in the shipped metadata.
+
+SurrealEngine has no corresponding HP1 field, and the available UE1 display
+documentation ([UnrealWiki: Actor display][ue1-actor-display]) describes
+brightness-based translucent blending but not this extension. OpenHP1
+therefore clamps `Opacity` to 0 through 1 and multiplies the actor's blended
+source color. This is a **compatibility assumption** chosen because the
+renderer's UE1-style translucent blend derives visibility from source color
+rather than source alpha. Manual comparison with Invisible Harry and Peeves
+must validate it.
+
+[ue1-actor-display]: https://beyondunrealwiki.github.io/pages/actor-ut-display.html
 
 ### OpenHP1 implementation boundary
 
-Project only effective typed render-property writes into the scene:
+The implementation retains the resolved actor display state that already feeds
+scene assembly. Effective topology and material-object changes (`Mesh`,
+`DrawType`, `Style`, `Skin`, and `SkelAnim`) re-run that same assembly path,
+append replacement geometry, and collapse the old bounded range. This keeps
+standalone `Mesh` independent from a carried weapon's `ThirdPersonMesh`,
+preserves the current animation sequence and phase, and avoids a second asset
+decoder.
 
-- `Mesh=None` hides the standalone actor geometry while retaining a matching
-  `ThirdPersonMesh` attachment template.
-- `AmbientGlow` adjusts the actor's baked vertex-light contribution.
-- translucent `Style` changes the actor surface mode and forces renderer batch
-  rebuilding.
+Per-tick scalar state does not append geometry. `DrawScale` transforms the
+current mesh or sprite range and updates collision-facing visual bounds;
+`AmbientGlow` and `ScaleGlow` relight the current range; `Opacity` updates the
+actor's blended materials. `LightBrightness` updates retained actor lights,
+rebuilds only BSP lightmaps that reference the changed export, and queues only
+those atlas rectangles for upload. Static `bUnlit` and environment-map
+defaults remain in the ordinary material path.
 
-Keep changed, unsupported values diagnostic. In particular, a future non-null
-mesh replacement or a true `bMeshEnviroMap` assignment must not be silently
-treated as supported.
+Keep effective `Texture`, `MultiSkins`, `bUnlit`, and dynamic
+`bMeshEnviroMap` changes diagnostic. Suppress same-value assignments by
+comparing against the actor instance, inherited class default, or typed zero
+default in that order.
 
 ## Zone-gravity response
 
@@ -153,33 +246,19 @@ currently authored `Gravity`, before damping and position advancement.
 
 ### OpenHP1 implementation boundary
 
-`ParticleEmitter` already carries `gravity_modifier` and `gravity` in
-`crates/openhp1-runtime/src/world/action.rs`, and
-`ScriptRuntime::particle_emitters` reads both live instance properties in
-`crates/openhp1-runtime/src/world/actor.rs`. The scene currently applies only
-the authored gravity in `LoadedScene::tick_particles` in
-`crates/openhp1-scene/src/loader.rs`.
-
-The runtime already has the correct central zone lookup in
-`ScriptRuntime::zone_physics` in
-`crates/openhp1-runtime/src/world/physics/events.rs`: it finds the BSP zone at
-an actor location, resolves the zone actor, falls back to `LevelInfo`, and
-reads `ZoneGravity`. Reuse or factor that seam when projecting a particle
-emitter. Do not add a second zone/object-resolution path in the scene crate.
-The projected emitter should carry either the resolved zone gravity or the
-already combined acceleration; the scene must remain unaware of package
-objects and BSP zone actors.
+`ScriptRuntime::particle_emitters` reads both live properties, samples the
+emitter's zone through the existing `ScriptRuntime::zone_physics` seam, and
+projects their already combined acceleration. That lookup resolves the BSP
+zone actor and falls back to `LevelInfo`; the scene remains unaware of package
+objects and simply applies the projected acceleration at the existing gravity
+step.
 
 ### Focused tests
 
-- With authored gravity `[1, 2, 3]`, zone gravity `[0, 0, -950]`, and modifier
-  `0.3`, the projected acceleration is `[1, 2, -282]`.
-- Modifiers `0`, positive, and negative values preserve the formula without
-  clamping.
-- A synthetic zone actor supplies its `ZoneGravity`; an unmapped/default zone
-  uses the active `LevelInfo` fallback.
-- Applying the combined acceleration before the existing damping step is
-  covered by a scene particle-update test.
+- A synthetic collision model with no mapped zone selects the active
+  `LevelInfo` fallback.
+- Authored gravity `[1, 2, 3]`, zone gravity `[0, 0, -100]`, and modifier
+  `-0.5` produce `[1, 2, 53]`, proving the modifier is not clamped.
 
 ## Chaos movement
 
@@ -225,14 +304,9 @@ recovered from that constructor.
 
 ### OpenHP1 implementation boundary
 
-`ParticleEmitter` currently carries `chaos` but not `ChaosDelay`, and the scene
-particle state has no chaos timer. Add:
-
-1. `chaos_delay` to the runtime-to-scene emitter projection, read from the live
-   `ChaosDelay` instance property.
-2. A per-particle `chaos_timer`, initialized to zero.
-3. The native timer and kick sequence after the existing position/attraction
-   work, using the particle system's existing random stream.
+`ParticleEmitter` carries the live `Chaos` and `ChaosDelay` properties into the
+scene. Each particle owns a zero-initialized timer, and the native timer and
+kick sequence runs after the existing position/attraction work.
 
 Using OpenHP1's deterministic per-emitter random stream is an
 **implementation choice**. The original uses the process-global `appFrand`
@@ -243,9 +317,9 @@ original random directions bit for bit.
 
 ### Focused tests
 
-- A controlled random triple equivalent to `[1, 0.5, 0.5]` produces a
-  positive-X unit direction, and a `Chaos` value of `3` changes velocity by
-  exactly three units for both short and long `delta_time` values.
+- The same deterministic random state produces the same direction for short
+  and long `delta_time` values, and `Chaos=3` changes velocity by exactly three
+  units in both cases.
 - `ChaosDelay == 0` kicks on every update.
 - With `ChaosDelay == 0.5`, the first update kicks, subsequent updates do not
   kick while the timer is positive, and a kick occurs when it reaches zero.
@@ -286,12 +360,15 @@ used to infer either formula.
 
 ## Completion criteria
 
-Implement zone gravity and chaos as separate logical changes. After focused
-synthetic tests, a release `Lev_Tut1.unr` replay should no longer emit the 29
-zone-gravity or 16 chaos diagnostics listed above. That confirms capability
-coverage, not visual equivalence: particle trajectories and appearance still
-need manual comparison with the original game.
+Implement actor display state, environment mapping, TriggerLight brightness,
+zone gravity, and chaos as separate logical changes. Focused synthetic checks
+must be followed by release scans of all shipped maps, because the tutorial
+does not exercise the full render inventory. The scan confirms capability and
+diagnostic coverage, not visual equivalence: environment reflections, actor
+fades, light transitions, particle trajectories, and attachments still need
+manual comparison with the original game.
 
-No formula or authored value in this note is an educated guess. The only
-compatibility choices are the deterministic OpenHP1 random stream and
-explicitly zero-initializing the native timer state.
+The particle formulas and authored values in this note are not guesses. The
+documented compatibility choices are OpenHP1's deterministic particle random
+stream, explicit zero initialization of the chaos timer, append-and-collapse
+render topology, and the HP1-specific opacity color multiplier.
