@@ -608,15 +608,23 @@ impl LoadedScene {
             system.particles.retain_mut(|particle| {
                 particle.age += delta_time;
                 particle.spin += particle.spin_rate * delta_time;
+                particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
+                particle.velocity *= particle_damping(system.config.damping, delta_time);
+                particle.location += particle.velocity * delta_time;
                 particle.velocity += particle_attraction(
                     particle.location,
                     owner.location,
                     system.config.system_relative,
                     system.config.attraction,
                 ) * delta_time;
-                particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
-                particle.velocity *= particle_damping(system.config.damping, delta_time);
-                particle.location += particle.velocity * delta_time;
+                apply_particle_chaos(
+                    &mut particle.velocity,
+                    &mut particle.chaos_timer,
+                    system.config.chaos,
+                    system.config.chaos_delay,
+                    delta_time,
+                    &mut system.random,
+                );
                 particle_is_alive(particle.age, particle.lifetime)
             });
             let rate =
@@ -759,6 +767,7 @@ impl LoadedScene {
                             system.config.spin_rate,
                             &mut system.random,
                         ),
+                        chaos_timer: 0.0,
                         drip_time: sample_particle_float(
                             system.config.drip_time,
                             &mut system.random,
@@ -1582,6 +1591,7 @@ struct Particle {
     color_end: Vec3,
     spin: f32,
     spin_rate: f32,
+    chaos_timer: f32,
     drip_time: f32,
 }
 
@@ -1709,6 +1719,31 @@ fn random_mesh_position(positions: &[Vec3], indices: &[u32], random: &mut u32) -
 
 fn random_signed(random: &mut u32) -> f32 {
     random_unit(random) * 2.0 - 1.0
+}
+
+fn apply_particle_chaos(
+    velocity: &mut Vec3,
+    timer: &mut f32,
+    chaos: f32,
+    delay: f32,
+    delta_time: f32,
+    random: &mut u32,
+) {
+    *timer = (*timer - delta_time).max(0.0);
+    if chaos == 0.0 || *timer > 0.0 {
+        return;
+    }
+
+    let mut direction = Vec3::new(
+        random_signed(random),
+        random_signed(random),
+        random_signed(random),
+    );
+    if direction.length_squared() >= 1.0e-8 {
+        direction = direction.normalize();
+    }
+    *velocity += direction * chaos;
+    *timer = delay;
 }
 
 fn random_unit(random: &mut u32) -> f32 {
@@ -3426,6 +3461,7 @@ mod tests {
             velocity_relative: false,
             gravity_modifier: 0.0,
             chaos: 0.0,
+            chaos_delay: 0.0,
             attraction: [0.0; 3],
             elasticity: 0.0,
             wind_modifier: 0.0,
@@ -3500,6 +3536,100 @@ mod tests {
             ),
             glam::Vec3::new(4.0, -3.0, 0.0)
         );
+    }
+
+    #[test]
+    fn particle_chaos_is_an_undiluted_delayed_per_particle_impulse() {
+        let mut short_velocity = glam::Vec3::ZERO;
+        let mut long_velocity = glam::Vec3::ZERO;
+        let (mut short_timer, mut long_timer) = (0.0, 0.0);
+        let (mut short_random, mut long_random) = (7, 7);
+        super::apply_particle_chaos(
+            &mut short_velocity,
+            &mut short_timer,
+            3.0,
+            0.5,
+            0.01,
+            &mut short_random,
+        );
+        super::apply_particle_chaos(
+            &mut long_velocity,
+            &mut long_timer,
+            3.0,
+            0.5,
+            10.0,
+            &mut long_random,
+        );
+        assert!(short_velocity.abs_diff_eq(long_velocity, 1.0e-6));
+        assert!((short_velocity.length() - 3.0).abs() < 1.0e-6);
+
+        let first_impulse = short_velocity;
+        super::apply_particle_chaos(
+            &mut short_velocity,
+            &mut short_timer,
+            3.0,
+            0.5,
+            0.1,
+            &mut short_random,
+        );
+        assert_eq!(short_velocity, first_impulse);
+        assert!((short_timer - 0.4).abs() < 1.0e-6);
+
+        let mut independent_velocity = glam::Vec3::ZERO;
+        let mut independent_timer = 0.0;
+        let mut independent_random = 9;
+        super::apply_particle_chaos(
+            &mut independent_velocity,
+            &mut independent_timer,
+            3.0,
+            0.5,
+            0.1,
+            &mut independent_random,
+        );
+        assert!((independent_velocity.length() - 3.0).abs() < 1.0e-6);
+        assert_eq!(independent_timer, 0.5);
+        assert!((short_timer - 0.4).abs() < 1.0e-6);
+
+        super::apply_particle_chaos(
+            &mut short_velocity,
+            &mut short_timer,
+            3.0,
+            0.5,
+            0.4,
+            &mut short_random,
+        );
+        assert!((short_velocity - first_impulse).length() > 2.999);
+
+        let mut every_update_velocity = glam::Vec3::ZERO;
+        let mut every_update_timer = 0.0;
+        let mut every_update_random = 11;
+        super::apply_particle_chaos(
+            &mut every_update_velocity,
+            &mut every_update_timer,
+            3.0,
+            0.0,
+            0.1,
+            &mut every_update_random,
+        );
+        let first_update_velocity = every_update_velocity;
+        super::apply_particle_chaos(
+            &mut every_update_velocity,
+            &mut every_update_timer,
+            3.0,
+            0.0,
+            0.1,
+            &mut every_update_random,
+        );
+        assert!(((every_update_velocity - first_update_velocity).length() - 3.0).abs() < 1.0e-6);
+        assert_eq!(every_update_timer, 0.0);
+
+        let (mut location, mut velocity, mut timer, mut random) =
+            (glam::Vec3::ZERO, glam::Vec3::ZERO, 0.0, 13);
+        location += velocity * 0.25;
+        super::apply_particle_chaos(&mut velocity, &mut timer, 3.0, 0.5, 0.25, &mut random);
+        assert_eq!(location, glam::Vec3::ZERO);
+        location += velocity * 0.25;
+        assert!(location.abs_diff_eq(velocity * 0.25, 1.0e-6));
     }
 
     #[test]

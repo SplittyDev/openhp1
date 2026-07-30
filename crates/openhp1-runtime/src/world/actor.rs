@@ -468,6 +468,11 @@ impl ScriptRuntime {
                 )?),
                 gravity_modifier,
                 chaos: particle_scalar(self.instance_property(&class, &instance, "Chaos")?),
+                chaos_delay: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "ChaosDelay",
+                )?),
                 attraction: particle_vector(self.instance_property(
                     &class,
                     &instance,

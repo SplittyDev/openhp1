@@ -66,6 +66,7 @@ pub struct ParticleEmitter {
     pub velocity_relative: bool,
     pub gravity_modifier: f32,
     pub chaos: f32,
+    pub chaos_delay: f32,
     pub attraction: [f32; 3],
     pub elasticity: f32,
     pub wind_modifier: f32,
@@ -88,9 +89,6 @@ impl ParticleEmitter {
         }
         if self.velocity_relative {
             diagnostics.push("particle owner-velocity inheritance is unsupported");
-        }
-        if self.chaos != 0.0 {
-            diagnostics.push("particle chaos movement is unsupported");
         }
         if self.elasticity != 0.0 {
             diagnostics.push("particle collision elasticity is unsupported");
@@ -123,7 +121,8 @@ mod particle_tests {
 
         let unsupported = ParticleEmitter {
             render_primitive: 0,
-            gravity_modifier: 1.0,
+            chaos: 1.0,
+            chaos_delay: 0.5,
             ..Default::default()
         };
         assert_eq!(

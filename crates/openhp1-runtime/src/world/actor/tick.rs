@@ -922,9 +922,9 @@ mod animation_tests {
     use std::collections::HashMap;
 
     use super::{
-        LatentAction, ParticleColor, StoredValue, Value, advance_animation_tween,
+        LatentAction, ParticleColor, ParticleEmitter, StoredValue, Value, advance_animation_tween,
         advance_level_time, animation_loop_end_crossed, animation_nonloop_end_crossed,
-        decode_latent_action, next_animation_notify, particle_color,
+        decode_latent_action, next_animation_notify, particle_color, particle_scalar,
     };
 
     #[test]
@@ -1005,5 +1005,18 @@ mod animation_tests {
                 random: [4, 5, 6, 0],
             }
         );
+    }
+
+    #[test]
+    fn projects_authored_chaos_delay_and_defaults_missing_values_to_zero() {
+        let emitter = |value| ParticleEmitter {
+            chaos_delay: particle_scalar(value),
+            ..Default::default()
+        };
+        assert_eq!(
+            emitter(Some(StoredValue::Value(Value::Float(0.5)))).chaos_delay,
+            0.5,
+        );
+        assert_eq!(emitter(None).chaos_delay, 0.0);
     }
 }
