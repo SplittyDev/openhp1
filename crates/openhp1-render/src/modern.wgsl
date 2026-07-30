@@ -91,7 +91,7 @@ fn fragment_post_process(input: FullscreenVertex) -> @location(0) vec4<f32> {
     let hdr = scene * ambient + bloom * settings.bloom_strength;
     let mapped = tone_map(hdr);
     let encoded = srgb_encode(clamp(mapped, vec3(0.0), vec3(1.0)));
-    let contrasted = (encoded - vec3(0.5)) * settings.contrast + vec3(0.5);
+    let contrasted = display_contrast(encoded);
     return vec4(
         pow(
             clamp(contrasted, vec3(0.0), vec3(1.0)),
@@ -102,8 +102,8 @@ fn fragment_post_process(input: FullscreenVertex) -> @location(0) vec4<f32> {
 }
 
 fn extract_bloom(color: vec3<f32>) -> vec3<f32> {
-    const THRESHOLD = 0.8;
-    const KNEE = 0.4;
+    const THRESHOLD = 1.0;
+    const KNEE = 0.1;
     let brightness = max(color.r, max(color.g, color.b));
     var soft = clamp(brightness - THRESHOLD + KNEE, 0.0, 2.0 * KNEE);
     soft = soft * soft / (4.0 * KNEE + 0.00001);
@@ -143,10 +143,24 @@ fn ambient_visibility(pixel: vec2<i32>) -> f32 {
     let normal = view_normal(clamped_pixel, center, dimensions);
     let focal_pixels = 0.5 / (settings.inverse_viewport.y * settings.projection.z);
     let radius_pixels = clamp(96.0 * focal_pixels / center_distance, 4.0, 64.0);
+    let random = fract(
+        52.9829189
+            * fract(
+                dot(
+                    vec2<f32>(clamped_pixel),
+                    vec2(0.06711056, 0.00583715),
+                ),
+            ),
+    );
+    let angle = 6.28318530718 * random;
+    let rotation = mat2x2<f32>(
+        vec2(cos(angle), sin(angle)),
+        vec2(-sin(angle), cos(angle)),
+    );
 
     var occlusion = 0.0;
     for (var index = 0u; index < 16u; index += 1u) {
-        let offset = vec2<i32>(round(SSAO_KERNEL[index] * radius_pixels));
+        let offset = vec2<i32>(round(rotation * SSAO_KERNEL[index] * radius_pixels));
         let sample_pixel = clamp(clamped_pixel + offset, vec2(0), dimensions - vec2(1));
         let sample_depth = textureLoad(scene_depth, sample_pixel, 0);
         if sample_depth < 0.99999 {
@@ -220,7 +234,8 @@ fn tone_map(color: vec3<f32>) -> vec3<f32> {
 }
 
 fn reinhard(color: vec3<f32>) -> vec3<f32> {
-    const WHITE = 4.0;
+    // Keep nominal UE1 white bright while retaining a short overbright shoulder.
+    const WHITE = 1.25;
     const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);
     let luminance = dot(color, LUMINANCE);
     if luminance <= 0.0 {
@@ -229,6 +244,20 @@ fn reinhard(color: vec3<f32>) -> vec3<f32> {
     let mapped_luminance =
         luminance * (1.0 + luminance / (WHITE * WHITE)) / (1.0 + luminance);
     return color * (mapped_luminance / luminance);
+}
+
+fn display_contrast(color: vec3<f32>) -> vec3<f32> {
+    const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);
+    let luminance = dot(color, LUMINANCE);
+    if luminance <= 0.0 {
+        return vec3(0.0);
+    }
+    let lower = pow(clamp(luminance, 0.0, 1.0), settings.contrast);
+    let upper = pow(1.0 - clamp(luminance, 0.0, 1.0), settings.contrast);
+    let contrasted_luminance = lower / max(lower + upper, 0.00001);
+    let scale = contrasted_luminance / luminance;
+    let maximum = max(color.r, max(color.g, color.b));
+    return color * min(scale, 1.0 / max(maximum, 0.00001));
 }
 
 fn srgb_encode(color: vec3<f32>) -> vec3<f32> {

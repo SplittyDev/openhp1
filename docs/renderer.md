@@ -67,21 +67,25 @@ UE1 textures, lightmaps, materials, batching, sky, and animation path, but draws
 the scene into an `Rgba16Float` target before post-processing it. The modern
 post pass provides:
 
-- selectable AgX, luminance-preserving Reinhard Equation 4 with a `4.0` white
-  point, and ACES tone mapping;
+- selectable AgX, luminance-preserving Reinhard Equation 4 with a `1.25` white
+  point that retains a short UE1 overbright shoulder, and ACES tone mapping;
 - view-space SSAO reconstructed from the scene depth buffer;
 - authored UE1 coronas drawn as HDR screen-space sprites;
-- quarter-resolution HDR bright extraction with separable bloom blur; and
-- sRGB output encoding followed by display-space contrast and the existing
-  brightness adjustment after tone mapping.
+- quarter-resolution HDR bright extraction with separable bloom blur that
+  excludes ordinary sub-white texture detail; and
+- sRGB output encoding followed by hue-preserving display-space contrast and
+  the existing brightness adjustment after tone mapping.
 
 Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
 display-space 2x modulation does not change. The modern HDR target preserves
 values above one produced by that modulation for tone mapping and bloom.
 
 The viewer exposes these choices in its sidebar, keeps independent Classic and
-Modern brightness values, and provides a Modern-only contrast control. Renderer
-mode, tone mapper, and ambient occlusion are also available on the command line:
+Modern brightness values, and provides a Modern-only contrast control.
+Reinhard is the default tone mapper; the viewer starts Modern at brightness
+`0.33` and contrast `1.24` while retaining the Classic `0.625` brightness.
+Renderer mode, tone mapper, and ambient occlusion are also available on the
+command line:
 
 ```sh
 cargo run --release -p openhp1-viewer -- \

@@ -1084,18 +1084,21 @@ mod tests {
     }
 
     #[test]
-    fn modern_shader_maps_reinhard_luminance_then_encodes_srgb() {
+    fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
         let shader = include_str!("modern.wgsl");
-        assert!(shader.contains("const WHITE = 4.0;"));
+        assert!(shader.contains("const WHITE = 1.25;"));
         assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
         assert!(shader.contains("return color * (mapped_luminance / luminance);"));
         assert!(shader.contains("let encoded = srgb_encode(clamp(mapped"));
-        assert!(
-            shader.contains(
-                "let contrasted = (encoded - vec3(0.5)) * settings.contrast + vec3(0.5);"
-            )
-        );
+        assert!(shader.contains("let contrasted = display_contrast(encoded);"));
+        assert!(shader.contains("const THRESHOLD = 1.0;"));
+        assert!(shader.contains("const KNEE = 0.1;"));
+        assert!(shader.contains("rotation * SSAO_KERNEL[index]"));
+
+        let white = 1.25_f32;
+        let mapped_white = white * (1.0 + white / (white * white)) / (1.0 + white);
+        assert!((mapped_white - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

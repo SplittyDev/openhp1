@@ -25,8 +25,8 @@ impl FromStr for RendererMode {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ToneMapper {
-    #[default]
     AgX,
+    #[default]
     Reinhard,
     Aces,
 }
@@ -140,6 +140,7 @@ mod tests {
 
     #[test]
     fn parses_renderer_choices() {
+        assert_eq!(ToneMapper::default(), ToneMapper::Reinhard);
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
         assert_eq!("agx".parse(), Ok(ToneMapper::AgX));
         assert_eq!("classic".parse(), Ok(ToneMapper::Reinhard));
