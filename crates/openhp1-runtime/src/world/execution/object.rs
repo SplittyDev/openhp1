@@ -627,6 +627,14 @@ fn scene_property_action(
                 ambient_glow: *ambient_glow,
             }
         }
+        (name, StoredValue::Value(Value::Byte(light_brightness)))
+            if name.eq_ignore_ascii_case("LightBrightness") =>
+        {
+            ActorAction::SetLightBrightness {
+                actor,
+                light_brightness: *light_brightness,
+            }
+        }
         (name, StoredValue::Value(Value::Float(opacity)))
             if name.eq_ignore_ascii_case("Opacity") =>
         {

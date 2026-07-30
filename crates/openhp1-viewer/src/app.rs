@@ -504,10 +504,17 @@ impl ViewerApp {
     }
 
     fn update_vertices(&mut self) {
-        if !self
+        let changed_lightmaps = self.scene.take_changed_lightmaps();
+        let vertices_updated = self
             .renderer
-            .update_vertices(&self.state.queue, &self.scene.render.mesh)
-        {
+            .update_vertices(&self.state.queue, &self.scene.render);
+        let lightmaps_updated = vertices_updated
+            && self.renderer.update_lightmaps(
+                &self.state.queue,
+                &self.scene.render.lightmaps,
+                &changed_lightmaps,
+            );
+        if !vertices_updated || !lightmaps_updated {
             self.renderer
                 .reload_scene(&self.state.device, &self.state.queue, &self.scene.render);
         }

@@ -498,7 +498,6 @@ fn is_unsupported_scene_property(name: &str) -> bool {
         "bNoSmooth",
         "bUnlit",
         "Fatness",
-        "LightBrightness",
         "LightEffect",
         "LightHue",
         "LightPeriod",
@@ -882,6 +881,28 @@ mod tests {
                 Value::Vector([4.0, 5.0, 6.0]),
                 Value::Rotator([7, 8, 9]),
             ]
+        );
+    }
+
+    #[test]
+    fn effective_light_brightness_assignments_emit_typed_actions() {
+        assert!(!is_unsupported_scene_property("LightBrightness"));
+        assert_eq!(
+            object::effective_assignment(
+                7,
+                "LightBrightness",
+                Some(&StoredValue::Value(Value::Byte(0))),
+                None,
+                None,
+                &StoredValue::Value(Value::Byte(64)),
+            ),
+            (
+                true,
+                Some(ActorAction::SetLightBrightness {
+                    actor: 7,
+                    light_brightness: 64,
+                }),
+            ),
         );
     }
 

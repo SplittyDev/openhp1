@@ -9,8 +9,11 @@ use super::{decode_ambient, decode_level_ambient, decode_light, hsb_to_rgb};
 
 #[derive(Clone, Copy, Debug)]
 struct VertexLight {
+    export_index: usize,
     location: Vec3,
     color: Vec3,
+    hue: u8,
+    saturation: u8,
     radius: f32,
     effect: u8,
 }
@@ -78,12 +81,15 @@ impl Model {
                 continue;
             }
             let light = decode_light(package, export_index)?;
-            if light.light_type == 0 || light.brightness == 0 || light.corona || light.special_lit {
+            if light.light_type == 0 || light.corona || light.special_lit {
                 continue;
             }
             lights.push(VertexLight {
+                export_index,
                 location: light.location,
                 color: hsb_to_rgb(light.hue, light.saturation, light.brightness),
+                hue: light.hue,
+                saturation: light.saturation,
                 radius: (f32::from(light.radius) + 1.0) * 25.0,
                 effect: light.effect,
             });
@@ -200,6 +206,19 @@ impl Model {
 }
 
 impl VertexLighting {
+    pub fn set_light_brightness(&mut self, export_index: usize, brightness: u8) -> bool {
+        let mut changed = false;
+        for light in &mut self.lights {
+            if light.export_index != export_index {
+                continue;
+            }
+            let color = hsb_to_rgb(light.hue, light.saturation, brightness);
+            changed |= light.color != color;
+            light.color = color;
+        }
+        changed
+    }
+
     pub fn for_actor(
         &self,
         model: &Model,
@@ -347,14 +366,37 @@ mod tests {
             ambient: Vec3::splat(0.1),
             scale_glow: 1.0,
             lights: vec![VertexLight {
+                export_index: 7,
                 location: Vec3::new(5.0, 0.0, 0.0),
                 color: Vec3::splat(0.2),
+                hue: 0,
+                saturation: 255,
                 radius: 10.0,
                 effect: 0,
             }],
         };
         assert_eq!(lighting.color(Vec3::ZERO, Vec3::X, false), Vec3::splat(0.5));
         assert_eq!(lighting.color(Vec3::ZERO, Vec3::X, true), Vec3::splat(1.2));
+    }
+
+    #[test]
+    fn brightness_updates_the_matching_light_export() {
+        let mut lighting = VertexLighting {
+            level_ambient: Vec3::ZERO,
+            zone_ambient: Vec::new(),
+            lights: vec![VertexLight {
+                export_index: 7,
+                location: Vec3::X,
+                color: hsb_to_rgb(0, 255, 64),
+                hue: 0,
+                saturation: 255,
+                radius: 10.0,
+                effect: 0,
+            }],
+        };
+        assert!(!lighting.set_light_brightness(8, 0));
+        assert!(lighting.set_light_brightness(7, 0));
+        assert_eq!(lighting.lights[0].color, Vec3::ZERO);
     }
 
     #[test]

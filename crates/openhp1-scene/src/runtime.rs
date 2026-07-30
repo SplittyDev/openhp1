@@ -273,7 +273,12 @@ pub fn apply_runtime_actions_with(
             ActorAction::SetOpacity { actor, opacity } => {
                 transformed |= scene.set_actor_opacity(actor, opacity)?;
             }
-            ActorAction::SetLightBrightness { .. } => {}
+            ActorAction::SetLightBrightness {
+                actor,
+                light_brightness,
+            } => {
+                transformed |= scene.set_light_brightness(actor, light_brightness)?;
+            }
             ActorAction::UnsupportedSceneProperty { actor, property } => {
                 // ParticleFX state is projected by sync_particle_emitters each frame.
                 if scene.actors[actor].draw_type == 8 {

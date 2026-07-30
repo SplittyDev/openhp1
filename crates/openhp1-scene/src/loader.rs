@@ -27,6 +27,7 @@ use crate::{
 };
 
 mod runtime_display;
+mod runtime_light;
 
 const NOT_FOR_SERVER: u32 = 0x0020_0000;
 pub struct LoadedScene {
@@ -56,6 +57,7 @@ pub struct LoadedScene {
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     attached_weapons: HashMap<usize, SceneObject>,
     water_animations: Vec<AnimatedWaterTexture>,
+    changed_lightmaps: Vec<usize>,
     particles: HashMap<usize, ParticleSystem>,
     particle_view_rotation: Mat4,
     actor_render: ActorRenderContext,
@@ -63,8 +65,10 @@ pub struct LoadedScene {
 
 struct ActorRenderContext {
     packages: PackageStore,
+    map: Arc<Package>,
     model: Model,
     vertex_lighting: VertexLighting,
+    light_brightnesses: HashMap<usize, u8>,
     class_cache: HashMap<SceneObjectId, ClassState>,
     mesh_cache: HashMap<SceneObjectId, Option<Arc<Mesh>>>,
     brush_cache: HashMap<SceneObjectId, Option<Arc<BrushPolys>>>,
@@ -178,8 +182,10 @@ impl LoadedScene {
             .context("failed to decode actor vertex lighting")?;
         let mut actor_render = ActorRenderContext {
             packages,
+            map: Arc::clone(&package),
             model,
             vertex_lighting,
+            light_brightnesses: HashMap::new(),
             class_cache,
             mesh_cache: HashMap::new(),
             brush_cache: HashMap::new(),
@@ -272,6 +278,7 @@ impl LoadedScene {
             hidden_actor_positions,
             attached_weapons: HashMap::new(),
             water_animations,
+            changed_lightmaps: Vec::new(),
             particles: HashMap::new(),
             particle_view_rotation: Mat4::IDENTITY,
             actor_render,
@@ -1821,6 +1828,7 @@ struct ActorState {
     ambient_glow: u8,
     scale_glow: f32,
     opacity: f32,
+    light_brightness: u8,
     anim_sequence: Option<String>,
     anim_frame: f32,
     anim_rate: f32,
@@ -1867,6 +1875,7 @@ impl Default for ActorState {
             ambient_glow: 0,
             scale_glow: 1.0,
             opacity: 1.0,
+            light_brightness: 64,
             anim_sequence: None,
             anim_frame: 0.0,
             anim_rate: 0.0,
@@ -1957,6 +1966,9 @@ impl ActorState {
         }
         if let Some(opacity) = properties.opacity {
             self.opacity = opacity;
+        }
+        if let Some(light_brightness) = properties.light_brightness {
+            self.light_brightness = light_brightness;
         }
         if let Some(anim_sequence) = &properties.anim_sequence {
             self.anim_sequence = Some(anim_sequence.clone());

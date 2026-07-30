@@ -9,7 +9,7 @@ use super::{
     AmbientLight, LightActor, decode_ambient, decode_level_ambient, decode_light, hsb_to_rgb,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LightmapImage {
     pub width: u32,
     pub height: u32,
@@ -22,6 +22,30 @@ impl Model {
     /// Reconstructs UE1's static lightmaps from the serialized shadow masks,
     /// light actors, and zone ambient colors.
     pub fn lightmap_images(&self, package: &Package) -> Result<Vec<LightmapImage>> {
+        Ok(self
+            .build_lightmap_images(package, &HashMap::new(), None)?
+            .into_iter()
+            .map(|(_, image)| image)
+            .collect())
+    }
+
+    /// Rebuilds only lightmaps whose serialized light list contains the
+    /// changed actor export.
+    pub fn relight_lightmaps(
+        &self,
+        package: &Package,
+        light_export: usize,
+        brightnesses: &HashMap<usize, u8>,
+    ) -> Result<Vec<(usize, LightmapImage)>> {
+        self.build_lightmap_images(package, brightnesses, Some(light_export))
+    }
+
+    fn build_lightmap_images(
+        &self,
+        package: &Package,
+        brightnesses: &HashMap<usize, u8>,
+        changed_light: Option<usize>,
+    ) -> Result<Vec<(usize, LightmapImage)>> {
         let mut lightmap_surfaces = vec![None; self.light_maps.len()];
         let mut lightmap_zones = vec![None; self.light_maps.len()];
         for node in &self.nodes {
@@ -53,6 +77,11 @@ impl Model {
         let mut light_cache = HashMap::new();
         let mut images = Vec::with_capacity(self.light_maps.len());
         for lightmap_index in 0..self.light_maps.len() {
+            if let Some(light_export) = changed_light
+                && !self.lightmap_uses_light(lightmap_index, light_export)?
+            {
+                continue;
+            }
             let ambient = match lightmap_zones[lightmap_index]
                 .and_then(|zone| self.zones.get(zone))
                 .map(|zone| zone.actor)
@@ -68,15 +97,49 @@ impl Model {
                 }
                 _ => level_ambient,
             };
-            images.push(self.build_lightmap(
-                package,
+            images.push((
                 lightmap_index,
-                lightmap_surfaces[lightmap_index],
-                ambient,
-                &mut light_cache,
-            )?);
+                self.build_lightmap(
+                    package,
+                    lightmap_index,
+                    lightmap_surfaces[lightmap_index],
+                    ambient,
+                    brightnesses,
+                    &mut light_cache,
+                )?,
+            ));
         }
         Ok(images)
+    }
+
+    fn lightmap_uses_light(&self, lightmap_index: usize, light_export: usize) -> Result<bool> {
+        let lightmap = &self.light_maps[lightmap_index];
+        let Ok(mut list_index) = usize::try_from(lightmap.light_actors) else {
+            return if lightmap.light_actors == -1 {
+                Ok(false)
+            } else {
+                Err(Error::InvalidLightList {
+                    index: lightmap_index,
+                    offset: lightmap.light_actors,
+                    length: self.lights.len(),
+                })
+            };
+        };
+        loop {
+            let reference = *self.lights.get(list_index).ok_or(Error::InvalidLightList {
+                index: lightmap_index,
+                offset: lightmap.light_actors,
+                length: self.lights.len(),
+            })?;
+            list_index += 1;
+            match reference {
+                ObjectReference::None => return Ok(false),
+                ObjectReference::Export(export_index) if export_index == light_export => {
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        }
     }
 
     fn build_lightmap(
@@ -85,6 +148,7 @@ impl Model {
         lightmap_index: usize,
         surface_index: Option<usize>,
         ambient: AmbientLight,
+        brightnesses: &HashMap<usize, u8>,
         light_cache: &mut HashMap<usize, LightActor>,
     ) -> Result<LightmapImage> {
         let lightmap = &self.light_maps[lightmap_index];
@@ -147,13 +211,16 @@ impl Model {
                 break;
             }
             if let ObjectReference::Export(export_index) = reference {
-                let light = if let Some(light) = light_cache.get(&export_index) {
+                let mut light = if let Some(light) = light_cache.get(&export_index) {
                     *light
                 } else {
                     let light = decode_light(package, export_index)?;
                     light_cache.insert(export_index, light);
                     light
                 };
+                if let Some(&brightness) = brightnesses.get(&export_index) {
+                    light.brightness = brightness;
+                }
                 if light.light_type != 0 && light.brightness != 0 {
                     let shadow = self.shadowmap(lightmap_index, shadow_index, width, height)?;
                     add_light(&mut pixels, &locations, normal, &shadow, light);
@@ -398,5 +465,24 @@ mod tests {
     fn shadow_mask_uses_little_endian_bits_and_ue1_blur() {
         assert_eq!(blur_shadow_bits(&[0b0000_0001], 1, 1), vec![2.0]);
         assert_eq!(blur_shadow_bits(&[0b0000_0010], 1, 1), vec![0.0]);
+    }
+
+    #[test]
+    fn zero_brightness_removes_the_authored_lightmap_contribution() {
+        let mut light = LightActor {
+            location: Vec3::new(25.0, 0.0, 0.0),
+            brightness: 64,
+            ..Default::default()
+        };
+        let locations = [Vec3::ZERO];
+        let shadow = [1.0];
+        let mut authored = [Vec3::ZERO];
+        add_light(&mut authored, &locations, Vec3::X, &shadow, light);
+        assert!(authored[0].length_squared() > 0.0);
+
+        light.brightness = 0;
+        let mut dark = [Vec3::ZERO];
+        add_light(&mut dark, &locations, Vec3::X, &shadow, light);
+        assert_eq!(dark[0], Vec3::ZERO);
     }
 }

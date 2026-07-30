@@ -449,7 +449,14 @@ fn apply_actions(
                 stats.visibility += 1;
                 stats.visibility_changed += usize::from(scene.set_actor_opacity(actor, opacity)?);
             }
-            ActorAction::SetLightBrightness { .. } => {}
+            ActorAction::SetLightBrightness {
+                actor,
+                light_brightness,
+            } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_light_brightness(actor, light_brightness)?);
+            }
             ActorAction::UnsupportedSceneProperty { actor, property } => {
                 if scene.actors[actor].draw_type != 8 {
                     let diagnostic =
