@@ -6,7 +6,7 @@ use eframe::{
     wgpu,
 };
 use glam::Vec3;
-use openhp1_render::{Camera, RenderStats, Renderer};
+use openhp1_render::{Camera, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
     LoadedScene, SceneActor, SceneObjectId, apply_runtime_actions, initialize_runtime,
@@ -32,12 +32,14 @@ pub(crate) struct ViewerApp {
     last_frame: Instant,
     render_stats: RenderStats,
     load_error: Option<String>,
+    renderer_settings: RendererSettings,
 }
 
 impl ViewerApp {
     pub(crate) fn new(
         context: &eframe::CreationContext<'_>,
         mut scene: LoadedScene,
+        renderer_settings: RendererSettings,
     ) -> Result<Self> {
         let runtime = initialize_runtime(&mut scene)?;
         let state = context
@@ -46,12 +48,13 @@ impl ViewerApp {
             .context("the viewer requires eframe's wgpu renderer")?;
         let size = [800, 600];
         let target = ColorTarget::new(&state, size);
-        let renderer = Renderer::new(
+        let renderer = Renderer::new_with_settings(
             &state.device,
             &state.queue,
             wgpu::TextureFormat::Rgba8Unorm,
             &scene.render,
             size,
+            renderer_settings,
         );
         let bounds = renderer.bounds();
         let radius = bounds.radius().max(100.0);
@@ -76,6 +79,7 @@ impl ViewerApp {
             last_frame: Instant::now(),
             render_stats: RenderStats::default(),
             load_error: None,
+            renderer_settings,
         })
     }
 
@@ -90,12 +94,13 @@ impl ViewerApp {
                 return;
             }
         };
-        let renderer = Renderer::new(
+        let renderer = Renderer::new_with_settings(
             &self.state.device,
             &self.state.queue,
             wgpu::TextureFormat::Rgba8Unorm,
             &scene.render,
             viewport_size,
+            self.renderer_settings,
         );
         let bounds = renderer.bounds();
         let radius = bounds.radius().max(100.0);

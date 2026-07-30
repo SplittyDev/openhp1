@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use app::GameApp;
+use openhp1_render::{AmbientOcclusion, RendererMode, RendererSettings, ToneMapper};
 use openhp1_scene::LoadedScene;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
@@ -20,7 +21,8 @@ fn main() -> Result<()> {
     let log_path = init_logging()?;
     info!(path = %log_path.display(), "logging game diagnostics");
 
-    let scene = LoadedScene::load(level_path()?)?;
+    let options = options()?;
+    let scene = LoadedScene::load(options.level)?;
     let diagnostics = scene
         .actors
         .iter()
@@ -46,7 +48,7 @@ fn main() -> Result<()> {
         "loaded scene capabilities"
     );
     let event_loop = EventLoop::new()?;
-    event_loop.run_app(&mut GameApp::new(scene))?;
+    event_loop.run_app(&mut GameApp::new(scene, options.renderer))?;
     Ok(())
 }
 
@@ -73,25 +75,46 @@ fn init_logging() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn level_path() -> Result<PathBuf> {
-    level_path_from(env::args_os().skip(1))
+struct Options {
+    level: PathBuf,
+    renderer: RendererSettings,
 }
 
-fn level_path_from(arguments: impl IntoIterator<Item = OsString>) -> Result<PathBuf> {
+fn options() -> Result<Options> {
+    options_from(env::args_os().skip(1))
+}
+
+fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options> {
+    let mut options = Options {
+        level: PathBuf::from("res/Maps/Lev_Tut1.unr"),
+        renderer: RendererSettings::default(),
+    };
     let mut arguments = arguments.into_iter();
-    let Some(argument) = arguments.next() else {
-        return Ok(PathBuf::from("res/Maps/Lev_Tut1.unr"));
-    };
-    if argument != "--level" {
-        bail!("usage: openhp1-game [--level <map path>]");
+    while let Some(argument) = arguments.next() {
+        if argument == "--level" {
+            options.level = arguments
+                .next()
+                .map(PathBuf::from)
+                .context("--level requires a map path")?;
+            continue;
+        }
+        let argument = argument
+            .to_str()
+            .context("renderer arguments must be valid UTF-8")?;
+        if let Some(value) = argument.strip_prefix("--renderer=") {
+            options.renderer.mode = value.parse()?;
+        } else if let Some(value) = argument.strip_prefix("--tone-mapper=") {
+            options.renderer.tone_mapper = value.parse()?;
+        } else if let Some(value) = argument.strip_prefix("--ambient-occlusion=") {
+            options.renderer.ambient_occlusion = value.parse()?;
+        } else {
+            bail!(
+                "usage: openhp1-game [--level <map path>] [--renderer=classic|modern] \
+                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao]"
+            );
+        }
     }
-    let Some(path) = arguments.next() else {
-        bail!("--level requires a map path");
-    };
-    if arguments.next().is_some() {
-        bail!("usage: openhp1-game [--level <map path>]");
-    }
-    Ok(PathBuf::from(path))
+    Ok(options)
 }
 
 #[cfg(test)]
@@ -99,18 +122,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_default_and_explicit_levels() {
-        assert_eq!(
-            level_path_from([]).unwrap(),
-            PathBuf::from("res/Maps/Lev_Tut1.unr"),
-        );
-        assert_eq!(
-            level_path_from([
-                OsString::from("--level"),
-                OsString::from("/game/Maps/Lev2_HogFront.unr"),
-            ])
-            .unwrap(),
-            PathBuf::from("/game/Maps/Lev2_HogFront.unr")
-        );
+    fn parses_renderer_and_level_options() {
+        let defaults = options_from([]).unwrap();
+        assert_eq!(defaults.level, PathBuf::from("res/Maps/Lev_Tut1.unr"));
+        assert_eq!(defaults.renderer, RendererSettings::default());
+
+        let options = options_from([
+            OsString::from("--renderer=modern"),
+            OsString::from("--tone-mapper=aces"),
+            OsString::from("--ambient-occlusion=off"),
+            OsString::from("--level"),
+            OsString::from("/game/Maps/Lev2_HogFront.unr"),
+        ])
+        .unwrap();
+        assert_eq!(options.level, PathBuf::from("/game/Maps/Lev2_HogFront.unr"));
+        assert_eq!(options.renderer.mode, RendererMode::Modern);
+        assert_eq!(options.renderer.tone_mapper, ToneMapper::Aces);
+        assert_eq!(options.renderer.ambient_occlusion, AmbientOcclusion::Off);
     }
 }

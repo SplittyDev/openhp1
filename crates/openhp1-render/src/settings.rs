@@ -1,0 +1,123 @@
+use std::{fmt, str::FromStr};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RendererMode {
+    #[default]
+    Classic,
+    Modern,
+}
+
+impl FromStr for RendererMode {
+    type Err = RendererSettingError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "classic" => Ok(Self::Classic),
+            "modern" => Ok(Self::Modern),
+            _ => Err(RendererSettingError::new(
+                "renderer",
+                value,
+                "classic, modern",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ToneMapper {
+    #[default]
+    AgX,
+    Reinhard,
+    Aces,
+}
+
+impl FromStr for ToneMapper {
+    type Err = RendererSettingError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "agx" => Ok(Self::AgX),
+            "reinhard" | "classic" => Ok(Self::Reinhard),
+            "aces" => Ok(Self::Aces),
+            _ => Err(RendererSettingError::new(
+                "tone mapper",
+                value,
+                "agx, reinhard, aces",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AmbientOcclusion {
+    Off,
+    #[default]
+    Ssao,
+}
+
+impl FromStr for AmbientOcclusion {
+    type Err = RendererSettingError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "ssao" => Ok(Self::Ssao),
+            _ => Err(RendererSettingError::new(
+                "ambient occlusion",
+                value,
+                "off, ssao",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RendererSettings {
+    pub mode: RendererMode,
+    pub tone_mapper: ToneMapper,
+    pub ambient_occlusion: AmbientOcclusion,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererSettingError {
+    setting: &'static str,
+    value: String,
+    expected: &'static str,
+}
+
+impl RendererSettingError {
+    fn new(setting: &'static str, value: &str, expected: &'static str) -> Self {
+        Self {
+            setting,
+            value: value.to_owned(),
+            expected,
+        }
+    }
+}
+
+impl fmt::Display for RendererSettingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unsupported {} {:?}; expected one of {}",
+            self.setting, self.value, self.expected
+        )
+    }
+}
+
+impl std::error::Error for RendererSettingError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_renderer_choices() {
+        assert_eq!("modern".parse(), Ok(RendererMode::Modern));
+        assert_eq!("agx".parse(), Ok(ToneMapper::AgX));
+        assert_eq!("classic".parse(), Ok(ToneMapper::Reinhard));
+        assert_eq!("aces".parse(), Ok(ToneMapper::Aces));
+        assert_eq!("off".parse(), Ok(AmbientOcclusion::Off));
+        assert!("filmic".parse::<ToneMapper>().is_err());
+    }
+}

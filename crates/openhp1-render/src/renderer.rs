@@ -5,7 +5,8 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    Camera, RenderScene, SceneBounds, SurfaceMaterial, SurfaceMode, TextureImage, unreal_to_render,
+    Camera, RenderScene, RendererSettings, SceneBounds, SurfaceMaterial, SurfaceMode, TextureImage,
+    unreal_to_render,
 };
 
 mod atlas;
@@ -89,6 +90,7 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     auto_uv: f32,
     stats: RenderStats,
+    settings: RendererSettings,
 }
 
 impl Renderer {
@@ -98,6 +100,24 @@ impl Renderer {
         target_format: wgpu::TextureFormat,
         scene: &RenderScene,
         viewport_size: [u32; 2],
+    ) -> Self {
+        Self::new_with_settings(
+            device,
+            queue,
+            target_format,
+            scene,
+            viewport_size,
+            RendererSettings::default(),
+        )
+    }
+
+    pub fn new_with_settings(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+        scene: &RenderScene,
+        viewport_size: [u32; 2],
+        settings: RendererSettings,
     ) -> Self {
         let lightmap_atlas =
             build_lightmap_atlas(&scene.lightmaps, device.limits().max_texture_dimension_2d);
@@ -443,6 +463,7 @@ impl Renderer {
             lightmap_sampler,
             auto_uv: 0.0,
             stats,
+            settings,
         }
     }
 
@@ -485,7 +506,14 @@ impl Renderer {
         scene: &RenderScene,
     ) {
         let auto_uv = self.auto_uv;
-        let mut renderer = Self::new(device, queue, self.target_format, scene, self.depth.size);
+        let mut renderer = Self::new_with_settings(
+            device,
+            queue,
+            self.target_format,
+            scene,
+            self.depth.size,
+            self.settings,
+        );
         renderer.auto_uv = auto_uv;
         *self = renderer;
     }

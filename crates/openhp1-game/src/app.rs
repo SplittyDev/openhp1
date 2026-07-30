@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use glam::{Mat3, Quat, Vec3};
 use openhp1_audio::AudioPlayer;
-use openhp1_render::{Camera, RenderStats, Renderer};
+use openhp1_render::{Camera, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::{
     ActorAction, ConsoleCommandAction, ConsoleCommands, PlayerInput, PlayerView, ScriptRuntime,
 };
@@ -37,13 +37,15 @@ const DEBUG_FAST_FORWARD_TICKS: usize = 16;
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
     graphics: Option<Graphics>,
+    renderer_settings: RendererSettings,
 }
 
 impl GameApp {
-    pub(crate) fn new(scene: LoadedScene) -> Self {
+    pub(crate) fn new(scene: LoadedScene, renderer_settings: RendererSettings) -> Self {
         Self {
             scene: Some(scene),
             graphics: None,
+            renderer_settings,
         }
     }
 }
@@ -62,7 +64,7 @@ impl ApplicationHandler for GameApp {
         let result = event_loop
             .create_window(attributes)
             .context("failed to create the game window")
-            .and_then(|window| Graphics::new(Arc::new(window), scene));
+            .and_then(|window| Graphics::new(Arc::new(window), scene, self.renderer_settings));
         match result {
             Ok(graphics) => {
                 graphics.window.request_redraw();
@@ -98,10 +100,9 @@ impl ApplicationHandler for GameApp {
                 RenderOutcome::Load(saved) => {
                     let window = Arc::clone(&graphics.window);
                     let path = saved.map_path(&graphics.scene.path);
-                    match path
-                        .and_then(LoadedScene::load)
-                        .and_then(|scene| Graphics::new_with_save(window, scene, &saved.bytes))
-                    {
+                    match path.and_then(LoadedScene::load).and_then(|scene| {
+                        Graphics::new_with_save(window, scene, &saved.bytes, self.renderer_settings)
+                    }) {
                         Ok(graphics) => {
                             graphics.window.request_redraw();
                             self.graphics = Some(graphics);
@@ -337,18 +338,28 @@ struct Graphics {
 }
 
 impl Graphics {
-    fn new(window: Arc<Window>, scene: LoadedScene) -> Result<Self> {
-        Self::new_inner(window, scene, None)
+    fn new(
+        window: Arc<Window>,
+        scene: LoadedScene,
+        renderer_settings: RendererSettings,
+    ) -> Result<Self> {
+        Self::new_inner(window, scene, None, renderer_settings)
     }
 
-    fn new_with_save(window: Arc<Window>, scene: LoadedScene, bytes: &[u8]) -> Result<Self> {
-        Self::new_inner(window, scene, Some(bytes))
+    fn new_with_save(
+        window: Arc<Window>,
+        scene: LoadedScene,
+        bytes: &[u8],
+        renderer_settings: RendererSettings,
+    ) -> Result<Self> {
+        Self::new_inner(window, scene, Some(bytes), renderer_settings)
     }
 
     fn new_inner(
         window: Arc<Window>,
         mut scene: LoadedScene,
         saved: Option<&[u8]>,
+        renderer_settings: RendererSettings,
     ) -> Result<Self> {
         let mut last_error = None;
         let game_root = scene
@@ -478,12 +489,13 @@ impl Graphics {
         config.present_mode = wgpu::PresentMode::Fifo;
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
-        let renderer = Renderer::new(
+        let renderer = Renderer::new_with_settings(
             &device,
             &queue,
             config.format,
             &scene.render,
             [size.width, size.height],
+            renderer_settings,
         );
         let far = (renderer.bounds().radius().max(100.0) * 10.0).max(10_000.0);
         let camera = camera_from_player_view(player_view, size, far);
