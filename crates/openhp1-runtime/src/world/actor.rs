@@ -55,6 +55,7 @@ impl ScriptRuntime {
             level_package: None,
             level_info: None,
             player_actor: None,
+            player_alt_fire_pressed: false,
             animation_sequences: HashMap::default(),
             actor_bone_names: HashMap::default(),
             actor_visual_bounds: HashMap::default(),

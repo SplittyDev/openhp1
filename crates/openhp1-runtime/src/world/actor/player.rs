@@ -165,6 +165,9 @@ impl ScriptRuntime {
             Ok(())
         })();
         self.instances.insert(actor, instance);
+        if result.is_ok() {
+            self.player_alt_fire_pressed |= input.alt_fire_pressed;
+        }
         result
     }
 
@@ -194,17 +197,9 @@ impl ScriptRuntime {
         delta_time: f32,
     ) -> DispatchResult<Vec<ActorAction>> {
         self.set_player_input(input)?;
-        let arguments = [Value::Float(delta_time)];
-        let result = (|| {
-            let mut actions = self.dispatch_player_event("PlayerInput", &arguments)?;
-            actions.extend(self.dispatch_player_event("PlayerTick", &arguments)?);
-            Ok(actions)
-        })();
-        let cleared = self.clear_player_motion_input();
-        match (result, cleared) {
-            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-            (Ok(actions), Ok(())) => Ok(actions),
-        }
+        let mut actions = Vec::new();
+        self.tick_player_events(delta_time, &mut actions)?;
+        Ok(actions)
     }
 
     pub fn player_view(

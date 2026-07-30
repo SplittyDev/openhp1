@@ -185,10 +185,10 @@ A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. The held cast button is exposed through
-the player input properties so the original `PlayerInput` and active state own
-sound, animation, and spell logic. `PlayerInput` and `PlayerTick` run at the
-player's position in the actor tick order, so later actors observe the current
-frame's processed mouse values as they do in UE1.
+the player input properties, while its press dispatches the original `AltFire`
+exec so the active state owns sound, animation, and spell logic. `PlayerInput`
+and `PlayerTick` run at the player's position in the actor tick order, so later
+actors observe the current frame's processed mouse values as they do in UE1.
 Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary world, animation, player,
 trigger, camera, and audio-action ticks per rendered frame. This debug
 fast-forward preserves event ordering and latent callbacks rather than

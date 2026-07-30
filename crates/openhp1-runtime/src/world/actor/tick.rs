@@ -227,12 +227,15 @@ impl ScriptRuntime {
         Ok(actions)
     }
 
-    fn tick_player_events(
+    pub(super) fn tick_player_events(
         &mut self,
         delta_time: f32,
         actions: &mut Vec<ActorAction>,
     ) -> DispatchResult<()> {
         let arguments = [Value::Float(delta_time)];
+        if std::mem::take(&mut self.player_alt_fire_pressed) {
+            actions.extend(self.dispatch_player_event("AltFire", &[Value::Float(0.0)])?);
+        }
         actions.extend(self.dispatch_player_event("PlayerInput", &arguments)?);
         actions.extend(self.dispatch_player_event("PlayerTick", &arguments)?);
         self.clear_player_motion_input()
