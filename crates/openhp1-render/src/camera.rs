@@ -58,8 +58,11 @@ impl Camera {
     }
 
     pub(crate) fn view_projection(&self, aspect: f32) -> Mat4 {
-        Mat4::perspective_rh(self.vertical_fov, aspect, self.near, self.far)
-            * Mat4::look_to_rh(self.position, self.forward(), self.up())
+        Mat4::perspective_rh(self.vertical_fov, aspect, self.near, self.far) * self.view()
+    }
+
+    pub(crate) fn view(&self) -> Mat4 {
+        Mat4::look_to_rh(self.position, self.forward(), self.up())
     }
 }
 

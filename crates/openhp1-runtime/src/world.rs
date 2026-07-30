@@ -30,7 +30,7 @@ mod state;
 
 pub use action::{
     ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, PlayerMusic,
-    WeaponAttachment,
+    RuntimeObject, WeaponAttachment,
 };
 pub use error::{DispatchError, DispatchResult};
 
@@ -257,7 +257,7 @@ impl FunctionLookup {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum StoredValue {
     Value(Value),
     Array(Vec<StoredValue>),

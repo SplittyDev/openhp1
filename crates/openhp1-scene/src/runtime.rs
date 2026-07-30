@@ -232,6 +232,48 @@ pub fn apply_runtime_actions_with(
             ActorAction::SetDrawType { actor, draw_type } => {
                 transformed |= scene.set_actor_draw_type(actor, draw_type)?;
             }
+            ActorAction::SetMesh { actor, mesh } => {
+                transformed |= scene.set_actor_mesh(actor, mesh)?;
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+                runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+            }
+            ActorAction::SetDrawScale { actor, draw_scale } => {
+                transformed |= scene.set_actor_draw_scale(actor, draw_scale)?;
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+            }
+            ActorAction::SetStyle { actor, style } => {
+                transformed |= scene.set_actor_style(actor, style)?;
+            }
+            ActorAction::SetScaleGlow { actor, scale_glow } => {
+                transformed |= scene.set_actor_scale_glow(actor, scale_glow)?;
+            }
+            ActorAction::SetSkin { actor, skin } => {
+                transformed |= scene.set_actor_skin(actor, skin)?;
+            }
+            ActorAction::SetSkelAnim { actor, skel_anim } => {
+                transformed |= scene.set_actor_skeletal_animation(actor, skel_anim)?;
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+                runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+            }
+            ActorAction::SetAmbientGlow {
+                actor,
+                ambient_glow,
+            } => {
+                transformed |= scene.set_actor_ambient_glow(actor, ambient_glow)?;
+            }
+            ActorAction::SetOpacity { actor, opacity } => {
+                transformed |= scene.set_actor_opacity(actor, opacity)?;
+            }
+            ActorAction::SetLightBrightness { .. } => {}
             ActorAction::UnsupportedSceneProperty { actor, property } => {
                 // ParticleFX state is projected by sync_particle_emitters each frame.
                 if scene.actors[actor].draw_type == 8 {

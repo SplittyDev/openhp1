@@ -6,6 +6,9 @@ use crate::{Error, Model, Result, decode::index};
 #[derive(Clone, Debug, Default)]
 pub struct TriangleMesh {
     pub positions: Vec<Vec3>,
+    /// World-space normals. Environment-mapped actor meshes use these to
+    /// derive camera-relative reflection coordinates.
+    pub normals: Vec<Vec3>,
     /// Raw UE texture coordinates in texels. Divide by the selected texture's
     /// dimensions before sampling a normalized GPU texture.
     pub texture_coordinates: Vec<Vec2>,
@@ -23,6 +26,7 @@ pub struct TriangleMesh {
 impl Model {
     pub fn triangulate(&self) -> Result<TriangleMesh> {
         let mut positions = Vec::new();
+        let mut normals = Vec::new();
         let mut texture_coordinates = Vec::new();
         let mut lightmap_coordinates = Vec::new();
         let mut vertex_lightmaps = Vec::new();
@@ -50,6 +54,9 @@ impl Model {
                 point_count: positions.len(),
             })?;
             let surface_data = &self.surfaces[surface];
+            let normal = self.vectors
+                [index(surface_data.normal, self.vectors.len(), "surface normal")?]
+            .normalize_or_zero();
             let base = self.points[index(
                 surface_data.base_point,
                 self.points.len(),
@@ -79,6 +86,7 @@ impl Model {
                 let point =
                     self.points[index(vertex.point, self.points.len(), "BSP vertex point")?];
                 positions.push(point);
+                normals.push(normal);
                 texture_coordinates.push(surface_texture_coordinates(
                     point,
                     base,
@@ -113,6 +121,7 @@ impl Model {
         }
         Ok(TriangleMesh {
             positions,
+            normals,
             texture_coordinates,
             lightmap_coordinates,
             vertex_lightmaps,

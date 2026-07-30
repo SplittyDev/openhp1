@@ -426,20 +426,22 @@ impl ScriptRuntime {
             };
             actor
         };
-        let (is_base, is_hidden, is_pre_pivot, is_draw_type, unsupported_scene_property) = {
+        let field_name = {
             let field = self.resolved_object(&field)?;
-            let name = field
+            field
                 .package
                 .summary()
-                .name(field.package.summary().exports[field.export_index].object_name);
-            (
-                name.eq_ignore_ascii_case("Base"),
-                name.eq_ignore_ascii_case("bHidden"),
-                name.eq_ignore_ascii_case("PrePivot"),
-                name.eq_ignore_ascii_case("DrawType"),
-                is_unsupported_scene_property(name).then(|| name.to_owned()),
-            )
+                .name(field.package.summary().exports[field.export_index].object_name)
+                .to_owned()
         };
+        let is_base = field_name.eq_ignore_ascii_case("Base");
+        let is_hidden = field_name.eq_ignore_ascii_case("bHidden");
+        let is_pre_pivot = field_name.eq_ignore_ascii_case("PrePivot");
+        let is_draw_type = field_name.eq_ignore_ascii_case("DrawType");
+        let unsupported_scene_property =
+            is_unsupported_scene_property(&field_name).then(|| field_name.clone());
+        let tracks_scene_value = unsupported_scene_property.is_some()
+            || scene_property_action(actor, &field_name, &value).is_some();
         if is_base {
             let base = match &value {
                 StoredValue::Object(base) => base.clone(),
@@ -458,6 +460,47 @@ impl ScriptRuntime {
         let draw_type = match (is_draw_type, &value) {
             (true, StoredValue::Value(Value::Byte(draw_type))) => Some(*draw_type),
             _ => None,
+        };
+        let instance_value = if !tracks_scene_value {
+            None
+        } else if actor == current_actor {
+            current_instance.get(&field).cloned()
+        } else {
+            self.instances
+                .get(&actor)
+                .ok_or(DispatchError::ActiveActorContext { actor })?
+                .get(&field)
+                .cloned()
+        };
+        let (class_default, zero_default) = if !tracks_scene_value || instance_value.is_some() {
+            (None, None)
+        } else {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            let defaults = self.load_class_defaults(&class, 0)?;
+            let class_default = defaults.get(&field).cloned();
+            let zero_default = if class_default.is_none() {
+                self.default_field_value(&field)?
+            } else {
+                None
+            };
+            (class_default, zero_default)
+        };
+        let (changed, scene_action) = if tracks_scene_value {
+            effective_assignment(
+                actor,
+                &field_name,
+                instance_value.as_ref(),
+                class_default.as_ref(),
+                zero_default.as_ref(),
+                &value,
+            )
+        } else {
+            (false, None)
         };
         if actor == current_actor {
             current_instance.insert(field.clone(), value);
@@ -480,8 +523,13 @@ impl ScriptRuntime {
         if let Some(draw_type) = draw_type {
             actions.push(ActorAction::SetDrawType { actor, draw_type });
         }
-        if let Some(property) = unsupported_scene_property {
-            actions.push(ActorAction::UnsupportedSceneProperty { actor, property });
+        if changed {
+            if let Some(action) = scene_action {
+                actions.push(action);
+            }
+            if let Some(property) = unsupported_scene_property {
+                actions.push(ActorAction::UnsupportedSceneProperty { actor, property });
+            }
         }
         Ok(())
     }
@@ -501,4 +549,92 @@ impl ScriptRuntime {
             .ok_or(DispatchError::InvalidObjectHandle { handle })?;
         Ok(self.handle_objects[index].clone())
     }
+}
+
+fn runtime_object_value(object: &Option<ObjectId>) -> Option<RuntimeObject> {
+    object.as_ref().map(|object| RuntimeObject {
+        package: Arc::clone(&object.package),
+        export_index: object.export_index,
+    })
+}
+
+pub(super) fn effective_assignment(
+    actor: usize,
+    field_name: &str,
+    instance: Option<&StoredValue>,
+    class_default: Option<&StoredValue>,
+    zero_default: Option<&StoredValue>,
+    value: &StoredValue,
+) -> (bool, Option<ActorAction>) {
+    let changed = instance.or(class_default).or(zero_default) != Some(value);
+    let action = changed
+        .then(|| scene_property_action(actor, field_name, value))
+        .flatten();
+    (changed, action)
+}
+
+fn scene_property_action(
+    actor: usize,
+    field_name: &str,
+    value: &StoredValue,
+) -> Option<ActorAction> {
+    Some(match (field_name, value) {
+        (name, StoredValue::Object(mesh)) if name.eq_ignore_ascii_case("Mesh") => {
+            ActorAction::SetMesh {
+                actor,
+                mesh: runtime_object_value(mesh),
+            }
+        }
+        (name, StoredValue::Value(Value::Float(draw_scale)))
+            if name.eq_ignore_ascii_case("DrawScale") =>
+        {
+            ActorAction::SetDrawScale {
+                actor,
+                draw_scale: *draw_scale,
+            }
+        }
+        (name, StoredValue::Value(Value::Byte(style))) if name.eq_ignore_ascii_case("Style") => {
+            ActorAction::SetStyle {
+                actor,
+                style: *style,
+            }
+        }
+        (name, StoredValue::Value(Value::Float(scale_glow)))
+            if name.eq_ignore_ascii_case("ScaleGlow") =>
+        {
+            ActorAction::SetScaleGlow {
+                actor,
+                scale_glow: *scale_glow,
+            }
+        }
+        (name, StoredValue::Object(skin)) if name.eq_ignore_ascii_case("Skin") => {
+            ActorAction::SetSkin {
+                actor,
+                skin: runtime_object_value(skin),
+            }
+        }
+        (name, StoredValue::Object(skel_anim)) if name.eq_ignore_ascii_case("SkelAnim") => {
+            ActorAction::SetSkelAnim {
+                actor,
+                skel_anim: runtime_object_value(skel_anim),
+            }
+        }
+        (name, StoredValue::Value(Value::Byte(ambient_glow)))
+            if name.eq_ignore_ascii_case("AmbientGlow") =>
+        {
+            ActorAction::SetAmbientGlow {
+                actor,
+                ambient_glow: *ambient_glow,
+            }
+        }
+        (name, StoredValue::Value(Value::Float(opacity)))
+            if name.eq_ignore_ascii_case("Opacity") =>
+        {
+            ActorAction::SetOpacity {
+                actor,
+                opacity: *opacity,
+            }
+        }
+        _ => return None,
+    })
 }

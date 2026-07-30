@@ -492,13 +492,11 @@ impl ScriptRuntime {
 
 fn is_unsupported_scene_property(name: &str) -> bool {
     [
-        "AmbientGlow",
         "bCorona",
         "bLensFlare",
         "bMeshEnviroMap",
         "bNoSmooth",
         "bUnlit",
-        "DrawScale",
         "Fatness",
         "LightBrightness",
         "LightEffect",
@@ -509,11 +507,7 @@ fn is_unsupported_scene_property(name: &str) -> bool {
         "LightSaturation",
         "LightType",
         "LODBias",
-        "Mesh",
         "MultiSkins",
-        "ScaleGlow",
-        "Skin",
-        "Style",
         "Texture",
         "VolumeBrightness",
     ]
@@ -751,10 +745,112 @@ mod tests {
 
     #[test]
     fn identifies_scene_properties_that_runtime_does_not_project() {
-        assert!(is_unsupported_scene_property("DrawScale"));
         assert!(is_unsupported_scene_property("multiskins"));
+        assert!(is_unsupported_scene_property("Texture"));
+        assert!(is_unsupported_scene_property("bUnlit"));
+        assert!(is_unsupported_scene_property("bMeshEnviroMap"));
+        assert!(!is_unsupported_scene_property("DrawScale"));
+        assert!(!is_unsupported_scene_property("Style"));
+        assert!(!is_unsupported_scene_property("AmbientGlow"));
+        assert!(!is_unsupported_scene_property("ScaleGlow"));
+        assert!(!is_unsupported_scene_property("Skin"));
+        assert!(!is_unsupported_scene_property("SkelAnim"));
+        assert!(!is_unsupported_scene_property("Opacity"));
+        assert!(!is_unsupported_scene_property("Mesh"));
         assert!(!is_unsupported_scene_property("DrawType"));
         assert!(!is_unsupported_scene_property("Velocity"));
+    }
+
+    #[test]
+    fn effective_display_assignments_suppress_defaults_and_emit_typed_actions() {
+        let object = ObjectId {
+            package: Arc::from("Engine.u"),
+            export_index: 42,
+        };
+        let runtime_object = RuntimeObject {
+            package: Arc::from("Engine.u"),
+            export_index: 42,
+        };
+        let float_default = StoredValue::Value(Value::Float(1.0));
+        assert_eq!(
+            object::effective_assignment(
+                7,
+                "ScaleGlow",
+                None,
+                Some(&float_default),
+                None,
+                &float_default,
+            ),
+            (false, None),
+        );
+        let object_default = StoredValue::Object(None);
+        assert_eq!(
+            object::effective_assignment(
+                7,
+                "Skin",
+                None,
+                None,
+                Some(&object_default),
+                &object_default,
+            ),
+            (false, None),
+        );
+
+        let skin = StoredValue::Object(Some(object.clone()));
+        assert_eq!(
+            object::effective_assignment(
+                7,
+                "ScaleGlow",
+                None,
+                Some(&float_default),
+                None,
+                &StoredValue::Value(Value::Float(2.0)),
+            ),
+            (
+                true,
+                Some(ActorAction::SetScaleGlow {
+                    actor: 7,
+                    scale_glow: 2.0,
+                }),
+            ),
+        );
+        assert_eq!(
+            object::effective_assignment(7, "Skin", None, None, Some(&object_default), &skin,),
+            (
+                true,
+                Some(ActorAction::SetSkin {
+                    actor: 7,
+                    skin: Some(runtime_object.clone()),
+                }),
+            ),
+        );
+        assert_eq!(
+            object::effective_assignment(7, "SkelAnim", Some(&object_default), None, None, &skin,),
+            (
+                true,
+                Some(ActorAction::SetSkelAnim {
+                    actor: 7,
+                    skel_anim: Some(runtime_object),
+                }),
+            ),
+        );
+        assert_eq!(
+            object::effective_assignment(
+                7,
+                "Opacity",
+                None,
+                Some(&float_default),
+                None,
+                &StoredValue::Value(Value::Float(0.5)),
+            ),
+            (
+                true,
+                Some(ActorAction::SetOpacity {
+                    actor: 7,
+                    opacity: 0.5,
+                }),
+            ),
+        );
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub struct ActorProperties {
     pub style: Option<u8>,
     pub ambient_glow: Option<u8>,
     pub scale_glow: Option<f32>,
+    pub opacity: Option<f32>,
+    pub light_brightness: Option<u8>,
     pub anim_sequence: Option<String>,
     pub anim_frame: Option<f32>,
     pub anim_rate: Option<f32>,
@@ -36,6 +38,7 @@ pub struct ActorProperties {
     pub corona: Option<bool>,
     pub hidden: Option<bool>,
     pub unlit: Option<bool>,
+    pub mesh_environment_map: Option<bool>,
 }
 
 impl Actor {
@@ -116,6 +119,12 @@ impl ActorProperties {
                 ("ScaleGlow", PropertyKind::Float, _) => {
                     properties.scale_glow = Some(value.read_f32()?);
                 }
+                ("Opacity", PropertyKind::Float, _) => {
+                    properties.opacity = Some(value.read_f32()?);
+                }
+                ("LightBrightness", PropertyKind::Byte, _) => {
+                    properties.light_brightness = Some(value.read_u8()?);
+                }
                 ("AnimSequence", PropertyKind::Name, _) => {
                     let index = value.read_name_index("actor animation sequence")?;
                     properties.anim_sequence = Some(value.summary().name(index).to_owned());
@@ -140,6 +149,9 @@ impl ActorProperties {
                 }
                 ("bUnlit", PropertyKind::Bool, _) => {
                     properties.unlit = property.bool_value;
+                }
+                ("bMeshEnviroMap", PropertyKind::Bool, _) => {
+                    properties.mesh_environment_map = property.bool_value;
                 }
                 _ => {}
             }

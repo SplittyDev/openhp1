@@ -4,8 +4,8 @@ use openhp1_scene::{LightmapImage, TextureImage};
 pub(super) struct AtlasRectangle {
     pub(super) x: u32,
     pub(super) y: u32,
-    width: u32,
-    height: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 pub(super) struct LightmapAtlas {
@@ -89,6 +89,41 @@ pub(super) fn build_lightmap_atlas(
         rectangles,
         neutral,
     }
+}
+
+pub(super) fn lightmap_patch(source: &LightmapImage) -> Option<TextureImage> {
+    let width = source.width.checked_add(2)?;
+    let height = source.height.checked_add(2)?;
+    let source_len = usize::try_from(source.width)
+        .ok()?
+        .checked_mul(usize::try_from(source.height).ok()?)?
+        .checked_mul(4)?;
+    if source.rgba.len() != source_len {
+        return None;
+    }
+    let mut rgba = vec![
+        0;
+        usize::try_from(width)
+            .ok()?
+            .checked_mul(usize::try_from(height).ok()?)?
+            .checked_mul(4)?
+    ];
+    copy_with_gutter(
+        &mut rgba,
+        width,
+        AtlasRectangle {
+            x: 1,
+            y: 1,
+            width: source.width,
+            height: source.height,
+        },
+        &source.rgba,
+    );
+    Some(TextureImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 fn pack_atlas(

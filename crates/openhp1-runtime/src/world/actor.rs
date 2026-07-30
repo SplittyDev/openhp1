@@ -163,8 +163,13 @@ impl ScriptRuntime {
             });
         }
         self.actor_visual_bounds.insert(actor, (minimum, maximum));
-        self.update_cached_collision_shape_bounds(actor, (minimum, maximum));
+        self.update_cached_collision_shape_bounds(actor, Some((minimum, maximum)));
         Ok(())
+    }
+
+    pub fn clear_actor_visual_bounds(&mut self, actor: usize) {
+        self.actor_visual_bounds.remove(&actor);
+        self.update_cached_collision_shape_bounds(actor, None);
     }
 
     pub fn register_actor(
@@ -578,15 +583,18 @@ impl ScriptRuntime {
                 .get(&weapon)
                 .cloned()
                 .ok_or(DispatchError::ActiveActorContext { actor: weapon })?;
-            if !matches!(
-                self.instance_property(&weapon_class, &weapon_instance, "ThirdPersonMesh")?,
-                Some(StoredValue::Object(Some(_)))
-            ) {
+            let Some(StoredValue::Object(Some(mesh))) =
+                self.instance_property(&weapon_class, &weapon_instance, "ThirdPersonMesh")?
+            else {
                 continue;
-            }
+            };
             attachments.push(WeaponAttachment {
                 pawn,
                 weapon,
+                mesh: RuntimeObject {
+                    package: Arc::clone(&mesh.package),
+                    export_index: mesh.export_index,
+                },
                 scale: particle_scalar(self.instance_property(
                     &weapon_class,
                     &weapon_instance,

@@ -928,10 +928,10 @@ impl ScriptRuntime {
     pub(super) fn update_cached_collision_shape_bounds(
         &mut self,
         actor: usize,
-        bounds: (Vec3, Vec3),
+        bounds: Option<(Vec3, Vec3)>,
     ) {
         if let Some(Some(cached)) = self.collision_actors.get_mut(actor) {
-            cached.actor.shape_bounds = Some(bounds);
+            cached.actor.shape_bounds = bounds;
             self.reindex_cached_collision_actor(actor);
         }
     }

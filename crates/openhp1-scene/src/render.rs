@@ -19,7 +19,7 @@ pub enum SurfaceMode {
     Hidden,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceMaterial {
     pub texture: Option<usize>,
     pub mode: SurfaceMode,
@@ -28,8 +28,27 @@ pub struct SurfaceMaterial {
     pub masked: bool,
     pub two_sided: bool,
     pub unlit: bool,
+    /// Derive texture coordinates from the reflected view direction.
+    pub environment_map: bool,
+    /// HP1-specific multiplier for blended source color.
+    pub opacity: f32,
     /// UE1 zone multipliers for automatic U/V texture-coordinate panning.
     pub texture_pan_speed: [f32; 2],
+}
+
+impl Default for SurfaceMaterial {
+    fn default() -> Self {
+        Self {
+            texture: None,
+            mode: SurfaceMode::Opaque,
+            masked: false,
+            two_sided: false,
+            unlit: false,
+            environment_map: false,
+            opacity: 1.0,
+            texture_pan_speed: [0.0; 2],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

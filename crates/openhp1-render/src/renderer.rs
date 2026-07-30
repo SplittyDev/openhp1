@@ -2,7 +2,6 @@ use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use openhp1_scene::TriangleMesh;
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -14,16 +13,14 @@ mod batch;
 mod pipeline;
 mod target;
 
-use atlas::build_lightmap_atlas;
+use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
 use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
     sorted_blended_batches, texture_batches, update_blended_centers,
 };
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
-use pipeline::{
-    create_backdrop_pipeline, create_pipeline, texture, texture_bind_group, texture_view,
-};
+use pipeline::{create_backdrop_pipeline, create_pipeline, texture, texture_bind_group};
 use target::{DepthTarget, SkyTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -47,12 +44,16 @@ struct Vertex {
     lightmap_coordinates: [f32; 2],
     has_lightmap: f32,
     vertex_color: [u8; 4],
+    normal: [f32; 3],
+    environment_map: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
     view_projection: [[f32; 4]; 4],
+    world_to_view: [[f32; 4]; 4],
+    camera_position: [f32; 4],
     display_gamma: [f32; 4],
     auto_uv: [f32; 4],
 }
@@ -82,7 +83,9 @@ pub struct Renderer {
     target_format: wgpu::TextureFormat,
     texture_layout: wgpu::BindGroupLayout,
     sky_sampler: wgpu::Sampler,
+    lightmap_texture: wgpu::Texture,
     lightmap_view: wgpu::TextureView,
+    lightmap_rectangles: Vec<AtlasRectangle>,
     lightmap_sampler: wgpu::Sampler,
     auto_uv: f32,
     stats: RenderStats,
@@ -161,7 +164,19 @@ impl Renderer {
                             .get(vertex_index)
                             .copied()
                             .unwrap_or(Vec3::ONE),
+                        material.opacity,
                     ),
+                    normal: unreal_to_render(
+                        scene
+                            .mesh
+                            .normals
+                            .get(vertex_index)
+                            .copied()
+                            .unwrap_or(Vec3::ZERO),
+                    )
+                    .normalize_or_zero()
+                    .to_array(),
+                    environment_map: f32::from(material.environment_map),
                 }
             })
             .collect();
@@ -317,12 +332,13 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let lightmap_view = texture_view(
+        let lightmap_texture = texture(
             device,
             queue,
             "OpenHP1 lightmap atlas",
             &lightmap_atlas.image,
         );
+        let lightmap_view = lightmap_texture.create_view(&Default::default());
         let checkerboard = checkerboard();
         let stats = RenderStats {
             draw_calls: 0,
@@ -421,7 +437,9 @@ impl Renderer {
             target_format,
             texture_layout,
             sky_sampler,
+            lightmap_texture,
             lightmap_view,
+            lightmap_rectangles: lightmap_atlas.rectangles,
             lightmap_sampler,
             auto_uv: 0.0,
             stats,
@@ -432,14 +450,28 @@ impl Renderer {
         self.bounds
     }
 
-    pub fn update_vertices(&mut self, queue: &wgpu::Queue, mesh: &TriangleMesh) -> bool {
+    pub fn update_vertices(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
+        let mesh = &scene.mesh;
         if mesh.positions.len() != self.vertices.len() {
             return false;
         }
         for (index, vertex) in self.vertices.iter_mut().enumerate() {
+            let material = mesh
+                .vertex_surfaces
+                .get(index)
+                .and_then(|surface| scene.surface_materials.get(*surface))
+                .copied()
+                .unwrap_or_default();
             vertex.position = unreal_to_render(mesh.positions[index]).to_array();
-            vertex.vertex_color =
-                pack_vertex_color(mesh.vertex_colors.get(index).copied().unwrap_or(Vec3::ONE));
+            vertex.vertex_color = pack_vertex_color(
+                mesh.vertex_colors.get(index).copied().unwrap_or(Vec3::ONE),
+                material.opacity,
+            );
+            vertex.normal =
+                unreal_to_render(mesh.normals.get(index).copied().unwrap_or(Vec3::ZERO))
+                    .normalize_or_zero()
+                    .to_array();
+            vertex.environment_map = f32::from(material.environment_map);
         }
         update_blended_centers(&mut self.blended_surfaces, &self.vertices);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
@@ -502,6 +534,51 @@ impl Renderer {
         true
     }
 
+    pub fn update_lightmaps(
+        &self,
+        queue: &wgpu::Queue,
+        images: &[openhp1_scene::LightmapImage],
+        changed: &[usize],
+    ) -> bool {
+        if images.len() != self.lightmap_rectangles.len() {
+            return false;
+        }
+        for &index in changed {
+            let (Some(image), Some(rectangle)) =
+                (images.get(index), self.lightmap_rectangles.get(index))
+            else {
+                return false;
+            };
+            if image.width != rectangle.width || image.height != rectangle.height {
+                return false;
+            }
+            let Some(patch) = lightmap_patch(image) else {
+                return false;
+            };
+            let mut destination = self.lightmap_texture.as_image_copy();
+            destination.origin = wgpu::Origin3d {
+                x: rectangle.x - 1,
+                y: rectangle.y - 1,
+                z: 0,
+            };
+            queue.write_texture(
+                destination,
+                &patch.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(patch.width * 4),
+                    rows_per_image: Some(patch.height),
+                },
+                wgpu::Extent3d {
+                    width: patch.width,
+                    height: patch.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        true
+    }
+
     pub fn resize(&mut self, device: &wgpu::Device, viewport_size: [u32; 2]) {
         if self.depth.size != viewport_size {
             self.depth = DepthTarget::new(device, viewport_size);
@@ -540,6 +617,8 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&CameraUniform {
                 view_projection: camera.view_projection(aspect).to_cols_array_2d(),
+                world_to_view: camera.view().to_cols_array_2d(),
+                camera_position: camera.position.extend(1.0).to_array(),
                 display_gamma,
                 auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
             }),
@@ -573,6 +652,8 @@ impl Renderer {
                 0,
                 bytemuck::bytes_of(&CameraUniform {
                     view_projection: sky_camera.view_projection(aspect).to_cols_array_2d(),
+                    world_to_view: sky_camera.view().to_cols_array_2d(),
+                    camera_position: sky_camera.position.extend(1.0).to_array(),
                     display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                 }),
@@ -713,13 +794,18 @@ fn display_gamma(brightness: f32) -> f32 {
     1.0 / (brightness * 2.0).clamp(0.05, 2.99)
 }
 
-fn pack_vertex_color(color: Vec3) -> [u8; 4] {
+fn pack_vertex_color(color: Vec3, opacity: f32) -> [u8; 4] {
     let color = color.clamp(Vec3::ZERO, Vec3::ONE) * 255.0;
+    let opacity = if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     [
         color.x.round() as u8,
         color.y.round() as u8,
         color.z.round() as u8,
-        255,
+        (opacity * 255.0).round() as u8,
     ]
 }
 
@@ -784,6 +870,8 @@ mod tests {
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
+                normal: [0.0, 1.0, 0.0],
+                environment_map: 0.0,
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
@@ -792,6 +880,8 @@ mod tests {
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
+                normal: [0.0, 1.0, 0.0],
+                environment_map: 0.0,
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -912,8 +1002,33 @@ mod tests {
     #[test]
     fn packs_vertex_lighting_like_fixed_function_diffuse_color() {
         assert_eq!(
-            pack_vertex_color(Vec3::new(-0.5, 0.5, 2.0)),
-            [0, 128, 255, 255]
+            pack_vertex_color(Vec3::new(-0.5, 0.5, 2.0), 0.25),
+            [0, 128, 255, 64]
+        );
+    }
+
+    #[test]
+    fn environment_maps_are_opt_in_and_use_surreal_reflection_coordinates() {
+        assert!(!SurfaceMaterial::default().environment_map);
+        assert_eq!(SurfaceMaterial::default().opacity, 1.0);
+        assert!(
+            SurfaceMaterial {
+                environment_map: true,
+                ..Default::default()
+            }
+            .environment_map
+        );
+
+        let coordinates = |position: Vec3, normal: Vec3, camera: Vec3| {
+            let incident = (position - camera).normalize_or_zero();
+            let reflection = incident - 2.0 * incident.dot(normal) * normal;
+            (reflection.truncate() + glam::Vec2::ONE) * (128.0 / 255.0)
+        };
+        let centered = coordinates(-Vec3::Z, Vec3::Z, Vec3::ZERO);
+        assert!(centered.abs_diff_eq(glam::Vec2::splat(128.0 / 255.0), 0.000_001));
+        let camera_relative = coordinates(-Vec3::Z, Vec3::Z, Vec3::new(-1.0, 0.0, -1.0));
+        assert!(
+            camera_relative.abs_diff_eq(glam::Vec2::new(256.0 / 255.0, 128.0 / 255.0), 0.000_001)
         );
     }
 
@@ -977,6 +1092,8 @@ mod tests {
             lightmap_coordinates: [0.0; 2],
             has_lightmap: 0.0,
             vertex_color: [255; 4],
+            normal: [0.0, 1.0, 0.0],
+            environment_map: 0.0,
         }
     }
 }

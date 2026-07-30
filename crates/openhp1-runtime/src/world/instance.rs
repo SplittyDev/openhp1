@@ -41,7 +41,14 @@ impl ScriptRuntime {
         if let Some(value) = instance.get(&field) {
             return Ok(Some(value.clone()));
         }
-        let field = self.resolved_object(&field)?;
+        self.default_field_value(&field)
+    }
+
+    pub(super) fn default_field_value(
+        &mut self,
+        field: &ObjectId,
+    ) -> DispatchResult<Option<StoredValue>> {
+        let field = self.resolved_object(field)?;
         self.zero_field_value(&field)?
             .map(|value| self.stored_value(&field.package, &value))
             .transpose()

@@ -33,7 +33,9 @@ pub(super) fn create_pipeline(
                     2 => Float32x2,
                     3 => Float32x2,
                     4 => Float32,
-                    5 => Unorm8x4
+                    5 => Unorm8x4,
+                    6 => Float32x3,
+                    7 => Float32
                 ],
             }],
         },
@@ -94,7 +96,9 @@ pub(super) fn create_backdrop_pipeline(
                     2 => Float32x2,
                     3 => Float32x2,
                     4 => Float32,
-                    5 => Unorm8x4
+                    5 => Unorm8x4,
+                    6 => Float32x3,
+                    7 => Float32
                 ],
             }],
         },
@@ -192,15 +196,6 @@ pub(super) fn texture_bind_group(
             },
         ],
     })
-}
-
-pub(super) fn texture_view(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    label: &str,
-    image: &TextureImage,
-) -> wgpu::TextureView {
-    texture(device, queue, label, image).create_view(&Default::default())
 }
 
 pub(super) fn texture(

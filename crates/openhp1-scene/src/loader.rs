@@ -14,7 +14,9 @@ use openhp1_map::{
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
 use openhp1_physics::BspCollision;
-use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat, WeaponAttachment};
+use openhp1_runtime::{
+    ParticleColor, ParticleEmitter, ParticleFloat, RuntimeObject, WeaponAttachment,
+};
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
@@ -23,6 +25,8 @@ use crate::{
     RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId,
     SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
 };
+
+mod runtime_display;
 
 const NOT_FOR_SERVER: u32 = 0x0020_0000;
 pub struct LoadedScene {
@@ -42,6 +46,7 @@ pub struct LoadedScene {
     pub actor_meshes: usize,
     pub animated_actor_meshes: usize,
     pub actors: Vec<SceneActor>,
+    actor_states: Vec<ActorRenderState>,
     collision: Arc<BspCollision>,
     zone_nodes: Vec<BspNode>,
     zone_count: usize,
@@ -49,7 +54,7 @@ pub struct LoadedScene {
     sprites: Vec<SpriteActor>,
     root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
-    attached_weapons: HashSet<usize>,
+    attached_weapons: HashMap<usize, SceneObject>,
     water_animations: Vec<AnimatedWaterTexture>,
     particles: HashMap<usize, ParticleSystem>,
     particle_view_rotation: Mat4,
@@ -182,7 +187,7 @@ impl LoadedScene {
             decoded_textures: HashMap::new(),
             images: HashMap::new(),
         };
-        let actors = load_actors(
+        let (actors, actor_states) = load_actors(
             &mut actor_render,
             &package,
             &level,
@@ -257,6 +262,7 @@ impl LoadedScene {
             actor_meshes,
             animated_actor_meshes,
             actors,
+            actor_states,
             collision,
             zone_nodes: actor_render.model.nodes.clone(),
             zone_count: actor_render.model.zones.len(),
@@ -264,7 +270,7 @@ impl LoadedScene {
             sprites,
             root_motions: Vec::new(),
             hidden_actor_positions,
-            attached_weapons: HashSet::new(),
+            attached_weapons: HashMap::new(),
             water_animations,
             particles: HashMap::new(),
             particle_view_rotation: Mat4::IDENTITY,
@@ -299,6 +305,7 @@ impl LoadedScene {
         while self.actors.len() < actor_index {
             self.actors
                 .push(runtime_actor_placeholder(self.actors.len()));
+            self.actor_states.push(ActorRenderState::default());
         }
         let package = self
             .actor_render
@@ -373,8 +380,14 @@ impl LoadedScene {
                 collapse_positions(&mut self.render.mesh.positions[render.vertices.clone()]);
             }
         }
+        let render_state = ActorRenderState {
+            actor: state,
+            is_pawn,
+            is_light,
+        };
         if actor_index == self.actors.len() {
             self.actors.push(actor);
+            self.actor_states.push(render_state);
         } else {
             ensure!(
                 self.actors[actor_index].id.package == "<runtime>"
@@ -382,6 +395,7 @@ impl LoadedScene {
                 "runtime actor index {actor_index} already exists in the scene"
             );
             self.actors[actor_index] = actor;
+            self.actor_states[actor_index] = render_state;
         }
         Ok(())
     }
@@ -390,6 +404,7 @@ impl LoadedScene {
         while self.actors.len() <= actor_index {
             self.actors
                 .push(runtime_actor_placeholder(self.actors.len()));
+            self.actor_states.push(ActorRenderState::default());
         }
     }
 
@@ -413,6 +428,7 @@ impl LoadedScene {
         }
 
         self.actors[actor_index].location = location;
+        self.actor_states[actor_index].actor.location = location;
         if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
             *transform = Mat4::from_translation(delta) * *transform;
         }
@@ -551,6 +567,7 @@ impl LoadedScene {
             for slot in 0..capacity {
                 let base = self.render.mesh.positions.len() as u32;
                 self.render.mesh.positions.extend([Vec3::ZERO; 4]);
+                self.render.mesh.normals.extend([Vec3::ZERO; 4]);
                 self.render.mesh.texture_coordinates.extend([
                     Vec2::ZERO,
                     Vec2::new(dimensions.x, 0.0),
@@ -840,79 +857,6 @@ impl LoadedScene {
             .collect()
     }
 
-    pub fn sync_weapon_attachments(&mut self, attachments: Vec<WeaponAttachment>) -> Result<bool> {
-        let mut changed = false;
-        let attached_weapons = attachments
-            .iter()
-            .map(|attachment| attachment.weapon)
-            .collect::<HashSet<_>>();
-        for weapon in self.attached_weapons.difference(&attached_weapons) {
-            if !self.actors[*weapon].hidden {
-                continue;
-            }
-            let Some(render) = self.actors[*weapon].render.as_ref() else {
-                continue;
-            };
-            let saved = self
-                .hidden_actor_positions
-                .get(weapon)
-                .context("detached hidden weapon has no saved render positions")?;
-            changed |= sync_hidden_attachment(
-                &mut self.render.mesh.positions[render.vertices.clone()],
-                saved,
-                false,
-            );
-        }
-        for attachment in attachments {
-            let Some(attachment_transform) = self
-                .animations
-                .iter()
-                .find(|animation| animation.actor_index == attachment.pawn)
-                .map(AnimatedActorMesh::attachment)
-                .transpose()?
-                .flatten()
-            else {
-                continue;
-            };
-            let Some(weapon) = self.actors.get(attachment.weapon) else {
-                continue;
-            };
-            let (Some(render), Some(current), Some(mesh_to_object)) = (
-                weapon.render.as_ref().map(|render| render.vertices.clone()),
-                weapon.mesh_transform,
-                weapon.mesh_to_object,
-            ) else {
-                continue;
-            };
-            let desired = attachment_transform
-                * Mat4::from_scale(Vec3::splat(attachment.scale))
-                * mesh_to_object;
-            let delta = desired * current.inverse();
-            if weapon.hidden {
-                let positions = self
-                    .hidden_actor_positions
-                    .get_mut(&attachment.weapon)
-                    .context("hidden attached weapon has no saved render positions")?;
-                transform_positions(positions, delta);
-                sync_hidden_attachment(&mut self.render.mesh.positions[render], positions, true);
-            } else {
-                transform_positions(&mut self.render.mesh.positions[render], delta);
-            }
-            self.actors[attachment.weapon].mesh_transform = Some(desired);
-            if let Some(animation) = self
-                .animations
-                .iter_mut()
-                .find(|animation| animation.actor_index == attachment.weapon)
-            {
-                animation.transform = desired;
-                animation.normal_transform = Mat3::from_mat4(desired).inverse().transpose();
-            }
-            changed = true;
-        }
-        self.attached_weapons = attached_weapons;
-        Ok(changed)
-    }
-
     pub fn set_actor_rotation(&mut self, actor_index: usize, rotation: Rotator) -> Result<bool> {
         let actor = self
             .actors
@@ -937,6 +881,7 @@ impl LoadedScene {
         };
         let transform = rotation_delta(origin, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
+        self.actor_states[actor_index].actor.rotation = rotation;
         if let Some(mesh_transform) = &mut self.actors[actor_index].mesh_transform {
             *mesh_transform = transform * *mesh_transform;
         }
@@ -948,8 +893,9 @@ impl LoadedScene {
                     .context("collapsed actor has no saved render positions")?;
                 transform_positions(positions, transform);
             } else {
-                transform_positions(&mut self.render.mesh.positions[vertices], transform);
+                transform_positions(&mut self.render.mesh.positions[vertices.clone()], transform);
             }
+            transform_normals(&mut self.render.mesh.normals[vertices], transform);
         }
         if let Some(animation) = self
             .animations
@@ -976,6 +922,7 @@ impl LoadedScene {
         let collapsed = self.hidden_actor_positions.contains_key(&actor_index);
         let vertices = actor.render.as_ref().map(|render| render.vertices.clone());
         self.actors[actor_index].pre_pivot = pre_pivot;
+        self.actor_states[actor_index].actor.pre_pivot = pre_pivot;
         if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
             *transform = Mat4::from_translation(delta) * *transform;
         }
@@ -1009,34 +956,7 @@ impl LoadedScene {
             return Ok(false);
         }
         actor.hidden = hidden;
-        self.sync_actor_render_visibility(actor_index)
-    }
-
-    pub fn set_actor_draw_type(&mut self, actor_index: usize, draw_type: u8) -> Result<bool> {
-        let actor = self
-            .actors
-            .get_mut(actor_index)
-            .context("runtime refers to a missing scene actor")?;
-        if actor.draw_type == draw_type {
-            return Ok(false);
-        }
-        let previous = actor.draw_type;
-        actor.draw_type = draw_type;
-        if previous != 0 && draw_type != 0 && previous != draw_type {
-            let diagnostic = format!(
-                "runtime DrawType transition from {previous} to {draw_type} is unsupported"
-            );
-            if !actor.diagnostics.contains(&diagnostic) {
-                warn!(
-                    actor = actor_index,
-                    actor_name = actor.name,
-                    %diagnostic,
-                    "render capability diagnostic"
-                );
-                actor.diagnostics.push(diagnostic);
-            }
-            return Ok(false);
-        }
+        self.actor_states[actor_index].actor.hidden = hidden;
         self.sync_actor_render_visibility(actor_index)
     }
 
@@ -1251,8 +1171,17 @@ impl LoadedScene {
                 } else {
                     self.render.mesh.positions[destination] = position;
                 }
+                self.render.mesh.normals[destination] = normal;
+                let surface = self.render.mesh.vertex_surfaces[destination];
+                let unlit = animation.unlit
+                    || self
+                        .render
+                        .surface_materials
+                        .get(surface)
+                        .context("animated actor vertex refers to a missing material")?
+                        .unlit;
                 self.render.mesh.vertex_colors[destination] =
-                    animation.lighting.color(position, normal, animation.unlit);
+                    animation.lighting.color(position, normal, unlit);
             }
             if tween == Some(1.0) {
                 animation.tween_from = None;
@@ -1493,6 +1422,20 @@ fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
     for position in positions {
         *position = transform.transform_point3(*position);
     }
+}
+
+fn transform_normals(normals: &mut [Vec3], transform: Mat4) {
+    let transform = Mat3::from_mat4(transform).inverse().transpose();
+    for normal in normals {
+        *normal = (transform * *normal).normalize_or_zero();
+    }
+}
+
+fn scale_bounds_about(bounds: (Vec3, Vec3), pivot: Vec3, scale: f32) -> (Vec3, Vec3) {
+    let (minimum, maximum) = bounds;
+    let center = pivot + ((minimum + maximum) * 0.5 - pivot) * scale;
+    let extents = (maximum - minimum) * 0.5 * scale.abs();
+    (center - extents, center + extents)
 }
 
 fn triangle_attachment_transform(points: [Vec3; 3]) -> Option<Mat4> {
@@ -1877,6 +1820,7 @@ struct ActorState {
     style: u8,
     ambient_glow: u8,
     scale_glow: f32,
+    opacity: f32,
     anim_sequence: Option<String>,
     anim_frame: f32,
     anim_rate: f32,
@@ -1884,6 +1828,7 @@ struct ActorState {
     corona: bool,
     hidden: bool,
     unlit: bool,
+    mesh_environment_map: bool,
 }
 
 #[derive(Clone)]
@@ -1892,6 +1837,13 @@ struct ClassState {
     is_pawn: bool,
     is_light: bool,
     diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct ActorRenderState {
+    actor: ActorState,
+    is_pawn: bool,
+    is_light: bool,
 }
 
 impl Default for ActorState {
@@ -1914,6 +1866,7 @@ impl Default for ActorState {
             style: 1,
             ambient_glow: 0,
             scale_glow: 1.0,
+            opacity: 1.0,
             anim_sequence: None,
             anim_frame: 0.0,
             anim_rate: 0.0,
@@ -1921,6 +1874,7 @@ impl Default for ActorState {
             corona: false,
             hidden: false,
             unlit: false,
+            mesh_environment_map: false,
         }
     }
 }
@@ -2001,6 +1955,9 @@ impl ActorState {
         if let Some(scale_glow) = properties.scale_glow {
             self.scale_glow = scale_glow;
         }
+        if let Some(opacity) = properties.opacity {
+            self.opacity = opacity;
+        }
         if let Some(anim_sequence) = &properties.anim_sequence {
             self.anim_sequence = Some(anim_sequence.clone());
         }
@@ -2024,6 +1981,9 @@ impl ActorState {
         }
         if let Some(unlit) = properties.unlit {
             self.unlit = unlit;
+        }
+        if let Some(mesh_environment_map) = properties.mesh_environment_map {
+            self.mesh_environment_map = mesh_environment_map;
         }
         Ok(())
     }
@@ -2069,8 +2029,9 @@ fn load_actors(
     animations: &mut Vec<AnimatedActorMesh>,
     sprites: &mut Vec<SpriteActor>,
     water_animations: &mut Vec<AnimatedWaterTexture>,
-) -> Vec<SceneActor> {
+) -> (Vec<SceneActor>, Vec<ActorRenderState>) {
     let mut actors = Vec::new();
+    let mut actor_states = Vec::new();
     let mut seen_exports = HashSet::new();
 
     for reference in &level.actors {
@@ -2122,6 +2083,7 @@ fn load_actors(
                 scene_actor
                     .diagnostics
                     .push(format!("actor decode failed: {error}"));
+                actor_states.push(ActorRenderState::default());
                 actors.push(scene_actor);
                 continue;
             }
@@ -2137,6 +2099,7 @@ fn load_actors(
                 scene_actor
                     .diagnostics
                     .push("actor has no resolvable class".to_owned());
+                actor_states.push(ActorRenderState::default());
                 actors.push(scene_actor);
                 continue;
             }
@@ -2145,6 +2108,7 @@ fn load_actors(
                 scene_actor
                     .diagnostics
                     .push(format!("class resolution failed: {error}"));
+                actor_states.push(ActorRenderState::default());
                 actors.push(scene_actor);
                 continue;
             }
@@ -2155,15 +2119,23 @@ fn load_actors(
             &mut actor_render.class_cache,
             0,
         );
-        scene_actor.diagnostics.extend(class_state.diagnostics);
-        let is_pawn = class_state.is_pawn;
-        let is_light = class_state.is_light;
-        let mut state = class_state.actor;
+        let ClassState {
+            actor: mut state,
+            is_pawn,
+            is_light,
+            diagnostics,
+        } = class_state;
+        scene_actor.diagnostics.extend(diagnostics);
         if let Err(error) = state.apply(&mut actor_render.packages, map, &actor.properties) {
             warn!(export_index, %error, "could not resolve actor properties");
             scene_actor
                 .diagnostics
                 .push(format!("actor property resolution failed: {error}"));
+            actor_states.push(ActorRenderState {
+                actor: state,
+                is_pawn,
+                is_light,
+            });
             actors.push(scene_actor);
             continue;
         }
@@ -2182,9 +2154,14 @@ fn load_actors(
             sprites,
             water_animations,
         );
+        actor_states.push(ActorRenderState {
+            actor: state,
+            is_pawn,
+            is_light,
+        });
         actors.push(scene_actor);
     }
-    actors
+    (actors, actor_states)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2259,9 +2236,6 @@ fn append_scene_actor_render(
         return;
     }
     let Some(mesh_object) = state.mesh.clone() else {
-        scene_actor
-            .diagnostics
-            .push("mesh draw type has no mesh assigned".to_owned());
         return;
     };
     let ActorRenderContext {
@@ -2430,6 +2404,7 @@ fn append_scene_actor_sprite(
         ])
     {
         render_mesh.positions.push(position);
+        render_mesh.normals.push(Vec3::ZERO);
         render_mesh.texture_coordinates.push(uv);
         render_mesh.lightmap_coordinates.push(Vec2::ZERO);
         render_mesh.vertex_lightmaps.push(None);
@@ -2747,6 +2722,7 @@ fn append_actor_brush(
         for &vertex in &polygon.vertices {
             let position = transform.transform_point3(vertex);
             render_mesh.positions.push(position);
+            render_mesh.normals.push(normal);
             render_mesh.texture_coordinates.push(Vec2::new(
                 polygon.texture_u.dot(vertex - polygon.base) + f32::from(polygon.pan_u),
                 polygon.texture_v.dot(vertex - polygon.base) + f32::from(polygon.pan_v),
@@ -2870,8 +2846,15 @@ fn append_actor_mesh(
         let surface = if let Some(surface) = actor_materials.get(&material_key) {
             *surface
         } else {
-            let texture = select_actor_texture(actor, &mesh_textures, triangle.texture_index);
-            let material = actor_surface_material(
+            // ponytail: the shipped corpus only enables bMeshEnviroMap on
+            // spellEcto, which supplies Actor.Texture. Add zone/level
+            // EnvironmentMap fallback here if authored content starts using it.
+            let texture = if actor.mesh_environment_map {
+                actor.texture.clone()
+            } else {
+                select_actor_texture(actor, &mesh_textures, triangle.texture_index)
+            };
+            let mut material = actor_surface_material(
                 packages,
                 texture.as_ref(),
                 triangle.poly_flags,
@@ -2881,6 +2864,7 @@ fn append_actor_mesh(
                 images,
                 water_animations,
             );
+            material.environment_map = actor.mesh_environment_map;
             let surface = materials.len();
             materials.push(material);
             actor_materials.insert(material_key, surface);
@@ -2893,10 +2877,12 @@ fn append_actor_mesh(
                 Vec2::new(texture.width as f32, texture.height as f32)
             });
         let base = u32::try_from(render_mesh.positions.len())?;
+        let vertex_unlit = unlit || materials[surface].unlit;
         for vertex in triangle.vertices {
             let position = transform.transform_point3(vertex.position);
             let normal = (normal_transform * vertex.normal).normalize_or_zero();
             render_mesh.positions.push(position);
+            render_mesh.normals.push(normal);
             render_mesh
                 .texture_coordinates
                 .push(vertex.texture_coordinates * dimensions);
@@ -2904,7 +2890,7 @@ fn append_actor_mesh(
             render_mesh.vertex_lightmaps.push(None);
             render_mesh
                 .vertex_colors
-                .push(actor_lighting.color(position, normal, unlit));
+                .push(actor_lighting.color(position, normal, vertex_unlit));
             render_mesh.vertex_surfaces.push(surface);
         }
         render_mesh
@@ -2992,8 +2978,16 @@ fn actor_surface_material(
         flags |= 0x0040_0000;
     }
     let flags = PolyFlags::from_bits(flags);
+    let opacity = if actor.opacity.is_finite() {
+        actor.opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let Some(texture) = texture else {
-        return surface_material(flags, None, None);
+        return SurfaceMaterial {
+            opacity,
+            ..surface_material(flags, None, None)
+        };
     };
     let key = texture.id();
     if !decoded.contains_key(&key) {
@@ -3011,9 +3005,15 @@ fn actor_surface_material(
         decoded.insert(key.clone(), value);
     }
     let Some(texture) = decoded.get(&key).and_then(Option::as_ref) else {
-        return surface_material(flags, None, None);
+        return SurfaceMaterial {
+            opacity,
+            ..surface_material(flags, None, None)
+        };
     };
-    let mut material = surface_material(flags, None, Some(texture.texture.render_flags));
+    let mut material = SurfaceMaterial {
+        opacity,
+        ..surface_material(flags, None, Some(texture.texture.render_flags))
+    };
     let image_key = (key.package, key.export_index, material.masked);
     let image = if let Some(index) = images.get(&image_key) {
         Some(*index)
@@ -3373,6 +3373,8 @@ fn surface_material(
         masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
         unlit: flags.contains(PolyFlags::UNLIT),
+        environment_map: false,
+        opacity: 1.0,
         texture_pan_speed: [0.0; 2],
     }
 }
@@ -3784,6 +3786,28 @@ mod tests {
     }
 
     #[test]
+    fn draw_scale_resizes_mesh_bounds_about_the_mesh_offset() {
+        let bounds = (
+            glam::Vec3::new(1.0, 2.0, 3.0),
+            glam::Vec3::new(3.0, 6.0, 7.0),
+        );
+        assert_eq!(
+            super::scale_bounds_about(bounds, glam::Vec3::new(1.0, 2.0, 3.0), 0.5),
+            (
+                glam::Vec3::new(1.0, 2.0, 3.0),
+                glam::Vec3::new(2.0, 4.0, 5.0)
+            )
+        );
+        assert_eq!(
+            super::scale_bounds_about(bounds, glam::Vec3::new(1.0, 2.0, 3.0), -1.0),
+            (
+                glam::Vec3::new(-1.0, -2.0, -1.0),
+                glam::Vec3::new(1.0, 2.0, 3.0)
+            )
+        );
+    }
+
+    #[test]
     fn pre_pivot_changes_follow_mesh_and_brush_transform_conventions() {
         let mut actor = super::runtime_actor_placeholder(0);
         actor.pre_pivot = glam::Vec3::new(1.0, 2.0, 3.0);
@@ -3827,6 +3851,7 @@ mod tests {
     fn rotates_actor_vertices_around_their_unreal_origin() {
         let origin = glam::Vec3::new(10.0, 0.0, 0.0);
         let mut positions = [glam::Vec3::new(11.0, 0.0, 0.0)];
+        let mut normals = [glam::Vec3::X];
         let transform = super::rotation_delta(
             origin,
             Default::default(),
@@ -3836,7 +3861,9 @@ mod tests {
             },
         );
         super::transform_positions(&mut positions, transform);
+        super::transform_normals(&mut normals, transform);
         assert!(positions[0].abs_diff_eq(glam::Vec3::new(10.0, 1.0, 0.0), 1.0e-5));
+        assert!(normals[0].abs_diff_eq(glam::Vec3::Y, 1.0e-5));
     }
 
     #[test]

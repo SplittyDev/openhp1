@@ -29,6 +29,12 @@ pub struct ParticleTexture {
     pub export_index: usize,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct RuntimeObject {
+    pub package: Arc<str>,
+    pub export_index: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParticleEmitter {
     pub actor: usize,
@@ -132,10 +138,11 @@ mod particle_tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WeaponAttachment {
     pub pawn: usize,
     pub weapon: usize,
+    pub mesh: RuntimeObject,
     pub scale: f32,
 }
 
@@ -202,6 +209,42 @@ pub enum ActorAction {
         actor: usize,
         draw_type: u8,
     },
+    SetMesh {
+        actor: usize,
+        mesh: Option<RuntimeObject>,
+    },
+    SetDrawScale {
+        actor: usize,
+        draw_scale: f32,
+    },
+    SetStyle {
+        actor: usize,
+        style: u8,
+    },
+    SetScaleGlow {
+        actor: usize,
+        scale_glow: f32,
+    },
+    SetSkin {
+        actor: usize,
+        skin: Option<RuntimeObject>,
+    },
+    SetSkelAnim {
+        actor: usize,
+        skel_anim: Option<RuntimeObject>,
+    },
+    SetAmbientGlow {
+        actor: usize,
+        ambient_glow: u8,
+    },
+    SetLightBrightness {
+        actor: usize,
+        light_brightness: u8,
+    },
+    SetOpacity {
+        actor: usize,
+        opacity: f32,
+    },
     UnsupportedSceneProperty {
         actor: usize,
         property: String,
@@ -239,6 +282,15 @@ impl ActorAction {
             | Self::SetPrePivot { actor, .. }
             | Self::SetHidden { actor, .. }
             | Self::SetDrawType { actor, .. }
+            | Self::SetMesh { actor, .. }
+            | Self::SetDrawScale { actor, .. }
+            | Self::SetStyle { actor, .. }
+            | Self::SetScaleGlow { actor, .. }
+            | Self::SetSkin { actor, .. }
+            | Self::SetSkelAnim { actor, .. }
+            | Self::SetAmbientGlow { actor, .. }
+            | Self::SetLightBrightness { actor, .. }
+            | Self::SetOpacity { actor, .. }
             | Self::UnsupportedSceneProperty { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }

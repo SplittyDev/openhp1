@@ -396,6 +396,60 @@ fn apply_actions(
                 stats.visibility_changed +=
                     usize::from(scene.set_actor_draw_type(actor, draw_type)?);
             }
+            ActorAction::SetMesh { actor, mesh } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_mesh(actor, mesh)?);
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+                runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+            }
+            ActorAction::SetDrawScale { actor, draw_scale } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_actor_draw_scale(actor, draw_scale)?);
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+            }
+            ActorAction::SetStyle { actor, style } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_style(actor, style)?);
+            }
+            ActorAction::SetScaleGlow { actor, scale_glow } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_actor_scale_glow(actor, scale_glow)?);
+            }
+            ActorAction::SetSkin { actor, skin } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_skin(actor, skin)?);
+            }
+            ActorAction::SetSkelAnim { actor, skel_anim } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_actor_skeletal_animation(actor, skel_anim)?);
+                runtime
+                    .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
+                runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+            }
+            ActorAction::SetAmbientGlow {
+                actor,
+                ambient_glow,
+            } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_actor_ambient_glow(actor, ambient_glow)?);
+            }
+            ActorAction::SetOpacity { actor, opacity } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_opacity(actor, opacity)?);
+            }
+            ActorAction::SetLightBrightness { .. } => {}
             ActorAction::UnsupportedSceneProperty { actor, property } => {
                 if scene.actors[actor].draw_type != 8 {
                     let diagnostic =
