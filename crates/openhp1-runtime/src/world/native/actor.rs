@@ -245,6 +245,14 @@ impl ScriptRuntime {
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
         instance.insert(field, StoredValue::Value(Value::Bool(true)));
+        self.call_actor_event(
+            actor,
+            actor_class,
+            instance,
+            "Destroyed",
+            Vec::new(),
+            actions,
+        )?;
         self.timers.remove(&actor);
         self.animating.remove(&actor);
         actions.push(ActorAction::DestroyActor { actor });

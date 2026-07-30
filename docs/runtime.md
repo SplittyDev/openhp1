@@ -115,6 +115,9 @@ lifetime. Particle velocity uses the authored exponential `Damping` decay. A
 the active normalized range, which is how spell lessons progressively draw
 their visible template. Authored particle modes that are not implemented are
 retained as per-actor capability diagnostics rather than silently discarded.
+Native actor destruction marks `bDeleteMe` and dispatches the authored
+`Destroyed` event before removing the actor, allowing effects such as HP1's
+targeting reticle to destroy their child emitters.
 
 ## Movement and spawning
 
