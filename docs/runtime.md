@@ -190,7 +190,9 @@ Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. The held cast button is exposed through
 the player input properties, while its press dispatches the original `AltFire`
-exec so the active state owns sound, animation, and spell logic. `PlayerInput`
+exec so the active state owns sound, animation, and spell logic. The press is
+discarded unless a visible `bProjTarget` with a non-none spell vulnerability
+is within the authored 512-unit, 4000-rotator-unit targeting cone. `PlayerInput`
 and `PlayerTick` run at the player's position in the actor tick order, so later
 actors observe the current frame's processed mouse values as they do in UE1.
 Captured mouse-button events always reach gameplay after egui observes them, so

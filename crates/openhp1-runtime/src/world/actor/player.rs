@@ -148,6 +148,15 @@ impl ScriptRuntime {
             .instances
             .remove(&actor)
             .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let allow_alt_fire = !input.alt_fire
+            || self
+                .actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref())
+                .is_some_and(|state| state.eq_ignore_ascii_case("PlayerAiming"))
+            || self
+                .player_has_cast_target(actor, &class, &instance)
+                .map_err(|message| DispatchError::InvalidPlayerInput { message })?;
         let result = (|| {
             for (name, value) in [
                 ("aBaseX", Value::Float(input.base_x)),
@@ -155,7 +164,10 @@ impl ScriptRuntime {
                 ("aStrafe", Value::Float(input.strafe)),
                 ("aMouseX", Value::Float(input.mouse_x)),
                 ("aMouseY", Value::Float(input.mouse_y)),
-                ("bAltFire", Value::Byte(u8::from(input.alt_fire))),
+                (
+                    "bAltFire",
+                    Value::Byte(u8::from(input.alt_fire && allow_alt_fire)),
+                ),
                 ("bBroomAction", Value::Bool(input.jump)),
                 ("bPressedJump", Value::Bool(input.jump)),
             ] {
@@ -166,9 +178,78 @@ impl ScriptRuntime {
         })();
         self.instances.insert(actor, instance);
         if result.is_ok() {
-            self.player_alt_fire_pressed |= input.alt_fire_pressed;
+            self.player_alt_fire_pressed |= input.alt_fire_pressed && allow_alt_fire;
         }
         result
+    }
+
+    fn player_has_cast_target(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let rotation = self.actor_rotator(class, instance, "Rotation")?;
+        let mut candidates = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        candidates.sort_unstable();
+        for candidate in candidates {
+            if candidate == actor || self.destroyed.contains(&candidate) {
+                continue;
+            }
+            let candidate_class = self
+                .actor_classes
+                .get(&candidate)
+                .cloned()
+                .ok_or_else(|| format!("cast target actor {candidate} has no class"))?;
+            let candidate_class = self
+                .resolved_object(&candidate_class)
+                .map_err(|error| error.to_string())?;
+            if self
+                .class_has_name(&candidate_class, "BaseCam")
+                .map_err(|error| error.to_string())?
+            {
+                continue;
+            }
+            let candidate_instance = self
+                .instances
+                .get(&candidate)
+                .cloned()
+                .ok_or_else(|| format!("cast target actor {candidate} has no instance"))?;
+            if self.actor_bool(&candidate_class, &candidate_instance, "bHidden")?
+                || !self.actor_bool(&candidate_class, &candidate_instance, "bProjTarget")?
+                || self.actor_byte(&candidate_class, &candidate_instance, "eVulnerableToSpell")?
+                    == 0
+            {
+                continue;
+            }
+            let target = Vec3::from_array(self.actor_vector(
+                &candidate_class,
+                &candidate_instance,
+                "Location",
+            )?);
+            let direction = target - location;
+            if direction.length_squared() > 512.0 * 512.0 {
+                continue;
+            }
+            let yaw = (direction.y.atan2(direction.x) * (65_536.0 / std::f32::consts::TAU)) as i32;
+            let pitch = ((-direction.z).atan2(direction.x.hypot(direction.y))
+                * (65_536.0 / std::f32::consts::TAU)) as i32;
+            if unreal_angle_delta(yaw, rotation[1]).abs() >= 4_000
+                || unreal_angle_delta(pitch, 0).abs() >= 4_000
+            {
+                continue;
+            }
+            if self.collision.as_ref().is_some_and(|collision| {
+                collision
+                    .sweep_aabb(location, target, Vec3::ZERO)
+                    .is_some_and(|hit| hit.fraction < 0.99)
+            }) {
+                continue;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub fn dispatch_player_event(
@@ -316,5 +397,25 @@ impl ScriptRuntime {
         })();
         self.instances.insert(actor, instance);
         result
+    }
+}
+
+fn unreal_angle_delta(left: i32, right: i32) -> i32 {
+    let delta = (left - right).rem_euclid(65_536);
+    if delta > 32_767 {
+        delta - 65_536
+    } else {
+        delta
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unreal_angle_delta;
+
+    #[test]
+    fn cast_target_angles_wrap_across_unreal_yaw_zero() {
+        assert_eq!(unreal_angle_delta(100, 65_500), 136);
+        assert_eq!(unreal_angle_delta(65_500, 100), -136);
     }
 }
