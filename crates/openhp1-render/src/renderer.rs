@@ -5,12 +5,13 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    Camera, RenderScene, RendererSettings, SceneBounds, SurfaceMaterial, SurfaceMode, TextureImage,
-    unreal_to_render,
+    Camera, RenderScene, RendererMode, RendererSettings, SceneBounds, SurfaceMaterial, SurfaceMode,
+    TextureImage, unreal_to_render,
 };
 
 mod atlas;
 mod batch;
+mod modern;
 mod pipeline;
 mod target;
 
@@ -19,6 +20,7 @@ use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
     sorted_blended_batches, texture_batches, update_blended_centers,
 };
+use modern::{HDR_FORMAT, ModernPostProcess};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
 use pipeline::{create_backdrop_pipeline, create_pipeline, texture, texture_bind_group};
@@ -78,6 +80,7 @@ pub struct Renderer {
     sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
+    modern: Option<ModernPostProcess>,
     sky_target: Option<SkyTarget>,
     bounds: SceneBounds,
     sky_zone: Option<openhp1_scene::SkyZone>,
@@ -119,6 +122,12 @@ impl Renderer {
         viewport_size: [u32; 2],
         settings: RendererSettings,
     ) -> Self {
+        let modern_enabled = settings.mode == RendererMode::Modern;
+        let scene_format = if modern_enabled {
+            HDR_FORMAT
+        } else {
+            target_format
+        };
         let lightmap_atlas =
             build_lightmap_atlas(&scene.lightmaps, device.limits().max_texture_dimension_2d);
         let fallback_texture = scene.textures.len();
@@ -405,7 +414,7 @@ impl Renderer {
             };
             create_pipeline(
                 device,
-                target_format,
+                scene_format,
                 &pipeline_layout,
                 &shader,
                 SurfaceMaterial {
@@ -418,18 +427,22 @@ impl Renderer {
             )
         });
         let backdrop_pipelines = std::array::from_fn(|index| {
-            create_backdrop_pipeline(device, target_format, &pipeline_layout, &shader, index != 0)
+            create_backdrop_pipeline(device, scene_format, &pipeline_layout, &shader, index != 0)
         });
         let sky_target = scene.sky_zone.map(|_| {
             SkyTarget::new(
                 device,
                 viewport_size,
-                target_format,
+                scene_format,
                 &texture_layout,
                 &sky_sampler,
                 &lightmap_view,
                 &lightmap_sampler,
             )
+        });
+        let depth = DepthTarget::new(device, viewport_size, modern_enabled);
+        let modern = modern_enabled.then(|| {
+            ModernPostProcess::new(device, target_format, viewport_size, settings, &depth.view)
         });
 
         Self {
@@ -450,7 +463,8 @@ impl Renderer {
             blended_index_buffer,
             sky_blended_index_buffer,
             blended_surfaces,
-            depth: DepthTarget::new(device, viewport_size),
+            depth,
+            modern,
             sky_target,
             bounds,
             sky_zone: scene.sky_zone,
@@ -609,12 +623,19 @@ impl Renderer {
 
     pub fn resize(&mut self, device: &wgpu::Device, viewport_size: [u32; 2]) {
         if self.depth.size != viewport_size {
-            self.depth = DepthTarget::new(device, viewport_size);
+            self.depth = DepthTarget::new(device, viewport_size, self.modern.is_some());
+            if let Some(modern) = self.modern.as_mut() {
+                modern.resize(device, viewport_size, &self.depth.view);
+            }
             if self.sky_target.is_some() {
                 self.sky_target = Some(SkyTarget::new(
                     device,
                     viewport_size,
-                    self.target_format,
+                    if self.modern.is_some() {
+                        HDR_FORMAT
+                    } else {
+                        self.target_format
+                    },
                     &self.texture_layout,
                     &self.sky_sampler,
                     &self.lightmap_view,
@@ -639,7 +660,15 @@ impl Renderer {
     ) -> RenderStats {
         let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
-        let display_gamma = [display_gamma(brightness), 0.0, 0.0, 0.0];
+        let display_gamma = [
+            match self.settings.mode {
+                RendererMode::Classic => display_gamma(brightness),
+                RendererMode::Modern => 1.0,
+            },
+            0.0,
+            0.0,
+            0.0,
+        ];
         queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -727,10 +756,14 @@ impl Renderer {
             );
         }
 
+        let scene_target = self
+            .modern
+            .as_ref()
+            .map_or(target, ModernPostProcess::scene_view);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 BSP render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: scene_target,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -757,6 +790,11 @@ impl Renderer {
             &blended_batches,
             self.sky_target.as_ref().map(|target| &target.bind_group),
         );
+        drop(pass);
+        if let Some(modern) = &self.modern {
+            modern.render(queue, encoder, target, brightness);
+            draw_calls += 1;
+        }
         RenderStats {
             draw_calls,
             ..self.stats
@@ -878,14 +916,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shader_is_valid_wgsl() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shader.wgsl")).unwrap();
-        wgpu::naga::valid::Validator::new(
-            wgpu::naga::valid::ValidationFlags::all(),
-            wgpu::naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
+    fn shaders_are_valid_wgsl() {
+        for shader in [include_str!("shader.wgsl"), include_str!("modern.wgsl")] {
+            let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
     }
 
     #[test]

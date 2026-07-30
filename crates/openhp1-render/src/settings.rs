@@ -71,11 +71,23 @@ impl FromStr for AmbientOcclusion {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RendererSettings {
     pub mode: RendererMode,
     pub tone_mapper: ToneMapper,
     pub ambient_occlusion: AmbientOcclusion,
+    pub bloom: bool,
+}
+
+impl Default for RendererSettings {
+    fn default() -> Self {
+        Self {
+            mode: RendererMode::Classic,
+            tone_mapper: ToneMapper::AgX,
+            ambient_occlusion: AmbientOcclusion::Ssao,
+            bloom: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

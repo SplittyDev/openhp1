@@ -5,7 +5,7 @@ use std::{env, ffi::OsString, path::PathBuf};
 
 use anyhow::{Result, anyhow, bail};
 use eframe::egui;
-use openhp1_render::{RendererSettings, ToneMapper};
+use openhp1_render::RendererSettings;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::ViewerApp;
@@ -68,7 +68,7 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhp1_render::RendererMode;
+    use openhp1_render::{RendererMode, ToneMapper};
 
     #[test]
     fn parses_map_and_modern_renderer_options() {

@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use app::GameApp;
-use openhp1_render::{AmbientOcclusion, RendererMode, RendererSettings, ToneMapper};
+use openhp1_render::RendererSettings;
 use openhp1_scene::LoadedScene;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
@@ -120,6 +120,7 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openhp1_render::{AmbientOcclusion, RendererMode, ToneMapper};
 
     #[test]
     fn parses_renderer_and_level_options() {

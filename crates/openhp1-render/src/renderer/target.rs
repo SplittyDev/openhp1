@@ -64,13 +64,13 @@ impl SkyTarget {
             _texture: texture,
             view,
             bind_group,
-            depth: DepthTarget::new(device, size),
+            depth: DepthTarget::new(device, size, false),
         }
     }
 }
 
 impl DepthTarget {
-    pub(super) fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+    pub(super) fn new(device: &wgpu::Device, size: [u32; 2], sampleable: bool) -> Self {
         let size = [size[0].max(1), size[1].max(1)];
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OpenHP1 depth"),
@@ -83,7 +83,12 @@ impl DepthTarget {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | if sampleable {
+                    wgpu::TextureUsages::TEXTURE_BINDING
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
             view_formats: &[],
         });
         Self {

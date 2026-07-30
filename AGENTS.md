@@ -56,6 +56,10 @@ committed copies.
   `openhp1-audio`; keep game/runtime audio policy out of the renderer.
 - `openhp1-viewer` uses eframe for its UI and displays the renderer's offscreen
   target. `openhp1-render` must remain independent of eframe.
+- Classic and modern rendering share one scene, batching, material, sky, and
+  animation path. Keep HDR post-processing, GI, and reflection resources
+  internal to `openhp1-render` rather than duplicating the renderer or exposing
+  package data.
 - `openhp1-game` owns its winit/wgpu event loop. Do not make eframe own the game
   loop, raw input, cursor grabbing, fullscreen behavior, or frame scheduling.
 - Use `kira` for PCM playback, mixing, spatial sound, and streaming. Keep
