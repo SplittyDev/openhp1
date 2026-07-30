@@ -150,6 +150,22 @@ fn main() -> Result<()> {
             );
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            let actions = runtime.initialize_player_hud()?;
+            anyhow::ensure!(
+                actions.iter().any(|action| matches!(
+                    action,
+                    ActorAction::SpawnActor { class_name, .. }
+                        if class_name.eq_ignore_ascii_case("HPHud")
+                )),
+                "{}: local player setup did not spawn HPHud",
+                scene.path.display()
+            );
+            apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
+            anyhow::ensure!(
+                runtime.initialize_player_hud()?.is_empty(),
+                "{}: local player setup spawned HPHud twice",
+                scene.path.display()
+            );
             let actions = runtime.tick_player(PlayerInput::default(), 1.0 / 60.0)?;
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             let actor = &scene.actors[player];

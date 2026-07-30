@@ -280,6 +280,20 @@ impl Graphics {
                         play_audio_action(audio.as_mut(), action)
                     })?
                     .1;
+                match runtime.initialize_player_hud() {
+                    Ok(actions) => {
+                        deferred_calls += apply_runtime_actions_with(
+                            &mut scene,
+                            &mut runtime,
+                            actions,
+                            |action| play_audio_action(audio.as_mut(), action),
+                        )?
+                        .1;
+                    }
+                    Err(error) => {
+                        last_error = Some(format!("player HUD initialization deferred: {error}"));
+                    }
+                }
             }
             Err(error) => last_error = Some(format!("player possession deferred: {error}")),
         }

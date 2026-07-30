@@ -1,6 +1,65 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub fn initialize_player_hud(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&player)
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let mut actions = Vec::new();
+        let result = (|| {
+            if self
+                .actor_object(&class, &instance, "myHUD")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?
+                .is_some()
+            {
+                return Ok(());
+            }
+            let Some(hud_type) = self
+                .actor_object(&class, &instance, "HUDType")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?
+            else {
+                return Ok(());
+            };
+
+            // UE1's renderer invokes PlayerPawn.PreRender, which lazily spawns
+            // HUDType. OpenHP1's local game host calls this after Possess and
+            // before the first world tick.
+            let hud_type = self.object_handle(hud_type)?;
+            let hud = self
+                .spawn_actor(
+                    player,
+                    &class,
+                    &class.package,
+                    &[Value::Object(hud_type), Value::Object(-1)],
+                    &mut instance,
+                    &mut actions,
+                )
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            let hud = match hud {
+                Value::Object(0) | Value::None => None,
+                Value::Object(handle) => Some(self.object_for_handle(handle)?),
+                value => {
+                    return Err(DispatchError::UnresolvedObject {
+                        message: format!("HUD spawn returned {}", value.kind()),
+                    });
+                }
+            };
+            self.set_actor_stored(&class, &mut instance, "myHUD", StoredValue::Object(hud))
+                .map_err(|message| DispatchError::UnresolvedObject { message })
+        })();
+        self.instances.insert(player, instance);
+        result?;
+        Ok(actions)
+    }
+
     pub fn set_player_view_target_class(
         &mut self,
         class_name: &str,
