@@ -76,6 +76,12 @@ impl ApplicationHandler for GameApp {
             return;
         }
         let egui_response = graphics.egui.on_window_event(&graphics.window, &event);
+        if let WindowEvent::MouseInput { state, button, .. } = &event
+            && graphics.input.captured
+        {
+            graphics.mouse_button(*button, *state);
+            return;
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && event.physical_key == PhysicalKey::Code(KeyCode::F1)
             && event.state == ElementState::Pressed
@@ -936,6 +942,7 @@ mod tests {
         assert!(!input.player_input(1.0 / 60.0).alt_fire_pressed);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Released);
+        assert!(!input.player_input(1.0 / 60.0).alt_fire);
         input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
         assert!(input.player_input(1.0 / 60.0).jump);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);

@@ -189,11 +189,13 @@ the player input properties, while its press dispatches the original `AltFire`
 exec so the active state owns sound, animation, and spell logic. `PlayerInput`
 and `PlayerTick` run at the player's position in the actor tick order, so later
 actors observe the current frame's processed mouse values as they do in UE1.
-Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary world, animation, player,
-trigger, camera, and audio-action ticks per rendered frame. This debug
-fast-forward preserves event ordering and latent callbacks rather than
-jumping runtime state; held movement/casting input repeats while one-shot
-jump and mouse input do not.
+Captured mouse-button events always reach gameplay after egui observes them, so
+releasing cast cannot leave the held `bAltFire` input stuck.
+Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary
+world, animation, player, trigger, camera, and audio-action ticks per rendered
+frame. This debug fast-forward preserves event ordering and latent callbacks
+rather than jumping runtime state; held movement/casting input repeats while
+one-shot jump and mouse input do not.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
