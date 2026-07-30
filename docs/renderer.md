@@ -67,11 +67,13 @@ UE1 textures, lightmaps, materials, batching, sky, and animation path, but draws
 the scene into an `Rgba16Float` target before post-processing it. The modern
 post pass provides:
 
-- selectable AgX, Reinhard, and ACES tone mapping;
+- selectable AgX, luminance-preserving Reinhard Equation 4 with a `4.0` white
+  point, and ACES tone mapping;
 - view-space SSAO reconstructed from the scene depth buffer;
 - authored UE1 coronas drawn as HDR screen-space sprites;
 - quarter-resolution HDR bright extraction with separable bloom blur; and
-- the existing brightness adjustment after tone mapping.
+- sRGB output encoding followed by the existing brightness adjustment after
+  tone mapping.
 
 Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
 display-space 2x modulation does not change. The modern HDR target preserves

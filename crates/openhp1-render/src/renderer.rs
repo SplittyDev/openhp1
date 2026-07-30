@@ -1077,6 +1077,16 @@ mod tests {
     }
 
     #[test]
+    fn modern_shader_maps_reinhard_luminance_then_encodes_srgb() {
+        let shader = include_str!("modern.wgsl");
+        assert!(shader.contains("const WHITE = 4.0;"));
+        assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
+        assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
+        assert!(shader.contains("return color * (mapped_luminance / luminance);"));
+        assert!(shader.contains("let encoded = srgb_encode(clamp(mapped"));
+    }
+
+    #[test]
     fn computes_scene_bounds() {
         let vertices = [
             Vertex {
