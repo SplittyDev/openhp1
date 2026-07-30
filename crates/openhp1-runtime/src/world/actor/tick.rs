@@ -284,51 +284,224 @@ impl ScriptRuntime {
             if self.destroyed.contains(&actor) {
                 continue;
             }
-            let result = (|| {
-                let class = self
-                    .actor_classes
-                    .get(&actor)
-                    .cloned()
-                    .ok_or_else(|| format!("animation actor {actor} is not registered"))?;
-                let class = self
-                    .resolved_object(&class)
-                    .map_err(|error| error.to_string())?;
-                let mut instance = self
-                    .instances
-                    .remove(&actor)
-                    .ok_or_else(|| format!("animation actor {actor} is active"))?;
+            let Some(class_id) = self.actor_classes.get(&actor).cloned() else {
+                actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("Animation: actor {actor} is not registered"),
+                });
+                continue;
+            };
+            let class = match self.resolved_object(&class_id) {
+                Ok(class) => class,
+                Err(error) => {
+                    actions.push(ActorAction::DeferredCall {
+                        actor,
+                        message: format!("Animation: {error}"),
+                    });
+                    continue;
+                }
+            };
+            let mut remaining = delta_time;
+            for _ in 0..10 {
+                if remaining <= 0.0
+                    || self.destroyed.contains(&actor)
+                    || !self.animating.contains(&actor)
+                {
+                    break;
+                }
+                let mut instance = match self.instances.remove(&actor) {
+                    Some(instance) => instance,
+                    None => {
+                        actions.push(ActorAction::DeferredCall {
+                            actor,
+                            message: format!("Animation: animation actor {actor} is active"),
+                        });
+                        break;
+                    }
+                };
                 let result = (|| {
                     let frame = self.actor_signed_float(&class, &instance, "AnimFrame")?;
-                    let rate = self.actor_signed_float(&class, &instance, "AnimRate")?;
-                    let rate = if rate >= 0.0 {
-                        rate
+                    let authored_rate = self.actor_signed_float(&class, &instance, "AnimRate")?;
+                    let rate = if authored_rate >= 0.0 {
+                        authored_rate
                     } else {
                         self.actor_float(&class, &instance, "AnimMinRate")?.max(
-                            -rate
+                            -authored_rate
                                 * glam::Vec3::from_array(
                                     self.actor_vector(&class, &instance, "Velocity")?,
                                 )
                                 .length(),
                         )
                     };
-                    let next = advance_animation_frame(
-                        frame,
-                        rate,
-                        self.actor_float(&class, &instance, "TweenRate")?,
-                        self.actor_float(&class, &instance, "AnimLast")?,
-                        self.actor_bool(&class, &instance, "bAnimLoop")?,
-                        delta_time,
-                    );
-                    self.set_actor_value(&class, &mut instance, "AnimFrame", Value::Float(next))
+                    let tween_rate = self.actor_float(&class, &instance, "TweenRate")?;
+                    let last = self.actor_float(&class, &instance, "AnimLast")?;
+                    let looping = self.actor_bool(&class, &instance, "bAnimLoop")?;
+
+                    if frame < 0.0 {
+                        if tween_rate == 0.0 {
+                            return Ok((None, 0.0, false));
+                        }
+                        let (next, next_remaining) =
+                            advance_animation_tween(frame, tween_rate, remaining);
+                        self.set_actor_value(
+                            &class,
+                            &mut instance,
+                            "AnimFrame",
+                            Value::Float(next),
+                        )?;
+                        if next == 0.0 && authored_rate == 0.0 {
+                            self.set_actor_value(
+                                &class,
+                                &mut instance,
+                                "bAnimFinished",
+                                Value::Bool(true),
+                            )?;
+                            return Ok((Some("AnimEnd".to_owned()), next_remaining, true));
+                        }
+                        return Ok((None, next_remaining, false));
+                    }
+                    if rate == 0.0 {
+                        return Ok((None, 0.0, false));
+                    }
+
+                    let raw_next = frame + rate * remaining;
+                    if self.actor_bool(&class, &instance, "bAnimNotify")? {
+                        let sequence = match self.required_actor_property(
+                            &class,
+                            &instance,
+                            "AnimSequence",
+                        )? {
+                            StoredValue::Name(sequence) => sequence,
+                            value => {
+                                return Err(format!("actor property AnimSequence is {value:?}"));
+                            }
+                        };
+                        let notifications = self
+                            .animation_sequences
+                            .get(&actor)
+                            .and_then(|sequences| sequences.get(&sequence.to_ascii_lowercase()))
+                            .map(|sequence| sequence.notifications.clone())
+                            .unwrap_or_default();
+                        if let Some((time, function)) =
+                            next_animation_notify(frame, raw_next, &notifications, |function| {
+                                self.find_actor_function(
+                                    actor,
+                                    ResolvedObject {
+                                        package: Arc::clone(&class.package),
+                                        export_index: class.export_index,
+                                    },
+                                    function,
+                                    0,
+                                )
+                                .map(|function| function.is_some())
+                                .map_err(|error| error.to_string())
+                            })?
+                        {
+                            self.set_actor_value(
+                                &class,
+                                &mut instance,
+                                "AnimFrame",
+                                Value::Float(time),
+                            )?;
+                            return Ok((
+                                Some(function.to_owned()),
+                                (remaining - (time - frame) / rate).max(0.0),
+                                false,
+                            ));
+                        }
+                    }
+
+                    if looping && animation_loop_end_crossed(frame, raw_next, last) {
+                        self.set_actor_value(
+                            &class,
+                            &mut instance,
+                            "AnimFrame",
+                            Value::Float(last),
+                        )?;
+                        return Ok((
+                            Some("AnimEnd".to_owned()),
+                            (remaining - (last - frame) / rate).max(0.0),
+                            false,
+                        ));
+                    }
+
+                    if animation_nonloop_end_crossed(looping, raw_next, last) {
+                        self.set_actor_value(
+                            &class,
+                            &mut instance,
+                            "AnimFrame",
+                            Value::Float(last),
+                        )?;
+                        self.set_actor_value(&class, &mut instance, "AnimRate", Value::Float(0.0))?;
+                        self.set_actor_value(
+                            &class,
+                            &mut instance,
+                            "bAnimFinished",
+                            Value::Bool(true),
+                        )?;
+                        return Ok((
+                            Some("AnimEnd".to_owned()),
+                            (remaining - (last - frame) / rate).max(0.0),
+                            true,
+                        ));
+                    }
+
+                    let end = if looping { 1.0 } else { last };
+                    let (next, next_remaining) = if raw_next < frame {
+                        (frame, 0.0)
+                    } else if raw_next >= end {
+                        if looping {
+                            (0.0, (remaining - (end - frame) / rate).max(0.0))
+                        } else {
+                            (last, 0.0)
+                        }
+                    } else {
+                        (raw_next, 0.0)
+                    };
+                    self.set_actor_value(&class, &mut instance, "AnimFrame", Value::Float(next))?;
+                    Ok((None, next_remaining, false))
                 })();
                 self.instances.insert(actor, instance);
-                result
-            })();
-            if let Err(message) = result {
-                actions.push(ActorAction::DeferredCall {
-                    actor,
-                    message: format!("Animation: {message}"),
-                });
+                match result {
+                    Ok((event, next_remaining, completed)) => {
+                        remaining = next_remaining;
+                        if event.as_deref() == Some("AnimEnd") {
+                            for frame in self.state_frames.values_mut() {
+                                if frame.latent == LatentAction::FinishAnimation(actor) {
+                                    frame.latent = LatentAction::Continue;
+                                }
+                            }
+                        }
+                        if completed {
+                            self.animating.remove(&actor);
+                            self.animation_commands.remove(&actor);
+                        }
+                        if let Some(event) = event {
+                            match self.dispatch_event(
+                                actor,
+                                Path::new(class_id.package.as_ref()),
+                                class_id.export_index,
+                                &event,
+                            ) {
+                                Ok(mut event_actions) => actions.append(&mut event_actions),
+                                Err(error) => actions.push(ActorAction::DeferredCall {
+                                    actor,
+                                    message: format!("Animation event {event}: {error}"),
+                                }),
+                            }
+                        }
+                        if remaining <= 0.0 {
+                            break;
+                        }
+                    }
+                    Err(message) => {
+                        actions.push(ActorAction::DeferredCall {
+                            actor,
+                            message: format!("Animation: {message}"),
+                        });
+                        break;
+                    }
+                }
             }
         }
     }
@@ -403,10 +576,8 @@ impl ScriptRuntime {
     }
 
     pub fn animation_finished(&mut self, actor: usize) -> DispatchResult<Vec<ActorAction>> {
-        for frame in self.state_frames.values_mut() {
-            if frame.latent == LatentAction::FinishAnimation(actor) {
-                frame.latent = LatentAction::Continue;
-            }
+        if self.animating.contains(&actor) {
+            return Ok(Vec::new());
         }
         let Some(class) = self.actor_classes.get(&actor).cloned() else {
             return Ok(Vec::new());
@@ -416,9 +587,21 @@ impl ScriptRuntime {
             .instances
             .remove(&actor)
             .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let finished = self
+            .actor_bool(&resolved, &instance, "bAnimFinished")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        if finished {
+            self.instances.insert(actor, instance);
+            return Ok(Vec::new());
+        }
         let looping = self
             .actor_bool(&resolved, &instance, "bAnimLoop")
             .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        for frame in self.state_frames.values_mut() {
+            if frame.latent == LatentAction::FinishAnimation(actor) {
+                frame.latent = LatentAction::Continue;
+            }
+        }
         let result = (|| {
             let last = self.actor_float(&resolved, &instance, "AnimLast")?;
             self.set_actor_value(&resolved, &mut instance, "AnimFrame", Value::Float(last))?;
@@ -637,22 +820,35 @@ pub(super) fn particle_vector(value: Option<StoredValue>) -> [f32; 3] {
     }
 }
 
-fn advance_animation_frame(
-    frame: f32,
-    rate: f32,
-    tween_rate: f32,
-    last: f32,
-    looping: bool,
-    delta_time: f32,
-) -> f32 {
-    if frame < 0.0 {
-        return (frame + tween_rate * delta_time).min(0.0);
-    }
-    if looping {
-        (frame + rate * delta_time).rem_euclid(1.0)
+fn advance_animation_tween(frame: f32, rate: f32, delta_time: f32) -> (f32, f32) {
+    let required = -frame / rate;
+    if required <= delta_time {
+        (0.0, (delta_time - required).max(0.0))
     } else {
-        (frame + rate * delta_time).min(last)
+        (frame + rate * delta_time, 0.0)
     }
+}
+
+fn animation_loop_end_crossed(frame: f32, raw_next: f32, last: f32) -> bool {
+    last > frame && last <= raw_next
+}
+
+fn animation_nonloop_end_crossed(looping: bool, raw_next: f32, last: f32) -> bool {
+    !looping && raw_next >= last
+}
+
+fn next_animation_notify<'a, E>(
+    frame: f32,
+    raw_next: f32,
+    notifications: &'a [(f32, String)],
+    mut callable: impl FnMut(&str) -> Result<bool, E>,
+) -> Result<Option<(f32, &'a str)>, E> {
+    for (time, function) in notifications {
+        if time.is_finite() && *time > frame && *time <= raw_next && callable(function)? {
+            return Ok(Some((*time, function)));
+        }
+    }
+    Ok(None)
 }
 
 fn advance_level_time(time: f32, dilation: f32, delta_time: f32) -> Option<f32> {
@@ -726,19 +922,54 @@ mod animation_tests {
     use std::collections::HashMap;
 
     use super::{
-        LatentAction, ParticleColor, StoredValue, Value, advance_animation_frame,
-        advance_level_time, decode_latent_action, particle_color,
+        LatentAction, ParticleColor, StoredValue, Value, advance_animation_tween,
+        advance_level_time, animation_loop_end_crossed, animation_nonloop_end_crossed,
+        decode_latent_action, next_animation_notify, particle_color,
     };
 
     #[test]
-    fn animation_frames_follow_ue_tween_and_loop_rules() {
+    fn animation_notifications_follow_callable_authored_events_and_raw_time() {
+        let notifications = [
+            (0.05, "Missing".to_owned()),
+            (0.1, "Cast".to_owned()),
+            (0.2, "AfterCast".to_owned()),
+            (1.0, "PastLastFrame".to_owned()),
+        ];
         assert_eq!(
-            advance_animation_frame(-0.1, 1.0, 2.0, 0.9, false, 0.025),
-            -0.05
+            next_animation_notify(0.0, 0.5, &notifications, |function| {
+                Ok::<_, ()>(function != "Missing")
+            }),
+            Ok(Some((0.1, "Cast")))
         );
-        assert_eq!(advance_animation_frame(0.2, 0.3, 0.0, 0.9, false, 1.0), 0.5);
-        assert!(
-            (advance_animation_frame(0.9, 0.2, 0.0, 0.95, true, 1.0) - 0.1).abs() < f32::EPSILON
+        assert_eq!(
+            next_animation_notify(0.1, 0.2, &notifications, |_| Ok::<_, ()>(true)),
+            Ok(Some((0.2, "AfterCast")))
+        );
+        assert_eq!(
+            next_animation_notify(0.9, 1.2, &notifications, |_| Ok::<_, ()>(true)),
+            Ok(Some((1.0, "PastLastFrame")))
+        );
+    }
+
+    #[test]
+    fn tween_and_loop_boundaries_leave_time_for_the_next_step() {
+        assert_eq!(advance_animation_tween(-0.1, 2.0, 0.025), (-0.05, 0.0));
+        assert_eq!(advance_animation_tween(-0.1, 2.0, 0.1), (0.0, 0.05));
+        assert!(animation_loop_end_crossed(0.9, 1.1, 0.95));
+        assert!(!animation_loop_end_crossed(0.95, 1.1, 0.95));
+        assert!(animation_nonloop_end_crossed(false, 0.95, 0.95));
+        assert!(!animation_nonloop_end_crossed(true, 0.95, 0.95));
+        let notifications = [
+            (0.05, "AfterWrap".to_owned()),
+            (0.95, "BeforeWrap".to_owned()),
+        ];
+        assert_eq!(
+            next_animation_notify(0.9, 1.1, &notifications, |_| Ok::<_, ()>(true)),
+            Ok(Some((0.95, "BeforeWrap")))
+        );
+        assert_eq!(
+            next_animation_notify(0.0, 0.1, &notifications, |_| Ok::<_, ()>(true)),
+            Ok(Some((0.05, "AfterWrap")))
         );
     }
 

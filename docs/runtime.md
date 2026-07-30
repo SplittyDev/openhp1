@@ -72,6 +72,9 @@ offsets.
 - Animation completion occurs at `AnimLast`, before the sampler wraps toward
   frame zero.
 - Repeated `LoopAnim` calls preserve the current phase.
+- Mesh animation notifications dispatch their named actor functions when
+  forward playback crosses the authored normalized time, before the actor's
+  next `Tick`.
 - `FinishAnim` ends the current loop.
 - Tween-time arguments blend from the displayed pose.
 - HP1's `RootBone='Move'` argument extracts skeletal root translation from the
@@ -83,6 +86,17 @@ offsets.
 
 Unsupported actions should remain nonfatal actor diagnostics until their
 subsystem exists; they must not silently claim successful behavior.
+
+`TraceActors` traces colliding actors from its authored `Start` toward `End`,
+orders hits from that start, and does not insert a BSP pseudo-actor. Starting
+inside an actor does not report that existing overlap. `VisibleActors` skips
+hidden actors and BSP-occluded locations; HP1's engine treats an omitted or
+zero radius as unbounded, then its scripts apply their own distance filters.
+Qualified `TraceActors` and `VisibleActors` calls use the receiver's location
+and collision context.
+`Self` is resolved to the current actor at the common actor-call boundary
+before arguments are consumed; a qualified call that passes `Self` retains
+the caller's identity.
 
 Runtime assignments to `bHidden` and `DrawType` both update scene visibility.
 `DT_None` collapses existing render geometry without discarding it, so a later

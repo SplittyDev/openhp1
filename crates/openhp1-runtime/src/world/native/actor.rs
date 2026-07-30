@@ -634,6 +634,12 @@ impl ScriptRuntime {
         else {
             return Ok(());
         };
+        self.set_actor_value(
+            class,
+            instance,
+            "bAnimNotify",
+            Value::Bool(!sequence.notifications.is_empty()),
+        )?;
         let frames = sequence.frame_count.max(1) as f32;
         let tween_rate = if command.tween_time > 0.0 {
             1.0 / (command.tween_time * frames)

@@ -128,6 +128,9 @@ impl ScriptRuntime {
             else {
                 continue;
             };
+            if !other.collide_actors {
+                continue;
+            }
             let Some(hit) = sweep_collision_actors(&trace, other, delta) else {
                 continue;
             };

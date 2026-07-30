@@ -1109,7 +1109,10 @@ impl LoadedScene {
         Ok(self.tick_animations_with_completions(delta_time)?.0)
     }
 
-    pub fn actor_animation_sequences(&self, actor: usize) -> Vec<(String, String, f32, usize)> {
+    pub fn actor_animation_sequences(
+        &self,
+        actor: usize,
+    ) -> Vec<(String, String, f32, usize, Vec<(f32, String)>)> {
         self.animations
             .iter()
             .find(|animation| animation.actor_index == actor)
@@ -1123,6 +1126,13 @@ impl LoadedScene {
                             sequence.group.clone(),
                             sequence.rate,
                             sequence.frame_count,
+                            sequence
+                                .notifications
+                                .iter()
+                                .map(|notification| {
+                                    (notification.time, notification.function.clone())
+                                })
+                                .collect(),
                         )
                     })
                     .collect()

@@ -360,6 +360,16 @@ impl ScriptRuntime {
                     return Ok(Value::String(self.packages.localize(package, section, key)));
                 }
                 if class.eq_ignore_ascii_case("Object")
+                    && function_name.eq_ignore_ascii_case("GetLanguage")
+                    && arguments.is_empty()
+                {
+                    return Ok(Value::String(
+                        self.packages
+                            .config_value("Engine.Engine", "Language")
+                            .unwrap_or_else(|| "int".to_owned()),
+                    ));
+                }
+                if class.eq_ignore_ascii_case("Object")
                     && function_name.eq_ignore_ascii_case("DynamicLoadObject")
                 {
                     return self.dynamic_load_object(arguments);
@@ -721,11 +731,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn self_keeps_the_callers_identity_across_actor_contexts() {
+    fn self_is_concrete_for_call_arguments_and_object_comparisons() {
         let value = Value::Array(vec![Value::Object(-1), Value::Object(7)]);
         assert_eq!(
             concrete_self_value(&value, 42),
             Value::Array(vec![Value::Object(42), Value::Object(7)])
+        );
+        assert_eq!(
+            crate::world::native::scalar_native(
+                0x77,
+                &[
+                    Value::Object(42),
+                    concrete_self_value(&Value::Object(-1), 42),
+                ],
+            ),
+            Ok(Value::Bool(false))
         );
     }
 

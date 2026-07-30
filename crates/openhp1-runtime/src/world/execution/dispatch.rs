@@ -13,6 +13,28 @@ impl ScriptRuntime {
         actions: &mut Vec<ActorAction>,
         depth: usize,
     ) -> DispatchResult<CallOutput> {
+        // ponytail: actor calls have a registered self identity; thread the
+        // receiver UObject through hosted execution before concretizing non-Actor Self.
+        let actor_context = self.actor_classes.get(&actor).is_some_and(|class| {
+            class == &object_id(&actor_class.package, actor_class.export_index)
+        });
+        let concrete_arguments = if actor_context {
+            let self_handle = self.object_handle(
+                self.actor_objects
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::UnregisteredActor { actor })?,
+            )?;
+            Some(
+                arguments
+                    .iter()
+                    .map(|value| concrete_self_value(value, self_handle))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+        let arguments = concrete_arguments.as_deref().unwrap_or(arguments);
         match call {
             FunctionCall::Native(index) => self.dispatch_native_call(
                 actor,
@@ -465,9 +487,20 @@ impl ScriptRuntime {
         arguments: &[Value],
         current_instance: &InstanceState,
     ) -> DispatchResult<Vec<IteratorValue>> {
-        if receiver != -1 {
-            self.actor_for_handle(receiver)?;
-        }
+        let receiver = (receiver != -1)
+            .then(|| self.actor_for_handle(receiver))
+            .transpose()?;
+        let receiver_instance = receiver
+            .filter(|&actor| actor != current_actor)
+            .map(|actor| {
+                self.instances
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::ActiveActorContext { actor })
+            })
+            .transpose()?;
+        let iterator_actor = receiver.unwrap_or(current_actor);
+        let iterator_instance = receiver_instance.as_ref().unwrap_or(current_instance);
         let FunctionCall::Native(index) = call else {
             return Err(crate::Error::Call {
                 call,
@@ -476,7 +509,20 @@ impl ScriptRuntime {
             .into());
         };
         if index == TRACE_ACTORS {
-            return self.trace_actors_iterator(current_actor, source, arguments, current_instance);
+            return self.trace_actors_iterator(
+                iterator_actor,
+                source,
+                arguments,
+                iterator_instance,
+            );
+        }
+        if index == VISIBLE_ACTORS {
+            return self.visible_actors_iterator(
+                iterator_actor,
+                source,
+                arguments,
+                iterator_instance,
+            );
         }
         if index != ALL_ACTORS {
             return Err(crate::Error::Call {
@@ -577,6 +623,136 @@ impl ScriptRuntime {
         Ok(values)
     }
 
+    fn visible_actors_iterator(
+        &mut self,
+        current_actor: usize,
+        source: &Arc<Package>,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<IteratorValue>> {
+        let [Value::Object(base_class), Value::None, rest @ ..] = arguments else {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "VisibleActors expects a class and output actor, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        };
+        if rest.len() > 2 {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "VisibleActors expects at most 4 arguments, found {}",
+                    arguments.len()
+                ),
+            });
+        }
+        let base_class = self
+            .resolve_class_value(source, *base_class)?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "VisibleActors base class is null".to_owned(),
+            })?;
+        // HP1 omits Radius and applies its own 512/2048-unit filters.
+        let radius = match rest.first() {
+            Some(Value::Float(radius)) if radius.is_finite() && *radius >= 0.0 => {
+                (*radius > 0.0).then_some(*radius)
+            }
+            Some(Value::None) | None => None,
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("VisibleActors radius is {}", value.kind()),
+                });
+            }
+        };
+        let current_class = self.actor_classes.get(&current_actor).cloned().ok_or(
+            DispatchError::UnregisteredActor {
+                actor: current_actor,
+            },
+        )?;
+        let current_class = self.resolved_object(&current_class)?;
+        let location = match rest.get(1) {
+            Some(Value::Vector(location)) => Vec3::from_array(*location),
+            Some(Value::None) | None => Vec3::from_array(
+                self.actor_vector(&current_class, current_instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            ),
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("VisibleActors location is {}", value.kind()),
+                });
+            }
+        };
+        if !location.is_finite() {
+            return Err(DispatchError::UnresolvedObject {
+                message: "VisibleActors location is not finite".to_owned(),
+            });
+        }
+
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let mut values = Vec::new();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            if !self.class_is_a(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                &base_class,
+            )? {
+                continue;
+            }
+            let instance = if actor == current_actor {
+                current_instance.clone()
+            } else {
+                self.instances
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::ActiveActorContext { actor })?
+            };
+            if self
+                .actor_bool(&class, &instance, "bHidden")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?
+            {
+                continue;
+            }
+            let actor_location = Vec3::from_array(
+                self.actor_vector(&class, &instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            );
+            if !within_visible_radius(radius, location, actor_location)
+                || self.collision.as_ref().is_some_and(|collision| {
+                    collision
+                        .sweep_aabb(location, actor_location, Vec3::ZERO)
+                        .is_some()
+                })
+            {
+                continue;
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(IteratorValue {
+                value: Value::Object(self.object_handle(object)?),
+                outputs: Vec::new(),
+            });
+        }
+        Ok(values)
+    }
+
     fn trace_actors_iterator(
         &mut self,
         current_actor: usize,
@@ -651,9 +827,8 @@ impl ScriptRuntime {
             });
         }
 
-        // UE1's iterator tests from End back toward Start.
-        let trace_start = end;
-        let trace_end = start;
+        let trace_start = start;
+        let trace_end = end;
         let mut hits = self
             .trace_collision_actors(
                 trace_start,
@@ -666,14 +841,6 @@ impl ScriptRuntime {
             .into_iter()
             .map(|hit| (hit.fraction, hit.actor, hit.normal))
             .collect::<Vec<_>>();
-        if let Some(hit) = self
-            .collision
-            .as_ref()
-            .and_then(|collision| collision.sweep_aabb(trace_start, trace_end, extent))
-            && let Some(level) = self.level_info
-        {
-            hits.push((hit.fraction, level, hit.normal));
-        }
         hits.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -709,5 +876,23 @@ impl ScriptRuntime {
             });
         }
         Ok(values)
+    }
+}
+
+fn within_visible_radius(radius: Option<f32>, location: Vec3, actor_location: Vec3) -> bool {
+    radius.is_none_or(|radius| actor_location.distance(location) <= radius)
+}
+
+#[cfg(test)]
+mod iterator_tests {
+    use super::within_visible_radius;
+    use glam::Vec3;
+
+    #[test]
+    fn omitted_visible_actor_radius_is_unbounded() {
+        let location = Vec3::ZERO;
+        let actor = Vec3::new(512.0, 0.0, 0.0);
+        assert!(within_visible_radius(None, location, actor));
+        assert!(!within_visible_radius(Some(15.0), location, actor));
     }
 }

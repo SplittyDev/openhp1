@@ -116,19 +116,20 @@ impl ScriptRuntime {
     pub fn set_actor_animation_sequences(
         &mut self,
         actor: usize,
-        sequences: impl IntoIterator<Item = (String, String, f32, usize)>,
+        sequences: impl IntoIterator<Item = (String, String, f32, usize, Vec<(f32, String)>)>,
     ) -> DispatchResult<()> {
         self.animation_sequences.insert(
             actor,
             sequences
                 .into_iter()
-                .map(|(sequence, group, rate, frame_count)| {
+                .map(|(sequence, group, rate, frame_count, notifications)| {
                     (
                         sequence.to_ascii_lowercase(),
                         AnimationSequence {
                             group,
                             rate,
                             frame_count,
+                            notifications,
                         },
                     )
                 })

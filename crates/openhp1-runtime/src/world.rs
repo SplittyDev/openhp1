@@ -40,6 +40,7 @@ const DISABLE: u16 = 0x076;
 const DESTROY: u16 = 0x117;
 const ALL_ACTORS: u16 = 0x130;
 const TRACE_ACTORS: u16 = 0x135;
+const VISIBLE_ACTORS: u16 = 0x137;
 const SLEEP: u16 = 0x100;
 const CLASS_IS_CHILD_OF: u16 = 0x102;
 const PLAY_ANIM: u16 = 0x103;
@@ -278,6 +279,7 @@ struct AnimationSequence {
     group: String,
     rate: f32,
     frame_count: usize,
+    notifications: Vec<(f32, String)>,
 }
 
 #[derive(Clone, Debug)]
