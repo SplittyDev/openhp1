@@ -862,7 +862,11 @@ impl ScriptRuntime {
         let player_pawn = self
             .class_has_name(class, "PlayerPawn")
             .map_err(|error| error.to_string())?;
-        if pawn && !player_pawn {
+        // UE1 leaves PlayerPawn rotation to its script instead of Actor/Pawn rotation physics.
+        if player_pawn {
+            return Ok(());
+        }
+        if pawn {
             self.set_actor_value(class, instance, "bRotateToDesired", Value::Bool(true))?;
             self.set_actor_value(class, instance, "bFixedRotationDir", Value::Bool(false))?;
             let desired = self.actor_rotator(class, instance, "DesiredRotation")?;
