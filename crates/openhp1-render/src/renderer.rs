@@ -5,8 +5,8 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    Camera, RenderScene, RendererMode, RendererSettings, SceneBounds, SurfaceMaterial, SurfaceMode,
-    TextureImage, unreal_to_render,
+    Camera, DisplaySettings, RenderScene, RendererMode, RendererSettings, SceneBounds,
+    SurfaceMaterial, SurfaceMode, TextureImage, unreal_to_render,
 };
 
 mod atlas;
@@ -696,13 +696,13 @@ impl Renderer {
         target: &wgpu::TextureView,
         camera: &Camera,
         viewport_size: [u32; 2],
-        brightness: f32,
+        display: DisplaySettings,
     ) -> RenderStats {
         let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
         let display_gamma = [
             match self.settings.mode {
-                RendererMode::Classic => display_gamma(brightness),
+                RendererMode::Classic => display_gamma(display.brightness),
                 RendererMode::Modern => 1.0,
             },
             0.0,
@@ -841,7 +841,14 @@ impl Renderer {
         }
         drop(pass);
         if let Some(modern) = &self.modern {
-            draw_calls += modern.render(queue, encoder, target, brightness, camera);
+            draw_calls += modern.render(
+                queue,
+                encoder,
+                target,
+                display.brightness,
+                display.contrast,
+                camera,
+            );
         }
         RenderStats {
             draw_calls,
@@ -1084,6 +1091,11 @@ mod tests {
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
         assert!(shader.contains("return color * (mapped_luminance / luminance);"));
         assert!(shader.contains("let encoded = srgb_encode(clamp(mapped"));
+        assert!(
+            shader.contains(
+                "let contrasted = (encoded - vec3(0.5)) * settings.contrast + vec3(0.5);"
+            )
+        );
     }
 
     #[test]

@@ -71,6 +71,21 @@ impl FromStr for AmbientOcclusion {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplaySettings {
+    pub brightness: f32,
+    pub contrast: f32,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            brightness: 0.625,
+            contrast: 1.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RendererSettings {
     pub mode: RendererMode,

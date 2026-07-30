@@ -10,5 +10,6 @@ pub use openhp1_scene::{
 };
 pub use renderer::{RenderStats, Renderer};
 pub use settings::{
-    AmbientOcclusion, RendererMode, RendererSettingError, RendererSettings, ToneMapper,
+    AmbientOcclusion, DisplaySettings, RendererMode, RendererSettingError, RendererSettings,
+    ToneMapper,
 };

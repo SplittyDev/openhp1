@@ -7,7 +7,8 @@ use eframe::{
 };
 use glam::Vec3;
 use openhp1_render::{
-    AmbientOcclusion, Camera, RenderStats, Renderer, RendererMode, RendererSettings, ToneMapper,
+    AmbientOcclusion, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
+    RendererSettings, ToneMapper,
 };
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
@@ -23,7 +24,9 @@ pub(crate) struct ViewerApp {
     target: ColorTarget,
     camera: Camera,
     movement_speed: f32,
-    brightness: f32,
+    classic_brightness: f32,
+    modern_brightness: f32,
+    modern_contrast: f32,
     animations_playing: bool,
     animation_speed: f32,
     actor_filter: String,
@@ -70,7 +73,9 @@ impl ViewerApp {
             target,
             camera,
             movement_speed: (radius * 0.35).max(200.0),
-            brightness: 0.625,
+            classic_brightness: 0.625,
+            modern_brightness: 0.625,
+            modern_contrast: 1.0,
             animations_playing: true,
             animation_speed: 1.0,
             actor_filter: String::new(),
@@ -199,6 +204,20 @@ impl ViewerApp {
                                 );
                             });
                         ui.end_row();
+                    }
+
+                    ui.label("Brightness");
+                    let brightness = match self.renderer_settings.mode {
+                        RendererMode::Classic => &mut self.classic_brightness,
+                        RendererMode::Modern => &mut self.modern_brightness,
+                    };
+                    ui.add(egui::Slider::new(brightness, 0.2..=1.0));
+                    ui.end_row();
+
+                    if self.renderer_settings.mode == RendererMode::Modern {
+                        ui.label("Contrast");
+                        ui.add(egui::Slider::new(&mut self.modern_contrast, 0.5..=2.0));
+                        ui.end_row();
 
                         ui.label("Effects");
                         ui.horizontal(|ui| {
@@ -319,7 +338,6 @@ impl ViewerApp {
         egui::CollapsingHeader::new("View")
             .default_open(true)
             .show(ui, |ui| {
-                ui.add(egui::Slider::new(&mut self.brightness, 0.2..=1.0).text("Brightness"));
                 ui.checkbox(&mut self.animations_playing, "Play animations");
                 ui.add(
                     egui::Slider::new(&mut self.animation_speed, 0.1..=2.0).text("Animation speed"),
@@ -652,6 +670,10 @@ impl eframe::App for ViewerApp {
             self.update_animations(delta_time);
             self.update_runtime(delta_time);
 
+            let brightness = match self.renderer_settings.mode {
+                RendererMode::Classic => self.classic_brightness,
+                RendererMode::Modern => self.modern_brightness,
+            };
             let mut encoder =
                 self.state
                     .device
@@ -664,7 +686,10 @@ impl eframe::App for ViewerApp {
                 &self.target.view,
                 &self.camera,
                 size,
-                self.brightness,
+                DisplaySettings {
+                    brightness,
+                    contrast: self.modern_contrast,
+                },
             );
             self.state.queue.submit([encoder.finish()]);
         });

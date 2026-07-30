@@ -2,9 +2,10 @@ struct Settings {
     inverse_viewport: vec2<f32>,
     brightness_gamma: f32,
     bloom_strength: f32,
+    contrast: f32,
     tone_mapper: u32,
     ssao: u32,
-    _padding: vec2<u32>,
+    _padding: u32,
     projection: vec4<f32>,
 };
 
@@ -90,7 +91,14 @@ fn fragment_post_process(input: FullscreenVertex) -> @location(0) vec4<f32> {
     let hdr = scene * ambient + bloom * settings.bloom_strength;
     let mapped = tone_map(hdr);
     let encoded = srgb_encode(clamp(mapped, vec3(0.0), vec3(1.0)));
-    return vec4(pow(encoded, vec3(settings.brightness_gamma)), 1.0);
+    let contrasted = (encoded - vec3(0.5)) * settings.contrast + vec3(0.5);
+    return vec4(
+        pow(
+            clamp(contrasted, vec3(0.0), vec3(1.0)),
+            vec3(settings.brightness_gamma),
+        ),
+        1.0,
+    );
 }
 
 fn extract_bloom(color: vec3<f32>) -> vec3<f32> {

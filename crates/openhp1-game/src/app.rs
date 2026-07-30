@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use glam::{Mat3, Quat, Vec3};
 use openhp1_audio::AudioPlayer;
-use openhp1_render::{Camera, RenderStats, Renderer, RendererSettings};
+use openhp1_render::{Camera, DisplaySettings, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::{
     ActorAction, ConsoleCommandAction, ConsoleCommands, PlayerInput, PlayerView, ScriptRuntime,
 };
@@ -652,7 +652,7 @@ impl Graphics {
             &view,
             &self.camera,
             [self.config.width, self.config.height],
-            0.625,
+            DisplaySettings::default(),
         );
         let screenshots = match prepare_screenshots(
             &self.device,

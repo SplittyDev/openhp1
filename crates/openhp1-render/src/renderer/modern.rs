@@ -14,9 +14,10 @@ struct ModernUniform {
     inverse_viewport: [f32; 2],
     brightness_gamma: f32,
     bloom_strength: f32,
+    contrast: f32,
     tone_mapper: u32,
     ssao: u32,
-    _padding: [u32; 2],
+    _padding: u32,
     projection: [f32; 4],
 }
 
@@ -288,6 +289,7 @@ impl ModernPostProcess {
         encoder: &mut wgpu::CommandEncoder,
         output: &wgpu::TextureView,
         brightness: f32,
+        contrast: f32,
         camera: &Camera,
     ) -> usize {
         queue.write_buffer(
@@ -297,9 +299,10 @@ impl ModernPostProcess {
                 inverse_viewport: [1.0 / self.size[0] as f32, 1.0 / self.size[1] as f32],
                 brightness_gamma: display_gamma(brightness),
                 bloom_strength: if self.bloom { 1.5 } else { 0.0 },
+                contrast,
                 tone_mapper: tone_mapper_id(self.tone_mapper),
                 ssao: u32::from(matches!(self.ambient_occlusion, AmbientOcclusion::Ssao)),
-                _padding: [0; 2],
+                _padding: 0,
                 projection: [
                     camera.near,
                     camera.far,
@@ -508,5 +511,12 @@ mod tests {
     fn bloom_target_is_quarter_resolution_and_never_empty() {
         assert_eq!(bloom_size([800, 600]), [200, 150]);
         assert_eq!(bloom_size(valid_size([0, 3])), [1, 1]);
+    }
+
+    #[test]
+    fn modern_uniform_matches_shader_layout() {
+        assert_eq!(size_of::<ModernUniform>(), 48);
+        assert_eq!(std::mem::offset_of!(ModernUniform, contrast), 16);
+        assert_eq!(std::mem::offset_of!(ModernUniform, projection), 32);
     }
 }
