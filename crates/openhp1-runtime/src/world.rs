@@ -75,6 +75,7 @@ const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
 const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
+const REMOVE_PAWN: u16 = 530;
 const CAN_SEE: u16 = 533;
 const SAVE_CONFIG: u16 = 536;
 const COMPARE_GESTURE: u16 = 426;

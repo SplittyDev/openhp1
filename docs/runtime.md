@@ -164,7 +164,8 @@ over numerically overlapping serialized package references.
 Spawning a collision-enabled actor at an occupied blocking location fails
 without allocating an actor handle. Spawned pawns link themselves into
 `Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping
-used during `PreBeginPlay`.
+used during `PreBeginPlay`; native `RemovePawn` unlinks the same list during
+`Destroyed`.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
 Engine side effects without an OpenHP1 surface do not abort scripts:

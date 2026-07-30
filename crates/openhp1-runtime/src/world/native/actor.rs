@@ -55,6 +55,97 @@ impl ScriptRuntime {
         result
     }
 
+    pub(in crate::world) fn remove_pawn(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+    ) -> std::result::Result<(), String> {
+        let level = self
+            .actor_object(actor_class, instance, "Level")?
+            .ok_or_else(|| "RemovePawn actor has no Level".to_owned())?;
+        let level_actor = self
+            .object_actors
+            .get(&level)
+            .copied()
+            .ok_or_else(|| "RemovePawn Level is not a registered actor".to_owned())?;
+        let level_class = self
+            .actor_classes
+            .get(&level_actor)
+            .cloned()
+            .ok_or_else(|| format!("RemovePawn Level actor {level_actor} has no class"))?;
+        let level_class = self
+            .resolved_object(&level_class)
+            .map_err(|error| error.to_string())?;
+        let object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("RemovePawn actor {actor} has no object identity"))?;
+        let next = self.actor_object(actor_class, instance, "nextPawn")?;
+        let mut level_instance = self
+            .instances
+            .remove(&level_actor)
+            .ok_or_else(|| format!("RemovePawn Level actor {level_actor} instance is active"))?;
+        let result: std::result::Result<(), String> = (|| {
+            let head = self.actor_object(&level_class, &level_instance, "PawnList")?;
+            if head.as_ref() == Some(&object) {
+                self.set_actor_stored(
+                    &level_class,
+                    &mut level_instance,
+                    "PawnList",
+                    StoredValue::Object(next.clone()),
+                )?;
+            } else {
+                let mut pawns = self.actor_classes.keys().copied().collect::<Vec<_>>();
+                pawns.sort_unstable();
+                for pawn in pawns {
+                    if pawn == actor || pawn == level_actor {
+                        continue;
+                    }
+                    let pawn_class = self
+                        .actor_classes
+                        .get(&pawn)
+                        .cloned()
+                        .ok_or_else(|| format!("RemovePawn actor {pawn} has no class"))?;
+                    let pawn_class = self
+                        .resolved_object(&pawn_class)
+                        .map_err(|error| error.to_string())?;
+                    if !self
+                        .class_has_name(&pawn_class, "Pawn")
+                        .map_err(|error| error.to_string())?
+                    {
+                        continue;
+                    }
+                    let Some(mut pawn_instance) = self.instances.remove(&pawn) else {
+                        continue;
+                    };
+                    let linked = self.actor_object(&pawn_class, &pawn_instance, "nextPawn");
+                    if linked
+                        .as_ref()
+                        .is_ok_and(|linked| linked.as_ref() == Some(&object))
+                    {
+                        let update = self.set_actor_stored(
+                            &pawn_class,
+                            &mut pawn_instance,
+                            "nextPawn",
+                            StoredValue::Object(next.clone()),
+                        );
+                        self.instances.insert(pawn, pawn_instance);
+                        update?;
+                        break;
+                    }
+                    self.instances.insert(pawn, pawn_instance);
+                    linked?;
+                }
+            }
+            Ok(())
+        })();
+        self.instances.insert(level_actor, level_instance);
+        result?;
+        self.set_actor_stored(actor_class, instance, "nextPawn", StoredValue::Object(None))
+    }
+
     pub(in crate::world) fn pick_target(
         &mut self,
         actor: usize,

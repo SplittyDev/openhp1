@@ -1068,6 +1068,16 @@ impl ScriptRuntime {
             self.add_pawn(actor, actor_class, instance)?;
             return Ok(Value::None);
         }
+        if index == REMOVE_PAWN {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "RemovePawn expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            self.remove_pawn(actor, actor_class, instance)?;
+            return Ok(Value::None);
+        }
         if index == SAVE_CONFIG {
             if !arguments.is_empty() {
                 return Err(format!(
