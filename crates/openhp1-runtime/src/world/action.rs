@@ -89,9 +89,6 @@ impl ParticleEmitter {
         if self.velocity_relative {
             diagnostics.push("particle owner-velocity inheritance is unsupported");
         }
-        if self.gravity_modifier != 0.0 {
-            diagnostics.push("particle zone-gravity response is unsupported");
-        }
         if self.chaos != 0.0 {
             diagnostics.push("particle chaos movement is unsupported");
         }
@@ -119,6 +116,7 @@ mod particle_tests {
     fn reports_only_authored_particle_features_outside_the_supported_subset() {
         let supported = ParticleEmitter {
             render_primitive: 1,
+            gravity_modifier: -0.5,
             ..Default::default()
         };
         assert!(supported.capability_diagnostics().is_empty());
@@ -130,10 +128,7 @@ mod particle_tests {
         };
         assert_eq!(
             unsupported.capability_diagnostics(),
-            [
-                "particle render primitive is not a billboard",
-                "particle zone-gravity response is unsupported",
-            ]
+            ["particle render primitive is not a billboard"]
         );
     }
 }

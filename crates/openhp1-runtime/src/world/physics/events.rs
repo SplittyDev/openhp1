@@ -107,7 +107,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    pub(super) fn zone_physics(
+    pub(in crate::world) fn zone_physics(
         &mut self,
         location: Vec3,
         current_actor: usize,
@@ -117,23 +117,14 @@ impl ScriptRuntime {
             .collision
             .as_ref()
             .ok_or_else(|| "physics requires a configured BSP collision model".to_owned())?;
-        let Some(zone) = collision.zone_at(location) else {
-            return Ok(None);
-        };
-        let zone_actor = collision
-            .zone_actor_export(zone)
-            .and_then(|export_index| {
-                self.level_package.as_ref().and_then(|package| {
-                    self.object_actors
-                        .get(&ObjectId {
-                            package: Arc::clone(package),
-                            export_index,
-                        })
-                        .copied()
-                })
-            })
-            .or(self.level_info)
-            .ok_or_else(|| format!("zone {zone} has no registered ZoneInfo or LevelInfo"))?;
+        let zone_actor = zone_actor_at(
+            collision,
+            location,
+            self.level_package.as_ref(),
+            &self.object_actors,
+            self.level_info,
+        )
+        .ok_or_else(|| "location has no registered ZoneInfo or LevelInfo".to_owned())?;
         let class = self
             .actor_classes
             .get(&zone_actor)

@@ -44,8 +44,8 @@ fn player_rotation_is_script_controlled(
         })
 }
 
-struct ZonePhysics {
-    gravity: Vec3,
+pub(super) struct ZonePhysics {
+    pub(super) gravity: Vec3,
     velocity: Vec3,
     ground_friction: f32,
     fluid_friction: f32,

@@ -11,6 +11,7 @@ use super::{
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
+use openhp1_map::PrimitiveBounds;
 
 #[test]
 fn looping_timer_keeps_fractional_overshoot() {
@@ -33,6 +34,43 @@ fn positive_lifespans_expire_once_at_zero() {
     assert!(advance_lifespan(&mut lifespan, 0.07));
     assert_eq!(lifespan, 0.0);
     assert!(!advance_lifespan(&mut lifespan, 0.1));
+}
+
+#[test]
+fn particle_acceleration_uses_negative_zone_modifier_and_level_fallback() {
+    let collision = BspCollision::from_model(&Model {
+        bounds: PrimitiveBounds {
+            minimum: Vec3::ZERO,
+            maximum: Vec3::ZERO,
+            valid: false,
+            sphere: [0.0; 4],
+        },
+        vectors: Vec::new(),
+        points: Vec::new(),
+        nodes: Vec::new(),
+        surfaces: Vec::new(),
+        vertices: Vec::new(),
+        shared_side_count: 0,
+        zones: Vec::new(),
+        polys: ObjectReference::None,
+        light_maps: Vec::new(),
+        light_bits: Vec::new(),
+        collision_bounds: Vec::new(),
+        leaf_hulls: Vec::new(),
+        leaves: Vec::new(),
+        lights: Vec::new(),
+        root_outside: true,
+        linked: false,
+    })
+    .unwrap();
+    assert_eq!(
+        zone_actor_at(&collision, Vec3::ZERO, None, &HashMap::default(), Some(4),),
+        Some(4),
+    );
+    assert_eq!(
+        particle_acceleration(Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, -100.0), -0.5,),
+        Vec3::new(1.0, 2.0, 53.0),
+    );
 }
 
 #[test]

@@ -342,6 +342,33 @@ fn runtime_actor_id(actor: usize) -> ObjectId {
     }
 }
 
+fn particle_acceleration(gravity: Vec3, zone_gravity: Vec3, modifier: f32) -> Vec3 {
+    gravity + zone_gravity * modifier
+}
+
+fn zone_actor_at(
+    collision: &BspCollision,
+    location: Vec3,
+    level_package: Option<&Arc<str>>,
+    object_actors: &HashMap<ObjectId, usize>,
+    level_info: Option<usize>,
+) -> Option<usize> {
+    collision
+        .zone_at(location)
+        .and_then(|zone| collision.zone_actor_export(zone))
+        .and_then(|export_index| {
+            level_package.and_then(|package| {
+                object_actors
+                    .get(&ObjectId {
+                        package: Arc::clone(package),
+                        export_index,
+                    })
+                    .copied()
+            })
+        })
+        .or(level_info)
+}
+
 fn object_reference(index: i32) -> ObjectReference {
     if index == 0 {
         ObjectReference::None

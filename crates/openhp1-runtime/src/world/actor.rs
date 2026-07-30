@@ -331,6 +331,23 @@ impl ScriptRuntime {
                 Some(StoredValue::Object(Some(owner))) => self.object_actors.get(&owner).copied(),
                 _ => None,
             };
+            let gravity_modifier =
+                particle_scalar(self.instance_property(&class, &instance, "GravityModifier")?);
+            let gravity = Vec3::from_array(particle_vector(
+                self.instance_property(&class, &instance, "Gravity")?,
+            ));
+            let gravity = if gravity_modifier == 0.0 {
+                gravity
+            } else {
+                let location = Vec3::from_array(particle_vector(
+                    self.instance_property(&class, &instance, "Location")?,
+                ));
+                self.zone_physics(location, actor, &instance)
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?
+                    .map_or(gravity, |zone| {
+                        particle_acceleration(gravity, zone.gravity, gravity_modifier)
+                    })
+            };
             emitters.push(ParticleEmitter {
                 actor,
                 owner,
@@ -438,7 +455,7 @@ impl ScriptRuntime {
                     "bSystemRelative",
                 )?),
                 damping: particle_scalar(self.instance_property(&class, &instance, "Damping")?),
-                gravity: particle_vector(self.instance_property(&class, &instance, "Gravity")?),
+                gravity: gravity.to_array(),
                 render_primitive: particle_byte(self.instance_property(
                     &class,
                     &instance,
@@ -449,11 +466,7 @@ impl ScriptRuntime {
                     &instance,
                     "bVelocityRelative",
                 )?),
-                gravity_modifier: particle_scalar(self.instance_property(
-                    &class,
-                    &instance,
-                    "GravityModifier",
-                )?),
+                gravity_modifier,
                 chaos: particle_scalar(self.instance_property(&class, &instance, "Chaos")?),
                 attraction: particle_vector(self.instance_property(
                     &class,
