@@ -29,6 +29,21 @@ fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
     !pushable && normal.z.abs() < 0.2
 }
 
+fn player_rotation_is_script_controlled(
+    player_pawn: bool,
+    actor: usize,
+    state_frames: &HashMap<usize, StateFrame>,
+) -> bool {
+    player_pawn
+        && !state_frames.values().any(|frame| {
+            matches!(
+                frame.latent,
+                LatentAction::TurnTo(target) | LatentAction::TurnToward(target)
+                    if target == actor
+            )
+        })
+}
+
 struct ZonePhysics {
     gravity: Vec3,
     velocity: Vec3,
@@ -474,5 +489,26 @@ mod tests {
         assert!(should_slide_walking_collision(false, Vec3::X));
         assert!(!should_slide_walking_collision(true, Vec3::X));
         assert!(!should_slide_walking_collision(false, Vec3::Z));
+    }
+
+    #[test]
+    fn matching_latent_turn_overrides_script_controlled_player_rotation() {
+        let frame = |latent| StateFrame {
+            state: ObjectId {
+                package: Arc::from("Test"),
+                export_index: 0,
+            },
+            frame: FrameSnapshot::at(0),
+            latent,
+        };
+        let mut frames = HashMap::default();
+        assert!(player_rotation_is_script_controlled(true, 7, &frames));
+        assert!(!player_rotation_is_script_controlled(false, 7, &frames));
+        frames.insert(99, frame(LatentAction::TurnTo(8)));
+        assert!(player_rotation_is_script_controlled(true, 7, &frames));
+        for latent in [LatentAction::TurnTo(7), LatentAction::TurnToward(7)] {
+            frames.insert(99, frame(latent));
+            assert!(!player_rotation_is_script_controlled(true, 7, &frames));
+        }
     }
 }

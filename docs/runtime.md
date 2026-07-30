@@ -142,8 +142,13 @@ must not leave a newly initialized or script-moved pawn suspended above it.
 Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
 Latent `TurnToward` tracks the target actor's current location while turning.
-Unlike ordinary pawns, `PlayerPawn` rotation remains script-controlled; generic
-`bRotateToDesired` physics must not turn Harry during cutscene movement.
+Unlike ordinary pawns, `PlayerPawn` rotation normally remains script-controlled;
+generic `bRotateToDesired` physics must not turn Harry during cutscene movement.
+For HP1 compatibility, native latent `TurnTo` and `TurnToward` are the exception:
+their state code waits until yaw reaches the arrival threshold. The compiled
+`Harry.Mounting` state blocks on `TurnTo`, so an off-angle ledge climb cannot
+resume unless pawn rotation follows its `DesiredRotation`. This is not a claim
+that every UE1 `PlayerPawn` movement action uses generic pawn rotation.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
 Walking players use the same wall-slide response for non-pushable actor

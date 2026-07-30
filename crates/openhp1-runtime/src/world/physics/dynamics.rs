@@ -862,8 +862,9 @@ impl ScriptRuntime {
         let player_pawn = self
             .class_has_name(class, "PlayerPawn")
             .map_err(|error| error.to_string())?;
-        // UE1 leaves PlayerPawn rotation to its script instead of Actor/Pawn rotation physics.
-        if player_pawn {
+        // Keep normal PlayerPawn rotation script-controlled. HP1's blocking
+        // latent turns still need Pawn rotation to resume their authored state.
+        if player_rotation_is_script_controlled(player_pawn, actor, &self.state_frames) {
             return Ok(());
         }
         if pawn {
