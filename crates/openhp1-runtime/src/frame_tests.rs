@@ -31,6 +31,33 @@ fn executes_assignment_native_call_and_return() {
 }
 
 #[test]
+fn eat_string_evaluates_its_child_and_discards_its_value() {
+    let mut bytes = vec![0x0f, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.extend([0x0e, 0x92, 0x16, 0x04, 0x00]);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    let mut calls = 0;
+    let result = frame
+        .execute(|call, arguments| {
+            assert_eq!(call, FunctionCall::Native(0x92));
+            assert!(arguments.is_empty());
+            calls += 1;
+            Ok(Value::String("discarded".to_owned()))
+        })
+        .unwrap();
+    assert_eq!(calls, 1);
+    assert_eq!(result, Value::None);
+    assert_eq!(frame.local(7), Some(&Value::None));
+}
+
+#[test]
 fn takes_conditional_jump_using_canonical_offsets() {
     let bytecode = Bytecode {
         version: 76,

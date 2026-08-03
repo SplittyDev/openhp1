@@ -256,6 +256,11 @@ impl<'a> Frame<'a> {
                 field: self.read_i32()?,
             }),
             Opcode::Nothing | Opcode::Unknown0x15 => Expression::Value(Value::None),
+            Opcode::EatString => {
+                let value = self.expression(host)?;
+                self.value(value, host)?;
+                Expression::Value(Value::None)
+            }
             Opcode::Let | Opcode::LetBool => {
                 let target = self.expression(host)?;
                 let value_expression = self.expression(host)?;
