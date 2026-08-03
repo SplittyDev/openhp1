@@ -1057,8 +1057,8 @@ mod iterator_tests {
         let import_table = [0, 1, 0, 0, 0, 0, 1];
         let export_offset = import_offset + import_table.len();
         let mut export_table = Vec::new();
-        for object_name in [2_u8, 3, 4] {
-            export_table.extend([0x81, 0]); // Class import, then no superclass.
+        for (object_name, class) in [(2_u8, [0x81, 0]), (3, [0, 0]), (4, [0, 0])] {
+            export_table.extend(class); // Base uses the Class import; its children use None.
             export_table.extend(0_i32.to_le_bytes());
             export_table.push(object_name);
             export_table.extend(0_u32.to_le_bytes());
@@ -1101,6 +1101,7 @@ mod iterator_tests {
         let root = radius_actors_test_root();
         let mut runtime = ScriptRuntime::new(&root.0).unwrap();
         let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        assert_eq!(source.summary().exports[1].class, ObjectReference::None);
         let base_class = object_id(&source, 0);
         let included_class = object_id(&source, 1);
         let excluded_class = object_id(&source, 2);
@@ -1200,5 +1201,49 @@ mod iterator_tests {
         );
         assert_eq!(frame.local(7), Some(&Value::Object(0)));
         assert_eq!(frame.local(8), Some(&Value::Object(included_handle)));
+    }
+
+    #[test]
+    fn meta_cast_keeps_derived_class_objects() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let base_class = object_id(&source, 0);
+        let included_class = object_id(&source, 1);
+        let excluded_class = object_id(&source, 2);
+        runtime
+            .class_relations
+            .insert((included_class.clone(), base_class.clone()), true);
+        runtime
+            .class_relations
+            .insert((excluded_class.clone(), base_class), false);
+        let included_handle = runtime.object_handle(included_class).unwrap();
+
+        let mut run = |reference: i32| {
+            let mut bytes = vec![0x04, 0x13];
+            bytes.extend(1_i32.to_le_bytes());
+            bytes.push(0x20);
+            bytes.extend(reference.to_le_bytes());
+            let bytecode = Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            };
+            Frame::new(&bytecode).execute_hosted(|request| match request {
+                FrameRequest::MetaCast { class, value } => runtime
+                    .meta_cast(&source, class, value)
+                    .map(FrameResponse::Value)
+                    .map_err(|error| error.to_string()),
+                FrameRequest::ResolveObject { reference } => runtime
+                    .object_reference_value(&source, reference)
+                    .map(FrameResponse::Value)
+                    .map_err(|error| error.to_string()),
+                _ => panic!("unexpected frame request"),
+            })
+        };
+
+        assert_eq!(run(2).unwrap(), Value::Object(included_handle));
+        assert_eq!(run(3).unwrap(), Value::Object(0));
     }
 }

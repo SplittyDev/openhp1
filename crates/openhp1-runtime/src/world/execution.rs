@@ -193,6 +193,9 @@ impl ScriptRuntime {
                     FrameRequest::DynamicCast { class, value } => self
                         .dynamic_cast(actor_class, &state.package, class, value)
                         .map(FrameResponse::Value),
+                    FrameRequest::MetaCast { class, value } => self
+                        .meta_cast(&state.package, class, value)
+                        .map(FrameResponse::Value),
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)
                         .map(FrameResponse::Value),
@@ -462,6 +465,9 @@ impl ScriptRuntime {
                         .map(FrameResponse::Iterator),
                     FrameRequest::DynamicCast { class, value } => self
                         .dynamic_cast(actor_class, &function.package, class, value)
+                        .map(FrameResponse::Value),
+                    FrameRequest::MetaCast { class, value } => self
+                        .meta_cast(&function.package, class, value)
                         .map(FrameResponse::Value),
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)

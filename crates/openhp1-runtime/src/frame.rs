@@ -79,6 +79,10 @@ pub(crate) enum FrameRequest {
         class: i32,
         value: Value,
     },
+    MetaCast {
+        class: i32,
+        value: Value,
+    },
     ObjectToString {
         value: Value,
     },

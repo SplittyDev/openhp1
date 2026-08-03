@@ -265,6 +265,8 @@ one-shot jump and mouse input do not.
 
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
+`MetaCast` returns a class object only when it is the requested class or derives
+from it; non-class and incompatible objects become `None`.
 Numeric natives interpret a null-context scalar result as the typed zero value
 that UE writes into the expression result buffer.
 Switches likewise compare an untyped null-context result as zero when their

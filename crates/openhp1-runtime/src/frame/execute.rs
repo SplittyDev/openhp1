@@ -17,6 +17,9 @@ impl<'a> Frame<'a> {
             FrameRequest::DynamicCast { .. } => {
                 Err("standalone frames do not host dynamic casts".to_owned())
             }
+            FrameRequest::MetaCast { .. } => {
+                Err("standalone frames do not host meta casts".to_owned())
+            }
             FrameRequest::ObjectToString { .. } => {
                 Err("standalone frames do not host object conversions".to_owned())
             }
@@ -410,6 +413,16 @@ impl<'a> Frame<'a> {
                     )
                     .and_then(FrameResponse::into_value)
                     .map_err(|message| Error::Context { message })?,
+                )
+            }
+            Opcode::MetaCast => {
+                let class = self.read_i32()?;
+                let value = self.expression(host)?;
+                let value = self.value(value, host)?;
+                Expression::Value(
+                    host(FrameRequest::MetaCast { class, value }, &mut self.instance)
+                        .and_then(FrameResponse::into_value)
+                        .map_err(|message| Error::Context { message })?,
                 )
             }
             Opcode::StructMember => {

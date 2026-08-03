@@ -1,6 +1,50 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn meta_cast(
+        &mut self,
+        source: &Arc<Package>,
+        class: i32,
+        value: Value,
+    ) -> DispatchResult<Value> {
+        let value = match value {
+            Value::None | Value::Object(0) => return Ok(Value::Object(0)),
+            Value::Object(value) => value,
+            value => {
+                return Err(crate::Error::Type {
+                    expected: "class object",
+                    actual: value.kind(),
+                }
+                .into());
+            }
+        };
+        let target = match self.packages.resolve(source, object_reference(class))? {
+            Some(target) => target,
+            None => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: "meta cast class is null".to_owned(),
+                });
+            }
+        };
+        let object = self.object_for_handle(value)?;
+        let candidate = self.resolved_object(&object)?;
+        let export = &candidate.package.summary().exports[candidate.export_index];
+        if export.class != ObjectReference::None
+            && !candidate
+                .package
+                .summary()
+                .class_name(export)
+                .is_some_and(|class| class.eq_ignore_ascii_case("Class"))
+        {
+            return Ok(Value::Object(0));
+        }
+        Ok(if self.class_is_a(candidate, &target)? {
+            Value::Object(value)
+        } else {
+            Value::Object(0)
+        })
+    }
+
     pub(super) fn dynamic_cast(
         &mut self,
         actor_class: &ResolvedObject,
