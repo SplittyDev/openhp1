@@ -379,6 +379,7 @@ pub(super) fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
             Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
         }
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
+        (ConversionOpcode::ByteToInt, Value::Bool(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToBool, Value::Byte(value)) => Value::Bool(value != 0),
         (ConversionOpcode::ByteToFloat, Value::Byte(value)) => Value::Float(f32::from(value)),
         (ConversionOpcode::IntToByte, Value::Int(value)) => Value::Byte(value as u8),

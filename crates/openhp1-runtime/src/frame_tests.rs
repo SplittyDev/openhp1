@@ -31,6 +31,26 @@ fn executes_assignment_native_call_and_return() {
 }
 
 #[test]
+fn byte_to_int_converts_a_boolean_instance_value() {
+    let mut bytes = vec![0x04, 0x3a, 0x01];
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut instance = HashMap::from([(7, Value::Bool(true))]);
+    let mut frame = Frame::new(&bytecode);
+    assert_eq!(
+        frame
+            .execute_with_instance(&mut instance, |_, _| unreachable!())
+            .unwrap(),
+        Value::Int(1)
+    );
+}
+
+#[test]
 fn eat_string_evaluates_its_child_and_discards_its_value() {
     let mut bytes = vec![0x0f, 0x00];
     bytes.extend(7_i32.to_le_bytes());

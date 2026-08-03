@@ -23,6 +23,8 @@ Bytecode `0x60` is `ExtendedNative`/`HighNative0`, not a conversion: its next
 byte is the low native-index byte, followed by expression arguments through
 `EndFunctionParms`. UE1's `MaxConversion = 0x60` is an enum boundary sentinel;
 the HP1 binary dispatches this opcode through its high-native handler.
+HP1 bytecode can use `ByteToInt` (`0x3a`) for a boolean instance value; that
+conversion uses the boolean's UE1 byte representation, zero or one.
 
 ## Actor identity and state
 
