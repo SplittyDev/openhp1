@@ -205,6 +205,8 @@ targeting reticle to destroy their child emitters.
 
 Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
+`Actor.AutonomousPhysics` uses that same per-actor physics update and suppresses
+the later scheduled physics pass for its actor in the current runtime tick.
 An idle walking pawn still steps down to a reachable floor; a floor probe alone
 must not leave a newly initialized or script-moved pawn suspended above it.
 Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state

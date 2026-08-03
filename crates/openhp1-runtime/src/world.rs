@@ -94,6 +94,7 @@ const COMPARE_GESTURE_POINT: u16 = 427;
 const RAND_RANGE: u16 = 0x409;
 const SET_PHYSICS: u16 = 0xf82;
 const MOVE_SMOOTH: u16 = 0xf81;
+const AUTONOMOUS_PHYSICS: u16 = 0xf83;
 const LOG: u16 = 0x0e7;
 const V_RAND: u16 = 0x0fc;
 const FIND_PATH: u16 = 0x229;
@@ -196,6 +197,7 @@ pub struct ScriptRuntime {
     tick_functions: HashMap<usize, ResolvedObject>,
     failed_ticks: HashSet<usize>,
     failed_physics: HashMap<usize, u8>,
+    physics_ticked: HashSet<usize>,
     disabled_events: HashMap<(usize, String), HashSet<String>>,
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,

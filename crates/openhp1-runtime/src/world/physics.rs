@@ -162,7 +162,7 @@ impl ScriptRuntime {
         let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
         actors.sort_unstable();
         for actor in actors {
-            if self.destroyed.contains(&actor) {
+            if self.destroyed.contains(&actor) || self.physics_ticked.contains(&actor) {
                 continue;
             }
             let class = self
@@ -196,7 +196,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    fn tick_actor_physics(
+    pub(super) fn tick_actor_physics(
         &mut self,
         actor: usize,
         class: &ResolvedObject,

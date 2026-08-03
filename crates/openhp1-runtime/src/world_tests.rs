@@ -730,6 +730,186 @@ fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
 }
 
 #[test]
+fn autonomous_physics_dispatches_from_tick_without_double_advancing() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-autonomous-physics-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 2,
+    };
+    let class_id = object_id(&package, class.export_index);
+    runtime.scripts.insert(
+        class_id.clone(),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: class.export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    runtime.scripts.insert(
+        object_id(&package, function.export_index),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: function.export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 2,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: AUTONOMOUS_PHYSICS,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+
+    let fields = [
+        "TimeSeconds",
+        "TimeDilation",
+        "Physics",
+        "Rotation",
+        "RotationRate",
+        "bRotateToDesired",
+        "bFixedRotationDir",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "lifespan".to_owned()), None);
+
+    let level = 0;
+    let actor = 1;
+    runtime.actor_classes.insert(level, class_id.clone());
+    runtime.actor_classes.insert(actor, class_id);
+    runtime.level_info = Some(level);
+    runtime.tick_functions.insert(actor, function);
+    runtime.instances.insert(
+        level,
+        [
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["TimeDilation"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        actor,
+        [
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(5)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["RotationRate"].clone(),
+                StoredValue::Value(Value::Rotator([0, 1_000, 0])),
+            ),
+            (
+                fields["bRotateToDesired"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bFixedRotationDir"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    assert_eq!(
+        runtime.tick(0.02).unwrap(),
+        [ActorAction::SetRotation {
+            actor,
+            rotation: [0, 20, 0],
+        }]
+    );
+    assert_eq!(
+        runtime.instances[&actor].get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 20, 0])))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn client_travel_named_native_dispatches_through_function_execution() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-client-travel-{}-{}",

@@ -116,6 +116,22 @@ impl ScriptRuntime {
                 .destroy_actor(actor, actor_class, instance, actions)
                 .map(Value::Bool);
         }
+        if index == AUTONOMOUS_PHYSICS {
+            let [Value::Float(delta_time)] = arguments else {
+                return Err(format!(
+                    "AutonomousPhysics expects one float, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            self.tick_actor_physics(actor, actor_class, instance, *delta_time, actions)?;
+            self.failed_physics.remove(&actor);
+            self.physics_ticked.insert(actor);
+            return Ok(Value::None);
+        }
         if index == GOTO_STATE {
             if arguments.len() > 2 {
                 return Err(format!(

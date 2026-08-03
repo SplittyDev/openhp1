@@ -15,6 +15,7 @@ impl ScriptRuntime {
         if !delta_time.is_finite() || delta_time < 0.0 {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
+        self.physics_ticked.clear();
         self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
         self.tick_animation_properties(delta_time, &mut actions);
