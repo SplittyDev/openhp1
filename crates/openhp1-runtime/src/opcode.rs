@@ -107,8 +107,8 @@ impl From<u8> for Opcode {
             0x36 => Self::StructMember,
             0x37 => Self::DynArrayToInt,
             0x38 => Self::GlobalFunction,
-            0x39..=0x60 => Self::Conversion(opcode.into()),
-            0x61..=0x6f => Self::ExtendedNative(u16::from(opcode - 0x60) << 8),
+            0x39..0x60 => Self::Conversion(opcode.into()),
+            0x60..=0x6f => Self::ExtendedNative(u16::from(opcode - 0x60) << 8),
             0x70..=0xff => Self::Native(u16::from(opcode)),
             _ => Self::Unsupported,
         }

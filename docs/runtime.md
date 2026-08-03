@@ -19,6 +19,11 @@ The 100,000-step frame guard counts executable statements, not expression
 tokens within a statement. This retains protection against runaway control flow
 without rejecting finite iterator bodies merely because they have nested calls.
 
+Bytecode `0x60` is `ExtendedNative`/`HighNative0`, not a conversion: its next
+byte is the low native-index byte, followed by expression arguments through
+`EndFunctionParms`. UE1's `MaxConversion = 0x60` is an enum boundary sentinel;
+the HP1 binary dispatches this opcode through its high-native handler.
+
 ## Actor identity and state
 
 Actors use stable package/export identities. Class defaults followed by actor

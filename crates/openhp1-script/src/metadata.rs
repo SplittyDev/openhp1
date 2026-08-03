@@ -392,6 +392,60 @@ mod tests {
     }
 
     #[test]
+    fn decodes_high_native_zero_with_its_low_byte_operand() {
+        let bytecode = [0x04, 0x60, 0x92, 0x25, 0x26, 0x16];
+        let mut payload = vec![0, 0, 0, 0, 0, 5];
+        payload.extend(10_u32.to_le_bytes());
+        payload.extend(20_u32.to_le_bytes());
+        payload.extend((bytecode.len() as u32).to_le_bytes());
+        payload.extend(bytecode);
+        payload.extend(8_u16.to_le_bytes());
+        payload.extend(0_u16.to_le_bytes());
+        payload.push(1);
+        payload.push(0);
+        payload.extend(4_u16.to_le_bytes());
+        payload.extend(2_u32.to_le_bytes());
+
+        let package = synthetic_package("Function", "HighNative", payload);
+        let decoded = ScriptExport::decode(&package, 0).unwrap();
+        assert_eq!(decoded.bytecode.raw_len, bytecode.len());
+        assert_eq!(decoded.bytecode.bytes, bytecode);
+        assert_eq!(
+            decoded
+                .bytecode
+                .tokens
+                .iter()
+                .map(|token| (token.offset, token.opcode, token.call.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (0, 0x04, None),
+                (1, 0x60, Some(CallTarget::Native(0x92))),
+                (3, 0x25, None),
+                (4, 0x26, None),
+                (5, 0x16, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_high_native_zero_without_its_low_byte_operand() {
+        let mut payload = vec![0, 0, 0, 0, 0, 5];
+        payload.extend(10_u32.to_le_bytes());
+        payload.extend(20_u32.to_le_bytes());
+        payload.extend(2_u32.to_le_bytes());
+        payload.extend([0x04, 0x60]);
+
+        let package = synthetic_package("Function", "TruncatedHighNative", payload);
+        assert!(matches!(
+            ScriptExport::decode(&package, 0),
+            Err(Error::Package(openhp1_package::Error::UnexpectedEnd {
+                needed: 1,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
     fn positions_reader_at_class_defaults_after_nonempty_bytecode() {
         let mut payload = vec![0, 0, 0, 0, 5];
         payload.extend(0_u32.to_le_bytes());

@@ -102,12 +102,12 @@ impl Parser<'_, '_> {
         });
         let child_depth = depth + 1;
 
-        if (0x39..=0x60).contains(&opcode) {
+        if (0x39..0x60).contains(&opcode) {
             self.read_token(child_depth)?;
         } else if opcode >= 0x70 {
             self.tokens[token_index].call = Some(CallTarget::Native(u16::from(opcode)));
             self.read_parameters(child_depth)?;
-        } else if (0x61..=0x6f).contains(&opcode) {
+        } else if (0x60..=0x6f).contains(&opcode) {
             let low = self.read_u8()?;
             let native = (u16::from(opcode - 0x60) << 8) | u16::from(low);
             self.tokens[token_index].call = Some(CallTarget::Native(native));
@@ -414,8 +414,8 @@ pub fn token_name(opcode: u8) -> &'static str {
         0x36 => "StructMember",
         0x37 => "DynArrayToInt",
         0x38 => "GlobalFunction",
-        0x39..=0x60 => "Conversion",
-        0x61..=0x6f => "ExtendedNative",
+        0x39..0x60 => "Conversion",
+        0x60..=0x6f => "ExtendedNative",
         0x70..=0xff => "Native",
         _ => "Unknown",
     }

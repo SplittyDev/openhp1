@@ -1582,6 +1582,51 @@ mod iterator_tests {
     }
 
     #[test]
+    fn high_native_zero_dispatches_through_the_runtime_host() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let actor_class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: 8,
+            bytes: vec![0x04, 0x60, 0x92, 0x2c, 20, 0x2c, 22, 0x16],
+            tokens: Vec::new(),
+        };
+        let mut instance = InstanceState::default();
+        let mut actions = Vec::new();
+
+        assert_eq!(
+            Frame::new(&bytecode)
+                .execute_hosted(|request| match request {
+                    FrameRequest::Call {
+                        function,
+                        arguments,
+                        ..
+                    } => runtime
+                        .dispatch_call(
+                            1,
+                            &actor_class,
+                            &source,
+                            function,
+                            &arguments,
+                            &mut instance,
+                            &mut actions,
+                            0,
+                        )
+                        .map(CallOutput::into_response)
+                        .map_err(|error| error.to_string()),
+                    _ => panic!("unexpected frame request"),
+                })
+                .unwrap(),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
     fn warp_and_unwarp_round_trip_all_three_output_lvalues() {
         let root = radius_actors_test_root();
         let mut runtime = ScriptRuntime::new(&root.0).unwrap();
