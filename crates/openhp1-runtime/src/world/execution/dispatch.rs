@@ -139,6 +139,16 @@ impl ScriptRuntime {
                 })
                 .map_err(DispatchError::from);
         }
+        if index == FAST_TRACE {
+            return self
+                .fast_trace_native(actor_class, arguments, instance)
+                .map(CallOutput::value)
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(index),
+                    message,
+                })
+                .map_err(DispatchError::from);
+        }
         if index == PICK_TARGET {
             let (value, best_aim, best_dist) = self
                 .pick_target(actor, arguments)
@@ -1210,6 +1220,7 @@ mod iterator_tests {
 
     use super::*;
     use glam::Vec3;
+    use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PrimitiveBounds};
     use openhp1_script::Bytecode;
 
     static NEXT_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -1294,6 +1305,123 @@ mod iterator_tests {
         let actor = Vec3::new(512.0, 0.0, 0.0);
         assert!(within_radius(None, location, actor));
         assert!(!within_radius(Some(15.0), location, actor));
+    }
+
+    #[test]
+    fn fast_trace_dispatches_numeric_native_with_optional_start() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        let location = ObjectId {
+            package: Arc::from("<fast-trace-test>"),
+            export_index: 0,
+        };
+        runtime.fields.insert(
+            (object_id(&source, 0), "location".to_owned()),
+            Some(location.clone()),
+        );
+        let mut instance = [(
+            location,
+            StoredValue::Value(Value::Vector([10.0, 0.0, 0.0])),
+        )]
+        .into_iter()
+        .collect::<InstanceState>();
+        let model = Model {
+            bounds: PrimitiveBounds {
+                minimum: Vec3::ZERO,
+                maximum: Vec3::ZERO,
+                valid: false,
+                sphere: [0.0; 4],
+            },
+            vectors: Vec::new(),
+            points: vec![
+                Vec3::new(0.0, -10.0, -10.0),
+                Vec3::new(0.0, 10.0, -10.0),
+                Vec3::new(0.0, 10.0, 10.0),
+                Vec3::new(0.0, -10.0, 10.0),
+            ],
+            nodes: vec![BspNode {
+                plane: [1.0, 0.0, 0.0, 0.0],
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 0,
+                surface: 0,
+                back: -1,
+                front: -1,
+                coplanar: -1,
+                collision_bound: -1,
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 4,
+                leaves: [0; 2],
+            }],
+            surfaces: vec![BspSurface {
+                texture: ObjectReference::None,
+                poly_flags: Default::default(),
+                base_point: 0,
+                normal: 0,
+                texture_u: 0,
+                texture_v: 0,
+                light_map: -1,
+                brush_poly: -1,
+                pan_u: 0,
+                pan_v: 0,
+                brush_actor: ObjectReference::None,
+            }],
+            vertices: (0..4).map(|point| BspVertex { point, side: -1 }).collect(),
+            shared_side_count: 0,
+            zones: Vec::new(),
+            polys: ObjectReference::None,
+            light_maps: Vec::new(),
+            light_bits: Vec::new(),
+            collision_bounds: Vec::new(),
+            leaf_hulls: Vec::new(),
+            leaves: Vec::new(),
+            lights: Vec::new(),
+            root_outside: true,
+            linked: false,
+        };
+        runtime.collision = Some(Arc::new(BspCollision::from_model(&model).unwrap()));
+
+        assert_eq!(
+            runtime
+                .dispatch_native_call(
+                    1,
+                    &class,
+                    &source,
+                    FAST_TRACE,
+                    &[Value::Vector([5.0, 0.0, 0.0]), Value::None],
+                    &mut instance,
+                    &mut Vec::new(),
+                    0,
+                )
+                .unwrap()
+                .value,
+            Value::Bool(true),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_native_call(
+                    1,
+                    &class,
+                    &source,
+                    FAST_TRACE,
+                    &[
+                        Value::Vector([5.0, 0.0, 0.0]),
+                        Value::Vector([-10.0, 0.0, 0.0]),
+                    ],
+                    &mut instance,
+                    &mut Vec::new(),
+                    0,
+                )
+                .unwrap()
+                .value,
+            Value::Bool(false),
+        );
     }
 
     #[test]

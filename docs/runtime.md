@@ -117,6 +117,8 @@ orders hits from that start, and does not insert a BSP pseudo-actor. Starting
 inside an actor does not report that existing overlap. `VisibleActors` skips
 hidden actors and BSP-occluded locations; HP1's engine treats an omitted or
 zero radius as unbounded, then its scripts apply their own distance filters.
+`FastTrace` uses its required `TraceEnd` and optional `TraceStart` (defaulting
+to the receiver location) for a zero-extent world-BSP trace; it ignores actors.
 Qualified `TraceActors` and `VisibleActors` calls use the receiver's location
 and collision context.
 `Self` is resolved to the current actor at the common actor-call boundary

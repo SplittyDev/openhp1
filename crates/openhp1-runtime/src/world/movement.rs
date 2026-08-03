@@ -920,6 +920,38 @@ impl ScriptRuntime {
             .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())
     }
 
+    pub(super) fn fast_trace_native(
+        &mut self,
+        actor_class: &ResolvedObject,
+        arguments: &[Value],
+        instance: &InstanceState,
+    ) -> std::result::Result<Value, String> {
+        let [Value::Vector(end), rest @ ..] = arguments else {
+            return Err(format!(
+                "FastTrace expects a trace end and an optional trace start, found {} arguments",
+                arguments.len()
+            ));
+        };
+        if rest.len() > 1 {
+            return Err(format!(
+                "FastTrace expects at most 2 arguments, found {}",
+                arguments.len()
+            ));
+        }
+        let start = match rest.first() {
+            Some(Value::Vector(start)) => Vec3::from_array(*start),
+            Some(Value::None) | None => {
+                Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?)
+            }
+            Some(value) => return Err(format!("FastTrace start is {}", value.kind())),
+        };
+        let end = Vec3::from_array(*end);
+        if !start.is_finite() || !end.is_finite() {
+            return Err("FastTrace coordinates are not finite".to_owned());
+        }
+        Ok(Value::Bool(self.has_line_of_sight(start, end)))
+    }
+
     fn actor_is_visible(&self, eye: Vec3, other: &CollisionActor) -> bool {
         [
             other.location,

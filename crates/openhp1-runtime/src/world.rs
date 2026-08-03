@@ -86,6 +86,7 @@ const ADD_PAWN: u16 = 529;
 const REMOVE_PAWN: u16 = 530;
 const PLAYER_CAN_SEE_ME: u16 = 532;
 const CAN_SEE: u16 = 533;
+const FAST_TRACE: u16 = 0x224;
 const SAVE_CONFIG: u16 = 536;
 const UPDATE_URL: u16 = 546;
 const COMPARE_GESTURE: u16 = 426;
