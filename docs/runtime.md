@@ -177,8 +177,12 @@ retained as per-actor capability diagnostics rather than silently discarded.
 Particle acceleration combines authored `Gravity` with the emitter's active
 zone `ZoneGravity * GravityModifier`, falling back to `LevelInfo` when the BSP
 zone has no actor. `WindModifier` samples active `Wind` actors, never
-`ZoneInfo.ZoneVelocity`: point and plane sources use the native squared-radius
-falloff, BSP-blocked sources require `bPermeating`, and their vectors sum.
+`ZoneInfo.ZoneVelocity`: a source first applies HP1's native
+`distance_squared <= (WindRadius^2)^2` gate, then its `WindRadius^2` falloff
+clamps its contribution to zero at the authored radius. BSP-blocked sources
+require `bPermeating`, and their vectors sum. World-relative particles use the
+emitter's once-per-tick sample; system-relative particles resample at each
+particle's world position.
 Current native `Fluc` values participate; time-evolving `WindFluctuation`
 state is not yet simulated.
 When `Damping * WindModifier > 0`, wind is the terminal-velocity term of HP1's

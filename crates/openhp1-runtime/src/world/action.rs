@@ -58,6 +58,7 @@ impl ParticleWind {
         }
         let offset = location - Vec3::from_array(self.location);
         let distance_squared = offset.length_squared();
+        // Native GetWind guards with Square(Radius()), where Radius() is WindRadius squared.
         if distance_squared > radius * radius
             || (!self.permeating
                 && collision.is_some_and(|collision| {

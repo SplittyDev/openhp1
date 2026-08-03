@@ -3703,14 +3703,19 @@ mod tests {
         system.config.system_relative = true;
         system.config.damping = 2.0;
         system.config.wind_modifier = 1.0;
-        system.config.winds = vec![ParticleWind {
+        let wind = ParticleWind {
             location: [0.0; 3],
             direction: [1.0, 0.0, 0.0],
             speed: 20.0,
             radius: 10,
             permeating: true,
             ..Default::default()
-        }];
+        };
+        assert_eq!(
+            ParticleWind::total_at(&[wind], None, glam::Vec3::new(10.1, 0.0, 0.0)),
+            glam::Vec3::ZERO
+        );
+        system.config.winds = vec![wind];
         system.particles[0].location = glam::Vec3::new(5.0, 0.0, 0.0);
         system.particles[0].velocity = glam::Vec3::ZERO;
 
