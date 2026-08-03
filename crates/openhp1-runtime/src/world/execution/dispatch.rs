@@ -152,9 +152,9 @@ impl ScriptRuntime {
                 outputs: vec![(0, Value::Float(best_aim)), (1, Value::Float(best_dist))],
             });
         }
-        if index == WARP {
+        if matches!(index, WARP | UNWARP) {
             return self
-                .warp_native(actor_class, arguments, instance)
+                .warp_native(actor_class, arguments, instance, index == UNWARP)
                 .map_err(|message| crate::Error::Call {
                     call: FunctionCall::Native(index),
                     message,
@@ -196,6 +196,7 @@ impl ScriptRuntime {
         actor_class: &ResolvedObject,
         arguments: &[Value],
         instance: &InstanceState,
+        unwarp: bool,
     ) -> std::result::Result<CallOutput, String> {
         let [
             Value::Vector(location),
@@ -204,7 +205,8 @@ impl ScriptRuntime {
         ] = arguments
         else {
             return Err(format!(
-                "Warp expects location, velocity, and rotation, found {}",
+                "{} expects location, velocity, and rotation, found {}",
+                if unwarp { "UnWarp" } else { "Warp" },
                 arguments
                     .iter()
                     .map(Value::kind)
@@ -235,7 +237,19 @@ impl ScriptRuntime {
         };
         let inverse_rotate =
             |value: Vec3| Vec3::new(axes[0].dot(value), axes[1].dot(value), axes[2].dot(value));
-        let forward = rotate(Vec3::from_array(crate::rotator_axes(*rotation)[0]));
+        let (location, velocity, forward) = if unwarp {
+            (
+                rotate(Vec3::from_array(*location) - origin),
+                rotate(Vec3::from_array(*velocity)),
+                inverse_rotate(Vec3::from_array(crate::rotator_axes(*rotation)[0])),
+            )
+        } else {
+            (
+                inverse_rotate(Vec3::from_array(*location)) + origin,
+                inverse_rotate(Vec3::from_array(*velocity)),
+                rotate(Vec3::from_array(crate::rotator_axes(*rotation)[0])),
+            )
+        };
         let units = 65_536.0 / std::f32::consts::TAU;
         let rotation = [
             ((-forward.z).atan2(forward.x.hypot(forward.y)) * units) as i32,
@@ -245,16 +259,8 @@ impl ScriptRuntime {
         Ok(CallOutput {
             value: Value::None,
             outputs: vec![
-                (
-                    0,
-                    Value::Vector(
-                        (inverse_rotate(Vec3::from_array(*location)) + origin).to_array(),
-                    ),
-                ),
-                (
-                    1,
-                    Value::Vector(inverse_rotate(Vec3::from_array(*velocity)).to_array()),
-                ),
+                (0, Value::Vector(location.to_array())),
+                (1, Value::Vector(velocity.to_array())),
                 (2, Value::Rotator(rotation)),
             ],
         })
@@ -1442,7 +1448,7 @@ mod iterator_tests {
     }
 
     #[test]
-    fn warp_native_transforms_all_three_output_lvalues() {
+    fn warp_and_unwarp_round_trip_all_three_output_lvalues() {
         let root = radius_actors_test_root();
         let mut runtime = ScriptRuntime::new(&root.0).unwrap();
         let source = runtime.packages.load("RadiusActorsTest").unwrap();
@@ -1485,34 +1491,45 @@ mod iterator_tests {
         frame.set_local(8, Value::Vector([1.0, 2.0, 3.0]));
         frame.set_local(9, Value::Rotator([0, 0, 42]));
         let mut actions = Vec::new();
+        let mut execute = |frame: &mut Frame| {
+            frame.execute_hosted(|request| match request {
+                FrameRequest::Call {
+                    function,
+                    arguments,
+                    ..
+                } => runtime
+                    .dispatch_call(
+                        1,
+                        &actor_class,
+                        &source,
+                        function,
+                        &arguments,
+                        &mut instance,
+                        &mut actions,
+                        0,
+                    )
+                    .map(CallOutput::into_response)
+                    .map_err(|error| error.to_string()),
+                _ => panic!("unexpected frame request"),
+            })
+        };
 
         assert_eq!(
-            frame
-                .execute_hosted(|request| match request {
-                    FrameRequest::Call {
-                        function,
-                        arguments,
-                        ..
-                    } => runtime
-                        .dispatch_call(
-                            1,
-                            &actor_class,
-                            &source,
-                            function,
-                            &arguments,
-                            &mut instance,
-                            &mut actions,
-                            0,
-                        )
-                        .map(CallOutput::into_response)
-                        .map_err(|error| error.to_string()),
-                    _ => panic!("unexpected frame request"),
-                })
-                .unwrap(),
+            execute(&mut frame).unwrap(),
             Value::Vector([105.0, 196.0, 306.0])
         );
         assert_eq!(frame.local(8), Some(&Value::Vector([2.0, -1.0, 3.0])));
         assert_eq!(frame.local(9), Some(&Value::Rotator([0, 16_384, 42])));
+
+        let mut unwarp_bytecode = bytecode.clone();
+        unwarp_bytecode.bytes[1] = 0x3b;
+        let mut frame = Frame::new(&unwarp_bytecode);
+        frame.set_local(7, Value::Vector([105.0, 196.0, 306.0]));
+        frame.set_local(8, Value::Vector([2.0, -1.0, 3.0]));
+        frame.set_local(9, Value::Rotator([0, 16_384, 42]));
+        assert_eq!(execute(&mut frame).unwrap(), Value::Vector([4.0, 5.0, 6.0]));
+        assert_eq!(frame.local(8), Some(&Value::Vector([1.0, 2.0, 3.0])));
+        assert_eq!(frame.local(9), Some(&Value::Rotator([0, 0, 42])));
     }
 
     #[test]

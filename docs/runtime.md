@@ -252,6 +252,8 @@ normals.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.
+`WarpZoneInfo.Warp` and `UnWarp` apply the corresponding inverse coordinate
+transforms to their location, velocity, and rotation output parameters.
 Harry's authored `PostBeginPlay` selects `BaseCam`; the game does not override
 that view target. Returning Harry to `PlayerWalking` is not the end of the
 cutscene camera sequence: its later `ExitCutState` action restores the saved
