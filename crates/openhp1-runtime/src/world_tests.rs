@@ -439,6 +439,66 @@ fn integer_right_shift_executes_through_native_dispatch_with_sign_extension() {
 }
 
 #[test]
+fn integer_logical_right_shift_dispatches_from_bytecode_through_runtime_native() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-logical-right-shift-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    let mut execute = |left: i32, right: i32| {
+        let mut bytes = vec![0x04, 0xc4, 0x1d];
+        bytes.extend(left.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(right.to_le_bytes());
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                assert_eq!(index, 0xc4);
+                runtime.native(
+                    0,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap()
+    };
+
+    assert_eq!(execute(i32::MIN, 31), Value::Int(1));
+    assert_eq!(execute(i32::MIN, 32), Value::Int(i32::MIN));
+    assert_eq!(execute(-1, -1), Value::Int(1));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn float_remainder_uses_unreal_dividend_sign() {
     assert_eq!(
         scalar_native(0xad, &[Value::Float(-7.5), Value::Float(2.0)]),
