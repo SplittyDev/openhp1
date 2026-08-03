@@ -13,7 +13,7 @@ pub use player::{PlayerInput, PlayerView};
 pub use value::Value;
 pub use world::{
     ActorAction, DispatchError, DispatchResult, ParticleColor, ParticleEmitter, ParticleFloat,
-    ParticleTexture, PlayerMusic, RuntimeObject, ScriptRuntime, WeaponAttachment,
+    ParticleTexture, ParticleWind, PlayerMusic, RuntimeObject, ScriptRuntime, WeaponAttachment,
 };
 
 pub(crate) use frame::{

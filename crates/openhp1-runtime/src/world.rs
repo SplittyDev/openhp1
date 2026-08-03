@@ -29,8 +29,8 @@ mod physics;
 mod state;
 
 pub use action::{
-    ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, PlayerMusic,
-    RuntimeObject, WeaponAttachment,
+    ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind,
+    PlayerMusic, RuntimeObject, WeaponAttachment,
 };
 pub use error::{DispatchError, DispatchResult};
 

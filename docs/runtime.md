@@ -176,8 +176,15 @@ their visible template. Authored particle modes that are not implemented are
 retained as per-actor capability diagnostics rather than silently discarded.
 Particle acceleration combines authored `Gravity` with the emitter's active
 zone `ZoneGravity * GravityModifier`, falling back to `LevelInfo` when the BSP
-zone has no actor. The combined acceleration enters before damping and
-position advancement. A nonzero `Elasticity` point-traces that advance against
+zone has no actor. `WindModifier` samples active `Wind` actors, never
+`ZoneInfo.ZoneVelocity`: point and plane sources use the native squared-radius
+falloff, BSP-blocked sources require `bPermeating`, and their vectors sum.
+Current native `Fluc` values participate; time-evolving `WindFluctuation`
+state is not yet simulated.
+When `Damping * WindModifier > 0`, wind is the terminal-velocity term of HP1's
+analytic exponential-damping integration; otherwise wind is omitted. A
+nonpositive damping value uses the native ballistic gravity step. A nonzero
+`Elasticity` point-traces that advance against
 world BSP, stops at the trace fraction, and reflects the normal velocity by
 the authored restitution; zero leaves particles non-colliding. `Chaos` applies
 the native per-particle, delayed,

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use glam::Vec3;
 use openhp1_audio::AudioClip;
+use openhp1_physics::BspCollision;
 
 use crate::Value;
 
@@ -27,6 +29,60 @@ pub struct ParticleColor {
 pub struct ParticleTexture {
     pub package: String,
     pub export_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ParticleWind {
+    pub location: [f32; 3],
+    pub direction: [f32; 3],
+    pub fluctuation: [f32; 3],
+    pub speed: f32,
+    pub radius: u8,
+    pub inner_radius: u8,
+    pub source: u8,
+    pub permeating: bool,
+}
+
+impl ParticleWind {
+    pub fn total_at(winds: &[Self], collision: Option<&BspCollision>, location: Vec3) -> Vec3 {
+        winds.iter().map(|wind| wind.at(collision, location)).sum()
+    }
+
+    fn at(&self, collision: Option<&BspCollision>, location: Vec3) -> Vec3 {
+        if self.speed == 0.0 || self.source > 1 {
+            return Vec3::ZERO;
+        }
+        let radius = (self.radius as f32).powi(2);
+        if radius == 0.0 {
+            return Vec3::ZERO;
+        }
+        let offset = location - Vec3::from_array(self.location);
+        let distance_squared = offset.length_squared();
+        if distance_squared > radius * radius
+            || (!self.permeating
+                && collision.is_some_and(|collision| {
+                    collision
+                        .line_trace(Vec3::from_array(self.location), location)
+                        .is_some()
+                }))
+        {
+            return Vec3::ZERO;
+        }
+        let direction = if self.source == 0 {
+            let direction = offset.normalize_or_zero();
+            if direction == Vec3::ZERO {
+                Vec3::from_array(self.direction)
+            } else {
+                direction
+            }
+        } else {
+            Vec3::from_array(self.direction)
+        } + Vec3::from_array(self.fluctuation);
+        let attenuation = ((1.0 - distance_squared / radius)
+            / (1.0 - self.inner_radius as f32 / 256.0))
+            .clamp(0.0, 1.0);
+        direction * (self.speed * attenuation)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -68,6 +124,8 @@ pub struct ParticleEmitter {
     pub system_relative: bool,
     pub damping: f32,
     pub gravity: [f32; 3],
+    pub wind: [f32; 3],
+    pub winds: Vec<ParticleWind>,
     pub render_primitive: u8,
     pub velocity_relative: bool,
     pub owner_velocity: [f32; 3],
@@ -94,9 +152,6 @@ impl ParticleEmitter {
         if self.textures.len() > 1 {
             diagnostics.push("particle random texture selection is unsupported");
         }
-        if self.wind_modifier != 0.0 {
-            diagnostics.push("particle wind response is unsupported");
-        }
         if self.parent_blend != 0.0 {
             diagnostics.push("particle parent parameter blending is unsupported");
         }
@@ -118,6 +173,7 @@ mod particle_tests {
             velocity_relative: true,
             gravity_modifier: -0.5,
             elasticity: 1.0,
+            wind_modifier: 1.0,
             ..Default::default()
         };
         assert!(supported.capability_diagnostics().is_empty());

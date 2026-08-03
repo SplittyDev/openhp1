@@ -15,7 +15,7 @@ use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
 use openhp1_physics::BspCollision;
 use openhp1_runtime::{
-    ParticleColor, ParticleEmitter, ParticleFloat, RuntimeObject, WeaponAttachment,
+    ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject, WeaponAttachment,
 };
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
@@ -633,15 +633,33 @@ impl LoadedScene {
             system.particles.retain_mut(|particle| {
                 particle.age += delta_time;
                 particle.spin += particle.spin_rate * delta_time;
-                particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
-                particle.velocity *= particle_damping(system.config.damping, delta_time);
-                let previous_location = particle.location;
-                particle.location += particle.velocity * delta_time;
                 let origin = system
                     .config
                     .system_relative
                     .then_some(owner.location)
                     .unwrap_or(Vec3::ZERO);
+                let wind = if system.config.damping * system.config.wind_modifier > 0.0 {
+                    if system.config.system_relative {
+                        ParticleWind::total_at(
+                            &system.config.winds,
+                            Some(&collision),
+                            particle.location + origin,
+                        ) * system.config.wind_modifier
+                    } else {
+                        Vec3::from_array(system.config.wind)
+                    }
+                } else {
+                    Vec3::ZERO
+                };
+                let previous_location = particle.location;
+                particle_drag(
+                    &mut particle.location,
+                    &mut particle.velocity,
+                    Vec3::from_array(system.config.gravity),
+                    wind,
+                    system.config.damping,
+                    delta_time,
+                );
                 if let Some(location) = particle_collision_response(
                     &collision,
                     previous_location + origin,
@@ -1644,6 +1662,26 @@ fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
 
 fn particle_damping(damping: f32, delta_time: f32) -> f32 {
     (-damping * delta_time).exp()
+}
+
+fn particle_drag(
+    location: &mut Vec3,
+    velocity: &mut Vec3,
+    gravity: Vec3,
+    wind: Vec3,
+    damping: f32,
+    delta_time: f32,
+) {
+    if damping <= 0.0 {
+        *location += *velocity * delta_time + gravity * (0.5 * delta_time * delta_time);
+        *velocity += gravity * delta_time;
+        return;
+    }
+    let terminal = gravity / damping + wind;
+    let difference = *velocity - terminal;
+    let decay = particle_damping(damping, delta_time);
+    *location += terminal * delta_time + difference * ((1.0 - decay) / damping);
+    *velocity = terminal + difference * decay;
 }
 
 fn particle_attraction(
@@ -3534,7 +3572,7 @@ mod tests {
     use openhp1_map::{BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
     use openhp1_package::{ObjectReference, PackageStore};
     use openhp1_physics::BspCollision;
-    use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat};
+    use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind};
     use openhp1_texture::TextureRenderFlags;
 
     use crate::SurfaceMode;
@@ -3587,6 +3625,8 @@ mod tests {
             system_relative: false,
             damping: 0.0,
             gravity: [0.0; 3],
+            wind: [0.0; 3],
+            winds: Vec::new(),
             render_primitive: 1,
             velocity_relative: false,
             owner_velocity: [0.0; 3],
@@ -3654,6 +3694,31 @@ mod tests {
     fn particle_damping_is_exponential_over_elapsed_time() {
         assert!((super::particle_damping(1.0, 1.0) - std::f32::consts::E.recip()).abs() < 1e-6);
         assert_eq!(super::particle_damping(0.0, 10.0), 1.0);
+    }
+
+    #[test]
+    fn system_relative_particles_sample_wind_with_native_drag() {
+        let mut scene = particle_test_scene();
+        let system = scene.particles.get_mut(&0).unwrap();
+        system.config.system_relative = true;
+        system.config.damping = 2.0;
+        system.config.wind_modifier = 1.0;
+        system.config.winds = vec![ParticleWind {
+            location: [0.0; 3],
+            direction: [1.0, 0.0, 0.0],
+            speed: 20.0,
+            radius: 10,
+            permeating: true,
+            ..Default::default()
+        }];
+        system.particles[0].location = glam::Vec3::new(5.0, 0.0, 0.0);
+        system.particles[0].velocity = glam::Vec3::ZERO;
+
+        assert!(scene.tick_particles(1.0));
+        let particle = &scene.particles[&0].particles[0];
+        let decay = (-2.0_f32).exp();
+        assert!((particle.velocity.x - 15.0 * (1.0 - decay)).abs() < 1.0e-5);
+        assert!((particle.location.x - (5.0 + 15.0 * (1.0 + decay) / 2.0)).abs() < 1.0e-5);
     }
 
     #[test]

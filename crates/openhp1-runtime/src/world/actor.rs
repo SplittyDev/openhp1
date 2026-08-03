@@ -314,6 +314,7 @@ impl ScriptRuntime {
             .iter()
             .map(|(&actor, class)| (actor, class.clone()))
             .collect::<Vec<_>>();
+        let winds = self.particle_winds(&actors)?;
         let mut emitters = Vec::new();
         for (actor, class) in actors {
             if self.destroyed.contains(&actor) {
@@ -359,20 +360,28 @@ impl ScriptRuntime {
             };
             let gravity_modifier =
                 particle_scalar(self.instance_property(&class, &instance, "GravityModifier")?);
+            let location = Vec3::from_array(particle_vector(
+                self.instance_property(&class, &instance, "Location")?,
+            ));
             let gravity = Vec3::from_array(particle_vector(
                 self.instance_property(&class, &instance, "Gravity")?,
             ));
             let gravity = if gravity_modifier == 0.0 {
                 gravity
             } else {
-                let location = Vec3::from_array(particle_vector(
-                    self.instance_property(&class, &instance, "Location")?,
-                ));
                 self.zone_physics(location, actor, &instance)
                     .map_err(|message| DispatchError::UnresolvedObject { message })?
                     .map_or(gravity, |zone| {
                         particle_acceleration(gravity, zone.gravity, gravity_modifier)
                     })
+            };
+            let damping = particle_scalar(self.instance_property(&class, &instance, "Damping")?);
+            let wind_modifier =
+                particle_scalar(self.instance_property(&class, &instance, "WindModifier")?);
+            let wind = if damping * wind_modifier > 0.0 {
+                ParticleWind::total_at(&winds, self.collision.as_deref(), location) * wind_modifier
+            } else {
+                Vec3::ZERO
             };
             emitters.push(ParticleEmitter {
                 actor,
@@ -480,8 +489,10 @@ impl ScriptRuntime {
                     &instance,
                     "bSystemRelative",
                 )?),
-                damping: particle_scalar(self.instance_property(&class, &instance, "Damping")?),
+                damping,
                 gravity: gravity.to_array(),
+                wind: wind.to_array(),
+                winds: winds.clone(),
                 render_primitive: particle_byte(self.instance_property(
                     &class,
                     &instance,
@@ -506,11 +517,7 @@ impl ScriptRuntime {
                     &instance,
                     "Elasticity",
                 )?),
-                wind_modifier: particle_scalar(self.instance_property(
-                    &class,
-                    &instance,
-                    "WindModifier",
-                )?),
+                wind_modifier,
                 spin_rate: particle_float(self.instance_property(&class, &instance, "SpinRate")?),
                 drip_time: particle_float(self.instance_property(&class, &instance, "DripTime")?),
                 parent_blend: particle_scalar(self.instance_property(
@@ -527,6 +534,50 @@ impl ScriptRuntime {
             });
         }
         Ok(emitters)
+    }
+
+    fn particle_winds(
+        &mut self,
+        actors: &[(usize, ObjectId)],
+    ) -> DispatchResult<Vec<ParticleWind>> {
+        let mut winds = Vec::new();
+        for (actor, class) in actors {
+            if self.destroyed.contains(actor) {
+                continue;
+            }
+            let class = self.resolved_object(class)?;
+            if !self.class_has_name(&class, "Wind")? {
+                continue;
+            }
+            let instance = self
+                .instances
+                .get(actor)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor: *actor })?;
+            let rotation = match self.instance_property(&class, &instance, "Rotation")? {
+                Some(StoredValue::Value(Value::Rotator(rotation))) => rotation,
+                _ => [0; 3],
+            };
+            winds.push(ParticleWind {
+                location: particle_vector(self.instance_property(&class, &instance, "Location")?),
+                direction: crate::rotator_axes(rotation)[0],
+                fluctuation: particle_vector(self.instance_property(&class, &instance, "Fluc")?),
+                speed: particle_scalar(self.instance_property(&class, &instance, "WindSpeed")?),
+                radius: particle_byte(self.instance_property(&class, &instance, "WindRadius")?),
+                inner_radius: particle_byte(self.instance_property(
+                    &class,
+                    &instance,
+                    "WindRadiusInner",
+                )?),
+                source: particle_byte(self.instance_property(&class, &instance, "WindSource")?),
+                permeating: particle_bool(self.instance_property(
+                    &class,
+                    &instance,
+                    "bPermeating",
+                )?),
+            });
+        }
+        Ok(winds)
     }
 
     fn particle_pattern(
