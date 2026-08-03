@@ -15,6 +15,10 @@ such as scalar natives, spawning, sound, collision geometry, player state, and
 physics callbacks. Preserve this ownership when adding behavior instead of
 introducing parallel runtime objects.
 
+The 100,000-step frame guard counts executable statements, not expression
+tokens within a statement. This retains protection against runaway control flow
+without rejecting finite iterator bodies merely because they have nested calls.
+
 ## Actor identity and state
 
 Actors use stable package/export identities. Class defaults followed by actor

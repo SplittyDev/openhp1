@@ -120,6 +120,12 @@ impl<'a> Frame<'a> {
         ) -> std::result::Result<FrameResponse, String>,
     ) -> Result<FrameRun> {
         while self.instruction_pointer < self.bytecode.bytes.len() {
+            if self.steps >= self.step_limit {
+                return Err(Error::StepLimit {
+                    limit: self.step_limit,
+                });
+            }
+            self.steps += 1;
             match Opcode::from(self.peek()?) {
                 Opcode::Return => {
                     self.opcode()?;
@@ -957,12 +963,6 @@ impl<'a> Frame<'a> {
     }
 
     fn opcode(&mut self) -> Result<u8> {
-        if self.steps >= self.step_limit {
-            return Err(Error::StepLimit {
-                limit: self.step_limit,
-            });
-        }
-        self.steps += 1;
         self.read_u8()
     }
 
