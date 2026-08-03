@@ -110,6 +110,49 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
 }
 
 #[test]
+fn static_aabb_check_separates_a_slanted_hull_on_a_box_axis() {
+    let mut model = empty_model();
+    let planes = [
+        [1.0, 1.0, 0.0, 1.0],
+        [1.0, -1.0, 0.0, 1.0],
+        [-1.0, 1.0, 0.0, 1.0],
+        [-1.0, -1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+        [0.0, 0.0, -1.0, 1.0],
+    ];
+    model.nodes = planes
+        .into_iter()
+        .enumerate()
+        .map(|(index, plane)| BspNode {
+            plane,
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: -1,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: if index == 0 { 0 } else { -1 },
+            render_bound: -1,
+            zones: [0; 2],
+            vertex_count: 0,
+            leaves: [0; 2],
+        })
+        .collect();
+    model.leaf_hulls = vec![0, 1, 2, 3, 4, 5, -1];
+    model.leaf_hulls.extend(
+        [-1.0_f32, -1.0, -1.0, 1.0, 1.0, 1.0]
+            .map(f32::to_bits)
+            .map(|value| value as i32),
+    );
+
+    let collision = BspCollision::from_model(&model).unwrap();
+    assert!(collision.overlaps_aabb(Vec3::ZERO, Vec3::splat(0.2)));
+    // Every slanted face projection overlaps this box; its x interval is wholly outside the hull.
+    assert!(!collision.overlaps_aabb(Vec3::new(1.3, 0.0, 0.0), Vec3::splat(0.2)));
+}
+
+#[test]
 fn point_trace_hits_bsp_polygons_from_both_sides() {
     let mut model = empty_model();
     model.points = vec![

@@ -670,26 +670,65 @@ impl ScriptRuntime {
         Ok(Value::Bool(hit.fraction == 1.0))
     }
 
-    pub(super) fn spawn_location_is_clear(
+    pub(super) fn find_spawn_location(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
-        active_actor: usize,
-        active_instance: &InstanceState,
-    ) -> std::result::Result<bool, String> {
+    ) -> std::result::Result<Option<Vec3>, String> {
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
         if !self.actor_bool(class, instance, "bCollideWorld")?
             && !self.actor_bool(class, instance, "bCollideWhenPlacing")?
         {
-            return Ok(true);
+            return Ok(Some(location));
         }
-        let candidate = self.collision_actor(usize::MAX, class, instance)?;
-        self.ensure_collision_actors(active_actor, active_instance)?;
-        Ok(self
-            .collision_actors
-            .iter()
-            .flatten()
-            .filter(|other| !self.destroyed.contains(&other.actor.actor))
-            .all(|other| !placement_blocked(&candidate, &other.actor)))
+        let mut candidate = self.collision_actor(usize::MAX, class, instance)?;
+        let extents = collision_actor_local_extents(&candidate);
+        let collision = self
+            .collision
+            .as_ref()
+            .ok_or("Spawn requires a configured BSP collision model")?;
+
+        if !bsp_placement_blocked(collision, &candidate) {
+            return Ok(Some(location));
+        }
+
+        let mut adjusted = location;
+        for direction in [-1.0, 1.0] {
+            for (axis, distance) in [
+                (Vec3::X, extents.x),
+                (Vec3::Y, extents.y),
+                (Vec3::Z, extents.z),
+            ] {
+                adjust_spawn_spot(
+                    collision,
+                    &mut adjusted,
+                    location + axis * direction * distance,
+                    distance,
+                );
+            }
+        }
+        candidate.location = adjusted;
+        if !bsp_placement_blocked(collision, &candidate) {
+            return Ok(Some(adjusted));
+        }
+
+        let maximum = extents.length() + 1.0;
+        for x in [-extents.x, extents.x] {
+            for y in [-extents.y, extents.y] {
+                for z in [-extents.z, extents.z] {
+                    adjust_spawn_spot(
+                        collision,
+                        &mut adjusted,
+                        location + Vec3::new(x, y, z),
+                        maximum,
+                    );
+                }
+            }
+        }
+        candidate.location = adjusted;
+        Ok((adjusted.distance(location) <= maximum * 1.5
+            && !bsp_placement_blocked(collision, &candidate))
+        .then_some(adjusted))
     }
 
     pub(super) fn try_move_actor(
@@ -1173,19 +1212,7 @@ impl ScriptRuntime {
                     for x in [0.0, 1.0, -1.0] {
                         let candidate_location = location + scale * Vec3::new(x, y, z);
                         candidate.location = candidate_location;
-                        let blocked = if candidate.collide_type == COLLIDE_BOX {
-                            collision.overlaps_aabb(
-                                candidate.location,
-                                collision_actor_world_extents(&candidate),
-                            )
-                        } else {
-                            collision.overlaps_cylinder(
-                                candidate.location,
-                                candidate.radius,
-                                candidate.height,
-                            )
-                        };
-                        if !blocked {
+                        if !bsp_placement_blocked(collision, &candidate) {
                             found = Some(candidate_location);
                             break 'locations;
                         }
@@ -1818,5 +1845,24 @@ impl ScriptRuntime {
             cached.actor.shape_bounds = bounds;
             self.reindex_cached_collision_actor(actor);
         }
+    }
+}
+
+fn adjust_spawn_spot(collision: &BspCollision, spot: &mut Vec3, target: Vec3, distance: f32) {
+    if let Some(hit) = collision.line_trace(*spot, target) {
+        *spot += hit.normal * (1.0 - hit.fraction) * distance;
+    }
+}
+
+fn bsp_placement_blocked(collision: &BspCollision, candidate: &CollisionActor) -> bool {
+    if candidate.collide_type == COLLIDE_BOX
+        || candidate.collide_type == COLLIDE_SHAPE && candidate.shape_bounds.is_some()
+    {
+        collision.overlaps_aabb(
+            collision_actor_center(candidate),
+            collision_actor_world_extents(candidate),
+        )
+    } else {
+        collision.overlaps_cylinder(candidate.location, candidate.radius, candidate.height)
     }
 }

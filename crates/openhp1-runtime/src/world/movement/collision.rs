@@ -276,6 +276,7 @@ pub(super) fn actors_block(first: &CollisionActor, second: &CollisionActor) -> b
     }
 }
 
+#[cfg(test)]
 pub(super) fn placement_blocked(first: &CollisionActor, second: &CollisionActor) -> bool {
     actors_block(first, second) && collision_actors_overlap(first, second)
 }

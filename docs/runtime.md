@@ -309,8 +309,19 @@ stores it in `myHUD`; authored HUD types may be `HPHud` subclasses such as
 `QuidHud` or `BroomHud`, and a second initialization does not spawn another HUD.
 Class-valued native arguments are runtime object handles and take precedence
 over numerically overlapping serialized package references.
-Spawning a collision-enabled actor at an occupied blocking location fails
-without allocating an actor handle. Spawned pawns link themselves into
+`Actor.Spawn` runs a `FindSpot`-style BSP placement check before allocating an
+actor handle when `bCollideWorld` or `bCollideWhenPlacing` is set. It uses the
+class-default local collision extents, searches the adjacent axis and corner
+spots, and ignores existing actors. The shared placement query uses a rotated
+AABB for `CT_Box` and for `CT_Shape` once primitive bounds are registered;
+cylinders and shapes without bounds use the shared cylinder query. Pre-allocation
+Spawn has no scene-registered primitive bounds, so it currently takes the latter
+path for `CT_Shape`; this is not claimed as HP1 Spawn parity. One-second
+release replays attempted all 41 shipped maps (27 completed; 14 stopped in
+pre-existing paths) and observed 1,927 Spawn invocations across 53 classes,
+all `CT_None`, so the corpus has no exercised `CT_Shape` Spawn case. A found
+spot
+updates both `Location` and `OldLocation`. Spawned pawns link themselves into
 `Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping
 used during `PreBeginPlay`; native `RemovePawn` unlinks the same list during
 `Destroyed`.

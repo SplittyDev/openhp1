@@ -1134,6 +1134,429 @@ fn solid_box_collision() -> Arc<BspCollision> {
 }
 
 #[test]
+fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-spawn-placement-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let collision_box = |minimum: Vec3, maximum: Vec3| {
+        let planes = [
+            [0.0, 1.0, 0.0, maximum.y],
+            [1.0, 0.0, 0.0, maximum.x],
+            [-1.0, 0.0, 0.0, -minimum.x],
+            [0.0, -1.0, 0.0, -minimum.y],
+            [0.0, 0.0, 1.0, maximum.z],
+            [0.0, 0.0, -1.0, -minimum.z],
+        ];
+        let mut leaf_hulls = vec![0, 1, 2, 3, 4, 5, -1];
+        leaf_hulls.extend(
+            [
+                minimum.x, minimum.y, minimum.z, maximum.x, maximum.y, maximum.z,
+            ]
+            .map(f32::to_bits)
+            .map(|value| value as i32),
+        );
+        Arc::new(
+            BspCollision::from_model(&Model {
+                bounds: PrimitiveBounds {
+                    minimum,
+                    maximum,
+                    valid: true,
+                    sphere: [0.0; 4],
+                },
+                vectors: Vec::new(),
+                points: vec![
+                    Vec3::new(minimum.x, maximum.y, minimum.z),
+                    Vec3::new(maximum.x, maximum.y, minimum.z),
+                    Vec3::new(maximum.x, maximum.y, maximum.z),
+                    Vec3::new(minimum.x, maximum.y, maximum.z),
+                ],
+                nodes: planes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, plane)| BspNode {
+                        plane,
+                        zone_mask: 0,
+                        flags: 0,
+                        vertex_pool: 0,
+                        surface: -1,
+                        back: -1,
+                        front: -1,
+                        coplanar: -1,
+                        collision_bound: if index == 0 { 0 } else { -1 },
+                        render_bound: -1,
+                        zones: [0; 2],
+                        vertex_count: if index == 0 { 4 } else { 0 },
+                        leaves: [0; 2],
+                    })
+                    .collect(),
+                surfaces: Vec::new(),
+                vertices: (0..4).map(|point| BspVertex { point, side: -1 }).collect(),
+                shared_side_count: 0,
+                zones: Vec::new(),
+                polys: ObjectReference::None,
+                light_maps: Vec::new(),
+                light_bits: Vec::new(),
+                collision_bounds: Vec::new(),
+                leaf_hulls,
+                leaves: Vec::new(),
+                lights: Vec::new(),
+                root_outside: true,
+                linked: false,
+            })
+            .unwrap(),
+        )
+    };
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let source_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 5,
+    };
+    let spawned_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let spawned_class_id = object_id(&package, spawned_class.export_index);
+    runtime.scripts.insert(
+        spawned_class_id.clone(),
+        Arc::new(ScriptExport {
+            export_index: spawned_class.export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: spawned_class.export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    for event in [
+        "Tick",
+        "Spawned",
+        "PreBeginPlay",
+        "BeginPlay",
+        "PostBeginPlay",
+        "SetInitialState",
+    ] {
+        runtime.function_lookups.insert(
+            FunctionLookup::new(spawned_class_id.clone(), None, event, 0),
+            None,
+        );
+    }
+
+    let source_fields = ["Location", "Rotation", "Instigator", "Level", "XLevel"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| (name, runtime_actor_id(300 + index)))
+        .collect::<HashMap<_, _>>();
+    let spawned_fields = [
+        "Location",
+        "OldLocation",
+        "Rotation",
+        "DesiredRotation",
+        "Tag",
+        "Owner",
+        "Instigator",
+        "Level",
+        "XLevel",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "MainScale",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(400 + index)))
+    .collect::<HashMap<_, _>>();
+    let source_class_id = object_id(&package, source_class.export_index);
+    for (name, field) in &source_fields {
+        runtime.fields.insert(
+            (source_class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    for (name, field) in &spawned_fields {
+        runtime.fields.insert(
+            (spawned_class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+
+    let mut defaults = InstanceState::default();
+    for name in ["Instigator", "Level", "XLevel", "Owner", "Brush"] {
+        defaults.insert(spawned_fields[name].clone(), StoredValue::Object(None));
+    }
+    for name in ["Location", "OldLocation", "PrePivot"] {
+        defaults.insert(
+            spawned_fields[name].clone(),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+        );
+    }
+    for name in ["Rotation", "DesiredRotation"] {
+        defaults.insert(
+            spawned_fields[name].clone(),
+            StoredValue::Value(Value::Rotator([0; 3])),
+        );
+    }
+    defaults.insert(
+        spawned_fields["Tag"].clone(),
+        StoredValue::Name("QuidHud".to_owned()),
+    );
+    for name in [
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+    ] {
+        defaults.insert(
+            spawned_fields[name].clone(),
+            StoredValue::Value(Value::Bool(name != "bCollideWorld")),
+        );
+    }
+    for (name, value) in [
+        ("CollisionHeight", 5.0),
+        ("CollisionRadius", 5.0),
+        ("CollisionWidth", 7.0),
+    ] {
+        defaults.insert(
+            spawned_fields[name].clone(),
+            StoredValue::Value(Value::Float(value)),
+        );
+    }
+    defaults.insert(
+        spawned_fields["CollideType"].clone(),
+        StoredValue::Value(Value::Byte(2)),
+    );
+    runtime
+        .class_defaults
+        .insert(spawned_class_id.clone(), defaults);
+    let mut source_instance = InstanceState::default();
+    source_instance.insert(
+        source_fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    source_instance.insert(
+        source_fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    for name in ["Instigator", "Level", "XLevel"] {
+        source_instance.insert(source_fields[name].clone(), StoredValue::Object(None));
+    }
+    let spawned_class_handle = runtime.object_handle(spawned_class_id.clone()).unwrap();
+    let mut run_spawn = |runtime: &mut ScriptRuntime, location: [f32; 3]| {
+        let mut bytes = vec![0x04, 0x61, 0x16, 0x00];
+        bytes.extend(1_i32.to_le_bytes());
+        bytes.extend([0x2a, 0x0b, 0x23]);
+        for component in location {
+            bytes.extend(component.to_le_bytes());
+        }
+        bytes.push(0x22);
+        for component in [0_i32; 3] {
+            bytes.extend(component.to_le_bytes());
+        }
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(1, Value::Object(spawned_class_handle));
+        let mut actions = Vec::new();
+        let value = frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                runtime.native(
+                    99,
+                    &source_class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut source_instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap();
+        (value, actions)
+    };
+
+    runtime.collision = Some(collision_box(
+        Vec3::new(-100.0, -1.0, -100.0),
+        Vec3::new(100.0, 0.0, 100.0),
+    ));
+    let (Value::Object(first_handle), first_actions) = run_spawn(&mut runtime, [0.0, -0.95, 0.0])
+    else {
+        panic!("Spawn did not return an object handle");
+    };
+    assert_ne!(first_handle, 0);
+    let [
+        ActorAction::SpawnActor {
+            actor: first_actor,
+            location: first_location,
+            ..
+        },
+    ] = first_actions.as_slice()
+    else {
+        panic!("Spawn did not emit its host action");
+    };
+    assert_eq!(first_location[0], 0.0);
+    assert!(first_location[1] < -7.9);
+    assert_eq!(first_location[2], 0.0);
+    assert!(matches!(
+        runtime.instances[first_actor].get(&spawned_fields["OldLocation"]),
+        Some(StoredValue::Value(Value::Vector(location))) if location == first_location
+    ));
+
+    runtime.collision = Some(collision_box(Vec3::splat(100.0), Vec3::splat(101.0)));
+    let (Value::Object(second_handle), _) = run_spawn(&mut runtime, *first_location) else {
+        panic!("Spawn did not return an object handle");
+    };
+    assert_ne!(
+        second_handle, 0,
+        "another actor must not block Spawn placement"
+    );
+
+    let cylinder_corner = {
+        let minimum = Vec3::new(0.65, 0.65, -0.5);
+        let maximum = Vec3::new(1.25, 1.25, 0.5);
+        let planes = [
+            [1.0, 1.0, 0.0, 2.2],
+            [-1.0, -1.0, 0.0, -1.6],
+            [1.0, -1.0, 0.0, 0.3],
+            [-1.0, 1.0, 0.0, 0.3],
+            [0.0, 0.0, 1.0, 0.5],
+            [0.0, 0.0, -1.0, 0.5],
+        ];
+        let mut leaf_hulls = vec![0, 1, 2, 3, 4, 5, -1];
+        leaf_hulls.extend(
+            [
+                minimum.x, minimum.y, minimum.z, maximum.x, maximum.y, maximum.z,
+            ]
+            .map(f32::to_bits)
+            .map(|value| value as i32),
+        );
+        Arc::new(
+            BspCollision::from_model(&Model {
+                bounds: PrimitiveBounds {
+                    minimum,
+                    maximum,
+                    valid: true,
+                    sphere: [0.0; 4],
+                },
+                vectors: Vec::new(),
+                points: Vec::new(),
+                nodes: planes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, plane)| BspNode {
+                        plane,
+                        zone_mask: 0,
+                        flags: 0,
+                        vertex_pool: 0,
+                        surface: -1,
+                        back: -1,
+                        front: -1,
+                        coplanar: -1,
+                        collision_bound: if index == 0 { 0 } else { -1 },
+                        render_bound: -1,
+                        zones: [0; 2],
+                        vertex_count: 0,
+                        leaves: [0; 2],
+                    })
+                    .collect(),
+                surfaces: Vec::new(),
+                vertices: Vec::new(),
+                shared_side_count: 0,
+                zones: Vec::new(),
+                polys: ObjectReference::None,
+                light_maps: Vec::new(),
+                light_bits: Vec::new(),
+                collision_bounds: Vec::new(),
+                leaf_hulls,
+                leaves: Vec::new(),
+                lights: Vec::new(),
+                root_outside: true,
+                linked: false,
+            })
+            .unwrap(),
+        )
+    };
+    assert!(cylinder_corner.overlaps_aabb(Vec3::ZERO, Vec3::ONE));
+    assert!(!cylinder_corner.overlaps_cylinder(Vec3::ZERO, 1.0, 1.0));
+    let defaults = runtime.class_defaults.get_mut(&spawned_class_id).unwrap();
+    defaults.insert(
+        spawned_fields["CollideType"].clone(),
+        StoredValue::Value(Value::Byte(0)),
+    );
+    for name in ["CollisionHeight", "CollisionRadius", "CollisionWidth"] {
+        defaults.insert(
+            spawned_fields[name].clone(),
+            StoredValue::Value(Value::Float(1.0)),
+        );
+    }
+    runtime.collision = Some(cylinder_corner);
+    let (Value::Object(cylinder_handle), cylinder_actions) = run_spawn(&mut runtime, [0.0; 3])
+    else {
+        panic!("cylinder Spawn did not return an object handle");
+    };
+    assert_ne!(cylinder_handle, 0);
+    assert!(matches!(
+        cylinder_actions.as_slice(),
+        [ActorAction::SpawnActor { location, .. }] if *location == [0.0; 3]
+    ));
+
+    runtime.collision = Some(collision_box(Vec3::splat(-100.0), Vec3::splat(100.0)));
+    assert_eq!(run_spawn(&mut runtime, [0.0; 3]).0, Value::Object(0));
+    assert_eq!(runtime.next_actor, 3);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-looping-timer-{}-{}",

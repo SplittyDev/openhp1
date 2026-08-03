@@ -934,9 +934,22 @@ impl ScriptRuntime {
                 self.set_spawn_property(&class, &mut spawned_instance, property, value)?;
             }
         }
-        if !self.spawn_location_is_clear(&class, &spawned_instance, actor, instance)? {
+        let Some(location) = self.find_spawn_location(&class, &spawned_instance)? else {
             return Ok(Value::Object(0));
-        }
+        };
+        let location = location.to_array();
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "Location",
+            StoredValue::Value(Value::Vector(location)),
+        )?;
+        self.set_spawn_property(
+            &class,
+            &mut spawned_instance,
+            "OldLocation",
+            StoredValue::Value(Value::Vector(location)),
+        )?;
 
         let spawned = self.next_actor;
         self.next_actor = self
