@@ -19,7 +19,7 @@ use super::{
     native::{
         animation_parameters, bone_number, bone_position, collision_updates, log_arguments,
         next_navigation_step, noise_loudness, random_float, random_int, random_unit_vector,
-        scalar_native, sound_arguments, target_score, trace_texture,
+        scalar_native, sound_arguments, target_score,
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
@@ -3386,17 +3386,7 @@ fn make_noise_bytecode_records_the_instigator_and_dispatches_hear_noise() {
 }
 
 #[test]
-fn landing_surface_and_sound_natives_validate_calls() {
-    assert_eq!(
-        trace_texture(&[
-            Value::Vector([0.0; 3]),
-            Value::Vector([0.0, 0.0, -16.0]),
-            Value::Int(0),
-            Value::Bool(false),
-        ]),
-        Ok(Value::Object(0))
-    );
-    assert!(trace_texture(&[Value::Int(0)]).is_err());
+fn sound_natives_validate_calls() {
     assert!(
         sound_arguments(
             "PlayOwnedSound",

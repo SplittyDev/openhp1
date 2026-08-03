@@ -34,6 +34,23 @@ pub struct TextureRenderFlags {
     pub two_sided: bool,
 }
 
+pub fn texture_poly_flags(package: &Package, export_index: usize) -> Result<u32> {
+    let mut reader = package.export_reader(export_index)?;
+    let mut flags = 0;
+    while let Some(property) = reader.next_property()? {
+        if property.kind == PropertyKind::Bool
+            && let Some(flag) = texture_poly_flag(reader.summary().name(property.name))
+        {
+            if property.bool_value.unwrap_or(false) {
+                flags |= flag;
+            } else {
+                flags &= !flag;
+            }
+        }
+    }
+    Ok(flags)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WetTexture {
     pub source_texture: ObjectReference,
@@ -630,6 +647,37 @@ impl TextureRenderFlags {
             self.two_sided = value;
         }
     }
+}
+
+fn texture_poly_flag(name: &str) -> Option<u32> {
+    [
+        ("bInvisible", 0x0000_0001),
+        ("bMasked", 0x0000_0002),
+        ("bTransparent", 0x0000_0004),
+        ("bNotSolid", 0x0000_0008),
+        ("bEnvironment", 0x0000_0010),
+        ("bSemisolid", 0x0000_0020),
+        ("bModulate", 0x0000_0040),
+        ("bFakeBackdrop", 0x0000_0080),
+        ("bTwoSided", 0x0000_0100),
+        ("bAutoUPan", 0x0000_0200),
+        ("bAutoVPan", 0x0000_0400),
+        ("bNoSmooth", 0x0000_0800),
+        ("bBigWavy", 0x0000_1000),
+        ("bHighLedge", 0x0000_1000),
+        ("bSmallWavy", 0x0000_2000),
+        ("bLowShadowDetail", 0x0000_8000),
+        ("bNoMerge", 0x0001_0000),
+        ("bCloudWavy", 0x0002_0000),
+        ("bDirtyShadows", 0x0004_0000),
+        ("bSpecialLit", 0x0010_0000),
+        ("bGouraud", 0x0020_0000),
+        ("bHighShadowDetail", 0x0080_0000),
+        ("bPortal", 0x0400_0000),
+        ("bMirrored", 0x0800_0000),
+    ]
+    .into_iter()
+    .find_map(|(flag_name, flag)| flag_name.eq_ignore_ascii_case(name).then_some(flag))
 }
 
 #[cfg(test)]

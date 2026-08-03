@@ -2137,6 +2137,7 @@ dependencies = [
  "openhp1-package",
  "openhp1-physics",
  "openhp1-script",
+ "openhp1-texture",
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
 ]

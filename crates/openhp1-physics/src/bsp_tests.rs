@@ -8,7 +8,7 @@ use super::*;
 fn decodes_and_sweeps_serialized_leaf_hull() {
     let mut model = empty_model();
     model.surfaces.push(BspSurface {
-        texture: ObjectReference::None,
+        texture: ObjectReference::Export(3),
         poly_flags: PolyFlags::HIGH_LEDGE,
         base_point: 0,
         normal: 0,
@@ -76,6 +76,13 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
     );
     assert_eq!(hit.normal, Vec3::X);
     assert_eq!(hit.node, 0);
+    assert_eq!(
+        collision.surface_hit(hit.node),
+        Some(SurfaceHit {
+            texture: ObjectReference::Export(3),
+            poly_flags: PolyFlags::HIGH_LEDGE,
+        })
+    );
     let opposite = collision
         .sweep_aabb(Vec3::new(-20.0, 0.0, 0.0), Vec3::ZERO, Vec3::ONE)
         .unwrap();

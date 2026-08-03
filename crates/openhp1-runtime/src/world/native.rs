@@ -18,7 +18,7 @@ pub(super) use scalar::{
 pub(super) use sound::sound_arguments;
 pub(super) use support::{
     animation_parameters, animation_root_motion, bone_position, collision_updates, log_arguments,
-    next_navigation_step, noise_loudness, runtime_name, trace_texture,
+    next_navigation_step, noise_loudness, runtime_name, trace_texture_arguments,
 };
 
 use gesture::{gesture_native, gesture_points};
@@ -494,9 +494,6 @@ impl ScriptRuntime {
         if index == STOP_SOUND {
             self.stop_sound(actor, arguments, actions)?;
             return Ok(Value::None);
-        }
-        if index == TRACE_TEXTURE {
-            return trace_texture(arguments);
         }
         if index == MAKE_NOISE {
             self.make_noise(

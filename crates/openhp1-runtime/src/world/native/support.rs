@@ -89,16 +89,18 @@ pub(in crate::world) fn noise_loudness(arguments: &[Value]) -> std::result::Resu
     Ok(*loudness)
 }
 
-pub(in crate::world) fn trace_texture(arguments: &[Value]) -> std::result::Result<Value, String> {
+pub(in crate::world) fn trace_texture_arguments(
+    arguments: &[Value],
+) -> std::result::Result<([f32; 3], [f32; 3], bool), String> {
     let [
-        Value::Vector(start),
         Value::Vector(end),
+        Value::Vector(start),
         Value::Int(_),
         rest @ ..,
     ] = arguments
     else {
         return Err(format!(
-            "TraceTexture expects start, end, flags, and an optional decal flag, found {}",
+            "TraceTexture expects end, start, flags, and an optional decal flag, found {}",
             arguments
                 .iter()
                 .map(Value::kind)
@@ -106,17 +108,15 @@ pub(in crate::world) fn trace_texture(arguments: &[Value]) -> std::result::Resul
                 .join(", ")
         ));
     };
-    if rest.len() > 1
-        || rest
-            .first()
-            .is_some_and(|value| !matches!(value, Value::Bool(_) | Value::None))
-        || !start.iter().chain(end).all(|value| value.is_finite())
-    {
-        return Err("TraceTexture arguments are invalid".to_owned());
+    let trace_decals = match rest {
+        [] | [Value::None] => false,
+        [Value::Bool(trace_decals)] => *trace_decals,
+        _ => return Err("TraceTexture arguments are invalid".to_owned()),
+    };
+    if !start.iter().chain(end).all(|value| value.is_finite()) {
+        return Err("TraceTexture coordinates are not finite".to_owned());
     }
-    // ponytail: BSP collision does not retain surface texture identities yet;
-    // return no texture until material-aware traces have a gameplay consumer.
-    Ok(Value::Object(0))
+    Ok((*start, *end, trace_decals))
 }
 
 pub(in crate::world) fn animation_parameters(

@@ -12,5 +12,6 @@ openhp1-map = { path = "../openhp1-map" }
 openhp1-package = { path = "../openhp1-package" }
 openhp1-physics = { path = "../openhp1-physics" }
 openhp1-script = { path = "../openhp1-script" }
+openhp1-texture = { path = "../openhp1-texture" }
 rustc-hash.workspace = true
 thiserror.workspace = true

@@ -20,6 +20,12 @@ pub struct CollisionHit {
     pub node: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceHit {
+    pub texture: ObjectReference,
+    pub poly_flags: PolyFlags,
+}
+
 #[derive(Clone, Debug)]
 pub struct BspCollision {
     hulls: Vec<ConvexHull>,
@@ -28,7 +34,7 @@ pub struct BspCollision {
     points: Vec<Vec3>,
     vertices: Vec<BspVertex>,
     zone_actors: Vec<Option<usize>>,
-    node_poly_flags: Vec<PolyFlags>,
+    node_surfaces: Vec<Option<SurfaceHit>>,
 }
 
 #[cfg(test)]
@@ -218,15 +224,17 @@ impl BspCollision {
             points: model.points.clone(),
             vertices: model.vertices.clone(),
             zone_actors,
-            node_poly_flags: model
+            node_surfaces: model
                 .nodes
                 .iter()
                 .map(|node| {
                     usize::try_from(node.surface)
                         .ok()
                         .and_then(|surface| model.surfaces.get(surface))
-                        .map(|surface| surface.poly_flags)
-                        .unwrap_or_default()
+                        .map(|surface| SurfaceHit {
+                            texture: surface.texture,
+                            poly_flags: surface.poly_flags,
+                        })
                 })
                 .collect(),
         })
@@ -533,7 +541,9 @@ impl BspCollision {
             let Some(polygon) = self.zone_nodes.get(index) else {
                 break;
             };
-            if !self.node_poly_flags[index].contains(PolyFlags::NOT_SOLID)
+            if !self
+                .surface_hit(index)
+                .is_some_and(|surface| surface.poly_flags.contains(PolyFlags::NOT_SOLID))
                 && let Some(distance) =
                     self.node_ray_intersection(polygon, origin, direction, maximum)
                 && nearest.is_none_or(|(current, _, _)| distance < current)
@@ -608,9 +618,12 @@ impl BspCollision {
     }
 
     pub fn node_has_poly_flag(&self, node: usize, flag: PolyFlags) -> bool {
-        self.node_poly_flags
-            .get(node)
-            .is_some_and(|flags| flags.contains(flag))
+        self.surface_hit(node)
+            .is_some_and(|surface| surface.poly_flags.contains(flag))
+    }
+
+    pub fn surface_hit(&self, node: usize) -> Option<SurfaceHit> {
+        self.node_surfaces.get(node).copied().flatten()
     }
 
     pub fn zone_at(&self, point: Vec3) -> Option<usize> {

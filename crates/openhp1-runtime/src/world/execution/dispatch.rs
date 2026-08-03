@@ -1,3 +1,8 @@
+use std::path::Path;
+
+use openhp1_texture::texture_poly_flags;
+
+use super::super::native::trace_texture_arguments;
 use super::*;
 
 impl ScriptRuntime {
@@ -143,6 +148,15 @@ impl ScriptRuntime {
             return self
                 .fast_trace_native(actor_class, arguments, instance)
                 .map(CallOutput::value)
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(index),
+                    message,
+                })
+                .map_err(DispatchError::from);
+        }
+        if index == TRACE_TEXTURE {
+            return self
+                .trace_texture_native(arguments)
                 .map_err(|message| crate::Error::Call {
                     call: FunctionCall::Native(index),
                     message,
@@ -365,6 +379,51 @@ impl ScriptRuntime {
             arguments,
             output_arguments,
         ))
+    }
+
+    fn trace_texture_native(
+        &mut self,
+        arguments: &[Value],
+    ) -> std::result::Result<CallOutput, String> {
+        let (start, end, _trace_decals) = trace_texture_arguments(arguments)?;
+        let surface = self.collision.as_ref().and_then(|collision| {
+            collision
+                .line_trace(Vec3::from_array(start), Vec3::from_array(end))
+                .and_then(|hit| collision.surface_hit(hit.node))
+        });
+        let mut flags = 0;
+        let value = if let Some(surface) = surface {
+            flags = surface.poly_flags.bits();
+            let level_package = self
+                .level_package
+                .clone()
+                .ok_or_else(|| "TraceTexture hit BSP without a level package".to_owned())?;
+            let package = self
+                .packages
+                .load_path(Path::new(level_package.as_ref()))
+                .map_err(|error| error.to_string())?;
+            match self
+                .packages
+                .resolve(&package, surface.texture)
+                .map_err(|error| error.to_string())?
+            {
+                None => Value::Object(0),
+                Some(texture) => {
+                    flags |= texture_poly_flags(&texture.package, texture.export_index)
+                        .map_err(|error| error.to_string())?;
+                    Value::Object(
+                        self.object_handle(object_id(&texture.package, texture.export_index))
+                            .map_err(|error| error.to_string())?,
+                    )
+                }
+            }
+        } else {
+            Value::Object(0)
+        };
+        Ok(CallOutput {
+            value,
+            outputs: vec![(2, Value::Int(flags as i32))],
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1226,7 +1285,7 @@ mod iterator_tests {
 
     use super::*;
     use glam::Vec3;
-    use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PrimitiveBounds};
+    use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
     use openhp1_script::Bytecode;
 
     static NEXT_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -1260,7 +1319,17 @@ mod iterator_tests {
     }
 
     fn radius_actors_test_package() -> Vec<u8> {
-        let names = ["Core", "Class", "Base", "PlayerPawn", "PlayerPawn"];
+        let names = [
+            "Core",
+            "Class",
+            "Base",
+            "PlayerPawn",
+            "PlayerPawn",
+            "Texture",
+            "bMasked",
+            "bNotSolid",
+            "None",
+        ];
         let mut name_table = Vec::new();
         for name in names {
             name_table.extend(name.as_bytes());
@@ -1272,7 +1341,9 @@ mod iterator_tests {
         let name_offset = HEADER_SIZE;
         let import_offset = name_offset + name_table.len();
         let import_table = [0, 1, 0, 0, 0, 0, 1];
-        let export_offset = import_offset + import_table.len();
+        let property_data = [6, 0x83, 7, 0x83, 8];
+        let property_offset = import_offset + import_table.len();
+        let export_offset = property_offset + property_data.len();
         let mut export_table = Vec::new();
         for (object_name, class) in [(2_u8, [0x81, 0]), (3, [0, 0]), (4, [0, 0])] {
             export_table.extend(class); // Base uses the Class import; its children use None.
@@ -1281,6 +1352,15 @@ mod iterator_tests {
             export_table.extend(0_u32.to_le_bytes());
             export_table.push(0); // No serial data is needed for this cache-backed test.
         }
+        export_table.extend([0, 0]); // The synthetic texture has no class or superclass.
+        export_table.extend(0_i32.to_le_bytes());
+        export_table.push(5);
+        export_table.extend(0_u32.to_le_bytes());
+        export_table.push(property_data.len() as u8);
+        export_table.extend([
+            0x40 | (property_offset as u8 & 0x3f),
+            (property_offset >> 6) as u8,
+        ]);
 
         let mut bytes = Vec::new();
         bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -1290,7 +1370,7 @@ mod iterator_tests {
         for value in [
             names.len(),
             name_offset,
-            3,
+            4,
             export_offset,
             1,
             import_offset,
@@ -1301,8 +1381,67 @@ mod iterator_tests {
         }
         bytes.extend(name_table);
         bytes.extend(import_table);
+        bytes.extend(property_data);
         bytes.extend(export_table);
         bytes
+    }
+
+    fn plane_model(texture: ObjectReference, poly_flags: PolyFlags) -> Model {
+        Model {
+            bounds: PrimitiveBounds {
+                minimum: Vec3::ZERO,
+                maximum: Vec3::ZERO,
+                valid: false,
+                sphere: [0.0; 4],
+            },
+            vectors: Vec::new(),
+            points: vec![
+                Vec3::new(0.0, -10.0, -10.0),
+                Vec3::new(0.0, 10.0, -10.0),
+                Vec3::new(0.0, 10.0, 10.0),
+                Vec3::new(0.0, -10.0, 10.0),
+            ],
+            nodes: vec![BspNode {
+                plane: [1.0, 0.0, 0.0, 0.0],
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 0,
+                surface: 0,
+                back: -1,
+                front: -1,
+                coplanar: -1,
+                collision_bound: -1,
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 4,
+                leaves: [0; 2],
+            }],
+            surfaces: vec![BspSurface {
+                texture,
+                poly_flags,
+                base_point: 0,
+                normal: 0,
+                texture_u: 0,
+                texture_v: 0,
+                light_map: -1,
+                brush_poly: -1,
+                pan_u: 0,
+                pan_v: 0,
+                brush_actor: ObjectReference::None,
+            }],
+            vertices: (0..4).map(|point| BspVertex { point, side: -1 }).collect(),
+            shared_side_count: 0,
+            zones: Vec::new(),
+            polys: ObjectReference::None,
+            light_maps: Vec::new(),
+            light_bits: Vec::new(),
+            collision_bounds: Vec::new(),
+            leaf_hulls: Vec::new(),
+            leaves: Vec::new(),
+            lights: Vec::new(),
+            root_outside: true,
+            linked: false,
+        }
     }
 
     #[test]
@@ -1336,61 +1475,7 @@ mod iterator_tests {
         )]
         .into_iter()
         .collect::<InstanceState>();
-        let model = Model {
-            bounds: PrimitiveBounds {
-                minimum: Vec3::ZERO,
-                maximum: Vec3::ZERO,
-                valid: false,
-                sphere: [0.0; 4],
-            },
-            vectors: Vec::new(),
-            points: vec![
-                Vec3::new(0.0, -10.0, -10.0),
-                Vec3::new(0.0, 10.0, -10.0),
-                Vec3::new(0.0, 10.0, 10.0),
-                Vec3::new(0.0, -10.0, 10.0),
-            ],
-            nodes: vec![BspNode {
-                plane: [1.0, 0.0, 0.0, 0.0],
-                zone_mask: 0,
-                flags: 0,
-                vertex_pool: 0,
-                surface: 0,
-                back: -1,
-                front: -1,
-                coplanar: -1,
-                collision_bound: -1,
-                render_bound: -1,
-                zones: [0; 2],
-                vertex_count: 4,
-                leaves: [0; 2],
-            }],
-            surfaces: vec![BspSurface {
-                texture: ObjectReference::None,
-                poly_flags: Default::default(),
-                base_point: 0,
-                normal: 0,
-                texture_u: 0,
-                texture_v: 0,
-                light_map: -1,
-                brush_poly: -1,
-                pan_u: 0,
-                pan_v: 0,
-                brush_actor: ObjectReference::None,
-            }],
-            vertices: (0..4).map(|point| BspVertex { point, side: -1 }).collect(),
-            shared_side_count: 0,
-            zones: Vec::new(),
-            polys: ObjectReference::None,
-            light_maps: Vec::new(),
-            light_bits: Vec::new(),
-            collision_bounds: Vec::new(),
-            leaf_hulls: Vec::new(),
-            leaves: Vec::new(),
-            lights: Vec::new(),
-            root_outside: true,
-            linked: false,
-        };
+        let model = plane_model(ObjectReference::None, PolyFlags::default());
         runtime.collision = Some(Arc::new(BspCollision::from_model(&model).unwrap()));
 
         assert_eq!(
@@ -1427,6 +1512,77 @@ mod iterator_tests {
                 .unwrap()
                 .value,
             Value::Bool(false),
+        );
+    }
+
+    #[test]
+    fn trace_texture_dispatches_through_bytecode_and_writes_surface_and_texture_flags() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        let model = plane_model(ObjectReference::Export(3), PolyFlags::HIGH_LEDGE);
+        runtime.collision = Some(Arc::new(BspCollision::from_model(&model).unwrap()));
+        runtime.level_package = Some(Arc::clone(&source.summary().source));
+        let texture = runtime.object_handle(object_id(&source, 3)).unwrap();
+
+        let mut bytes = vec![0x04, 0x61, 0x1d, 0x23];
+        for value in [-10.0_f32, 0.0, 0.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.push(0x23);
+        for value in [10.0_f32, 0.0, 0.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.push(0x00);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.extend([0x27, 0x16]);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Int(-1));
+        let mut instance = InstanceState::default();
+        let mut actions = Vec::new();
+
+        assert_eq!(
+            frame
+                .execute_hosted(|request| match request {
+                    FrameRequest::Call {
+                        function,
+                        arguments,
+                        ..
+                    } => runtime
+                        .dispatch_call(
+                            1,
+                            &class,
+                            &source,
+                            function,
+                            &arguments,
+                            &mut instance,
+                            &mut actions,
+                            0,
+                        )
+                        .map(CallOutput::into_response)
+                        .map_err(|error| error.to_string()),
+                    _ => panic!("unexpected frame request"),
+                })
+                .unwrap(),
+            Value::Object(texture)
+        );
+        assert_eq!(
+            frame.local(7),
+            Some(&Value::Int(
+                (PolyFlags::HIGH_LEDGE.bits()
+                    | PolyFlags::MASKED.bits()
+                    | PolyFlags::NOT_SOLID.bits()) as i32
+            ))
         );
     }
 

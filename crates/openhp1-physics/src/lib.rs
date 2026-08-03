@@ -4,4 +4,4 @@ mod actor;
 mod bsp;
 
 pub use actor::{ActorCollisionHit, boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder};
-pub use bsp::{BspCollision, CollisionHit, Error, Result};
+pub use bsp::{BspCollision, CollisionHit, Error, Result, SurfaceHit};

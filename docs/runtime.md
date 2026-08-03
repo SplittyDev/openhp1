@@ -375,8 +375,11 @@ walking collision path. It selects `5400` for a rising forward floor and
 the current pitch; smaller values use UE1's capped interpolation, including
 its faster final 1000 rotator units. Raw pitches above `0x8000` are stored back
 as `(pitch & 0xffff) - 0x10000` before sampling.
-HP1 `TraceTexture` validates its authored start/end/flags form but returns no
-texture until BSP collision retains surface material identities. The runtime
+HP1 `TraceTexture` performs a zero-extent world BSP trace, never an actor
+trace. It returns the hit surface's base texture and writes its `Flags` out
+parameter as the surface and texture polyflags combined; a miss returns `None`
+and writes zero. `bTraceDecals` falls back to that base texture when no decal is
+attached. The runtime
 tracks non-transient actor sound channels until their WAV or MP2 duration
 expires. `ModifySound` returns true only for a live actor/slot channel,
 optionally filters by sound (`None` is a wildcard), and changes volume, radius,
