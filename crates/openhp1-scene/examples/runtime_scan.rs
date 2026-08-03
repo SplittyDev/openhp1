@@ -27,6 +27,10 @@ struct ScanStats {
     logs: usize,
 }
 
+fn spawned_configured_hud(actions: &[ActorAction]) -> bool {
+    matches!(actions.first(), Some(ActorAction::SpawnActor { .. }))
+}
+
 fn main() -> Result<()> {
     let seconds = env::args()
         .nth(2)
@@ -152,12 +156,8 @@ fn main() -> Result<()> {
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             let actions = runtime.initialize_player_hud()?;
             anyhow::ensure!(
-                actions.iter().any(|action| matches!(
-                    action,
-                    ActorAction::SpawnActor { class_name, .. }
-                        if class_name.eq_ignore_ascii_case("HPHud")
-                )),
-                "{}: local player setup did not spawn HPHud",
+                spawned_configured_hud(&actions),
+                "{}: local player setup did not spawn its configured HUDType",
                 scene.path.display()
             );
             apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
@@ -272,6 +272,24 @@ fn main() -> Result<()> {
         println!("{count:5} deferred: {message} [{sample}]");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_configured_hud_subclass() {
+        assert!(spawned_configured_hud(&[ActorAction::SpawnActor {
+            actor: 1,
+            name: "QuidHud1".to_owned(),
+            class_package: "Test.u".into(),
+            class_export: 0,
+            class_name: "QuidHud".to_owned(),
+            location: [0.0; 3],
+            rotation: [0; 3],
+        }]));
+    }
 }
 
 fn apply_actions(

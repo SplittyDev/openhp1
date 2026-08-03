@@ -37,6 +37,8 @@ fn synthetic_runtime_package() -> Vec<u8> {
         + b"Pawn\0".len()
         + size_of::<u32>()
         + b"StopWaiting\0".len()
+        + size_of::<u32>()
+        + b"QuidHud\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -44,9 +46,9 @@ fn synthetic_runtime_package() -> Vec<u8> {
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        5,
+        6,
         name_offset as i32,
-        5,
+        6,
         export_offset as i32,
         0,
         export_offset as i32,
@@ -61,11 +63,12 @@ fn synthetic_runtime_package() -> Vec<u8> {
         b"GetPlayerNetworkAddress\0".as_slice(),
         b"Pawn\0".as_slice(),
         b"StopWaiting\0".as_slice(),
+        b"QuidHud\0".as_slice(),
     ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
     }
-    for (outer, name) in [(0_i32, 0_u8), (1, 1), (1, 2), (0, 3), (4, 4)] {
+    for (outer, name) in [(0_i32, 0_u8), (1, 1), (1, 2), (0, 3), (4, 4), (0, 5)] {
         bytes.extend([0, 0]);
         bytes.extend(outer.to_le_bytes());
         bytes.push(name);
@@ -180,6 +183,183 @@ fn dispatched_finite_function_counts_statements_not_nested_expression_tokens() {
             .unwrap()
             .is_empty()
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-player-hud-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let player_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let hud_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 5,
+    };
+    let class_script = |export_index| {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        })
+    };
+    let player_class_id = object_id(&package, player_class.export_index);
+    let hud_class_id = object_id(&package, hud_class.export_index);
+    runtime.scripts.insert(
+        player_class_id.clone(),
+        class_script(player_class.export_index),
+    );
+    runtime
+        .scripts
+        .insert(hud_class_id.clone(), class_script(hud_class.export_index));
+    for event in [
+        "Tick",
+        "Spawned",
+        "PreBeginPlay",
+        "BeginPlay",
+        "PostBeginPlay",
+        "SetInitialState",
+    ] {
+        runtime.function_lookups.insert(
+            FunctionLookup::new(hud_class_id.clone(), None, event, 0),
+            None,
+        );
+    }
+
+    let player_fields = [
+        "myHUD",
+        "HUDType",
+        "Location",
+        "Rotation",
+        "Instigator",
+        "Level",
+        "XLevel",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    let hud_fields = [
+        "Location",
+        "OldLocation",
+        "Rotation",
+        "DesiredRotation",
+        "Tag",
+        "Owner",
+        "Instigator",
+        "Level",
+        "XLevel",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(200 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &player_fields {
+        runtime.fields.insert(
+            (player_class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    for (name, field) in &hud_fields {
+        runtime.fields.insert(
+            (hud_class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+
+    let player = 7;
+    let player_object = runtime_actor_id(player);
+    runtime.actor_classes.insert(player, player_class_id);
+    runtime.object_actors.insert(player_object.clone(), player);
+    runtime.actor_objects.insert(player, player_object);
+    runtime.player_actor = Some(player);
+    runtime.next_actor = player + 1;
+    runtime.object_handle(hud_class_id.clone()).unwrap();
+
+    let mut player_instance = InstanceState::default();
+    player_instance.insert(player_fields["myHUD"].clone(), StoredValue::Object(None));
+    player_instance.insert(
+        player_fields["HUDType"].clone(),
+        StoredValue::Object(Some(hud_class_id.clone())),
+    );
+    player_instance.insert(
+        player_fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    player_instance.insert(
+        player_fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    for name in ["Instigator", "Level", "XLevel"] {
+        player_instance.insert(player_fields[name].clone(), StoredValue::Object(None));
+    }
+    runtime.instances.insert(player, player_instance);
+
+    let mut hud_defaults = InstanceState::default();
+    hud_defaults.insert(
+        hud_fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    hud_defaults.insert(
+        hud_fields["bCollideWhenPlacing"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime
+        .class_defaults
+        .insert(hud_class_id.clone(), hud_defaults);
+
+    assert!(matches!(
+        runtime.initialize_player_hud().unwrap().as_slice(),
+        [ActorAction::SpawnActor { class_name, .. }] if class_name == "QuidHud"
+    ));
+    assert!(matches!(
+        runtime.instances[&player].get(&player_fields["myHUD"]),
+        Some(StoredValue::Object(Some(object))) if *object == runtime_actor_id(8)
+    ));
+    assert!(runtime.initialize_player_hud().unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 

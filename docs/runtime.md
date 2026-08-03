@@ -254,6 +254,9 @@ Runtime-spawned actors use the same class-default mesh, material, lighting, and
 animation assembly as actors serialized in the map. Adding their geometry may
 grow the scene topology, so render consumers reload their GPU scene resources
 when an in-place vertex update no longer fits.
+Local player setup lazily spawns the concrete class in `PlayerPawn.HUDType` and
+stores it in `myHUD`; authored HUD types may be `HPHud` subclasses such as
+`QuidHud` or `BroomHud`, and a second initialization does not spawn another HUD.
 Class-valued native arguments are runtime object handles and take precedence
 over numerically overlapping serialized package references.
 Spawning a collision-enabled actor at an occupied blocking location fails
