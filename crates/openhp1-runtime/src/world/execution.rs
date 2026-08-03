@@ -414,7 +414,14 @@ impl ScriptRuntime {
                             && self.packages.load(skin_package).is_ok(),
                     ));
                 }
-                if let Some(value) = named_native(actor, class, function_name, arguments, actions) {
+                if let Some(value) = named_native(
+                    &mut self.state_frames,
+                    actor,
+                    class,
+                    function_name,
+                    arguments,
+                    actions,
+                ) {
                     return Ok(value);
                 }
                 return Err(DispatchError::UnimplementedNamedNative {
@@ -543,6 +550,7 @@ fn is_unsupported_scene_property(name: &str) -> bool {
 }
 
 pub(super) fn named_native(
+    state_frames: &mut HashMap<usize, StateFrame>,
     actor: usize,
     class: &str,
     function: &str,
@@ -580,6 +588,19 @@ pub(super) fn named_native(
         // ponytail: OpenHP1 is a local-only host; surface an address when a
         // network host is introduced.
         return Some(Value::String(String::new()));
+    }
+    if class.eq_ignore_ascii_case("Pawn")
+        && function.eq_ignore_ascii_case("StopWaiting")
+        && arguments.is_empty()
+    {
+        if let Some(StateFrame {
+            latent: LatentAction::Sleep(remaining),
+            ..
+        }) = state_frames.get_mut(&actor)
+        {
+            *remaining = 0.0;
+        }
+        return Some(Value::None);
     }
     if class.eq_ignore_ascii_case("Decal")
         && function.eq_ignore_ascii_case("DetachDecal")

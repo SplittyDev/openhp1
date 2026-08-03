@@ -62,6 +62,8 @@ Context latent calls suspend the caller's state while movement and animation
 completion are polled on the actor that received the call.
 `FinishInterpolation` resumes the retained frame when mover physics clears
 `bInterpolating`.
+`Pawn.StopWaiting` zeros only a receiving pawn's pending `Sleep` delay, so the
+normal state tick resumes it without discarding its retained frame or locals.
 
 Nested state execution restores the caller's active-state context. A
 Dispatcher may therefore trigger another actor and then enter `Sleep` without
