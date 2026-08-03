@@ -172,6 +172,7 @@ pub fn apply_runtime_actions_with(
                 }
             }
             action @ (ActorAction::PlaySound { .. }
+            | ActorAction::ModifySound { .. }
             | ActorAction::StopSound { .. }
             | ActorAction::ClientTravel { .. }
             | ActorAction::UpdateUrl { .. }) => external(action)?,

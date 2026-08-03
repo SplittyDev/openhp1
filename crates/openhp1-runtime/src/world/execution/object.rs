@@ -243,7 +243,7 @@ impl ScriptRuntime {
             .map(Value::Object)
     }
 
-    pub(super) fn sound_duration(&mut self, arguments: &[Value]) -> DispatchResult<f32> {
+    pub(in crate::world) fn sound_duration(&mut self, arguments: &[Value]) -> DispatchResult<f32> {
         let [sound] = arguments else {
             return Err(DispatchError::UnresolvedObject {
                 message: format!(

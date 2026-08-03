@@ -16,6 +16,7 @@ impl ScriptRuntime {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
         self.physics_ticked.clear();
+        self.tick_sound_channels(delta_time);
         self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
         self.tick_animation_properties(delta_time, &mut actions);

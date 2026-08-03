@@ -359,9 +359,12 @@ the current pitch; smaller values use UE1's capped interpolation, including
 its faster final 1000 rotator units. Raw pitches above `0x8000` are stored back
 as `(pitch & 0xffff) - 0x10000` before sampling.
 HP1 `TraceTexture` validates its authored start/end/flags form but returns no
-texture until BSP collision retains surface material identities. `PlaySound`
-and `PlayOwnedSound` share the nonfatal not-audible diagnostic until playback
-is connected.
+texture until BSP collision retains surface material identities. The runtime
+tracks non-transient actor sound channels until their WAV or MP2 duration
+expires. `ModifySound` returns true only for a live actor/slot channel,
+optionally filters by sound (`None` is a wildcard), and changes volume, radius,
+or pitch for parameter values 0, 1, or 2. Slot zero uses an allocated transient
+channel and is not selectable by `ModifySound`.
 
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick

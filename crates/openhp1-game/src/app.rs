@@ -876,6 +876,14 @@ fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Re
             radius,
             pitch,
         )?,
+        ActorAction::ModifySound {
+            actor,
+            slot,
+            parameter,
+            value,
+        } => {
+            audio.modify_sound(actor, slot, parameter, value);
+        }
         ActorAction::StopSound { actor, clip, slot } => {
             audio.stop_sound(actor, clip.as_ref(), slot)
         }

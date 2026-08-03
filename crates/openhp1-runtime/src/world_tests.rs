@@ -8,7 +8,7 @@ use std::{
 
 use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata};
 
-use crate::{Frame, FunctionCall};
+use crate::{Frame, FrameRequest, FrameResponse, FunctionCall};
 
 use super::*;
 use super::{
@@ -1398,6 +1398,175 @@ fn vector_vector_multiply_dispatches_from_extended_bytecode_through_runtime_nati
             .unwrap(),
         Value::Vector([8.0, -15.0, -3.0])
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn modify_sound_dispatches_the_hp1_action() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-modify-sound-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    let run = |runtime: &mut ScriptRuntime,
+               sound: Option<i32>,
+               slot: u8,
+               parameter: u8,
+               instance: &mut InstanceState,
+               actions: &mut Vec<ActorAction>| {
+        let mut bytes = vec![0x04, 0x62, 0x37];
+        match sound {
+            Some(sound) => {
+                bytes.push(0x20);
+                bytes.extend(sound.to_le_bytes());
+            }
+            None => bytes.push(0x2a),
+        }
+        bytes.push(0x1e);
+        bytes.extend(0.75_f32.to_le_bytes());
+        bytes.extend([0x24, parameter, 0x24, slot, 0x16]);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        Frame::new(&bytecode)
+            .execute_hosted(|request| match request {
+                FrameRequest::ResolveObject { reference } => {
+                    assert_eq!(sound, Some(reference));
+                    Ok(FrameResponse::Value(Value::Object(reference)))
+                }
+                FrameRequest::Call {
+                    function: FunctionCall::Native(index),
+                    arguments,
+                    ..
+                } => runtime
+                    .native(0, &class, &package, index, &arguments, instance, actions, 0)
+                    .map(FrameResponse::Value),
+                _ => unreachable!(),
+            })
+            .unwrap()
+    };
+
+    assert_eq!(
+        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        Value::Bool(false)
+    );
+    assert!(actions.is_empty());
+
+    let sound = runtime_actor_id(90);
+    let sound_handle = runtime.object_handle(sound.clone()).unwrap();
+    let other_sound = runtime_actor_id(91);
+    let other_sound_handle = runtime.object_handle(other_sound.clone()).unwrap();
+    assert!(runtime.start_sound(0, 3, sound.clone(), 1.0, 1.0, false));
+
+    assert_eq!(
+        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        Value::Bool(true)
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::ModifySound {
+            actor: 0,
+            slot: 3,
+            parameter: 1,
+            value,
+        }] if (*value - 0.75).abs() < f32::EPSILON
+    ));
+    actions.clear();
+
+    assert_eq!(
+        run(
+            &mut runtime,
+            Some(sound_handle),
+            3,
+            2,
+            &mut instance,
+            &mut actions,
+        ),
+        Value::Bool(true)
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::ModifySound { .. }]
+    ));
+    assert!((runtime.sound_channels[&(0, 3)].pitch - 0.75).abs() < f32::EPSILON);
+    actions.clear();
+
+    assert_eq!(
+        run(
+            &mut runtime,
+            Some(other_sound_handle),
+            3,
+            1,
+            &mut instance,
+            &mut actions,
+        ),
+        Value::Bool(false)
+    );
+    assert!(actions.is_empty());
+    assert_eq!(
+        run(&mut runtime, None, 0, 1, &mut instance, &mut actions),
+        Value::Bool(false)
+    );
+    assert!(actions.is_empty());
+
+    assert_eq!(
+        runtime
+            .native(
+                0,
+                &class,
+                &package,
+                STOP_SOUND,
+                &[Value::None, Value::Byte(3)],
+                &mut instance,
+                &mut actions,
+                0,
+            )
+            .unwrap(),
+        Value::None
+    );
+    assert!(!runtime.sound_channels.contains_key(&(0, 3)));
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::StopSound { .. }]
+    ));
+    actions.clear();
+    assert_eq!(
+        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        Value::Bool(false)
+    );
+
+    assert!(runtime.start_sound(0, 3, sound.clone(), 0.5, 1.0, false));
+    runtime.tick_sound_channels(0.5);
+    assert_eq!(
+        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        Value::Bool(false)
+    );
+    assert!(actions.is_empty());
+
+    assert!(runtime.start_sound(0, 3, sound.clone(), 1.0, 1.0, false));
+    assert!(!runtime.start_sound(0, 3, other_sound.clone(), 1.0, 1.0, true));
+    assert_eq!(runtime.sound_channels[&(0, 3)].sound, sound);
+    assert!(runtime.start_sound(0, 3, other_sound, 1.0, 1.0, false));
+    assert!(!runtime.sound_channels.contains_key(&(0, 0)));
+    assert!(runtime.start_sound(0, 0, runtime_actor_id(92), 1.0, 1.0, false));
+    assert!(!runtime.sound_channels.contains_key(&(0, 0)));
     fs::remove_dir_all(root).unwrap();
 }
 

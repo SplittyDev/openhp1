@@ -63,6 +63,7 @@ impl ScriptRuntime {
             actor_visual_bounds: HashMap::default(),
             animation_commands: HashMap::default(),
             animating: HashSet::default(),
+            sound_channels: HashMap::default(),
             player_probe_touching: HashSet::default(),
             collision_fields: HashMap::default(),
             brush_collisions: HashMap::default(),

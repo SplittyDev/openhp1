@@ -51,6 +51,7 @@ const LOOP_ANIM: u16 = 0x104;
 const FINISH_ANIM: u16 = 0x105;
 const SET_COLLISION: u16 = 0x106;
 const PLAY_SOUND: u16 = 0x108;
+const MODIFY_SOUND: u16 = 0x237;
 const STOP_SOUND: u16 = 0x238;
 const CREATE_ANIM_CHANNEL: u16 = 0x109;
 const SET_OWNER: u16 = 0x110;
@@ -223,6 +224,7 @@ pub struct ScriptRuntime {
     actor_visual_bounds: HashMap<usize, (Vec3, Vec3)>,
     animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,
+    sound_channels: HashMap<(usize, u8), SoundChannel>,
     player_probe_touching: HashSet<usize>,
     collision_fields: HashMap<ObjectId, movement::CollisionFields>,
     brush_collisions: HashMap<ObjectId, Arc<BspCollision>>,
@@ -305,6 +307,13 @@ struct AnimationCommand {
     tween_time: f32,
     looping: bool,
     tween_only: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SoundChannel {
+    sound: ObjectId,
+    remaining: f32,
+    pitch: f32,
 }
 
 #[derive(Clone, Debug)]

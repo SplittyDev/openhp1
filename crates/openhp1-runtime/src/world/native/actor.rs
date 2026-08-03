@@ -354,6 +354,8 @@ impl ScriptRuntime {
         )?;
         self.timers.remove(&actor);
         self.animating.remove(&actor);
+        self.sound_channels
+            .retain(|(channel_actor, _), _| *channel_actor != actor);
         actions.push(ActorAction::DestroyActor { actor });
         Ok(true)
     }

@@ -24,14 +24,22 @@ impl ScriptRuntime {
         let Some(handle) = arguments.sound else {
             return Ok(());
         };
+        let slot = arguments.slot.unwrap_or(1);
         let object = self
             .object_for_handle(handle)
             .map_err(|error| error.to_string())?;
+        let sound = object.clone();
         let object = self
             .resolved_object(&object)
             .map_err(|error| error.to_string())?;
         let clip = AudioClip::decode(&object.package, object.export_index)
             .map_err(|error| error.to_string())?;
+        let duration = self
+            .sound_duration(&[Value::Object(handle)])
+            .map_err(|error| error.to_string())?;
+        if !duration.is_finite() || duration < 0.0 {
+            return Err(format!("{function} sound duration is invalid"));
+        }
         let volume = match arguments.volume {
             Some(volume) => volume,
             None => self.actor_float(actor_class, instance, "TransientSoundVolume")?,
@@ -40,17 +48,145 @@ impl ScriptRuntime {
             Some(radius) => radius,
             None => self.actor_float(actor_class, instance, "TransientSoundRadius")?,
         };
+        let pitch = arguments.pitch.unwrap_or(1.0);
+        if !self.start_sound(actor, slot, sound, duration, pitch, arguments.no_override) {
+            return Ok(());
+        }
         actions.push(ActorAction::PlaySound {
             actor,
             clip,
             location: self.actor_vector(actor_class, instance, "Location")?,
-            slot: arguments.slot.unwrap_or(1),
+            slot,
             volume,
             no_override: arguments.no_override,
             radius,
-            pitch: arguments.pitch.unwrap_or(1.0),
+            pitch,
         });
         Ok(())
+    }
+
+    pub(in crate::world) fn modify_sound(
+        &mut self,
+        actor: usize,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        let [
+            sound,
+            Value::Float(value),
+            Value::Byte(parameter),
+            Value::Byte(slot),
+        ] = arguments
+        else {
+            return Err("ModifySound expects sound, value, parameter, and slot".to_owned());
+        };
+        if !value.is_finite() {
+            return Err("ModifySound value must be finite".to_owned());
+        }
+        if *slot == 0 {
+            return Ok(false);
+        }
+        let sound = match sound {
+            Value::None | Value::Object(0) => None,
+            Value::Object(handle) => Some(
+                self.object_for_handle(*handle)
+                    .map_err(|error| error.to_string())?,
+            ),
+            value => return Err(format!("ModifySound sound is {}", value.kind())),
+        };
+        let Some(channel) = self.sound_channels.get_mut(&(actor, *slot)) else {
+            return Ok(false);
+        };
+        if sound.as_ref().is_some_and(|sound| channel.sound != *sound) {
+            return Ok(false);
+        }
+        if *parameter == 2 {
+            channel.pitch = *value;
+        }
+        actions.push(ActorAction::ModifySound {
+            actor,
+            slot: *slot,
+            parameter: *parameter,
+            value: *value,
+        });
+        Ok(true)
+    }
+
+    pub(in crate::world) fn stop_sound(
+        &mut self,
+        actor: usize,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        if arguments.len() > 2 {
+            return Err(format!(
+                "StopSound expects an optional sound and slot, found {} arguments",
+                arguments.len()
+            ));
+        }
+        let (sound, clip) = match arguments.first() {
+            None | Some(Value::None | Value::Object(0)) => (None, None),
+            Some(Value::Object(handle)) => {
+                let sound = self
+                    .object_for_handle(*handle)
+                    .map_err(|error| error.to_string())?;
+                let object = self
+                    .resolved_object(&sound)
+                    .map_err(|error| error.to_string())?;
+                let clip = AudioClip::decode(&object.package, object.export_index)
+                    .map_err(|error| error.to_string())?;
+                (Some(sound), Some(clip))
+            }
+            Some(value) => return Err(format!("StopSound sound is {}", value.kind())),
+        };
+        let slot = match arguments.get(1) {
+            None | Some(Value::None) => None,
+            Some(Value::Byte(slot)) => Some(*slot),
+            Some(value) => return Err(format!("StopSound slot is {}", value.kind())),
+        };
+        self.sound_channels
+            .retain(|(channel_actor, channel_slot), channel| {
+                *channel_actor != actor
+                    || sound.as_ref().is_some_and(|sound| channel.sound != *sound)
+                    || slot.is_some_and(|slot| *channel_slot != slot)
+            });
+        actions.push(ActorAction::StopSound { actor, clip, slot });
+        Ok(())
+    }
+
+    pub(in crate::world) fn start_sound(
+        &mut self,
+        actor: usize,
+        slot: u8,
+        sound: ObjectId,
+        duration: f32,
+        pitch: f32,
+        no_override: bool,
+    ) -> bool {
+        if slot == 0 {
+            return true;
+        }
+        if no_override && self.sound_channels.contains_key(&(actor, slot)) {
+            return false;
+        }
+        self.sound_channels.insert(
+            (actor, slot),
+            SoundChannel {
+                sound,
+                remaining: duration,
+                pitch,
+            },
+        );
+        true
+    }
+
+    pub(in crate::world) fn tick_sound_channels(&mut self, delta_time: f32) {
+        self.sound_channels.retain(|_, channel| {
+            if channel.pitch > 0.0 {
+                channel.remaining -= delta_time * channel.pitch;
+            }
+            channel.remaining > 0.0
+        });
     }
 }
 

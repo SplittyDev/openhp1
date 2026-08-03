@@ -229,6 +229,12 @@ pub enum ActorAction {
         radius: f32,
         pitch: f32,
     },
+    ModifySound {
+        actor: usize,
+        slot: u8,
+        parameter: u8,
+        value: f32,
+    },
     StopSound {
         actor: usize,
         clip: Option<AudioClip>,
@@ -341,6 +347,7 @@ impl ActorAction {
             | Self::LoopAnimation { actor, .. }
             | Self::AwaitAnimation { actor }
             | Self::PlaySound { actor, .. }
+            | Self::ModifySound { actor, .. }
             | Self::StopSound { actor, .. }
             | Self::ClientTravel { actor, .. }
             | Self::UpdateUrl { actor, .. }

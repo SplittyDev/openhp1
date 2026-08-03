@@ -123,6 +123,32 @@ impl AudioPlayer {
             .retain(|sound| sound.sound.state() != PlaybackState::Stopped);
     }
 
+    pub fn modify_sound(&mut self, actor: usize, slot: u8, parameter: u8, value: f32) -> bool {
+        if slot == 0 {
+            return false;
+        }
+        self.sounds
+            .retain(|sound| sound.sound.state() != PlaybackState::Stopped);
+        let Some(sound) = self
+            .sounds
+            .iter_mut()
+            .find(|sound| sound.actor == actor && sound.slot == slot)
+        else {
+            return false;
+        };
+        match parameter {
+            0 => sound.volume = value,
+            1 => sound.radius = value,
+            2 => {
+                sound
+                    .sound
+                    .set_playback_rate(f64::from(value), Tween::default());
+            }
+            _ => {}
+        }
+        true
+    }
+
     pub fn update(
         &mut self,
         listener_position: [f32; 3],

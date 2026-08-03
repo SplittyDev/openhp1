@@ -356,6 +356,7 @@ fn apply_actions(
             ActorAction::PlaySound { .. } => {
                 stats.sounds += 1;
             }
+            ActorAction::ModifySound { .. } => {}
             ActorAction::StopSound { .. } => {}
             ActorAction::ClientTravel { .. } => {}
             ActorAction::UpdateUrl { .. } => {}
