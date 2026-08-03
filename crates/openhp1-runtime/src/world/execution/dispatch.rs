@@ -516,6 +516,14 @@ impl ScriptRuntime {
                 iterator_instance,
             );
         }
+        if index == RADIUS_ACTORS {
+            return self.radius_actors_iterator(
+                iterator_actor,
+                source,
+                arguments,
+                iterator_instance,
+            );
+        }
         if index == VISIBLE_ACTORS {
             return self.visible_actors_iterator(
                 iterator_actor,
@@ -609,6 +617,112 @@ impl ScriptRuntime {
                 ) {
                     continue;
                 }
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(IteratorValue {
+                value: Value::Object(self.object_handle(object)?),
+                outputs: Vec::new(),
+            });
+        }
+        Ok(values)
+    }
+
+    fn radius_actors_iterator(
+        &mut self,
+        current_actor: usize,
+        source: &Arc<Package>,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<IteratorValue>> {
+        let [
+            Value::Object(base_class),
+            Value::None,
+            Value::Float(radius),
+            rest @ ..,
+        ] = arguments
+        else {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "RadiusActors expects a class, output actor, and radius, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        };
+        if rest.len() > 1 {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "RadiusActors expects at most 4 arguments, found {}",
+                    arguments.len()
+                ),
+            });
+        }
+        let base_class = self
+            .resolve_class_value(source, *base_class)?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "RadiusActors base class is null".to_owned(),
+            })?;
+        let current_class = self.actor_classes.get(&current_actor).cloned().ok_or(
+            DispatchError::UnregisteredActor {
+                actor: current_actor,
+            },
+        )?;
+        let current_class = self.resolved_object(&current_class)?;
+        let location = match rest.first() {
+            Some(Value::Vector(location)) => Vec3::from_array(*location),
+            Some(Value::None) | None => Vec3::from_array(
+                self.actor_vector(&current_class, current_instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            ),
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("RadiusActors location is {}", value.kind()),
+                });
+            }
+        };
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let mut values = Vec::new();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            if !self.class_is_a(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                &base_class,
+            )? {
+                continue;
+            }
+            let instance = if actor == current_actor {
+                current_instance.clone()
+            } else {
+                self.instances
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::ActiveActorContext { actor })?
+            };
+            let actor_location = Vec3::from_array(
+                self.actor_vector(&class, &instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            );
+            if !within_radius(Some(*radius), location, actor_location) {
+                continue;
             }
             let object = self
                 .actor_objects
@@ -731,7 +845,7 @@ impl ScriptRuntime {
                 self.actor_vector(&class, &instance, "Location")
                     .map_err(|message| DispatchError::UnresolvedObject { message })?,
             );
-            if !within_visible_radius(radius, location, actor_location)
+            if !within_radius(radius, location, actor_location)
                 || self.collision.as_ref().is_some_and(|collision| {
                     collision
                         .sweep_aabb(location, actor_location, Vec3::ZERO)
@@ -879,20 +993,212 @@ impl ScriptRuntime {
     }
 }
 
-fn within_visible_radius(radius: Option<f32>, location: Vec3, actor_location: Vec3) -> bool {
+fn within_radius(radius: Option<f32>, location: Vec3, actor_location: Vec3) -> bool {
     radius.is_none_or(|radius| actor_location.distance(location) <= radius)
 }
 
 #[cfg(test)]
 mod iterator_tests {
-    use super::within_visible_radius;
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use super::*;
     use glam::Vec3;
+    use openhp1_script::Bytecode;
+
+    static NEXT_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestRoot(PathBuf);
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn radius_actors_test_root() -> TestRoot {
+        let root = std::env::temp_dir().join(format!(
+            "openhp1-radius-actors-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ROOT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("System")).unwrap();
+        fs::write(
+            root.join("System/Default.ini"),
+            "[Core.System]\nPaths=../*.u\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("RadiusActorsTest.u"),
+            radius_actors_test_package(),
+        )
+        .unwrap();
+        TestRoot(root)
+    }
+
+    fn radius_actors_test_package() -> Vec<u8> {
+        let names = ["Core", "Class", "Base", "Included", "Excluded"];
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            name_table.extend(0_u32.to_le_bytes());
+        }
+
+        const HEADER_SIZE: usize = 44;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let import_table = [0, 1, 0, 0, 0, 0, 1];
+        let export_offset = import_offset + import_table.len();
+        let mut export_table = Vec::new();
+        for object_name in [2_u8, 3, 4] {
+            export_table.extend([0x81, 0]); // Class import, then no superclass.
+            export_table.extend(0_i32.to_le_bytes());
+            export_table.push(object_name);
+            export_table.extend(0_u32.to_le_bytes());
+            export_table.push(0); // No serial data is needed for this cache-backed test.
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend(0_u32.to_le_bytes());
+        for value in [
+            names.len(),
+            name_offset,
+            3,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+        ] {
+            bytes.extend((value as i32).to_le_bytes());
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export_table);
+        bytes
+    }
 
     #[test]
     fn omitted_visible_actor_radius_is_unbounded() {
         let location = Vec3::ZERO;
         let actor = Vec3::new(512.0, 0.0, 0.0);
-        assert!(within_visible_radius(None, location, actor));
-        assert!(!within_visible_radius(Some(15.0), location, actor));
+        assert!(within_radius(None, location, actor));
+        assert!(!within_radius(Some(15.0), location, actor));
+    }
+
+    #[test]
+    fn radius_actors_filters_and_assigns_the_output_actor() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let base_class = object_id(&source, 0);
+        let included_class = object_id(&source, 1);
+        let excluded_class = object_id(&source, 2);
+        let location = ObjectId {
+            package: Arc::from("<radius-actors-test>"),
+            export_index: 0,
+        };
+        let instance = |value| {
+            [(location.clone(), StoredValue::Value(Value::Vector(value)))]
+                .into_iter()
+                .collect::<InstanceState>()
+        };
+
+        for class in [&included_class, &excluded_class] {
+            runtime.fields.insert(
+                (class.clone(), "location".to_owned()),
+                Some(location.clone()),
+            );
+        }
+        runtime
+            .class_relations
+            .insert((included_class.clone(), base_class.clone()), true);
+        runtime
+            .class_relations
+            .insert((excluded_class.clone(), base_class.clone()), false);
+        for (actor, class) in [
+            (1, excluded_class.clone()),
+            (2, included_class.clone()),
+            (3, included_class.clone()),
+            (4, excluded_class),
+        ] {
+            let object = runtime_actor_id(actor);
+            runtime.object_actors.insert(object.clone(), actor);
+            runtime.actor_objects.insert(actor, object);
+            runtime.actor_classes.insert(actor, class);
+        }
+        let current_instance = instance([0.0, 0.0, 0.0]);
+        runtime.instances.insert(2, instance([3.0, 4.0, 0.0]));
+        runtime.instances.insert(3, instance([0.0, 0.0, 6.0]));
+        runtime.instances.insert(4, instance([0.0, 0.0, 1.0]));
+
+        let base_handle = runtime.object_handle(base_class).unwrap();
+        let included_handle = runtime
+            .object_handle(runtime.actor_objects.get(&2).cloned().unwrap())
+            .unwrap();
+        let mut bytes = vec![0x2f, 0x61, 0x36, 0x20];
+        bytes.extend(1_i32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(5.0_f32.to_le_bytes());
+        bytes.push(0x16);
+        let end_offset = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x0f, 0]);
+        bytes.extend(8_i32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x31);
+        let iterator_pop = u16::try_from(bytes.len()).unwrap();
+        bytes[end_offset..end_offset + 2].copy_from_slice(&iterator_pop.to_le_bytes());
+        bytes.extend([0x30, 0x04, 0]);
+        bytes.extend(8_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+
+        let mut frame = Frame::new(&bytecode);
+        assert_eq!(
+            frame
+                .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: 1 } => {
+                        Ok(FrameResponse::Value(Value::Object(base_handle)))
+                    }
+                    FrameRequest::CallIterator {
+                        receiver,
+                        function: FunctionCall::Native(RADIUS_ACTORS),
+                        arguments,
+                    } => runtime
+                        .dispatch_iterator_call(
+                            1,
+                            receiver,
+                            &source,
+                            FunctionCall::Native(RADIUS_ACTORS),
+                            &arguments,
+                            &current_instance
+                        )
+                        .map(FrameResponse::Iterator)
+                        .map_err(|error| error.to_string()),
+                    _ => panic!("unexpected frame request"),
+                })
+                .unwrap(),
+            Value::Object(included_handle)
+        );
+        assert_eq!(frame.local(7), Some(&Value::Object(0)));
+        assert_eq!(frame.local(8), Some(&Value::Object(included_handle)));
     }
 }
