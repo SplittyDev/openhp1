@@ -143,6 +143,8 @@ interpolate emission between locations, while `bSystemRelative` particles
 remain attached to their moving system. Authored size growth, delay, and end
 scale, `DripTime`, and sprite `SpinRate` are applied over each particle's
 lifetime. Particle velocity uses the authored exponential `Damping` decay. A
+`PPRIM_Liquid` particle (`RenderPrimitive=2`) uses a world-horizontal quad,
+rather than a camera billboard, and spins about its vertical normal.
 `Gesture` assigned to
 `Pattern` places emissions along its authored point segments; `Period` selects
 the active normalized range, which is how spell lessons progressively draw

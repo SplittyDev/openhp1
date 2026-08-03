@@ -829,11 +829,12 @@ impl LoadedScene {
                     } else {
                         particle.location
                     };
-                    let positions = particle_sprite_positions(
+                    let positions = particle_render_primitive_positions(
                         location,
                         particle.half_size * grow * shrink * drip,
                         self.particle_view_rotation,
                         particle.spin,
+                        system.config.render_primitive,
                     );
                     self.render.mesh.positions[target..target + 4].copy_from_slice(&positions);
                     let color_progress = if particle.age > system.config.color_delay {
@@ -2516,6 +2517,27 @@ fn particle_sprite_positions(
     ]
 }
 
+fn particle_render_primitive_positions(
+    center: Vec3,
+    half_size: Vec2,
+    view_rotation: Mat4,
+    spin: f32,
+    render_primitive: u8,
+) -> [Vec3; 4] {
+    if render_primitive != 2 {
+        return particle_sprite_positions(center, half_size, view_rotation, spin);
+    }
+    let (sin, cos) = spin.sin_cos();
+    let side = Vec3::new(cos, sin, 0.0) * half_size.x;
+    let up = Vec3::new(-sin, cos, 0.0) * half_size.y;
+    [
+        center - side - up,
+        center + side - up,
+        center + side + up,
+        center - side + up,
+    ]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_scene_actor_brush(
     actor_render: &mut ActorRenderContext,
@@ -4012,5 +4034,23 @@ mod tests {
         assert!(positions[0].abs_diff_eq(glam::Vec3::new(1.0, 3.0, 1.0), 1.0e-5));
         assert!(positions[2].abs_diff_eq(glam::Vec3::new(1.0, 1.0, 5.0), 1.0e-5));
         assert!(((positions[0] + positions[2]) * 0.5).abs_diff_eq(center, 1.0e-5));
+    }
+
+    #[test]
+    fn particle_liquid_uses_a_horizontal_world_plane() {
+        let center = glam::Vec3::new(1.0, 2.0, 3.0);
+        let positions = super::particle_render_primitive_positions(
+            center,
+            glam::Vec2::new(2.0, 1.0),
+            super::rotation_matrix(openhp1_map::Rotator {
+                yaw: 16_384,
+                ..Default::default()
+            }),
+            0.0,
+            2,
+        );
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(-1.0, 1.0, 3.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(3.0, 3.0, 3.0), 1.0e-5));
+        assert!(positions.iter().all(|position| position.z == center.z));
     }
 }

@@ -87,8 +87,8 @@ pub struct ParticleEmitter {
 impl ParticleEmitter {
     pub fn capability_diagnostics(&self) -> Vec<&'static str> {
         let mut diagnostics = Vec::new();
-        if self.render_primitive != 1 {
-            diagnostics.push("particle render primitive is not a billboard");
+        if !matches!(self.render_primitive, 1 | 2) {
+            diagnostics.push("particle render primitive is unsupported");
         }
         if self.textures.len() > 1 {
             diagnostics.push("particle random texture selection is unsupported");
@@ -133,7 +133,7 @@ mod particle_tests {
         };
         assert_eq!(
             unsupported.capability_diagnostics(),
-            ["particle render primitive is not a billboard"]
+            ["particle render primitive is unsupported"]
         );
     }
 }
