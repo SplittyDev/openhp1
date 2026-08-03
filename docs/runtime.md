@@ -152,9 +152,11 @@ semantics. `ParticlesEmitted` is synchronized back into UnrealScript so the
 original `Shutdown` logic can stop finite effects. Removing a `ParticleFX`
 actor also removes its live particles. World-relative emitters
 interpolate emission between locations, while `bSystemRelative` particles
-remain attached to their moving system. Authored size growth, delay, and end
-scale, `DripTime`, and sprite `SpinRate` are applied over each particle's
-lifetime. Particle velocity uses the authored exponential `Damping` decay. A
+remain attached to their moving system. `bVelocityRelative` adds the owner's
+current velocity once when each particle is emitted. Authored size growth,
+delay, and end scale, `DripTime`, and sprite `SpinRate` are applied over each
+particle's lifetime. Particle velocity uses the authored exponential `Damping`
+decay. A
 `PPRIM_Liquid` particle (`RenderPrimitive=2`) uses a world-horizontal quad,
 rather than a camera billboard, and spins about its vertical normal.
 `Gesture` assigned to

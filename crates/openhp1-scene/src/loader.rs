@@ -782,7 +782,12 @@ impl LoadedScene {
                     ) * speed;
                     system.particles.push(Particle {
                         location: center + source + pattern,
-                        velocity: direction,
+                        velocity: direction
+                            + system
+                                .config
+                                .velocity_relative
+                                .then_some(Vec3::from_array(system.config.owner_velocity))
+                                .unwrap_or(Vec3::ZERO),
                         age: 0.0,
                         lifetime: sample_particle_float(system.config.lifetime, &mut system.random),
                         half_size: Vec2::new(
@@ -3517,7 +3522,14 @@ fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, sync::Arc};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use openhp1_map::{BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
     use openhp1_package::{ObjectReference, PackageStore};
@@ -3526,6 +3538,8 @@ mod tests {
     use openhp1_texture::TextureRenderFlags;
 
     use crate::SurfaceMode;
+
+    static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
@@ -3575,6 +3589,7 @@ mod tests {
             gravity: [0.0; 3],
             render_primitive: 1,
             velocity_relative: false,
+            owner_velocity: [0.0; 3],
             gravity_modifier: 0.0,
             chaos: 0.0,
             chaos_delay: 0.0,
@@ -3678,10 +3693,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn velocity_relative_particles_inherit_owner_velocity_on_emission_only() {
+        let mut scene = particle_test_scene();
+        let system = scene.particles.get_mut(&0).unwrap();
+        system.config = ParticleEmitter {
+            emit: true,
+            particles_alive: 1,
+            particles_per_second: ParticleFloat {
+                base: 1.0,
+                random: 0.0,
+            },
+            lifetime: ParticleFloat {
+                base: 2.0,
+                random: 0.0,
+            },
+            render_primitive: 1,
+            velocity_relative: true,
+            owner_velocity: [3.0, -4.0, 5.0],
+            ..Default::default()
+        };
+        system.particles.clear();
+
+        assert!(scene.tick_particles(1.0));
+        let particle = &scene.particles[&0].particles[0];
+        assert_eq!(particle.velocity, glam::Vec3::new(3.0, -4.0, 5.0));
+
+        assert!(scene.tick_particles(1.0));
+        let particle = &scene.particles[&0].particles[0];
+        assert_eq!(particle.velocity, glam::Vec3::new(3.0, -4.0, 5.0));
+        assert_eq!(particle.location, glam::Vec3::new(3.0, -4.0, 5.0));
+    }
+
     fn particle_test_scene() -> super::LoadedScene {
         let root = std::env::temp_dir().join(format!(
-            "openhp1-scene-particle-elasticity-{}",
-            std::process::id()
+            "openhp1-scene-particle-elasticity-{}-{}",
+            std::process::id(),
+            PARTICLE_TEST_ROOT.fetch_add(1, Ordering::Relaxed),
         ));
         let system = root.join("System");
         fs::create_dir_all(&system).unwrap();

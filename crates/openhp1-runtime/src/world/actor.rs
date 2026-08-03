@@ -346,6 +346,17 @@ impl ScriptRuntime {
                 Some(StoredValue::Object(Some(owner))) => self.object_actors.get(&owner).copied(),
                 _ => None,
             };
+            let velocity_relative =
+                particle_bool(self.instance_property(&class, &instance, "bVelocityRelative")?);
+            let owner_velocity = if velocity_relative {
+                owner
+                    .map(|owner| self.other_actor_vector(owner, "Velocity"))
+                    .transpose()
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?
+                    .unwrap_or([0.0; 3])
+            } else {
+                [0.0; 3]
+            };
             let gravity_modifier =
                 particle_scalar(self.instance_property(&class, &instance, "GravityModifier")?);
             let gravity = Vec3::from_array(particle_vector(
@@ -476,11 +487,8 @@ impl ScriptRuntime {
                     &instance,
                     "RenderPrimitive",
                 )?),
-                velocity_relative: particle_bool(self.instance_property(
-                    &class,
-                    &instance,
-                    "bVelocityRelative",
-                )?),
+                velocity_relative,
+                owner_velocity,
                 gravity_modifier,
                 chaos: particle_scalar(self.instance_property(&class, &instance, "Chaos")?),
                 chaos_delay: particle_scalar(self.instance_property(

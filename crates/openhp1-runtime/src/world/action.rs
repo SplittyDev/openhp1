@@ -70,6 +70,7 @@ pub struct ParticleEmitter {
     pub gravity: [f32; 3],
     pub render_primitive: u8,
     pub velocity_relative: bool,
+    pub owner_velocity: [f32; 3],
     pub gravity_modifier: f32,
     pub chaos: f32,
     pub chaos_delay: f32,
@@ -93,9 +94,6 @@ impl ParticleEmitter {
         if self.textures.len() > 1 {
             diagnostics.push("particle random texture selection is unsupported");
         }
-        if self.velocity_relative {
-            diagnostics.push("particle owner-velocity inheritance is unsupported");
-        }
         if self.wind_modifier != 0.0 {
             diagnostics.push("particle wind response is unsupported");
         }
@@ -117,6 +115,7 @@ mod particle_tests {
     fn reports_only_authored_particle_features_outside_the_supported_subset() {
         let supported = ParticleEmitter {
             render_primitive: 1,
+            velocity_relative: true,
             gravity_modifier: -0.5,
             elasticity: 1.0,
             ..Default::default()
