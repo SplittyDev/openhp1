@@ -1031,6 +1031,7 @@ impl ScriptRuntime {
         tween_time: f32,
         looping: bool,
         tween_only: bool,
+        root_motion: bool,
     ) -> std::result::Result<(), String> {
         let command = AnimationCommand {
             sequence,
@@ -1038,6 +1039,7 @@ impl ScriptRuntime {
             tween_time,
             looping,
             tween_only,
+            root_motion,
         };
         self.animation_commands.insert(actor, command.clone());
         self.configure_animation_instance(actor, class, instance, &command)

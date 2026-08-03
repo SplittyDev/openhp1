@@ -1,5 +1,7 @@
 use std::{
+    cell::RefCell,
     fs,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -8,7 +10,9 @@ use std::{
 
 use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata};
 
-use crate::{Frame, FrameRequest, FrameResponse, FunctionCall};
+use crate::{
+    ConsoleCommandAction, ConsoleCommands, Frame, FrameRequest, FrameResponse, FunctionCall,
+};
 
 use super::*;
 use super::{
@@ -50,6 +54,10 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
         + b"QuidHud\0".len()
         + size_of::<u32>()
         + b"Head\0".len()
+        + size_of::<u32>()
+        + b"ConsoleCommand\0".len()
+        + size_of::<u32>()
+        + b"CallConsoleCommand\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -57,9 +65,9 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        7,
+        9,
         name_offset as i32,
-        6,
+        9,
         export_offset as i32,
         0,
         export_offset as i32,
@@ -76,11 +84,23 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
         b"StopWaiting\0".as_slice(),
         b"QuidHud\0".as_slice(),
         b"Head\0".as_slice(),
+        b"ConsoleCommand\0".as_slice(),
+        b"CallConsoleCommand\0".as_slice(),
     ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
     }
-    for (outer, name) in [(0_i32, 0_u8), (1, 1), (1, 2), (0, 3), (4, 4), (0, 5)] {
+    for (outer, name) in [
+        (0_i32, 0_u8),
+        (1, 1),
+        (1, 2),
+        (0, 3),
+        (4, 4),
+        (0, 5),
+        (1, 6),
+        (1, 7),
+        (1, 8),
+    ] {
         bytes.extend([0, 0]);
         bytes.extend(outer.to_le_bytes());
         bytes.push(name);
@@ -294,6 +314,27 @@ fn synthetic_config_package() -> Vec<u8> {
     bytes
 }
 
+struct RecordingConsole {
+    calls: Rc<RefCell<Vec<(usize, String, String)>>>,
+}
+
+impl ConsoleCommandHost for RecordingConsole {
+    fn console_command(
+        &mut self,
+        actor: usize,
+        class: &str,
+        command: &str,
+    ) -> ConsoleCommandResponse {
+        self.calls
+            .borrow_mut()
+            .push((actor, class.to_owned(), command.to_owned()));
+        ConsoleCommandResponse {
+            output: "host response".to_owned(),
+            handled: true,
+        }
+    }
+}
+
 fn named_native_script(export_index: usize) -> Arc<openhp1_script::ScriptExport> {
     Arc::new(openhp1_script::ScriptExport {
         export_index,
@@ -467,6 +508,174 @@ fn run_save_config(
             .unwrap(),
         Value::None
     );
+}
+
+fn save_snapshot_runtime(root: &std::path::Path, value: i32) -> ScriptRuntime {
+    let mut runtime = ScriptRuntime::new(root).unwrap();
+    let package = runtime.packages.load("Test").unwrap();
+    let class = object_id(&package, 0);
+    let actor_object = object_id(&package, 15);
+    let property = object_id(&package, 3);
+    let animation_frame = object_id(&package, 4);
+    let base = object_id(&package, 5);
+    let level = object_id(&package, 6);
+    runtime.object_handle(actor_object.clone()).unwrap();
+    runtime.object_actors.insert(actor_object.clone(), 7);
+    runtime.actor_objects.insert(7, actor_object);
+    runtime.actor_classes.insert(7, class.clone());
+    runtime.fields.insert(
+        (class.clone(), "animframe".to_owned()),
+        Some(animation_frame.clone()),
+    );
+    runtime
+        .fields
+        .insert((class.clone(), "base".to_owned()), Some(base.clone()));
+    runtime
+        .fields
+        .insert((class.clone(), "level".to_owned()), Some(level.clone()));
+    runtime.instances.insert(
+        7,
+        [
+            (property.clone(), StoredValue::Value(Value::Int(value))),
+            (animation_frame, StoredValue::Value(Value::Float(0.375))),
+            (base, StoredValue::Object(None)),
+            (level, StoredValue::Object(None)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime
+        .actor_states
+        .insert(7, Some("SavedState".to_owned()));
+    runtime.state_revisions.insert(7, 9);
+    runtime.state_frames.insert(
+        7,
+        StateFrame {
+            state: class,
+            frame: FrameSnapshot::from_save_parts(
+                12,
+                std::collections::HashMap::from([(5, Value::Object(1))]),
+            ),
+            latent: LatentAction::FinishAnimation(7),
+        },
+    );
+    runtime.timers.insert(
+        7,
+        ActorTimer {
+            remaining: 1.25,
+            rate: 3.0,
+            looping: true,
+        },
+    );
+    runtime.random_state = 0x1234_5678;
+    runtime.animation_commands.insert(
+        7,
+        AnimationCommand {
+            sequence: "Wave".to_owned(),
+            relative_rate: 0.5,
+            tween_time: 0.0,
+            looping: false,
+            tween_only: false,
+            root_motion: false,
+        },
+    );
+    runtime.animating.insert(7);
+    runtime.sound_channels.insert(
+        (7, 2),
+        SoundChannel {
+            sound: object_id(&package, 15),
+            remaining: 2.0,
+            pitch: 1.0,
+        },
+    );
+    runtime
+}
+
+#[test]
+fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-save-snapshot-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    fs::write(system.join("Test.u"), synthetic_config_package()).unwrap();
+
+    let mut console = ConsoleCommands::production(&root, (640, 480), vec![(640, 480)]).unwrap();
+    let mut actions = Vec::new();
+    let mut state_frames = HashMap::default();
+    assert_eq!(
+        execution::named_native(
+            &mut state_frames,
+            7,
+            "Console",
+            "ConsoleCommand",
+            &[Value::String("SaveGame 9".to_owned())],
+            &mut actions,
+            Some(&mut console),
+        ),
+        Some(Value::Bool(true))
+    );
+    assert_eq!(
+        console.take_actions(),
+        [ConsoleCommandAction::SaveGame { slot: 9 }]
+    );
+
+    let snapshot = save_snapshot_runtime(&root, 99)
+        .save_game("Maps/Test.unr")
+        .unwrap();
+    let mut restored = save_snapshot_runtime(&root, -1);
+    let actions = restored.restore_game("maps/test.unr", &snapshot).unwrap();
+    let package = restored.packages.load("Test").unwrap();
+    let property = object_id(&package, 3);
+    assert_eq!(
+        restored.instances[&7][&property],
+        StoredValue::Value(Value::Int(99))
+    );
+    assert_eq!(restored.actor_states[&7].as_deref(), Some("SavedState"));
+    assert_eq!(restored.state_revisions[&7], 9);
+    assert_eq!(
+        restored.timers[&7],
+        ActorTimer {
+            remaining: 1.25,
+            rate: 3.0,
+            looping: true,
+        }
+    );
+    assert!(matches!(
+        restored.state_frames[&7].latent,
+        LatentAction::FinishAnimation(7)
+    ));
+    assert_eq!(restored.random_state, 0x1234_5678);
+    assert!(restored.animating.contains(&7));
+    assert!(restored.sound_channels.is_empty());
+    assert!(actions.iter().any(|action| {
+        matches!(
+            action,
+            ActorAction::RestoreAnimation {
+                actor: 7,
+                sequence,
+                phase,
+                looping: false,
+                ..
+            } if sequence == "Wave" && *phase == 0.375
+        )
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn save_snapshot_rejects_truncated_and_unknown_versions() {
+    assert!(matches!(
+        ScriptRuntime::saved_game_map(b"OHPS"),
+        Err(DispatchError::SaveState { .. })
+    ));
+    assert!(matches!(
+        ScriptRuntime::saved_game_map(b"OHPS\x02\0"),
+        Err(DispatchError::SaveState { .. })
+    ));
 }
 
 #[test]
@@ -4347,6 +4556,238 @@ fn find_stair_rotation_uses_floor_samples_interpolates_and_matches_pitch_normali
 }
 
 #[test]
+fn player_console_command_calls_the_host_through_bytecode() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-console-command-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let caller = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 8,
+    };
+    runtime
+        .class_defaults
+        .insert(object_id(&package, 0), InstanceState::default());
+    runtime
+        .scripts
+        .insert(object_id(&package, 7), named_native_script(7));
+    runtime.scripts.insert(
+        object_id(&package, 8),
+        Arc::new(ScriptExport {
+            export_index: 8,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 8,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                bytes: [
+                    0x04, 0x1c, 8, 0, 0, 0, 0x1f, b'G', b'E', b'T', b'P', b'I', b'N', b'G', 0, 0x16,
+                ]
+                .to_vec(),
+                raw_len: 16,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    runtime.set_console_command_host(RecordingConsole {
+        calls: Rc::clone(&calls),
+    });
+
+    assert_eq!(
+        runtime
+            .execute_function(
+                17,
+                &class,
+                &caller,
+                &[],
+                &mut InstanceState::default(),
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::String("host response".to_owned()),
+    );
+    assert_eq!(
+        calls.borrow().as_slice(),
+        [(17, "PlayerPawn".to_owned(), "GETPING".to_owned())],
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn player_console_command_uses_the_production_host_for_queries_and_settings() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-production-console-command-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(
+        system.join("Default.ini"),
+        "[Core.System]\nPaths=*.u\n[Engine.Engine]\nViewportManager=WinDrv.WindowsClient\nAudioDevice=Galaxy.GalaxyAudioSubsystem\n[WinDrv.WindowsClient]\nBrightness=0.400000\n[Galaxy.GalaxyAudioSubsystem]\nMusicVolume=128\n",
+    )
+    .unwrap();
+    fs::write(
+        system.join("DefUser.ini"),
+        "[Engine.Input]\nW=MoveForward\n",
+    )
+    .unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let caller = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 8,
+    };
+    runtime
+        .class_defaults
+        .insert(object_id(&package, 0), InstanceState::default());
+    runtime
+        .scripts
+        .insert(object_id(&package, 7), named_native_script(7));
+    runtime.scripts.insert(
+        object_id(&package, 8),
+        Arc::new(ScriptExport {
+            export_index: 8,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 8,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                bytes: [
+                    0x04, 0x1c, 8, 0, 0, 0, 0x1f, b'G', b'E', b'T', b'P', b'I', b'N', b'G', 0, 0x16,
+                ]
+                .to_vec(),
+                raw_len: 16,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    let mut console =
+        ConsoleCommands::production(&root, (640, 480), vec![(640, 480), (1024, 768)]).unwrap();
+    runtime.set_console_command_host(console.clone());
+
+    assert_eq!(
+        runtime
+            .execute_function(
+                17,
+                &class,
+                &caller,
+                &[],
+                &mut InstanceState::default(),
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::String("0".to_owned()),
+    );
+    let mut actions = Vec::new();
+    let mut state_frames = HashMap::default();
+    assert_eq!(
+        execution::named_native(
+            &mut state_frames,
+            17,
+            "Actor",
+            "ConsoleCommand",
+            &[Value::String("GETLOSS".to_owned())],
+            &mut actions,
+            Some(&mut console),
+        ),
+        Some(Value::String("0".to_owned()))
+    );
+    assert_eq!(
+        execution::named_native(
+            &mut state_frames,
+            17,
+            "Console",
+            "ConsoleCommand",
+            &[Value::String("SaveGame 9".to_owned())],
+            &mut actions,
+            Some(&mut console),
+        ),
+        Some(Value::Bool(true))
+    );
+    assert_eq!(
+        console.console_command(
+            17,
+            "PlayerPawn",
+            "get ini:Engine.Engine.ViewportManager Brightness",
+        ),
+        ConsoleCommandResponse {
+            output: "0.400000".to_owned(),
+            handled: true,
+        },
+    );
+    assert_eq!(
+        console
+            .console_command(17, "PlayerPawn", "KEYBINDING W")
+            .output,
+        "MoveForward",
+    );
+    console.console_command(17, "PlayerPawn", "SetRes 1024x768");
+    assert_eq!(
+        console.take_actions(),
+        [
+            ConsoleCommandAction::SaveGame { slot: 9 },
+            ConsoleCommandAction::SetResolution {
+                width: 1024,
+                height: 768,
+            },
+        ],
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pawn_stop_waiting_named_native_cancels_sleep_through_function_execution() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-stop-waiting-{}-{}",
@@ -4641,16 +5082,33 @@ fn pick_any_target_rejects_beyond_sight_radius_without_changing_outputs() {
 fn named_native_shims_validate_their_engine_calls() {
     let mut actions = Vec::new();
     let mut state_frames = HashMap::default();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut console = RecordingConsole {
+        calls: Rc::clone(&calls),
+    };
     assert_eq!(
         execution::named_native(
             &mut state_frames,
             17,
-            "PlayerPawn",
+            "Actor",
             "ConsoleCommand",
-            &[Value::String("GETPING".to_owned())],
+            &[Value::String("GetRes".to_owned())],
             &mut actions,
+            Some(&mut console),
         ),
-        Some(Value::String(String::new()))
+        Some(Value::String("host response".to_owned()))
+    );
+    assert_eq!(
+        execution::named_native(
+            &mut state_frames,
+            18,
+            "Console",
+            "ConsoleCommand",
+            &[Value::String("exit".to_owned())],
+            &mut actions,
+            Some(&mut console),
+        ),
+        Some(Value::Bool(true))
     );
     assert_eq!(
         execution::named_native(
@@ -4660,6 +5118,7 @@ fn named_native_shims_validate_their_engine_calls() {
             "DetachDecal",
             &[],
             &mut actions,
+            None,
         ),
         Some(Value::None)
     );
@@ -4671,8 +5130,28 @@ fn named_native_shims_validate_their_engine_calls() {
             "ConsoleCommand",
             &[],
             &mut actions,
+            None,
         ),
         None
+    );
+    assert_eq!(
+        execution::named_native(
+            &mut state_frames,
+            19,
+            "PlayerPawn",
+            "ConsoleCommand",
+            &[Value::String("GETPING".to_owned())],
+            &mut actions,
+            None,
+        ),
+        None
+    );
+    assert_eq!(
+        calls.borrow().as_slice(),
+        [
+            (17, "Actor".to_owned(), "GetRes".to_owned()),
+            (18, "Console".to_owned(), "exit".to_owned()),
+        ],
     );
 }
 

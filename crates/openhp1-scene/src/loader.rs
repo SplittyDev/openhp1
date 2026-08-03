@@ -407,6 +407,53 @@ impl LoadedScene {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore_actor_animation(
+        &mut self,
+        actor_index: usize,
+        sequence_name: &str,
+        relative_rate: f32,
+        tween_time: f32,
+        looping: bool,
+        tween_only: bool,
+        root_motion: bool,
+        phase: f32,
+    ) -> Result<bool> {
+        ensure!(phase.is_finite(), "animation phase is not finite");
+        let played = self.set_actor_animation(
+            actor_index,
+            sequence_name,
+            relative_rate,
+            tween_time,
+            looping,
+            root_motion,
+        )?;
+        if !played {
+            return Ok(false);
+        }
+        let animation = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+            .expect("played animation is present");
+        animation.phase = phase;
+        animation.playing = !tween_only || tween_time > 0.0;
+        animation.looping = looping;
+        animation.root_motion = root_motion;
+        if root_motion {
+            let (_, root_motion_position) = animation.sample()?;
+            animation.root_motion_position =
+                animation.transform.transform_vector3(root_motion_position);
+        }
+        if let Some(actor) = self.actors.get_mut(actor_index)
+            && let Some(actor_animation) = actor.animation.as_mut()
+        {
+            actor_animation.phase = phase;
+            actor_animation.rate = animation.rate;
+        }
+        Ok(true)
+    }
+
     pub fn ensure_runtime_actor(&mut self, actor_index: usize) {
         while self.actors.len() <= actor_index {
             self.actors

@@ -216,6 +216,16 @@ pub enum ActorAction {
         tween_time: f32,
         root_motion: bool,
     },
+    RestoreAnimation {
+        actor: usize,
+        sequence: String,
+        rate: f32,
+        tween_time: f32,
+        looping: bool,
+        tween_only: bool,
+        root_motion: bool,
+        phase: f32,
+    },
     AwaitAnimation {
         actor: usize,
     },
@@ -345,6 +355,7 @@ impl ActorAction {
         match self {
             Self::PlayAnimation { actor, .. }
             | Self::LoopAnimation { actor, .. }
+            | Self::RestoreAnimation { actor, .. }
             | Self::AwaitAnimation { actor }
             | Self::PlaySound { actor, .. }
             | Self::ModifySound { actor, .. }

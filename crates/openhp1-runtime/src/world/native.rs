@@ -276,6 +276,7 @@ impl ScriptRuntime {
                 tween_time,
                 false,
                 false,
+                root_motion,
             )?;
             actions.push(ActorAction::PlayAnimation {
                 actor,
@@ -302,6 +303,7 @@ impl ScriptRuntime {
                 tween_time,
                 true,
                 false,
+                root_motion,
             )?;
             actions.push(ActorAction::LoopAnimation {
                 actor,
@@ -338,6 +340,7 @@ impl ScriptRuntime {
                 tween_time,
                 false,
                 true,
+                false,
             )?;
             actions.push(ActorAction::PlayAnimation {
                 actor,

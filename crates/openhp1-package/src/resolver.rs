@@ -138,6 +138,12 @@ impl PackageStore {
         self.paths.values().map(PathBuf::as_path)
     }
 
+    /// Directory owned by OpenHP1 for derived user data. Installed packages and
+    /// INI templates are never written through this path.
+    pub fn settings_dir(&self) -> &Path {
+        &self.settings_dir
+    }
+
     pub fn localize(&self, package: &str, section: &str, key: &str) -> String {
         let Some(system_dir) = self.package_path(package).and_then(Path::parent) else {
             return String::new();

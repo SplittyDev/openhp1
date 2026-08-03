@@ -13,5 +13,6 @@ pub use openhp1_map::{LightmapImage, Rotator, SkyZone, TriangleMesh};
 pub use render::{RenderScene, SurfaceMaterial, SurfaceMode, TextureImage};
 pub use runtime::{
     apply_runtime_actions, apply_runtime_actions_with, initialize_runtime, initialize_runtime_with,
+    initialize_runtime_with_console, initialize_runtime_with_console_unstarted,
     sync_runtime_bone_positions,
 };

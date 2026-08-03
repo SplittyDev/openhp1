@@ -371,14 +371,44 @@ macOS Application Support, Linux XDG config (or `~/.config`), or Windows
 Missing files are seeded from their read-only installed counterparts and,
 respectively, `Default.ini` or `DefUser.ini`. Each update is atomic; package
 files and all installed INIs remain read-only. Other engine side effects
-without an OpenHP1 surface do not abort scripts: `ConsoleCommand` returns an
-empty string, and decal detachment is a no-op until decals render.
+without an OpenHP1 surface do not abort scripts: decal detachment is a no-op
+until decals render.
 Config serialization is intentionally type-directed: scalars, named byte
 enums, package object/class references, `Color`, `Vector`, `Rotator`, dynamic
 string arrays, and fixed string/name arrays round-trip through the same parser.
 Object paths resolve case-insensitively. Invalid scalar or enum text reports a
 configuration error rather than changing an authored default to zero; structs
 outside those representations are not written.
+The shipped Engine metadata declares `Actor.ConsoleCommand(string)` and
+`PlayerPawn.ConsoleCommand(string)` with string returns, while
+`Console.ConsoleCommand(coerce string)` returns bool. The runtime preserves
+those contracts: Actor and PlayerPawn return the host output, and Console
+returns whether the host handled the command. The production game installs
+`ConsoleCommands` before level events; `runtime_scan` installs its deterministic
+headless equivalent. A runtime without that host reports the named native as
+unimplemented rather than inventing an empty result.
+
+The host reads configuration from the shared settings overlay. `FLUSH` writes
+only queued changes through that overlay (and only the headless scan's
+in-memory changes are discarded); it never modifies the installed `System`
+directory. `SaveGame N` writes `Saves/saveN.usa` below the same settings
+directory. `open` and `start` with that save name load it, while `Snap N` and
+`Shot` are captured by the game surface as numbered top-down 32-bit BMP files.
+The queue accepts a command only after it has a game owner; actual asynchronous
+readback or file errors remain game diagnostics because these shipped calls
+discard their return values.
+
+Save files contain an OpenHP1-owned, versioned snapshot rather than a copied
+map package: a normalized map identifier and stable package-stem/export
+identities identify mutable state. The decoder bounds file size, collection
+counts, nesting, finite floats, names, and version before restoring into a
+freshly registered authored map. It rejects snapshots taken during an active
+iterator or script execution. Restore rebuilds runtime caches, projects saved
+instance fields through the ordinary scene-property path, and resumes saved
+animations at their saved phase. Platform mixer voices are intentionally
+transient: they are omitted from a save and an empty audio host is used after
+load.
+
 `PlayerPawn.ClientTravel` emits a host action with its URL, raw UE1 travel-type
 byte, and `bItems` flag; the script runtime neither parses nor opens the next
 map. `PlayerPawn.UpdateURL` emits a host action carrying the option/value for
@@ -460,3 +490,27 @@ channel and is not selectable by `ModifySound`.
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick
 deferrals during local corpus scans.
+
+## Console commands and saved games
+
+The shipped Engine metadata declares `Actor.ConsoleCommand(string)` and
+`PlayerPawn.ConsoleCommand(string)` with string returns, while
+`Console.ConsoleCommand(coerce string)` returns bool. Actor and PlayerPawn
+return host output; Console returns whether the command was accepted. The game
+installs the production host before level events and `runtime_scan` installs a
+deterministic headless host. A runtime without either host leaves the named
+native unimplemented rather than inventing an empty result.
+
+`FLUSH` uses the shared writable settings overlay and never writes installed
+INI files. `SaveGame N` stores `Saves/saveN.usa` below that same directory;
+`open` and `start` with a save name restore it. `Snap N` and `Shot` are queued
+for game-surface BMP capture. The shipped call sites discard the asynchronous
+action result, so later readback/file errors remain game diagnostics.
+
+An `.usa` file contains OpenHP1-owned, versioned state rather than copied map
+bytes. It records a normalized map identifier and stable package-stem/export
+identities, bounds decoding before restore, rejects active iterators or active
+script execution before write, rebuilds runtime caches after loading the
+authored map, projects restored fields through the normal scene-property path,
+and resumes animation at its saved phase. Platform mixer voices are transient:
+they are omitted and the new host starts empty after load.

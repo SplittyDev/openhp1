@@ -113,6 +113,9 @@ pub enum DispatchError {
 
     #[error("config property `{property}` is invalid: {message}")]
     InvalidConfigValue { property: String, message: String },
+
+    #[error("save state is invalid: {message}")]
+    SaveState { message: String },
 }
 
 pub type DispatchResult<T> = std::result::Result<T, DispatchError>;

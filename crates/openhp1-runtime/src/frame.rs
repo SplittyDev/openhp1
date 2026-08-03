@@ -167,6 +167,20 @@ impl FrameSnapshot {
             iterators: Vec::new(),
         }
     }
+
+    pub(crate) fn save_parts(&self) -> Option<(usize, &HashMap<i32, Value>)> {
+        self.iterators
+            .is_empty()
+            .then_some((self.instruction_pointer, &self.locals))
+    }
+
+    pub(crate) fn from_save_parts(instruction_pointer: usize, locals: HashMap<i32, Value>) -> Self {
+        Self {
+            instruction_pointer,
+            locals,
+            iterators: Vec::new(),
+        }
+    }
 }
 
 pub(crate) enum FrameRun {

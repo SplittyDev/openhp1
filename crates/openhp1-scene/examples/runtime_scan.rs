@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use glam::Vec3;
-use openhp1_runtime::{ActorAction, PlayerInput, ScriptRuntime};
+use openhp1_runtime::{ActorAction, ConsoleCommands, PlayerInput, ScriptRuntime};
 use openhp1_scene::{LoadedScene, Rotator};
 
 #[derive(Default)]
@@ -67,6 +67,7 @@ fn main() -> Result<()> {
             .and_then(|directory| directory.parent())
             .context("map must be inside the game's Maps directory")?;
         let mut runtime = ScriptRuntime::new(game_root)?;
+        runtime.set_console_command_host(ConsoleCommands::headless(game_root)?);
         runtime.set_collision(scene.collision(), &scene.path)?;
         let classes = scene
             .actors
@@ -341,6 +342,33 @@ fn apply_actions(
                     scene.loop_actor_animation_with_tween(actor, &sequence, rate, tween_time)?
                 };
                 if played {
+                    stats.animations_applied += 1;
+                    stats.animated_actors.insert(actor);
+                } else {
+                    unavailable_animation(scene, actor, &sequence);
+                }
+            }
+            ActorAction::RestoreAnimation {
+                actor,
+                sequence,
+                rate,
+                tween_time,
+                looping,
+                tween_only,
+                root_motion,
+                phase,
+            } => {
+                stats.animations_requested += 1;
+                if scene.restore_actor_animation(
+                    actor,
+                    &sequence,
+                    rate,
+                    tween_time,
+                    looping,
+                    tween_only,
+                    root_motion,
+                    phase,
+                )? {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
                 } else {

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use anyhow::{Context, Result};
 use glam::Vec3;
-use openhp1_runtime::{ActorAction, ScriptRuntime};
+use openhp1_runtime::{ActorAction, ConsoleCommandHost, ScriptRuntime};
 use tracing::{info, warn};
 
 use crate::{LoadedScene, Rotator};
@@ -13,7 +13,7 @@ pub fn initialize_runtime(scene: &mut LoadedScene) -> Result<ScriptRuntime> {
 
 pub fn initialize_runtime_with(
     scene: &mut LoadedScene,
-    mut external: impl FnMut(ActorAction) -> Result<()>,
+    external: impl FnMut(ActorAction) -> Result<()>,
 ) -> Result<ScriptRuntime> {
     let game_root = scene
         .path
@@ -21,6 +21,49 @@ pub fn initialize_runtime_with(
         .and_then(|directory| directory.parent())
         .context("map path must be inside the game's Maps directory")?;
     let mut runtime = ScriptRuntime::new(game_root)?;
+    initialize_runtime_after_creation(scene, &mut runtime, external, true)?;
+    Ok(runtime)
+}
+
+pub fn initialize_runtime_with_console(
+    scene: &mut LoadedScene,
+    console: impl ConsoleCommandHost + 'static,
+    external: impl FnMut(ActorAction) -> Result<()>,
+) -> Result<ScriptRuntime> {
+    let game_root = scene
+        .path
+        .parent()
+        .and_then(|directory| directory.parent())
+        .context("map path must be inside the game's Maps directory")?;
+    let mut runtime = ScriptRuntime::new(game_root)?;
+    runtime.set_console_command_host(console);
+    initialize_runtime_after_creation(scene, &mut runtime, external, true)?;
+    Ok(runtime)
+}
+
+/// Registers the authored map without running game construction or script
+/// events. Save restoration uses this before replacing mutable runtime state.
+pub fn initialize_runtime_with_console_unstarted(
+    scene: &mut LoadedScene,
+    console: impl ConsoleCommandHost + 'static,
+) -> Result<ScriptRuntime> {
+    let game_root = scene
+        .path
+        .parent()
+        .and_then(|directory| directory.parent())
+        .context("map path must be inside the game's Maps directory")?;
+    let mut runtime = ScriptRuntime::new(game_root)?;
+    runtime.set_console_command_host(console);
+    initialize_runtime_after_creation(scene, &mut runtime, |_| Ok(()), false)?;
+    Ok(runtime)
+}
+
+fn initialize_runtime_after_creation(
+    scene: &mut LoadedScene,
+    runtime: &mut ScriptRuntime,
+    mut external: impl FnMut(ActorAction) -> Result<()>,
+    start: bool,
+) -> Result<()> {
     runtime.set_collision(scene.collision(), &scene.path)?;
     let classes = scene
         .actors
@@ -63,9 +106,12 @@ pub fn initialize_runtime_with(
             runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
         }
     }
-    sync_runtime_bone_positions(scene, &mut runtime)?;
+    sync_runtime_bone_positions(scene, runtime)?;
+    if !start {
+        return Ok(());
+    }
     let game_actions = runtime.initialize_game()?;
-    apply_runtime_actions_with(scene, &mut runtime, game_actions, &mut external)?;
+    apply_runtime_actions_with(scene, runtime, game_actions, &mut external)?;
     let mut events = 0;
     let mut animations = 0;
     let mut deferred = 0;
@@ -80,7 +126,7 @@ pub fn initialize_runtime_with(
                 Ok(actions) => {
                     events += 1;
                     let applied =
-                        apply_runtime_actions_with(scene, &mut runtime, actions, &mut external)?;
+                        apply_runtime_actions_with(scene, runtime, actions, &mut external)?;
                     animations += applied.0;
                     deferred += applied.1;
                 }
@@ -94,7 +140,7 @@ pub fn initialize_runtime_with(
         }
     }
     info!(events, animations, deferred, "initialized script runtime");
-    Ok(runtime)
+    Ok(())
 }
 
 pub fn apply_runtime_actions(
@@ -162,6 +208,35 @@ pub fn apply_runtime_actions_with(
                     scene.actors[actor]
                         .diagnostics
                         .push(format!("runtime could not play animation {sequence}"));
+                }
+                bone_positions_changed = true;
+            }
+            ActorAction::RestoreAnimation {
+                actor,
+                sequence,
+                rate,
+                tween_time,
+                looping,
+                tween_only,
+                root_motion,
+                phase,
+            } => {
+                let played = scene.restore_actor_animation(
+                    actor,
+                    &sequence,
+                    rate,
+                    tween_time,
+                    looping,
+                    tween_only,
+                    root_motion,
+                    phase,
+                )?;
+                if played {
+                    animations += 1;
+                } else {
+                    scene.actors[actor]
+                        .diagnostics
+                        .push(format!("runtime could not restore animation {sequence}"));
                 }
                 bone_positions_changed = true;
             }

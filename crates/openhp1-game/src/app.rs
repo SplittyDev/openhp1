@@ -1,12 +1,24 @@
-use std::{collections::HashSet, f32::consts::TAU, sync::Arc, time::Instant};
+use std::{
+    collections::HashSet,
+    f32::consts::TAU,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, mpsc},
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result};
 use glam::{Mat3, Quat, Vec3};
 use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, RenderStats, Renderer};
-use openhp1_runtime::{ActorAction, PlayerInput, PlayerView, ScriptRuntime};
+use openhp1_runtime::{
+    ActorAction, ConsoleCommandAction, ConsoleCommands, PlayerInput, PlayerView, ScriptRuntime,
+};
 use openhp1_scene::{
-    LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with, unreal_to_render,
+    LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
+    initialize_runtime_with_console_unstarted, unreal_to_render,
 };
 use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
@@ -69,6 +81,43 @@ impl ApplicationHandler for GameApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if matches!(&event, WindowEvent::RedrawRequested) {
+            let Some(mut graphics) = self.graphics.take() else {
+                return;
+            };
+            if graphics.window.id() != window_id {
+                self.graphics = Some(graphics);
+                return;
+            }
+            match graphics.render() {
+                RenderOutcome::Continue => {
+                    graphics.window.request_redraw();
+                    self.graphics = Some(graphics);
+                }
+                RenderOutcome::Exit => event_loop.exit(),
+                RenderOutcome::Load(saved) => {
+                    let window = Arc::clone(&graphics.window);
+                    let path = saved.map_path(&graphics.scene.path);
+                    match path
+                        .and_then(LoadedScene::load)
+                        .and_then(|scene| Graphics::new_with_save(window, scene, &saved.bytes))
+                    {
+                        Ok(graphics) => {
+                            graphics.window.request_redraw();
+                            self.graphics = Some(graphics);
+                        }
+                        Err(error) => {
+                            graphics.last_error = Some(format!(
+                                "could not load saved game {}: {error:#}",
+                                saved.map
+                            ));
+                            self.graphics = Some(graphics);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
@@ -118,10 +167,6 @@ impl ApplicationHandler for GameApp {
             WindowEvent::MouseInput { state, button, .. } => {
                 graphics.mouse_button(button, state);
             }
-            WindowEvent::RedrawRequested => {
-                graphics.render();
-                graphics.window.request_redraw();
-            }
             _ => {}
         }
     }
@@ -141,6 +186,37 @@ impl ApplicationHandler for GameApp {
             graphics.input.mouse_delta.0 += delta.0;
             graphics.input.mouse_delta.1 += delta.1;
         }
+    }
+}
+
+enum RenderOutcome {
+    Continue,
+    Exit,
+    Load(SavedGame),
+}
+
+struct SavedGame {
+    map: String,
+    bytes: Vec<u8>,
+}
+
+impl SavedGame {
+    fn map_path(&self, current_map: &Path) -> Result<PathBuf> {
+        let game_root = current_map
+            .parent()
+            .and_then(|directory| directory.parent())
+            .context("map path must be inside the game's Maps directory")?;
+        let relative = Path::new(&self.map);
+        if !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+            || !relative
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("unr"))
+        {
+            anyhow::bail!("saved map identifier `{}` is invalid", self.map);
+        }
+        Ok(game_root.join(relative))
     }
 }
 
@@ -240,6 +316,7 @@ struct Graphics {
     camera: Camera,
     scene: LoadedScene,
     runtime: ScriptRuntime,
+    console: ConsoleCommands,
     audio: Option<AudioPlayer>,
     player: usize,
     input: InputState,
@@ -253,11 +330,41 @@ struct Graphics {
     overlay_visible: bool,
     egui: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
+    screenshot_dir: PathBuf,
+    save_dir: PathBuf,
+    pending_screenshots: Vec<Option<u32>>,
 }
 
 impl Graphics {
-    fn new(window: Arc<Window>, mut scene: LoadedScene) -> Result<Self> {
+    fn new(window: Arc<Window>, scene: LoadedScene) -> Result<Self> {
+        Self::new_inner(window, scene, None)
+    }
+
+    fn new_with_save(window: Arc<Window>, scene: LoadedScene, bytes: &[u8]) -> Result<Self> {
+        Self::new_inner(window, scene, Some(bytes))
+    }
+
+    fn new_inner(
+        window: Arc<Window>,
+        mut scene: LoadedScene,
+        saved: Option<&[u8]>,
+    ) -> Result<Self> {
         let mut last_error = None;
+        let game_root = scene
+            .path
+            .parent()
+            .and_then(|directory| directory.parent())
+            .context("map path must be inside the game's Maps directory")?
+            .to_path_buf();
+        let initial_size = window.inner_size();
+        let console = ConsoleCommands::production(
+            &game_root,
+            (initial_size.width, initial_size.height),
+            display_resolutions(&window),
+        )
+        .context("could not configure game console commands")?;
+        let screenshot_dir = console.settings_dir().join("Screenshots");
+        let save_dir = console.settings_dir().join("Saves");
         let (music_volume, sound_volume) = audio_volumes(&scene);
         let mut audio = match AudioPlayer::new(music_volume, sound_volume) {
             Ok(audio) => Some(audio),
@@ -266,36 +373,41 @@ impl Graphics {
                 None
             }
         };
-        let mut runtime = initialize_runtime_with(&mut scene, |action| {
-            play_audio_action(audio.as_mut(), action)
-        })?;
+        let mut runtime = if saved.is_some() {
+            initialize_runtime_with_console_unstarted(&mut scene, console.clone())?
+        } else {
+            initialize_runtime_with_console(&mut scene, console.clone(), |action| {
+                play_audio_action(audio.as_mut(), action)
+            })?
+        };
         let player = runtime
             .player_actor()
             .context("Lev_Tut1 has no registered PlayerPawn actor")?;
         let mut deferred_calls = 0;
-        match runtime.dispatch_player_event("Possess", &[]) {
-            Ok(actions) => {
-                deferred_calls +=
-                    apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
-                        play_audio_action(audio.as_mut(), action)
-                    })?
-                    .1;
-                match runtime.initialize_player_hud() {
-                    Ok(actions) => {
-                        deferred_calls += apply_runtime_actions_with(
-                            &mut scene,
-                            &mut runtime,
-                            actions,
-                            |action| play_audio_action(audio.as_mut(), action),
-                        )?
-                        .1;
-                    }
-                    Err(error) => {
-                        last_error = Some(format!("player HUD initialization deferred: {error}"));
-                    }
-                }
-            }
-            Err(error) => last_error = Some(format!("player possession deferred: {error}")),
+        if let Some(saved) = saved {
+            let map = map_identifier(&scene.path, &game_root)?;
+            let actions = runtime.restore_game(&map, saved)?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
+                    play_audio_action(audio.as_mut(), action)
+                })?
+                .1;
+        } else if let Err(error) = (|| -> Result<()> {
+            let actions = runtime.dispatch_player_event("Possess", &[])?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
+                    play_audio_action(audio.as_mut(), action)
+                })?
+                .1;
+            let actions = runtime.initialize_player_hud()?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |action| {
+                    play_audio_action(audio.as_mut(), action)
+                })?
+                .1;
+            Ok(())
+        })() {
+            last_error = Some(format!("player initialization deferred: {error}"));
         }
 
         let player_actor = scene
@@ -363,6 +475,7 @@ impl Graphics {
             config.format = linear_format;
         }
         config.present_mode = wgpu::PresentMode::Fifo;
+        config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
         let renderer = Renderer::new(
             &device,
@@ -393,6 +506,7 @@ impl Graphics {
             camera,
             scene,
             runtime,
+            console,
             audio,
             player,
             input: InputState::default(),
@@ -406,6 +520,9 @@ impl Graphics {
             overlay_visible: true,
             egui,
             egui_renderer,
+            screenshot_dir,
+            save_dir,
+            pending_screenshots: Vec::new(),
         })
     }
 
@@ -452,7 +569,7 @@ impl Graphics {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> RenderOutcome {
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -473,6 +590,10 @@ impl Graphics {
         if self.vertices_dirty {
             self.update_vertices();
         }
+        match self.apply_console_commands() {
+            RenderOutcome::Continue => {}
+            outcome => return outcome,
+        }
 
         let frame = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) => frame,
@@ -482,12 +603,14 @@ impl Graphics {
             }
             CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return RenderOutcome::Continue;
             }
-            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return,
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => {
+                return RenderOutcome::Continue;
+            }
             CurrentSurfaceTexture::Validation => {
                 self.last_error = Some("wgpu rejected the game surface".to_owned());
-                return;
+                return RenderOutcome::Continue;
             }
         };
         let view = frame.texture.create_view(&Default::default());
@@ -518,6 +641,22 @@ impl Graphics {
             [self.config.width, self.config.height],
             0.625,
         );
+        let screenshots = match prepare_screenshots(
+            &self.device,
+            &mut encoder,
+            &frame.texture,
+            self.config.format,
+            self.config.width,
+            self.config.height,
+            &self.screenshot_dir,
+            std::mem::take(&mut self.pending_screenshots),
+        ) {
+            Ok(screenshots) => screenshots,
+            Err(error) => {
+                self.last_error = Some(format!("could not capture screenshot: {error}"));
+                Vec::new()
+            }
+        };
         let mut commands = self.egui_renderer.update_buffers(
             &self.device,
             &self.queue,
@@ -551,6 +690,87 @@ impl Graphics {
             self.egui_renderer.free_texture(id);
         }
         frame.present();
+        for screenshot in screenshots {
+            if let Err(error) = write_screenshot(&self.device, screenshot) {
+                self.last_error = Some(format!("could not save screenshot: {error}"));
+            }
+        }
+        RenderOutcome::Continue
+    }
+
+    fn apply_console_commands(&mut self) -> RenderOutcome {
+        let mut exit = false;
+        let mut load = None;
+        for action in self.console.take_actions() {
+            match action {
+                ConsoleCommandAction::Exit => exit = true,
+                ConsoleCommandAction::SetResolution { width, height } => {
+                    let _ = self
+                        .window
+                        .request_inner_size(PhysicalSize::new(width, height));
+                }
+                ConsoleCommandAction::SetMusicVolume(volume) => {
+                    if let Some(audio) = self.audio.as_mut() {
+                        audio.set_music_volume(f32::from(volume) / 255.0);
+                    }
+                }
+                ConsoleCommandAction::SetSoundVolume(volume) => {
+                    if let Some(audio) = self.audio.as_mut() {
+                        audio.set_sound_volume(f32::from(volume) / 255.0);
+                    }
+                }
+                ConsoleCommandAction::Open(url) => {
+                    if let Err(error) = open_url(&url) {
+                        self.last_error = Some(format!("could not open {url}: {error}"));
+                    }
+                }
+                ConsoleCommandAction::Screenshot { snapshot } => {
+                    self.pending_screenshots.push(snapshot);
+                }
+                ConsoleCommandAction::SaveGame { slot } => {
+                    if let Err(error) = self.save_game(slot) {
+                        self.last_error = Some(format!("could not save game: {error:#}"));
+                    }
+                }
+                ConsoleCommandAction::OpenSave { slot } => match self.open_save(slot) {
+                    Ok(saved) => load = Some(saved),
+                    Err(error) => {
+                        self.last_error = Some(format!("could not open saved game: {error:#}"));
+                    }
+                },
+            }
+        }
+        if exit {
+            RenderOutcome::Exit
+        } else if let Some(saved) = load {
+            RenderOutcome::Load(saved)
+        } else {
+            RenderOutcome::Continue
+        }
+    }
+
+    fn save_game(&mut self, slot: u32) -> Result<()> {
+        let game_root = self
+            .scene
+            .path
+            .parent()
+            .and_then(|directory| directory.parent())
+            .context("map path must be inside the game's Maps directory")?;
+        let map = map_identifier(&self.scene.path, game_root)?;
+        let bytes = self.runtime.save_game(&map)?;
+        write_save_atomically(&self.save_path(slot), &bytes)
+    }
+
+    fn open_save(&self, slot: u32) -> Result<SavedGame> {
+        let path = self.save_path(slot);
+        let bytes =
+            fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let map = ScriptRuntime::saved_game_map(&bytes)?;
+        Ok(SavedGame { map, bytes })
+    }
+
+    fn save_path(&self, slot: u32) -> PathBuf {
+        self.save_dir.join(format!("save{slot}.usa"))
     }
 
     fn debug_overlay(&self, context: &egui::Context) {
@@ -838,6 +1058,29 @@ fn is_fast_forward_key(key: KeyCode) -> bool {
     matches!(key, KeyCode::Equal | KeyCode::NumpadAdd | KeyCode::KeyF)
 }
 
+fn display_resolutions(window: &Window) -> Vec<(u32, u32)> {
+    window
+        .available_monitors()
+        .flat_map(|monitor| monitor.video_modes())
+        .map(|mode| mode.size())
+        .map(|size| (size.width, size.height))
+        .collect()
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut command = Command::new("xdg-open");
+    command.arg(url).spawn().map(|_| ())
+}
+
 fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
     let subsystem = scene
         .config_value("Engine.Engine", "AudioDevice")
@@ -919,6 +1162,219 @@ fn horizontal_to_vertical_fov(horizontal: f32, aspect: f32) -> f32 {
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+fn map_identifier(map: &Path, game_root: &Path) -> Result<String> {
+    let identifier = map
+        .strip_prefix(game_root)
+        .context("map path is outside the game root")?;
+    if !identifier
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+        || !identifier
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("unr"))
+    {
+        anyhow::bail!("map path `{}` is not a relative .unr map", map.display());
+    }
+    Ok(identifier.to_string_lossy().to_string())
+}
+
+fn write_save_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().context("save file has no parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("save file has no valid name")?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .with_context(|| format!("failed to create {}", temporary.display()))?;
+    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to write {}", temporary.display()));
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to replace {}", path.display()));
+    }
+    Ok(())
+}
+
+struct ScreenshotReadback {
+    path: PathBuf,
+    buffer: wgpu::Buffer,
+    bytes_per_row: u32,
+    width: u32,
+    height: u32,
+    bgra: bool,
+}
+
+fn prepare_screenshots(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    directory: &Path,
+    snapshots: Vec<Option<u32>>,
+) -> Result<Vec<ScreenshotReadback>> {
+    let bgra = match format.remove_srgb_suffix() {
+        wgpu::TextureFormat::Bgra8Unorm => true,
+        wgpu::TextureFormat::Rgba8Unorm => false,
+        format => anyhow::bail!("surface format {format:?} cannot be saved as a BMP"),
+    };
+    let row_bytes = width.checked_mul(4).context("screenshot row is too wide")?;
+    let bytes_per_row = (row_bytes + 255) & !255;
+    let size = u64::from(bytes_per_row)
+        .checked_mul(u64::from(height))
+        .context("screenshot is too large")?;
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("OpenHP1 screenshot readback"),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            Ok(ScreenshotReadback {
+                path: next_screenshot_path(directory, snapshot)?,
+                buffer,
+                bytes_per_row,
+                width,
+                height,
+                bgra,
+            })
+        })
+        .collect()
+}
+
+fn next_screenshot_path(directory: &Path, snapshot: Option<u32>) -> Result<PathBuf> {
+    fs::create_dir_all(directory)
+        .with_context(|| format!("could not create {}", directory.display()))?;
+    let prefix = snapshot.map_or_else(|| "Shot".to_owned(), |value| format!("Snap{value}"));
+    for index in 0..=u16::MAX {
+        let path = directory.join(format!("{prefix}{index:04}.bmp"));
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    anyhow::bail!("all screenshot names for {prefix} are in use")
+}
+
+fn write_screenshot(device: &wgpu::Device, screenshot: ScreenshotReadback) -> Result<()> {
+    let slice = screenshot.buffer.slice(..);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("GPU readback failed")?;
+    receiver
+        .recv()
+        .context("GPU screenshot readback was cancelled")?
+        .context("GPU screenshot readback failed")?;
+    let mapped = slice.get_mapped_range();
+    let bmp = bmp_bytes(
+        &mapped,
+        screenshot.bytes_per_row,
+        screenshot.width,
+        screenshot.height,
+        screenshot.bgra,
+    )?;
+    drop(mapped);
+    screenshot.buffer.unmap();
+    let temporary = screenshot.path.with_extension("tmp");
+    fs::write(&temporary, bmp)
+        .with_context(|| format!("could not write {}", temporary.display()))?;
+    fs::rename(&temporary, &screenshot.path)
+        .with_context(|| format!("could not finalize {}", screenshot.path.display()))?;
+    Ok(())
+}
+
+fn bmp_bytes(
+    pixels: &[u8],
+    bytes_per_row: u32,
+    width: u32,
+    height: u32,
+    bgra: bool,
+) -> Result<Vec<u8>> {
+    let row_bytes = usize::try_from(width.checked_mul(4).context("screenshot row is too wide")?)?;
+    let bytes_per_row = usize::try_from(bytes_per_row)?;
+    let height = usize::try_from(height)?;
+    if bytes_per_row < row_bytes
+        || pixels.len()
+            < bytes_per_row
+                .checked_mul(height)
+                .context("screenshot is too large")?
+    {
+        anyhow::bail!("screenshot readback has an invalid row layout");
+    }
+    let image_size = row_bytes
+        .checked_mul(height)
+        .context("screenshot is too large")?;
+    let file_size = 54_usize
+        .checked_add(image_size)
+        .context("screenshot is too large")?;
+    let width = i32::try_from(width)?;
+    let height = i32::try_from(height)?;
+    let mut output = Vec::with_capacity(file_size);
+    output.extend(b"BM");
+    output.extend(u32::try_from(file_size)?.to_le_bytes());
+    output.extend([0; 4]);
+    output.extend(54_u32.to_le_bytes());
+    output.extend(40_u32.to_le_bytes());
+    output.extend(width.to_le_bytes());
+    output.extend((-height).to_le_bytes());
+    output.extend(1_u16.to_le_bytes());
+    output.extend(32_u16.to_le_bytes());
+    output.extend(0_u32.to_le_bytes());
+    output.extend(u32::try_from(image_size)?.to_le_bytes());
+    output.extend([0; 16]);
+    for source in pixels.chunks(bytes_per_row).take(height as usize) {
+        for pixel in source[..row_bytes].chunks_exact(4) {
+            let [red, green, blue, alpha] = if bgra {
+                [pixel[2], pixel[1], pixel[0], pixel[3]]
+            } else {
+                [pixel[0], pixel[1], pixel[2], pixel[3]]
+            };
+            output.extend([blue, green, red, alpha]);
+        }
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1010,5 +1466,38 @@ mod tests {
         assert!(is_fast_forward_key(KeyCode::NumpadAdd));
         assert!(is_fast_forward_key(KeyCode::KeyF));
         assert!(!is_fast_forward_key(KeyCode::F2));
+    }
+
+    #[test]
+    fn bmp_readback_uses_top_down_bgra_pixels_and_numbered_names() {
+        let mut readback = vec![0; 256];
+        readback[..8].copy_from_slice(&[1, 2, 3, 4, 20, 30, 40, 50]);
+        let bmp = bmp_bytes(&readback, 256, 2, 1, false).unwrap();
+        assert_eq!(&bmp[..2], b"BM");
+        assert_eq!(u32::from_le_bytes(bmp[2..6].try_into().unwrap()), 62);
+        assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
+        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 2);
+        assert_eq!(i32::from_le_bytes(bmp[22..26].try_into().unwrap()), -1);
+        assert_eq!(&bmp[54..62], &[3, 2, 1, 4, 40, 30, 20, 50]);
+
+        let directory = std::env::temp_dir().join(format!(
+            "openhp1-screenshot-name-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let first = next_screenshot_path(&directory, Some(3)).unwrap();
+        assert_eq!(first.file_name().unwrap(), "Snap30000.bmp");
+        fs::write(&first, []).unwrap();
+        assert_eq!(
+            next_screenshot_path(&directory, Some(3))
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "Snap30001.bmp"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

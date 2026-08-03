@@ -31,6 +31,7 @@ impl ScriptRuntime {
     fn with_packages(packages: PackageStore) -> DispatchResult<Self> {
         Ok(Self {
             packages,
+            console_command_host: None,
             scripts: HashMap::default(),
             function_lookups: HashMap::default(),
             state_lookups: HashMap::default(),
@@ -88,6 +89,10 @@ impl ScriptRuntime {
             base_children: HashMap::default(),
             touching: HashSet::default(),
         })
+    }
+
+    pub fn set_console_command_host(&mut self, host: impl ConsoleCommandHost + 'static) {
+        self.console_command_host = Some(Box::new(host));
     }
 
     pub fn set_collision(

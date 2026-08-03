@@ -198,6 +198,17 @@ impl AudioPlayer {
             music.stop(Tween::default());
         }
     }
+
+    pub fn set_music_volume(&mut self, volume: f32) {
+        self.music_volume = volume.clamp(0.0, 1.0);
+        if let Some(music) = &mut self.music {
+            music.set_volume(linear_volume(self.music_volume), Tween::default());
+        }
+    }
+
+    pub fn set_sound_volume(&mut self, volume: f32) {
+        self.sound_volume = volume.clamp(0.0, 1.0);
+    }
 }
 
 fn decoder(clip: &AudioClip) -> Result<StaticSoundData> {

@@ -4,7 +4,7 @@ use crate::IteratorValue;
 use glam::Vec3;
 
 mod dispatch;
-mod object;
+pub(super) mod object;
 
 struct CallOutput {
     value: Value,
@@ -421,6 +421,7 @@ impl ScriptRuntime {
                     function_name,
                     arguments,
                     actions,
+                    self.console_command_host.as_deref_mut(),
                 ) {
                     return Ok(value);
                 }
@@ -556,6 +557,7 @@ pub(super) fn named_native(
     function: &str,
     arguments: &[Value],
     actions: &mut Vec<ActorAction>,
+    console_command_host: Option<&mut (dyn ConsoleCommandHost + '_)>,
 ) -> Option<Value> {
     if class.eq_ignore_ascii_case("PlayerPawn")
         && function.eq_ignore_ascii_case("ClientTravel")
@@ -573,13 +575,19 @@ pub(super) fn named_native(
         });
         return Some(Value::None);
     }
-    if class.eq_ignore_ascii_case("PlayerPawn")
+    if (class.eq_ignore_ascii_case("Actor")
+        || class.eq_ignore_ascii_case("PlayerPawn")
+        || class.eq_ignore_ascii_case("Console"))
         && function.eq_ignore_ascii_case("ConsoleCommand")
-        && matches!(arguments, [Value::String(_)])
+        && let [Value::String(command)] = arguments
+        && let Some(console_command_host) = console_command_host
     {
-        // ponytail: the game only probes optional console values here; add
-        // command routing when an in-game console exists.
-        return Some(Value::String(String::new()));
+        let response = console_command_host.console_command(actor, class, command);
+        return Some(if class.eq_ignore_ascii_case("Console") {
+            Value::Bool(response.handled)
+        } else {
+            Value::String(response.output)
+        });
     }
     if class.eq_ignore_ascii_case("PlayerPawn")
         && function.eq_ignore_ascii_case("GetPlayerNetworkAddress")

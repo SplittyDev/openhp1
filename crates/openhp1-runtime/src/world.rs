@@ -26,6 +26,7 @@ mod instance;
 mod movement;
 mod native;
 mod physics;
+mod save;
 mod state;
 
 pub use action::{
@@ -33,6 +34,23 @@ pub use action::{
     PlayerMusic, RuntimeObject, WeaponAttachment,
 };
 pub use error::{DispatchError, DispatchResult};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConsoleCommandResponse {
+    pub output: String,
+    pub handled: bool,
+}
+
+/// Handles an Unreal console command in the game host that owns window, input,
+/// save, and platform state.
+pub trait ConsoleCommandHost {
+    fn console_command(
+        &mut self,
+        actor: usize,
+        class: &str,
+        command: &str,
+    ) -> ConsoleCommandResponse;
+}
 
 const GOTO_STATE: u16 = 0x071;
 const ENABLE: u16 = 0x075;
@@ -182,6 +200,7 @@ const PROBE_EVENTS: [&str; 64] = [
 
 pub struct ScriptRuntime {
     packages: PackageStore,
+    console_command_host: Option<Box<dyn ConsoleCommandHost>>,
     scripts: HashMap<ObjectId, Arc<ScriptExport>>,
     function_lookups: HashMap<FunctionLookup, Option<ObjectId>>,
     state_lookups: HashMap<StateLookup, Option<ObjectId>>,
@@ -290,7 +309,7 @@ enum StoredValue {
     SelfObject,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ActorTimer {
     remaining: f32,
     rate: f32,
@@ -312,6 +331,7 @@ struct AnimationCommand {
     tween_time: f32,
     looping: bool,
     tween_only: bool,
+    root_motion: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

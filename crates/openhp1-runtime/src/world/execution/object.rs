@@ -708,3 +708,63 @@ fn scene_property_action(
         _ => return None,
     })
 }
+
+/// Projects a stored actor property through the shared runtime-to-scene seam.
+/// Restore uses the same mapping after rebuilding mutable instances.
+pub(in crate::world) fn scene_projection_actions(
+    actor: usize,
+    field_name: &str,
+    value: &StoredValue,
+) -> Vec<ActorAction> {
+    let mut actions = Vec::new();
+    if field_name.eq_ignore_ascii_case("Location")
+        && let StoredValue::Value(Value::Vector(location)) = value
+    {
+        actions.push(ActorAction::SetLocation {
+            actor,
+            location: *location,
+        });
+    }
+    if field_name.eq_ignore_ascii_case("Rotation")
+        && let StoredValue::Value(Value::Rotator(rotation)) = value
+    {
+        actions.push(ActorAction::SetRotation {
+            actor,
+            rotation: *rotation,
+        });
+    }
+    if field_name.eq_ignore_ascii_case("bHidden")
+        && let StoredValue::Value(Value::Bool(hidden)) = value
+    {
+        actions.push(ActorAction::SetHidden {
+            actor,
+            hidden: *hidden,
+        });
+    }
+    if field_name.eq_ignore_ascii_case("PrePivot")
+        && let StoredValue::Value(Value::Vector(pre_pivot)) = value
+    {
+        actions.push(ActorAction::SetPrePivot {
+            actor,
+            pre_pivot: *pre_pivot,
+        });
+    }
+    if field_name.eq_ignore_ascii_case("DrawType")
+        && let StoredValue::Value(Value::Byte(draw_type)) = value
+    {
+        actions.push(ActorAction::SetDrawType {
+            actor,
+            draw_type: *draw_type,
+        });
+    }
+    if let Some(action) = scene_property_action(actor, field_name, value) {
+        actions.push(action);
+    }
+    if super::is_unsupported_scene_property(field_name) {
+        actions.push(ActorAction::UnsupportedSceneProperty {
+            actor,
+            property: field_name.to_owned(),
+        });
+    }
+    actions
+}
