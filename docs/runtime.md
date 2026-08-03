@@ -162,7 +162,10 @@ retained as per-actor capability diagnostics rather than silently discarded.
 Particle acceleration combines authored `Gravity` with the emitter's active
 zone `ZoneGravity * GravityModifier`, falling back to `LevelInfo` when the BSP
 zone has no actor. The combined acceleration enters before damping and
-position advancement. `Chaos` applies the native per-particle, delayed,
+position advancement. A nonzero `Elasticity` point-traces that advance against
+world BSP, stops at the trace fraction, and reflects the normal velocity by
+the authored restitution; zero leaves particles non-colliding. `Chaos` applies
+the native per-particle, delayed,
 normalized cube-direction velocity impulse after integration and attraction;
 the impulse is not scaled by frame time. OpenHP1 uses its deterministic
 per-emitter random stream and explicitly starts each chaos timer at zero.

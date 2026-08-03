@@ -624,6 +624,7 @@ impl LoadedScene {
         if !delta_time.is_finite() || delta_time <= 0.0 {
             return false;
         }
+        let collision = Arc::clone(&self.collision);
         let mut changed = false;
         for (&actor, system) in &mut self.particles {
             let Some(owner) = self.actors.get(actor) else {
@@ -634,7 +635,22 @@ impl LoadedScene {
                 particle.spin += particle.spin_rate * delta_time;
                 particle.velocity += Vec3::from_array(system.config.gravity) * delta_time;
                 particle.velocity *= particle_damping(system.config.damping, delta_time);
+                let previous_location = particle.location;
                 particle.location += particle.velocity * delta_time;
+                let origin = system
+                    .config
+                    .system_relative
+                    .then_some(owner.location)
+                    .unwrap_or(Vec3::ZERO);
+                if let Some(location) = particle_collision_response(
+                    &collision,
+                    previous_location + origin,
+                    particle.location + origin,
+                    &mut particle.velocity,
+                    system.config.elasticity,
+                ) {
+                    particle.location = location - origin;
+                }
                 particle.velocity += particle_attraction(
                     particle.location,
                     owner.location,
@@ -1637,6 +1653,21 @@ fn particle_attraction(
         owner_location
     };
     (target - location) * Vec3::from_array(attraction)
+}
+
+fn particle_collision_response(
+    collision: &BspCollision,
+    start: Vec3,
+    end: Vec3,
+    velocity: &mut Vec3,
+    elasticity: f32,
+) -> Option<Vec3> {
+    if elasticity == 0.0 {
+        return None;
+    }
+    let hit = collision.line_trace(start, end)?;
+    *velocity -= hit.normal * ((1.0 + elasticity) * velocity.dot(hit.normal));
+    Some(start.lerp(end, hit.fraction))
 }
 
 fn sync_hidden_attachment(rendered: &mut [Vec3], saved: &[Vec3], attached: bool) -> bool {
@@ -3486,7 +3517,11 @@ fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use openhp1_map::PolyFlags;
+    use std::{fs, path::PathBuf, sync::Arc};
+
+    use openhp1_map::{BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
+    use openhp1_package::{ObjectReference, PackageStore};
+    use openhp1_physics::BspCollision;
     use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat};
     use openhp1_texture::TextureRenderFlags;
 
@@ -3617,6 +3652,300 @@ mod tests {
             ),
             glam::Vec3::new(4.0, -3.0, 0.0)
         );
+    }
+
+    #[test]
+    fn tick_particles_bounces_elastic_particles_from_world_bsp_once() {
+        let mut scene = particle_test_scene();
+
+        assert!(scene.tick_particles(1.0));
+        let particle = &scene.particles[&0].particles[0];
+        assert!((-2.0..0.0).contains(&particle.location.x));
+        assert!(
+            particle
+                .velocity
+                .abs_diff_eq(glam::Vec3::new(-5.0, 2.0, 0.0), 1.0e-6)
+        );
+        let location = particle.location;
+
+        assert!(scene.tick_particles(0.1));
+        let particle = &scene.particles[&0].particles[0];
+        assert!(particle.location.x < location.x);
+        assert!(
+            particle
+                .velocity
+                .abs_diff_eq(glam::Vec3::new(-5.0, 2.0, 0.0), 1.0e-6)
+        );
+    }
+
+    fn particle_test_scene() -> super::LoadedScene {
+        let root = std::env::temp_dir().join(format!(
+            "openhp1-scene-particle-elasticity-{}",
+            std::process::id()
+        ));
+        let system = root.join("System");
+        fs::create_dir_all(&system).unwrap();
+        fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+        let package_path = system.join("Test.u");
+        fs::write(&package_path, synthetic_level_package()).unwrap();
+        let mut packages = PackageStore::scan_game_root(&root).unwrap();
+        let map = packages.load_path(&package_path).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        let model = particle_collision_model();
+        let collision = Arc::new(BspCollision::from_model(&model).unwrap());
+        let vertex_lighting = model.vertex_lighting(&map).unwrap();
+        super::LoadedScene {
+            path: PathBuf::from("particle-test.unr"),
+            levels: Vec::new(),
+            render: crate::RenderScene {
+                mesh: openhp1_map::TriangleMesh {
+                    positions: vec![glam::Vec3::ZERO; 4],
+                    vertex_colors: vec![glam::Vec3::ONE; 4],
+                    ..Default::default()
+                },
+                textures: Vec::new(),
+                lightmaps: Vec::new(),
+                surface_materials: Vec::new(),
+                sky_zone: None,
+            },
+            points: 0,
+            nodes: 0,
+            surfaces: 0,
+            visible_bsp_surfaces: 0,
+            textured_surfaces: 0,
+            masked_surfaces: 0,
+            translucent_surfaces: 0,
+            modulated_surfaces: 0,
+            fake_backdrop_surfaces: 0,
+            has_sky_zone: false,
+            actor_meshes: 0,
+            animated_actor_meshes: 0,
+            actors: vec![crate::SceneActor {
+                id: crate::SceneObjectId {
+                    package: "<test>".to_owned(),
+                    export_index: 0,
+                },
+                name: "ParticleTest".to_owned(),
+                class: None,
+                class_name: "ParticleFX".to_owned(),
+                location: glam::Vec3::ZERO,
+                rotation: crate::Rotator::default(),
+                pre_pivot: glam::Vec3::ZERO,
+                main_scale: glam::Vec3::ONE,
+                draw_scale: 1.0,
+                draw_type: 8,
+                hidden: false,
+                unlit: false,
+                brush: None,
+                mesh: None,
+                mesh_name: None,
+                animation: None,
+                render: None,
+                mesh_transform: None,
+                mesh_to_object: None,
+                visual_bounds: None,
+                diagnostics: Vec::new(),
+            }],
+            actor_states: vec![super::ActorRenderState::default()],
+            collision,
+            zone_nodes: Vec::new(),
+            zone_count: 0,
+            animations: Vec::new(),
+            sprites: Vec::new(),
+            root_motions: Vec::new(),
+            hidden_actor_positions: Default::default(),
+            attached_weapons: Default::default(),
+            water_animations: Vec::new(),
+            changed_lightmaps: Vec::new(),
+            particles: [(
+                0,
+                super::ParticleSystem {
+                    config: ParticleEmitter {
+                        elasticity: 0.5,
+                        ..Default::default()
+                    },
+                    particles: vec![super::Particle {
+                        location: glam::Vec3::new(-10.0, 0.0, 0.0),
+                        velocity: glam::Vec3::new(10.0, 2.0, 0.0),
+                        age: 0.0,
+                        lifetime: 5.0,
+                        half_size: glam::Vec2::ZERO,
+                        end_scale: 1.0,
+                        color_start: glam::Vec3::ONE,
+                        color_end: glam::Vec3::ONE,
+                        spin: 0.0,
+                        spin_rate: 0.0,
+                        chaos_timer: 0.0,
+                        drip_time: 0.0,
+                    }],
+                    capacity: 1,
+                    vertices: 0..4,
+                    residue: 0.0,
+                    last_location: glam::Vec3::ZERO,
+                    random: 0,
+                    primed: false,
+                    emitted: 0,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            particle_view_rotation: glam::Mat4::IDENTITY,
+            actor_render: super::ActorRenderContext {
+                packages,
+                map,
+                model,
+                vertex_lighting,
+                light_brightnesses: Default::default(),
+                class_cache: Default::default(),
+                mesh_cache: Default::default(),
+                brush_cache: Default::default(),
+                animation_cache: Default::default(),
+                decoded_textures: Default::default(),
+                images: Default::default(),
+            },
+        }
+    }
+
+    fn particle_collision_model() -> Model {
+        let mut model = Model {
+            bounds: PrimitiveBounds {
+                minimum: glam::Vec3::ZERO,
+                maximum: glam::Vec3::ZERO,
+                valid: false,
+                sphere: [0.0; 4],
+            },
+            vectors: Vec::new(),
+            points: vec![
+                glam::Vec3::new(0.0, -10.0, -10.0),
+                glam::Vec3::new(0.0, 10.0, -10.0),
+                glam::Vec3::new(0.0, 10.0, 10.0),
+                glam::Vec3::new(0.0, -10.0, 10.0),
+            ],
+            nodes: Vec::new(),
+            surfaces: vec![BspSurface {
+                texture: ObjectReference::None,
+                poly_flags: PolyFlags::default(),
+                base_point: 0,
+                normal: 0,
+                texture_u: 0,
+                texture_v: 0,
+                light_map: -1,
+                brush_poly: -1,
+                pan_u: 0,
+                pan_v: 0,
+                brush_actor: ObjectReference::None,
+            }],
+            vertices: (0..4).map(|point| BspVertex { point, side: -1 }).collect(),
+            shared_side_count: 0,
+            zones: Vec::new(),
+            polys: ObjectReference::None,
+            light_maps: Vec::new(),
+            light_bits: Vec::new(),
+            collision_bounds: Vec::new(),
+            leaf_hulls: Vec::new(),
+            leaves: Vec::new(),
+            lights: Vec::new(),
+            root_outside: true,
+            linked: false,
+        };
+        model.nodes.push(openhp1_map::BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: 0,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [0; 2],
+            vertex_count: 4,
+            leaves: [0; 2],
+        });
+        model
+    }
+
+    fn synthetic_level_package() -> Vec<u8> {
+        let names = ["None", "Package", "Class", "Level", "Test"];
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            name_table.extend(0_u32.to_le_bytes());
+        }
+        let mut payload = vec![0];
+        payload.extend(0_i32.to_le_bytes());
+        payload.extend(0_i32.to_le_bytes());
+        payload.extend([0; 4]);
+        payload.push(0);
+        payload.extend(0_i32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend([0; 2]);
+
+        const HEADER_SIZE: usize = 44;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let mut import_table = vec![1, 2];
+        import_table.extend(0_i32.to_le_bytes());
+        import_table.push(3);
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        export.extend(0_i32.to_le_bytes());
+        export.push(4);
+        export.extend(0_u32.to_le_bytes());
+        export.push(payload.len() as u8);
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let offset = compact_index(payload_offset);
+            let next = export_offset + export.len() + offset.len();
+            if next == payload_offset {
+                export.extend(offset);
+                break;
+            }
+            payload_offset = next;
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend(0_u32.to_le_bytes());
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+        ] {
+            bytes.extend((value as i32).to_le_bytes());
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        bytes.extend(payload);
+        bytes
+    }
+
+    fn compact_index(mut value: usize) -> Vec<u8> {
+        let mut bytes = vec![value as u8 & 0x3f];
+        value >>= 6;
+        if value != 0 {
+            bytes[0] |= 0x40;
+        }
+        while value != 0 {
+            let mut byte = value as u8 & 0x7f;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+        }
+        bytes
     }
 
     #[test]

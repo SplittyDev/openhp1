@@ -96,9 +96,6 @@ impl ParticleEmitter {
         if self.velocity_relative {
             diagnostics.push("particle owner-velocity inheritance is unsupported");
         }
-        if self.elasticity != 0.0 {
-            diagnostics.push("particle collision elasticity is unsupported");
-        }
         if self.wind_modifier != 0.0 {
             diagnostics.push("particle wind response is unsupported");
         }
@@ -121,6 +118,7 @@ mod particle_tests {
         let supported = ParticleEmitter {
             render_primitive: 1,
             gravity_modifier: -0.5,
+            elasticity: 1.0,
             ..Default::default()
         };
         assert!(supported.capability_diagnostics().is_empty());
