@@ -4,12 +4,12 @@ use glam::Vec3;
 use openhp1_audio::AudioClip;
 use openhp1_map::{Level, Model};
 use openhp1_package::{
-    ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
+    ConfigEntry, ObjectReader, ObjectReference, Package, PackageStore, PropertyKind, ResolveError,
     ResolvedObject,
 };
 use openhp1_physics::BspCollision;
 use openhp1_script::{
-    Bytecode, PropertyMetadata, ScriptExport, ScriptMetadata, class_defaults_reader,
+    Bytecode, PropertyMetadata, ScriptExport, ScriptMetadata, class_defaults_reader, enum_names,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
@@ -104,10 +104,13 @@ const LOG: u16 = 0x0e7;
 const V_RAND: u16 = 0x0fc;
 const FIND_PATH: u16 = 0x229;
 const CLASS_ABSTRACT: u32 = 0x0000_0001;
+const CLASS_CONFIG: u32 = 0x0000_0004;
 const MAX_CALL_DEPTH: usize = 64;
 const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_OUTPUT: u32 = 0x100;
 const PROPERTY_RETURN: u32 = 0x400;
+const PROPERTY_CONFIG: u32 = 0x0000_4000;
+const PROPERTY_GLOBAL_CONFIG: u32 = 0x0004_0000;
 const FUNCTION_NATIVE: u32 = 0x0000_0400;
 const STATE_AUTO: u32 = 0x0000_0002;
 const PROBE_EVENTS: [&str; 64] = [

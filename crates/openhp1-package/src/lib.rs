@@ -16,7 +16,7 @@ mod tables;
 pub use error::{Error, Result};
 pub use object::{ObjectReader, ObjectStack, PropertyKind, PropertyTag};
 pub use package::Package;
-pub use resolver::{PackageStore, ResolveError, ResolveResult, ResolvedObject};
+pub use resolver::{ConfigEntry, PackageStore, ResolveError, ResolveResult, ResolvedObject};
 pub use summary::{
     Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PackageHeader,
     PackageSummary,

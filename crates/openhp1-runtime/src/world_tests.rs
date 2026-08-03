@@ -90,6 +90,210 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     bytes
 }
 
+fn compact_index(value: i32) -> Vec<u8> {
+    let negative = value < 0;
+    let mut value = value.unsigned_abs();
+    let mut bytes = vec![(value as u8 & 0x3f) | if negative { 0x80 } else { 0 }];
+    value >>= 6;
+    if value != 0 {
+        bytes[0] |= 0x40;
+    }
+    while value != 0 {
+        let mut byte = value as u8 & 0x7f;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        bytes.push(byte);
+    }
+    bytes
+}
+
+fn synthetic_config_package() -> Vec<u8> {
+    let names = [
+        "None",
+        "DerivedConfig",
+        "TestConfig",
+        "GlobalBase",
+        "ConfigValue",
+        "SecondValue",
+        "ThirdValue",
+        "GlobalValue",
+        "Class",
+        "IntProperty",
+        "Core",
+        "User",
+        "Mode",
+        "ObjectValue",
+        "ClassValue",
+        "Tint",
+        "Tags",
+        "TagElement",
+        "Priorities",
+        "EMode",
+        "Color",
+        "SomeObject",
+        "SomeClass",
+        "ByteProperty",
+        "ObjectProperty",
+        "ClassProperty",
+        "StructProperty",
+        "ArrayProperty",
+        "StrProperty",
+        "NameProperty",
+        "Enum",
+        "Struct",
+        "Object",
+        "ModeZero",
+        "ModeOne",
+    ];
+    let name_offset = 44;
+    let names_len = names.iter().map(|name| name.len() + 5).sum::<usize>();
+    let import_offset = name_offset + names_len;
+    let mut import = Vec::new();
+    for object_name in [9, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32] {
+        import.extend(compact_index(10));
+        import.extend(compact_index(8));
+        import.extend(0_i32.to_le_bytes());
+        import.extend(compact_index(object_name));
+    }
+    let export_offset = import_offset + import.len();
+    let class_payload = |base, config_name| {
+        let mut payload = Vec::new();
+        for reference in [base, 0, 0, 0, 0] {
+            payload.extend(compact_index(reference));
+        }
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u64.to_le_bytes());
+        payload.extend(0_u64.to_le_bytes());
+        payload.extend(0_u16.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(CLASS_CONFIG.to_le_bytes());
+        payload.extend([0; 16]);
+        payload.extend(compact_index(0));
+        payload.extend(compact_index(0));
+        payload.extend(compact_index(0));
+        payload.extend(compact_index(config_name));
+        payload.extend(compact_index(0));
+        payload
+    };
+    let property_payload = |array_dimension: i32, flags: u32, references: &[i32]| {
+        let mut payload = vec![0, 0, 0];
+        payload.extend(array_dimension.to_le_bytes());
+        payload.extend(flags.to_le_bytes());
+        payload.extend(compact_index(0));
+        for reference in references {
+            payload.extend(compact_index(*reference));
+        }
+        payload
+    };
+    let enum_payload = || {
+        let mut payload = vec![0, 0, 0];
+        payload.extend(compact_index(2));
+        payload.extend(compact_index(33));
+        payload.extend(compact_index(34));
+        payload
+    };
+    let payloads = [
+        class_payload(2, 0),
+        class_payload(3, 11),
+        class_payload(0, 0),
+        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_GLOBAL_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG, &[15]),
+        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG, &[16]),
+        property_payload(1, PROPERTY_CONFIG, &[13]),
+        property_payload(1, 0, &[]),
+        property_payload(2, PROPERTY_CONFIG, &[]),
+        enum_payload(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ];
+    let export_table = |payload_offset| {
+        let mut table = Vec::new();
+        let mut serial_offset = payload_offset;
+        for (index, payload) in payloads.iter().enumerate() {
+            let (class, outer, name): (i32, i32, i32) = match index {
+                0 => (0, 0, 1),
+                1 => (0, 0, 2),
+                2 => (0, 0, 3),
+                3 => (-1, 2, 4),
+                4 => (-1, 2, 5),
+                5 => (-1, 2, 6),
+                6 => (-1, 3, 7),
+                7 => (-2, 1, 12),
+                8 => (-3, 1, 13),
+                9 => (-4, 1, 14),
+                10 => (-5, 1, 15),
+                11 => (-6, 1, 16),
+                12 => (-7, 0, 17),
+                13 => (-8, 1, 18),
+                14 => (-9, 0, 19),
+                15 => (-10, 0, 20),
+                16 => (-11, 0, 21),
+                17 => (0, 0, 22),
+                _ => unreachable!(),
+            };
+            table.extend(compact_index(class));
+            table.extend(compact_index(0));
+            table.extend(outer.to_le_bytes());
+            table.extend(compact_index(name));
+            table.extend(0_u32.to_le_bytes());
+            table.extend(compact_index(payload.len() as i32));
+            if !payload.is_empty() {
+                table.extend(compact_index(serial_offset as i32));
+            }
+            serial_offset += payload.len();
+        }
+        table
+    };
+    let mut payload_offset = export_offset;
+    let export = loop {
+        let table = export_table(payload_offset);
+        let next = export_offset + table.len();
+        if next == payload_offset {
+            break table;
+        }
+        payload_offset = next;
+    };
+    let mut bytes = Vec::new();
+    bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+    bytes.extend(62_u16.to_le_bytes());
+    bytes.extend(0_u16.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    for value in [
+        names.len() as i32,
+        name_offset as i32,
+        payloads.len() as i32,
+        export_offset as i32,
+        11,
+        import_offset as i32,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for name in names {
+        bytes.extend(name.as_bytes());
+        bytes.push(0);
+        bytes.extend(0_u32.to_le_bytes());
+    }
+    bytes.extend(import);
+    bytes.extend(export);
+    assert_eq!(bytes.len(), payload_offset);
+    for payload in payloads {
+        bytes.extend(payload);
+    }
+    bytes
+}
+
 fn named_native_script(export_index: usize) -> Arc<openhp1_script::ScriptExport> {
     Arc::new(openhp1_script::ScriptExport {
         export_index,
@@ -227,6 +431,263 @@ fn execute_extended_native_from_bytecode(
             _ => panic!("unexpected frame request"),
         })
         .unwrap()
+}
+
+fn run_save_config(
+    runtime: &mut ScriptRuntime,
+    class: &ResolvedObject,
+    instance: &mut InstanceState,
+) {
+    let bytecode = Bytecode {
+        version: 76,
+        bytes: vec![0x04, 0x62, 0x18, 0x16],
+        raw_len: 4,
+        tokens: Vec::new(),
+    };
+    let package = Arc::clone(&class.package);
+    let mut frame = Frame::new(&bytecode);
+    let mut actions = Vec::new();
+    assert_eq!(
+        frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                runtime.native(
+                    0,
+                    class,
+                    &package,
+                    index,
+                    arguments,
+                    instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap(),
+        Value::None
+    );
+}
+
+#[test]
+fn save_config_native_persists_config_properties_without_mutating_default_ini() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-save-config-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    let default_ini =
+        "[Core.System]\nPaths=*.u\n\n[Keep]\nValue=default\n\n[Test.GlobalBase]\nGlobalValue=8\n";
+    let def_user_ini = "[DefaultPlayer]\nName=Player\n\n[Test.DerivedConfig]\nConfigValue=7\n";
+    fs::write(system.join("Default.ini"), default_ini).unwrap();
+    fs::write(system.join("DefUser.ini"), def_user_ini).unwrap();
+    fs::write(system.join("HP.exe"), []).unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_config_package()).unwrap();
+
+    let settings = root.join("settings");
+    let mut runtime = ScriptRuntime::new_with_settings_dir(&root, &settings).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut instance = runtime.load_class_defaults(&class, 0).unwrap();
+    assert_eq!(
+        instance.get(&object_id(&package, 3)),
+        Some(&StoredValue::Value(Value::Int(7)))
+    );
+    assert_eq!(
+        instance.get(&object_id(&package, 6)),
+        Some(&StoredValue::Value(Value::Int(8)))
+    );
+    instance.insert(object_id(&package, 3), StoredValue::Value(Value::Int(42)));
+    instance.insert(object_id(&package, 4), StoredValue::Value(Value::Int(31)));
+    instance.insert(object_id(&package, 5), StoredValue::Value(Value::Int(32)));
+    instance.insert(object_id(&package, 6), StoredValue::Value(Value::Int(99)));
+    instance.insert(object_id(&package, 7), StoredValue::Value(Value::Byte(1)));
+    instance.insert(
+        object_id(&package, 8),
+        StoredValue::Object(Some(object_id(&package, 16))),
+    );
+    instance.insert(
+        object_id(&package, 9),
+        StoredValue::Object(Some(object_id(&package, 17))),
+    );
+    instance.insert(
+        object_id(&package, 10),
+        StoredValue::Value(Value::Struct(std::collections::HashMap::from([
+            ("R".to_owned(), Value::Byte(1)),
+            ("G".to_owned(), Value::Byte(2)),
+            ("B".to_owned(), Value::Byte(3)),
+            ("A".to_owned(), Value::Byte(4)),
+        ]))),
+    );
+    instance.insert(
+        object_id(&package, 11),
+        StoredValue::Array(vec![StoredValue::Value(Value::String(
+            "FirstTag".to_owned(),
+        ))]),
+    );
+    instance.insert(
+        object_id(&package, 13),
+        StoredValue::Array(vec![
+            StoredValue::Name("First".to_owned()),
+            StoredValue::Name("Second".to_owned()),
+        ]),
+    );
+    run_save_config(&mut runtime, &class, &mut instance);
+    let user_ini = fs::read_to_string(settings.join("User.ini")).unwrap();
+    assert!(user_ini.contains("[DefaultPlayer]\nName=Player"));
+    assert_eq!(user_ini.matches("[Test.DerivedConfig]").count(), 1);
+    assert!(user_ini.contains("ConfigValue=42"));
+    assert!(user_ini.contains("SecondValue=31"));
+    assert!(user_ini.contains("ThirdValue=32"));
+    assert!(user_ini.contains("Mode=ModeOne"));
+    assert!(user_ini.contains("ObjectValue=Test.SomeObject"));
+    assert!(user_ini.contains("ClassValue=Test.SomeClass"));
+    assert!(user_ini.contains("Tint=(R=1,G=2,B=3,A=4)"));
+    assert!(user_ini.contains("Tags=FirstTag"));
+    assert!(user_ini.contains("Priorities[0]=First\nPriorities[1]=Second"));
+    let hp_ini = fs::read_to_string(settings.join("HP.ini")).unwrap();
+    assert!(hp_ini.contains("[Test.GlobalBase]\nGlobalValue=99"));
+
+    instance.insert(object_id(&package, 3), StoredValue::Value(Value::Int(43)));
+    instance.insert(object_id(&package, 4), StoredValue::Value(Value::Int(33)));
+    instance.insert(object_id(&package, 5), StoredValue::Value(Value::Int(34)));
+    instance.insert(object_id(&package, 6), StoredValue::Value(Value::Int(100)));
+    instance.insert(object_id(&package, 7), StoredValue::Value(Value::Byte(0)));
+    instance.insert(
+        object_id(&package, 10),
+        StoredValue::Value(Value::Struct(std::collections::HashMap::from([
+            ("R".to_owned(), Value::Byte(5)),
+            ("G".to_owned(), Value::Byte(6)),
+            ("B".to_owned(), Value::Byte(7)),
+            ("A".to_owned(), Value::Byte(8)),
+        ]))),
+    );
+    instance.insert(
+        object_id(&package, 11),
+        StoredValue::Array(vec![
+            StoredValue::Value(Value::String("FinalTag".to_owned())),
+            StoredValue::Value(Value::String("SecondTag".to_owned())),
+        ]),
+    );
+    run_save_config(&mut runtime, &class, &mut instance);
+    let user_ini = fs::read_to_string(settings.join("User.ini")).unwrap();
+    assert_eq!(user_ini.matches("[Test.DerivedConfig]").count(), 1);
+    assert!(user_ini.contains("ConfigValue=43"));
+    assert!(user_ini.contains("SecondValue=33"));
+    assert!(user_ini.contains("ThirdValue=34"));
+    assert!(!user_ini.contains("ConfigValue=42"));
+    assert!(user_ini.contains("Mode=ModeZero"));
+    assert!(!user_ini.contains("Mode=ModeOne"));
+    assert!(user_ini.contains("Tint=(R=5,G=6,B=7,A=8)"));
+    assert!(user_ini.contains("Tags=FinalTag\nTags=SecondTag"));
+    assert!(!user_ini.contains("Tags=FirstTag"));
+    let hp_ini = fs::read_to_string(settings.join("HP.ini")).unwrap();
+    assert!(hp_ini.contains("[Test.GlobalBase]\nGlobalValue=100"));
+    assert!(!hp_ini.contains("GlobalValue=99"));
+
+    let defaults = runtime.load_class_defaults(&class, 0).unwrap();
+    assert_eq!(
+        defaults.get(&object_id(&package, 3)),
+        Some(&StoredValue::Value(Value::Int(43)))
+    );
+    assert_eq!(
+        defaults.get(&object_id(&package, 6)),
+        Some(&StoredValue::Value(Value::Int(100)))
+    );
+
+    let casefolded_ini = user_ini
+        .replace("ObjectValue=Test.SomeObject", "ObjectValue=tEsT.sOmEoBjEcT")
+        .replace("ClassValue=Test.SomeClass", "ClassValue=tEsT.sOmEcLaSs");
+    fs::write(settings.join("User.ini"), &casefolded_ini).unwrap();
+    let mut fresh_runtime = ScriptRuntime::new_with_settings_dir(&root, &settings).unwrap();
+    let fresh_package = fresh_runtime.packages.load_path(&package_path).unwrap();
+    let fresh_class = ResolvedObject {
+        package: Arc::clone(&fresh_package),
+        export_index: 0,
+    };
+    let fresh_defaults = fresh_runtime.load_class_defaults(&fresh_class, 0).unwrap();
+    for (index, value) in [(3, 43), (4, 33), (5, 34), (6, 100)] {
+        assert_eq!(
+            fresh_defaults.get(&object_id(&fresh_package, index)),
+            Some(&StoredValue::Value(Value::Int(value)))
+        );
+    }
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 7)),
+        Some(&StoredValue::Value(Value::Byte(0)))
+    );
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 8)),
+        Some(&StoredValue::Object(Some(object_id(&fresh_package, 16))))
+    );
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 9)),
+        Some(&StoredValue::Object(Some(object_id(&fresh_package, 17))))
+    );
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 10)),
+        Some(&StoredValue::Value(Value::Struct(
+            std::collections::HashMap::from([
+                ("R".to_owned(), Value::Byte(5)),
+                ("G".to_owned(), Value::Byte(6)),
+                ("B".to_owned(), Value::Byte(7)),
+                ("A".to_owned(), Value::Byte(8)),
+            ])
+        )))
+    );
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 11)),
+        Some(&StoredValue::Array(vec![
+            StoredValue::Value(Value::String("FinalTag".to_owned())),
+            StoredValue::Value(Value::String("SecondTag".to_owned())),
+        ]))
+    );
+    assert_eq!(
+        fresh_defaults.get(&object_id(&fresh_package, 13)),
+        Some(&StoredValue::Array(vec![
+            StoredValue::Name("First".to_owned()),
+            StoredValue::Name("Second".to_owned()),
+        ]))
+    );
+    fs::write(
+        settings.join("User.ini"),
+        casefolded_ini.replacen("Mode=ModeZero", "Mode=NotAMode", 1),
+    )
+    .unwrap();
+    let mut malformed_runtime = ScriptRuntime::new_with_settings_dir(&root, &settings).unwrap();
+    let malformed_package = malformed_runtime.packages.load_path(&package_path).unwrap();
+    let malformed_class = ResolvedObject {
+        package: Arc::clone(&malformed_package),
+        export_index: 0,
+    };
+    assert!(matches!(
+        malformed_runtime.load_class_defaults(&malformed_class, 0),
+        Err(DispatchError::InvalidConfigValue { property, .. }) if property == "Mode"
+    ));
+    assert_eq!(
+        fs::read_to_string(system.join("Default.ini")).unwrap(),
+        default_ini
+    );
+    assert_eq!(
+        fs::read_to_string(system.join("DefUser.ini")).unwrap(),
+        def_user_ini
+    );
+    assert!(!system.join("User.ini").exists());
+    assert!(!system.join("HP.ini").exists());
+    assert!(fs::read_dir(&settings).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp")
+    }));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

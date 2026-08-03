@@ -15,8 +15,22 @@ pub(super) use tick::{advance_lifespan, update_touching_array};
 
 impl ScriptRuntime {
     pub fn new(game_root: impl AsRef<Path>) -> DispatchResult<Self> {
+        Self::with_packages(PackageStore::scan_game_root(game_root)?)
+    }
+
+    pub fn new_with_settings_dir(
+        game_root: impl AsRef<Path>,
+        settings_dir: impl AsRef<Path>,
+    ) -> DispatchResult<Self> {
+        Self::with_packages(PackageStore::scan_game_root_with_settings_dir(
+            game_root,
+            settings_dir,
+        )?)
+    }
+
+    fn with_packages(packages: PackageStore) -> DispatchResult<Self> {
         Ok(Self {
-            packages: PackageStore::scan_game_root(game_root)?,
+            packages,
             scripts: HashMap::default(),
             function_lookups: HashMap::default(),
             state_lookups: HashMap::default(),

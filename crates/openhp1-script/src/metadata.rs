@@ -51,6 +51,7 @@ pub struct PropertyMetadata {
     pub flags: u32,
     pub category: usize,
     pub replication_offset: Option<u16>,
+    pub enum_type: Option<ObjectReference>,
     pub struct_type: Option<ObjectReference>,
     pub inner_type: Option<ObjectReference>,
 }
@@ -111,6 +112,10 @@ impl PropertyMetadata {
         let flags = reader.read_u32()?;
         let category = reader.read_name_index("property category")?;
         let replication_offset = (flags & 0x20 != 0).then(|| reader.read_u16()).transpose()?;
+        let enum_type = class_name
+            .eq_ignore_ascii_case("ByteProperty")
+            .then(|| reader.read_object_reference())
+            .transpose()?;
         let struct_type = class_name
             .eq_ignore_ascii_case("StructProperty")
             .then(|| reader.read_object_reference())
@@ -126,6 +131,7 @@ impl PropertyMetadata {
             flags,
             category,
             replication_offset,
+            enum_type,
             struct_type,
             inner_type,
         })
@@ -145,6 +151,30 @@ impl FieldMetadata {
         let mut reader = package.export_reader(export_index)?;
         read_field_metadata(export.object_flags, &mut reader)
     }
+}
+
+pub fn enum_names(package: &Package, export_index: usize) -> Result<Vec<String>> {
+    let summary = package.summary();
+    let export = summary.exports.get(export_index).ok_or_else(|| {
+        openhp1_package::Error::InvalidExportIndex {
+            package: summary.source.clone(),
+            index: export_index,
+            export_count: summary.exports.len(),
+        }
+    })?;
+    let class_name = summary.class_name(export).unwrap_or("<unknown>");
+    if !class_name.eq_ignore_ascii_case("Enum") {
+        return Err(unsupported(package, export_index, class_name));
+    }
+    let mut reader = package.export_reader(export_index)?;
+    let _field = read_field_metadata(export.object_flags, &mut reader)?;
+    let count = read_count(&mut reader, "enum names", 1)?;
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        let index = reader.read_name_index("enum name")?;
+        names.push(summary.name(index).to_owned());
+    }
+    Ok(names)
 }
 
 pub fn class_defaults_reader(
@@ -505,6 +535,7 @@ mod tests {
         assert_eq!(property.flags, 0xa0);
         assert_eq!(property.category, 5);
         assert_eq!(property.replication_offset, Some(77));
+        assert_eq!(property.enum_type, None);
         assert_eq!(property.struct_type, None);
         assert_eq!(property.inner_type, None);
     }
@@ -519,6 +550,7 @@ mod tests {
         let package = synthetic_package("StructProperty", "Value", payload);
         let property = PropertyMetadata::decode(&package, 0).unwrap();
         assert_eq!(property.struct_type, Some(ObjectReference::None));
+        assert_eq!(property.enum_type, None);
         assert_eq!(property.inner_type, None);
     }
 
@@ -531,7 +563,19 @@ mod tests {
         let package = synthetic_package("ArrayProperty", "Values", payload);
         let property = PropertyMetadata::decode(&package, 0).unwrap();
         assert_eq!(property.struct_type, None);
+        assert_eq!(property.enum_type, None);
         assert_eq!(property.inner_type, Some(ObjectReference::None));
+    }
+
+    #[test]
+    fn decodes_byte_property_enum_reference() {
+        let mut payload = vec![0, 0, 0];
+        payload.extend(1_i32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend([5, 0]);
+        let package = synthetic_package("ByteProperty", "Mode", payload);
+        let property = PropertyMetadata::decode(&package, 0).unwrap();
+        assert_eq!(property.enum_type, Some(ObjectReference::None));
     }
 
     #[test]
@@ -543,6 +587,15 @@ mod tests {
                 base_field: ObjectReference::None,
                 next_field: ObjectReference::None,
             }
+        );
+    }
+
+    #[test]
+    fn decodes_enum_names() {
+        let package = synthetic_package("Enum", "Mode", vec![0, 0, 0, 2, 5, 6]);
+        assert_eq!(
+            enum_names(&package, 0).unwrap(),
+            ["Friendly", "CalledFunction"]
         );
     }
 

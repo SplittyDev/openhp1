@@ -8,5 +8,5 @@ pub use bytecode::{Bytecode, CallTarget, Token, token_name};
 pub use error::{Error, Result};
 pub use metadata::{
     ClassDependency, ClassMetadata, FieldMetadata, FunctionMetadata, PropertyMetadata,
-    ScriptExport, ScriptMetadata, StateMetadata, class_defaults_reader,
+    ScriptExport, ScriptMetadata, StateMetadata, class_defaults_reader, enum_names,
 };

@@ -1,9 +1,11 @@
 use std::{
     collections::HashMap,
-    fs::{self, File},
-    io::Read,
+    env,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use thiserror::Error;
@@ -17,16 +19,32 @@ pub struct ResolvedObject {
     pub export_index: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigEntry {
+    pub section: String,
+    pub key: String,
+    pub values: Vec<String>,
+}
+
 /// Discovers packages through `[Core.System] Paths` and caches them by their
 /// case-insensitive Unreal package name.
 pub struct PackageStore {
     paths: HashMap<String, PathBuf>,
     loaded: HashMap<String, Arc<Package>>,
-    config: String,
+    system_dir: PathBuf,
+    settings_dir: PathBuf,
+    default_ini: PathBuf,
 }
 
 impl PackageStore {
     pub fn scan_game_root(root: impl AsRef<Path>) -> ResolveResult<Self> {
+        Self::scan_game_root_with_settings_dir(root, default_settings_dir())
+    }
+
+    pub fn scan_game_root_with_settings_dir(
+        root: impl AsRef<Path>,
+        settings_dir: impl AsRef<Path>,
+    ) -> ResolveResult<Self> {
         let root = root.as_ref();
         let system_dir = find_child_directory(root, "System").ok_or_else(|| {
             ResolveError::MissingSystemDirectory {
@@ -38,7 +56,7 @@ impl PackageStore {
                 system: system_dir.clone(),
             })?;
         let ini = fs::read_to_string(&ini_path).map_err(|source| ResolveError::Io {
-            path: ini_path,
+            path: ini_path.clone(),
             source,
         })?;
         let patterns = core_system_paths(&ini);
@@ -53,12 +71,61 @@ impl PackageStore {
         Ok(Self {
             paths,
             loaded: HashMap::new(),
-            config: ini,
+            system_dir,
+            settings_dir: settings_dir.as_ref().to_path_buf(),
+            default_ini: ini_path,
         })
     }
 
     pub fn config_value(&self, section: &str, key: &str) -> Option<String> {
-        localization_value(&self.config, section, key)
+        self.config_values("System", section, key)
+            .into_iter()
+            .next()
+    }
+
+    pub fn config_values(&self, config_name: &str, section: &str, key: &str) -> Vec<String> {
+        let Ok(files) = self.config_files(config_name) else {
+            return Vec::new();
+        };
+        for path in std::iter::once(&files.destination).chain(files.fallbacks.iter()) {
+            let Ok(contents) = fs::read_to_string(path) else {
+                continue;
+            };
+            let values = ini_values(&contents, section, key);
+            if !values.is_empty() {
+                return values;
+            }
+        }
+        Vec::new()
+    }
+
+    /// Writes only derived user configuration files. Package files and INI
+    /// templates remain read-only.
+    pub fn save_config(&self, config_name: &str, entries: &[ConfigEntry]) -> ResolveResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let files = self.config_files(config_name)?;
+        let mut contents = None;
+        for path in std::iter::once(&files.destination).chain(files.fallbacks.iter()) {
+            match fs::read_to_string(path) {
+                Ok(value) => {
+                    contents = Some(value);
+                    break;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(ResolveError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    });
+                }
+            }
+        }
+        write_ini_atomically(
+            &files.destination,
+            update_ini(&contents.unwrap_or_default(), entries),
+        )
     }
 
     pub fn package_path(&self, name: &str) -> Option<&Path> {
@@ -89,23 +156,69 @@ impl PackageStore {
         qualified_name: &str,
         class: &str,
     ) -> ResolveResult<Option<ResolvedObject>> {
+        self.find_object_matching(qualified_name, Some(class))
+    }
+
+    /// Resolves a package object by its case-insensitive qualified path.
+    /// Callers that require a particular object class should use [`Self::find_object`].
+    pub fn find_object_any(
+        &mut self,
+        qualified_name: &str,
+    ) -> ResolveResult<Option<ResolvedObject>> {
+        self.find_object_matching(qualified_name, None)
+    }
+
+    /// Returns a qualified object path accepted by [`Self::find_object_any`].
+    pub fn qualified_object_name(object: &ResolvedObject) -> ResolveResult<String> {
+        let summary = object.package.summary();
+        let package = Path::new(summary.source.as_ref())
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ResolveError::InvalidPackagePath {
+                path: PathBuf::from(summary.source.as_ref()),
+            })?;
+        let export = summary.exports.get(object.export_index).ok_or_else(|| {
+            crate::Error::InvalidExportIndex {
+                package: summary.source.clone(),
+                index: object.export_index,
+                export_count: summary.exports.len(),
+            }
+        })?;
+        let mut path = export_groups(summary, export).ok_or(ResolveError::InvalidObjectPath {
+            package: package.to_owned(),
+            export_index: object.export_index,
+        })?;
+        path.reverse();
+        path.push(summary.name(export.object_name).to_owned());
+        Ok(std::iter::once(package.to_owned())
+            .chain(path)
+            .collect::<Vec<_>>()
+            .join("."))
+    }
+
+    fn find_object_matching(
+        &mut self,
+        qualified_name: &str,
+        class: Option<&str>,
+    ) -> ResolveResult<Option<ResolvedObject>> {
         let mut parts = qualified_name.split('.');
         let Some(package_name) = parts.next().filter(|part| !part.is_empty()) else {
             return Ok(None);
         };
-        let path = parts.map(str::to_owned).collect::<Vec<_>>();
-        let Some((object, groups)) = path.split_last() else {
+        let mut path = parts.map(str::to_owned).collect::<Vec<_>>();
+        let Some(object) = path.pop() else {
             return Ok(None);
         };
+        path.reverse();
         let package = self.load(package_name)?;
-        Ok(
-            find_export(package.summary(), class, object, groups).map(|export_index| {
-                ResolvedObject {
-                    package,
-                    export_index,
-                }
-            }),
-        )
+        Ok((match class {
+            Some(class) => find_export(package.summary(), class, &object, &path),
+            None => find_export_any(package.summary(), &object, &path),
+        })
+        .map(|export_index| ResolvedObject {
+            package,
+            export_index,
+        }))
     }
 
     pub fn load(&mut self, name: &str) -> ResolveResult<Arc<Package>> {
@@ -179,6 +292,76 @@ impl PackageStore {
             }
         }
     }
+
+    fn config_files(&self, config_name: &str) -> ResolveResult<ConfigFiles> {
+        if config_name.is_empty() || config_name.eq_ignore_ascii_case("System") {
+            let stem = system_ini_stem(&self.system_dir).unwrap_or_else(|| "OpenHP1".to_owned());
+            return Ok(ConfigFiles {
+                destination: self.settings_dir.join(format!("{stem}.ini")),
+                fallbacks: vec![
+                    self.system_dir.join(format!("{stem}.ini")),
+                    self.default_ini.clone(),
+                ],
+            });
+        }
+        if config_name.eq_ignore_ascii_case("User") {
+            let mut fallbacks = vec![self.system_dir.join("User.ini")];
+            if let Some(template) = find_file(&self.system_dir, "DefUser.ini") {
+                fallbacks.push(template);
+            }
+            return Ok(ConfigFiles {
+                destination: self.settings_dir.join("User.ini"),
+                fallbacks,
+            });
+        }
+        if !config_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ResolveError::InvalidConfigName {
+                name: config_name.to_owned(),
+            });
+        }
+        Ok(ConfigFiles {
+            destination: self.settings_dir.join(format!("{config_name}.ini")),
+            fallbacks: vec![self.system_dir.join(format!("{config_name}.ini"))],
+        })
+    }
+}
+
+struct ConfigFiles {
+    destination: PathBuf,
+    fallbacks: Vec<PathBuf>,
+}
+
+fn default_settings_dir() -> PathBuf {
+    if let Some(path) = env::var_os("OPENHP1_SETTINGS_DIR") {
+        return PathBuf::from(path);
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(path) = env::var_os("APPDATA") {
+        return PathBuf::from(path).join("OpenHP1");
+    }
+
+    let Some(home) = env::var_os("HOME") else {
+        return env::temp_dir().join("OpenHP1");
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from(home).join("Library/Application Support/OpenHP1")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(home).join("AppData/Roaming/OpenHP1")
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(path).join("openhp1")
+    } else {
+        PathBuf::from(home).join(".config/openhp1")
+    }
 }
 
 struct ImportTarget {
@@ -249,6 +432,23 @@ fn find_export(
         .exports
         .iter()
         .position(|export| export_matches(summary, export, class, object, groups))
+}
+
+fn find_export_any(summary: &PackageSummary, object: &str, groups: &[String]) -> Option<usize> {
+    let mut matches = summary
+        .exports
+        .iter()
+        .enumerate()
+        .filter_map(|(index, export)| {
+            (summary
+                .name(export.object_name)
+                .eq_ignore_ascii_case(object)
+                && export_groups(summary, export)
+                    .is_some_and(|actual| equal_names(&actual, groups)))
+            .then_some(index)
+        });
+    let index = matches.next()?;
+    matches.next().is_none().then_some(index)
 }
 
 fn find_import_export(summary: &PackageSummary, target: &ImportTarget) -> Option<usize> {
@@ -390,7 +590,12 @@ fn core_system_paths(ini: &str) -> Vec<String> {
 }
 
 fn localization_value(contents: &str, section: &str, key: &str) -> Option<String> {
+    ini_values(contents, section, key).into_iter().next()
+}
+
+fn ini_values(contents: &str, section: &str, key: &str) -> Vec<String> {
     let mut in_section = false;
+    let mut values = Vec::new();
     for line in contents.lines().map(str::trim) {
         if line.starts_with('[') && line.ends_with(']') {
             in_section = line[1..line.len() - 1].eq_ignore_ascii_case(section);
@@ -406,7 +611,7 @@ fn localization_value(contents: &str, section: &str, key: &str) -> Option<String
             continue;
         }
         let value = value.trim();
-        return Some(
+        values.push(
             value
                 .strip_prefix('"')
                 .and_then(|value| value.strip_suffix('"'))
@@ -414,7 +619,208 @@ fn localization_value(contents: &str, section: &str, key: &str) -> Option<String
                 .to_owned(),
         );
     }
-    None
+    values
+}
+
+fn system_ini_stem(system_dir: &Path) -> Option<String> {
+    let mut executables = fs::read_dir(system_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+                .then(|| {
+                    entry
+                        .path()
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::to_owned)
+                })
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    executables.sort_by_key(|name| name.to_ascii_lowercase());
+    executables.into_iter().next()
+}
+
+fn update_ini(contents: &str, entries: &[ConfigEntry]) -> String {
+    let mut current_section = "";
+    let mut written = vec![false; entries.len()];
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            append_missing_ini_entries(&mut lines, current_section, entries, &mut written);
+            current_section = &trimmed[1..trimmed.len() - 1];
+            lines.push(line.to_owned());
+            continue;
+        }
+        let Some((key, _)) = trimmed.split_once('=') else {
+            lines.push(line.to_owned());
+            continue;
+        };
+        let Some(index) = entries.iter().position(|entry| {
+            entry.section.eq_ignore_ascii_case(current_section)
+                && entry.key.eq_ignore_ascii_case(key.trim())
+        }) else {
+            lines.push(line.to_owned());
+            continue;
+        };
+        if !written[index] {
+            lines.extend(
+                entries[index]
+                    .values
+                    .iter()
+                    .map(|value| format!("{}={value}", entries[index].key)),
+            );
+            written[index] = true;
+        }
+    }
+    append_missing_ini_entries(&mut lines, current_section, entries, &mut written);
+
+    let mut appended_sections = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if written[index] {
+            continue;
+        }
+        written[index] = true;
+        if entry.values.is_empty() {
+            continue;
+        }
+        if !appended_sections
+            .iter()
+            .any(|section: &String| section.eq_ignore_ascii_case(&entry.section))
+        {
+            if !lines.is_empty() && lines.last().is_some_and(|line| !line.is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{}]", entry.section));
+            appended_sections.push(entry.section.clone());
+        }
+        lines.extend(
+            entry
+                .values
+                .iter()
+                .map(|value| format!("{}={value}", entry.key)),
+        );
+    }
+    let mut updated = lines.join("\n");
+    if !updated.is_empty() {
+        updated.push('\n');
+    }
+    updated
+}
+
+fn append_missing_ini_entries(
+    lines: &mut Vec<String>,
+    section: &str,
+    entries: &[ConfigEntry],
+    written: &mut [bool],
+) {
+    for (index, entry) in entries.iter().enumerate() {
+        if written[index] || !entry.section.eq_ignore_ascii_case(section) {
+            continue;
+        }
+        written[index] = true;
+        lines.extend(
+            entry
+                .values
+                .iter()
+                .map(|value| format!("{}={value}", entry.key)),
+        );
+    }
+}
+
+fn write_ini_atomically(path: &Path, contents: String) -> ResolveResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ResolveError::InvalidConfigPath {
+            path: path.to_path_buf(),
+        })?;
+    fs::create_dir_all(parent).map_err(|source| ResolveError::Io {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| ResolveError::InvalidConfigPath {
+            path: path.to_path_buf(),
+        })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|source| ResolveError::Io {
+            path: temporary.clone(),
+            source,
+        })?;
+    let write_result = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(ResolveError::Io {
+            path: temporary,
+            source,
+        });
+    }
+    if let Err(source) = rename_atomically(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(ResolveError::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn rename_atomically(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, path)
+}
+
+#[cfg(target_os = "windows")]
+fn rename_atomically(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let temporary = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    if unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            path.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn scan_pattern(
@@ -483,6 +889,12 @@ pub enum ResolveError {
     #[error("`{}` is not a valid package path", path.display())]
     InvalidPackagePath { path: PathBuf },
 
+    #[error("`{name}` is not a valid Unreal configuration name")]
+    InvalidConfigName { name: String },
+
+    #[error("`{}` is not a valid configuration path", path.display())]
+    InvalidConfigPath { path: PathBuf },
+
     #[error("could not find Unreal package `{name}` in the configured paths")]
     MissingPackage { name: String },
 
@@ -500,6 +912,12 @@ pub enum ResolveError {
         package: String,
         class: String,
         path: String,
+    },
+
+    #[error("package `{package}` export {export_index} has an invalid outer path")]
+    InvalidObjectPath {
+        package: String,
+        export_index: usize,
     },
 }
 
@@ -773,6 +1191,28 @@ mod tests {
                 .and_then(|name| name.to_str()),
             Some("Localized.hun_utx")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_removes_its_temporary_file_when_replacement_fails() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("openhp1-config-write-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("User.ini");
+        fs::create_dir(&destination).unwrap();
+
+        assert!(super::write_ini_atomically(&destination, "Value=1\n".to_owned()).is_err());
+        assert!(fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp")
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 }

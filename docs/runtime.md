@@ -345,14 +345,34 @@ then sends the child's `BaseChange`. Destroying a base clears its direct
 children through the same path after `Destroyed`. An actor's serialized
 `Level` base is retained for base-chain reads but is never a direct attachment:
 it receives no reverse child, `StandingCount`, `Attach`, or `Detach` update.
-Engine side effects without an OpenHP1 surface do not abort scripts:
-`SaveConfig` is read-only, `ConsoleCommand` returns an empty string, and decal
-detachment is a no-op until decals render. `PlayerPawn.ClientTravel` emits a
-host action with its URL, raw UE1 travel-type byte, and `bItems` flag; the
-script runtime neither parses nor opens the next map. `PlayerPawn.UpdateURL`
-emits a host action carrying the option/value for case-insensitive replacement
-and an optional `User.DefaultPlayer` persistence request; the runtime never
-mutates map package or configuration data. OpenHP1 is a local-only host, so
+`SaveConfig` writes only `config` and `globalconfig` properties. Ordinary
+`config` properties use the receiving class's `[Package.Class]` section;
+`globalconfig` properties use their declaring class's section and config name.
+Classes apply those values while constructing defaults, resolving a missing
+derived `ClassConfigName` through its base class. `SaveConfig` refreshes cached
+defaults afterwards, including cached derived classes that share a
+`globalconfig` field.
+The writable OpenHP1 settings directory holds the executable-named INI for
+`System`, `User.ini` for `User`, and one INI per other declared config name.
+`OPENHP1_SETTINGS_DIR` overrides the location; otherwise it is OpenHP1 under
+macOS Application Support, Linux XDG config (or `~/.config`), or Windows
+`APPDATA`.
+Missing files are seeded from their read-only installed counterparts and,
+respectively, `Default.ini` or `DefUser.ini`. Each update is atomic; package
+files and all installed INIs remain read-only. Other engine side effects
+without an OpenHP1 surface do not abort scripts: `ConsoleCommand` returns an
+empty string, and decal detachment is a no-op until decals render.
+Config serialization is intentionally type-directed: scalars, named byte
+enums, package object/class references, `Color`, `Vector`, `Rotator`, dynamic
+string arrays, and fixed string/name arrays round-trip through the same parser.
+Object paths resolve case-insensitively. Invalid scalar or enum text reports a
+configuration error rather than changing an authored default to zero; structs
+outside those representations are not written.
+`PlayerPawn.ClientTravel` emits a host action with its URL, raw UE1 travel-type
+byte, and `bItems` flag; the script runtime neither parses nor opens the next
+map. `PlayerPawn.UpdateURL` emits a host action carrying the option/value for
+case-insensitive replacement and an optional `User.DefaultPlayer` persistence
+request; the runtime never mutates map packages. OpenHP1 is a local-only host, so
 `PlayerPawn.GetPlayerNetworkAddress` intentionally returns an empty string
 until a network host supplies an address.
 `Pawn.CheckValidSkinPackage` accepts only a scanned, parseable local package

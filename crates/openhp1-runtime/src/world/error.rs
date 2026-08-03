@@ -110,6 +110,9 @@ pub enum DispatchError {
 
     #[error("struct field `{field}` has unsupported type `{kind}`")]
     UnsupportedStructField { field: String, kind: String },
+
+    #[error("config property `{property}` is invalid: {message}")]
+    InvalidConfigValue { property: String, message: String },
 }
 
 pub type DispatchResult<T> = std::result::Result<T, DispatchError>;

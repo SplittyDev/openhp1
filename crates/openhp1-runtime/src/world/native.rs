@@ -1206,8 +1206,8 @@ impl ScriptRuntime {
                     arguments.len()
                 ));
             }
-            // ponytail: runtime configuration is read-only; persist UObject
-            // config properties when settings need to survive process exit.
+            self.save_config(actor_class, instance)
+                .map_err(|error| error.to_string())?;
             return Ok(Value::None);
         }
         if index == UPDATE_URL {

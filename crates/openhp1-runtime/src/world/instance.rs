@@ -1,6 +1,34 @@
 use super::execution::{fields, local_fields};
 use super::*;
 
+fn ini_string(value: &str) -> Option<String> {
+    (!value.contains(['\r', '\n'])
+        && value.trim() == value
+        && !(value.starts_with('"') && value.ends_with('"')))
+    .then(|| value.to_owned())
+}
+
+fn config_component<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    value
+        .trim()
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .split(',')
+        .find_map(|component| {
+            let (key, value) = component.split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then_some(value.trim())
+        })
+}
+
+struct ConfigProperty {
+    declaring: ObjectId,
+    field: ObjectId,
+    name: String,
+    metadata: PropertyMetadata,
+}
+
 impl ScriptRuntime {
     pub(super) fn load_object_instance(
         &mut self,
@@ -72,8 +100,594 @@ impl ScriptRuntime {
             None => InstanceState::default(),
         };
         self.apply_properties(class, &class.package, &mut reader, &mut defaults)?;
+        self.apply_config_defaults(class, &mut defaults)?;
         self.class_defaults.insert(id, defaults.clone());
         Ok(defaults)
+    }
+
+    fn apply_config_defaults(
+        &mut self,
+        class: &ResolvedObject,
+        defaults: &mut InstanceState,
+    ) -> DispatchResult<()> {
+        for property in self.config_properties(class)? {
+            let declaring = self.resolved_object(&property.declaring)?;
+            let target = if property.metadata.flags & PROPERTY_GLOBAL_CONFIG != 0 {
+                self.config_target(&declaring)?
+            } else {
+                self.config_target(class)?
+            };
+            self.apply_config_property(&property, &target, defaults)?;
+        }
+        Ok(())
+    }
+
+    fn apply_config_property(
+        &mut self,
+        property: &ConfigProperty,
+        target: &(String, String),
+        defaults: &mut InstanceState,
+    ) -> DispatchResult<()> {
+        let dimension = usize::try_from(property.metadata.array_dimension).map_err(|_| {
+            DispatchError::InvalidArrayDimension {
+                export_index: property.field.export_index,
+                dimension: property.metadata.array_dimension,
+            }
+        })?;
+        if dimension == 0 {
+            return Err(DispatchError::InvalidArrayDimension {
+                export_index: property.field.export_index,
+                dimension: property.metadata.array_dimension,
+            });
+        }
+        if dimension > 1 {
+            let mut value = defaults
+                .get(&property.field)
+                .cloned()
+                .or(self.default_field_value(&property.field)?)
+                .ok_or_else(|| DispatchError::InvalidConfigValue {
+                    property: property.name.clone(),
+                    message: "the property has no serializable default".to_owned(),
+                })?;
+            let StoredValue::Array(values) = &mut value else {
+                return Err(DispatchError::InvalidArrayProperty {
+                    property: property.name.clone(),
+                });
+            };
+            for (index, element) in values.iter_mut().enumerate() {
+                let key = format!("{}[{index}]", property.name);
+                let Some(value) = self
+                    .packages
+                    .config_values(&target.0, &target.1, &key)
+                    .into_iter()
+                    .next()
+                else {
+                    continue;
+                };
+                let field = self.resolved_object(&property.field)?;
+                let Some(parsed) = self.config_value_from_text(&field, &property.name, &value)?
+                else {
+                    continue;
+                };
+                *element = parsed;
+            }
+            defaults.insert(property.field.clone(), value);
+            return Ok(());
+        }
+
+        let values = self
+            .packages
+            .config_values(&target.0, &target.1, &property.name);
+        if values.is_empty() {
+            return Ok(());
+        }
+        let field = self.resolved_object(&property.field)?;
+        if field
+            .package
+            .summary()
+            .class_name(&field.package.summary().exports[field.export_index])
+            == Some("ArrayProperty")
+        {
+            let Some(inner) = property.metadata.inner_type else {
+                return Err(DispatchError::MissingArrayInner {
+                    property: property.name.clone(),
+                });
+            };
+            let Some(inner) = self.packages.resolve(&field.package, inner)? else {
+                return Err(DispatchError::MissingArrayInner {
+                    property: property.name.clone(),
+                });
+            };
+            let mut parsed = Vec::with_capacity(values.len());
+            for value in values {
+                let Some(value) = self.config_value_from_text(&inner, &property.name, &value)?
+                else {
+                    return Ok(());
+                };
+                parsed.push(value);
+            }
+            defaults.insert(property.field.clone(), StoredValue::Array(parsed));
+            return Ok(());
+        }
+        let Some(value) = self.config_value_from_text(&field, &property.name, &values[0])? else {
+            return Ok(());
+        };
+        defaults.insert(property.field.clone(), value);
+        Ok(())
+    }
+
+    fn config_value_from_text(
+        &mut self,
+        field: &ResolvedObject,
+        property: &str,
+        text: &str,
+    ) -> DispatchResult<Option<StoredValue>> {
+        let invalid = |message| DispatchError::InvalidConfigValue {
+            property: property.to_owned(),
+            message,
+        };
+        let class = field
+            .package
+            .summary()
+            .class_name(&field.package.summary().exports[field.export_index])
+            .unwrap_or("<unknown>");
+        let value = match class {
+            "ByteProperty" => {
+                let value = match text.trim().parse() {
+                    Ok(value) => value,
+                    Err(_) => self
+                        .enum_names(field)?
+                        .and_then(|names| {
+                            names
+                                .iter()
+                                .position(|name| name.eq_ignore_ascii_case(text.trim()))
+                                .and_then(|index| u8::try_from(index).ok())
+                        })
+                        .ok_or_else(|| invalid(format!("`{text}` is not a byte or enum value")))?,
+                };
+                StoredValue::Value(Value::Byte(value))
+            }
+            "IntProperty" => StoredValue::Value(Value::Int(
+                text.trim()
+                    .parse()
+                    .map_err(|_| invalid(format!("`{text}` is not an integer")))?,
+            )),
+            "BoolProperty" => StoredValue::Value(Value::Bool(
+                match text.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" => true,
+                    "0" | "false" | "no" => false,
+                    _ => return Err(invalid(format!("`{text}` is not a boolean"))),
+                },
+            )),
+            "FloatProperty" => {
+                let value: f32 = text
+                    .trim()
+                    .parse()
+                    .map_err(|_| invalid(format!("`{text}` is not a float")))?;
+                if !value.is_finite() {
+                    return Err(invalid("the float is not finite".to_owned()));
+                }
+                StoredValue::Value(Value::Float(value))
+            }
+            "NameProperty" => StoredValue::Name(ini_string(text).ok_or_else(|| {
+                invalid("the name cannot round-trip through an INI value".to_owned())
+            })?),
+            "StrProperty" | "StringProperty" => {
+                StoredValue::Value(Value::String(ini_string(text).ok_or_else(|| {
+                    invalid("the string cannot round-trip through an INI value".to_owned())
+                })?))
+            }
+            "ObjectProperty" | "ClassProperty" if text.trim().eq_ignore_ascii_case("None") => {
+                StoredValue::Object(None)
+            }
+            "ObjectProperty" | "ClassProperty" => {
+                let object = self.packages.find_object_any(text.trim())?.ok_or_else(|| {
+                    invalid(format!("`{text}` does not resolve to a package object"))
+                })?;
+                if class == "ClassProperty"
+                    && object.package.summary().exports[object.export_index].class
+                        != ObjectReference::None
+                {
+                    return Err(invalid(format!("`{text}` is not a class object")));
+                }
+                StoredValue::Object(Some(object_id(&object.package, object.export_index)))
+            }
+            "StructProperty" => {
+                let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
+                let Some(structure) = metadata.struct_type else {
+                    return Ok(None);
+                };
+                let Some(structure) = self.packages.resolve(&field.package, structure)? else {
+                    return Ok(None);
+                };
+                let name = structure
+                    .package
+                    .summary()
+                    .name(structure.package.summary().exports[structure.export_index].object_name);
+                match name {
+                    "Vector" => {
+                        let value = [
+                            self.config_component(text, property, "X")?,
+                            self.config_component(text, property, "Y")?,
+                            self.config_component(text, property, "Z")?,
+                        ];
+                        if !value.iter().all(|value: &f32| value.is_finite()) {
+                            return Err(invalid(
+                                "the vector has a non-finite component".to_owned(),
+                            ));
+                        }
+                        StoredValue::Value(Value::Vector(value))
+                    }
+                    "Rotator" => StoredValue::Value(Value::Rotator([
+                        self.config_component(text, property, "Pitch")?,
+                        self.config_component(text, property, "Yaw")?,
+                        self.config_component(text, property, "Roll")?,
+                    ])),
+                    "Color" => {
+                        let mut values = std::collections::HashMap::new();
+                        for component in ["R", "G", "B", "A"] {
+                            values.insert(
+                                component.to_owned(),
+                                Value::Byte(self.config_component(text, property, component)?),
+                            );
+                        }
+                        StoredValue::Value(Value::Struct(values))
+                    }
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(value))
+    }
+
+    fn config_component<T: std::str::FromStr>(
+        &self,
+        text: &str,
+        property: &str,
+        name: &str,
+    ) -> DispatchResult<T> {
+        config_component(text, name)
+            .ok_or_else(|| DispatchError::InvalidConfigValue {
+                property: property.to_owned(),
+                message: format!("the struct has no `{name}` component"),
+            })?
+            .parse()
+            .map_err(|_| DispatchError::InvalidConfigValue {
+                property: property.to_owned(),
+                message: format!("the struct `{name}` component is invalid"),
+            })
+    }
+
+    fn enum_names(&mut self, field: &ResolvedObject) -> DispatchResult<Option<Vec<String>>> {
+        let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
+        let Some(enumeration) = metadata.enum_type else {
+            return Ok(None);
+        };
+        let Some(enumeration) = self.packages.resolve(&field.package, enumeration)? else {
+            return Ok(None);
+        };
+        Ok(Some(enum_names(
+            &enumeration.package,
+            enumeration.export_index,
+        )?))
+    }
+
+    pub(super) fn save_config(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> DispatchResult<()> {
+        let script = self.script(class)?;
+        let ScriptMetadata::Class(metadata) = &script.metadata else {
+            return Err(DispatchError::InvalidClass {
+                export_index: class.export_index,
+            });
+        };
+        if metadata.flags & CLASS_CONFIG == 0 {
+            return Ok(());
+        }
+
+        let mut writes: Vec<(String, String, Vec<ConfigEntry>)> = Vec::new();
+        for property in self.config_properties(class)? {
+            let value = instance
+                .get(&property.field)
+                .cloned()
+                .or(self.default_field_value(&property.field)?)
+                .ok_or_else(|| DispatchError::InvalidConfigValue {
+                    property: property.name.clone(),
+                    message: "the property has no serializable default".to_owned(),
+                })?;
+            let declaring = self.resolved_object(&property.declaring)?;
+            let target = if property.metadata.flags & PROPERTY_GLOBAL_CONFIG != 0 {
+                self.config_target(&declaring)?
+            } else {
+                self.config_target(class)?
+            };
+            let mut entries = self.config_entries(&property, &value)?;
+            for entry in &mut entries {
+                entry.section.clone_from(&target.1);
+            }
+            if let Some((_, _, saved)) = writes.iter_mut().find(|(config, section, _)| {
+                config.eq_ignore_ascii_case(&target.0) && section.eq_ignore_ascii_case(&target.1)
+            }) {
+                saved.extend(entries);
+            } else {
+                writes.push((target.0, target.1, entries));
+            }
+        }
+        for (config, _, entries) in writes {
+            self.packages.save_config(&config, &entries)?;
+        }
+        self.refresh_config_defaults()?;
+        Ok(())
+    }
+
+    fn config_properties(&mut self, class: &ResolvedObject) -> DispatchResult<Vec<ConfigProperty>> {
+        let mut properties = Vec::new();
+        let mut seen = HashSet::default();
+        let mut current = ResolvedObject {
+            package: Arc::clone(&class.package),
+            export_index: class.export_index,
+        };
+        for _ in 0..MAX_CALL_DEPTH {
+            let script = self.script(&current)?;
+            let base = script.base_field;
+            let declaring = object_id(&current.package, current.export_index);
+            for (export_index, export) in current.package.summary().exports.iter().enumerate() {
+                if export.outer != ObjectReference::Export(current.export_index)
+                    || !current
+                        .package
+                        .summary()
+                        .class_name(export)
+                        .is_some_and(|name| name.ends_with("Property"))
+                {
+                    continue;
+                }
+                let name = current
+                    .package
+                    .summary()
+                    .name(export.object_name)
+                    .to_owned();
+                if !seen.insert(name.to_ascii_lowercase()) {
+                    continue;
+                }
+                let metadata = PropertyMetadata::decode(&current.package, export_index)?;
+                if metadata.flags & (PROPERTY_CONFIG | PROPERTY_GLOBAL_CONFIG) == 0 {
+                    continue;
+                }
+                properties.push(ConfigProperty {
+                    declaring: declaring.clone(),
+                    field: ObjectId {
+                        package: Arc::clone(&current.package.summary().source),
+                        export_index,
+                    },
+                    name,
+                    metadata,
+                });
+            }
+            let Some(base) = self.packages.resolve(&current.package, base)? else {
+                break;
+            };
+            current = base;
+        }
+        Ok(properties)
+    }
+
+    fn refresh_config_defaults(&mut self) -> DispatchResult<()> {
+        let cached = self.class_defaults.keys().cloned().collect::<Vec<_>>();
+        self.class_defaults.clear();
+        for class in cached {
+            let class = self.resolved_object(&class)?;
+            self.load_class_defaults(&class, 0)?;
+        }
+        Ok(())
+    }
+
+    fn config_target(&mut self, class: &ResolvedObject) -> DispatchResult<(String, String)> {
+        let summary = class.package.summary();
+        let config = self.config_name(class)?;
+        let package = Path::new(summary.source.as_ref())
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| DispatchError::InvalidConfigValue {
+                property: summary
+                    .name(summary.exports[class.export_index].object_name)
+                    .to_owned(),
+                message: "the class package has no file name".to_owned(),
+            })?;
+        let class_name = summary.name(summary.exports[class.export_index].object_name);
+        Ok((config, format!("{package}.{class_name}")))
+    }
+
+    fn config_name(&mut self, class: &ResolvedObject) -> DispatchResult<String> {
+        let mut current = ResolvedObject {
+            package: Arc::clone(&class.package),
+            export_index: class.export_index,
+        };
+        for _ in 0..MAX_CALL_DEPTH {
+            let script = self.script(&current)?;
+            let ScriptMetadata::Class(metadata) = &script.metadata else {
+                return Err(DispatchError::InvalidClass {
+                    export_index: current.export_index,
+                });
+            };
+            if let Some(name) = metadata
+                .config_name
+                .map(|index| current.package.summary().name(index))
+                .filter(|name| !name.eq_ignore_ascii_case("None"))
+            {
+                return Ok(name.to_owned());
+            }
+            let Some(base) = self.packages.resolve(&current.package, script.base_field)? else {
+                break;
+            };
+            current = base;
+        }
+        Ok("System".to_owned())
+    }
+
+    fn config_entries(
+        &mut self,
+        property: &ConfigProperty,
+        value: &StoredValue,
+    ) -> DispatchResult<Vec<ConfigEntry>> {
+        if property.metadata.array_dimension > 1 {
+            let StoredValue::Array(values) = value else {
+                return Err(DispatchError::InvalidArrayProperty {
+                    property: property.name.clone(),
+                });
+            };
+            let field = self.resolved_object(&property.field)?;
+            return values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    Ok(ConfigEntry {
+                        section: String::new(),
+                        key: format!("{}[{index}]", property.name),
+                        values: vec![self.config_field_value(&field, &property.name, value)?],
+                    })
+                })
+                .collect();
+        }
+        let field = self.resolved_object(&property.field)?;
+        let class = field
+            .package
+            .summary()
+            .class_name(&field.package.summary().exports[field.export_index]);
+        let values = match (class, value) {
+            (Some("ArrayProperty"), StoredValue::Array(values)) => {
+                let inner = property.metadata.inner_type.ok_or_else(|| {
+                    DispatchError::MissingArrayInner {
+                        property: property.name.clone(),
+                    }
+                })?;
+                let inner = self
+                    .packages
+                    .resolve(&field.package, inner)?
+                    .ok_or_else(|| DispatchError::MissingArrayInner {
+                        property: property.name.clone(),
+                    })?;
+                values
+                    .iter()
+                    .map(|value| self.config_field_value(&inner, &property.name, value))
+                    .collect::<DispatchResult<Vec<_>>>()?
+            }
+            (_, value) => vec![self.config_field_value(&field, &property.name, value)?],
+        };
+        Ok(vec![ConfigEntry {
+            section: String::new(),
+            key: property.name.clone(),
+            values,
+        }])
+    }
+
+    fn config_field_value(
+        &mut self,
+        field: &ResolvedObject,
+        property: &str,
+        value: &StoredValue,
+    ) -> DispatchResult<String> {
+        let invalid = |message| DispatchError::InvalidConfigValue {
+            property: property.to_owned(),
+            message,
+        };
+        let class = field
+            .package
+            .summary()
+            .class_name(&field.package.summary().exports[field.export_index])
+            .unwrap_or("<unknown>");
+        let struct_name = if class.eq_ignore_ascii_case("StructProperty") {
+            self.struct_name(field)?
+        } else {
+            None
+        };
+        match (class, value) {
+            ("ByteProperty", StoredValue::Value(Value::Byte(value))) => Ok(self
+                .enum_names(field)?
+                .and_then(|names| names.get(usize::from(*value)).cloned())
+                .unwrap_or_else(|| value.to_string())),
+            ("IntProperty", StoredValue::Value(Value::Int(value))) => Ok(value.to_string()),
+            ("BoolProperty", StoredValue::Value(Value::Bool(value))) => {
+                Ok(if *value { "True" } else { "False" }.to_owned())
+            }
+            ("FloatProperty", StoredValue::Value(Value::Float(value))) if value.is_finite() => {
+                Ok(value.to_string())
+            }
+            ("FloatProperty", StoredValue::Value(Value::Float(_))) => {
+                Err(invalid("the float is not finite".to_owned()))
+            }
+            ("NameProperty", StoredValue::Name(value)) => ini_string(value).ok_or_else(|| {
+                invalid("the name cannot round-trip through an INI value".to_owned())
+            }),
+            ("StrProperty" | "StringProperty", StoredValue::Value(Value::String(value))) => {
+                ini_string(value).ok_or_else(|| {
+                    invalid("the string cannot round-trip through an INI value".to_owned())
+                })
+            }
+            ("ObjectProperty" | "ClassProperty", StoredValue::Object(None)) => {
+                Ok("None".to_owned())
+            }
+            ("ObjectProperty" | "ClassProperty", StoredValue::Object(Some(object))) => {
+                let object = self.resolved_object(object)?;
+                if class == "ClassProperty"
+                    && object.package.summary().exports[object.export_index].class
+                        != ObjectReference::None
+                {
+                    return Err(invalid("the object is not a class".to_owned()));
+                }
+                PackageStore::qualified_object_name(&object).map_err(DispatchError::from)
+            }
+            ("StructProperty", StoredValue::Value(Value::Vector([x, y, z])))
+                if struct_name.as_deref() == Some("Vector")
+                    && x.is_finite()
+                    && y.is_finite()
+                    && z.is_finite() =>
+            {
+                Ok(format!("(X={x},Y={y},Z={z})"))
+            }
+            ("StructProperty", StoredValue::Value(Value::Rotator([pitch, yaw, roll])))
+                if struct_name.as_deref() == Some("Rotator") =>
+            {
+                Ok(format!("(Pitch={pitch},Yaw={yaw},Roll={roll})"))
+            }
+            ("StructProperty", StoredValue::Value(Value::Struct(values)))
+                if struct_name.as_deref() == Some("Color") =>
+            {
+                let component = |name| match values.get(name) {
+                    Some(Value::Byte(value)) => Ok(*value),
+                    _ => Err(invalid(format!(
+                        "the Color struct has no byte `{name}` component"
+                    ))),
+                };
+                Ok(format!(
+                    "(R={},G={},B={},A={})",
+                    component("R")?,
+                    component("G")?,
+                    component("B")?,
+                    component("A")?
+                ))
+            }
+            _ => Err(invalid(format!("unsupported `{class}` value"))),
+        }
+    }
+
+    fn struct_name(&mut self, field: &ResolvedObject) -> DispatchResult<Option<String>> {
+        let metadata = PropertyMetadata::decode(&field.package, field.export_index)?;
+        let Some(structure) = metadata.struct_type else {
+            return Ok(None);
+        };
+        let Some(structure) = self.packages.resolve(&field.package, structure)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            structure
+                .package
+                .summary()
+                .name(structure.package.summary().exports[structure.export_index].object_name)
+                .to_owned(),
+        ))
     }
 
     pub(super) fn apply_properties(
