@@ -1032,17 +1032,9 @@ impl ScriptRuntime {
                         .join(", ")
                 ));
             };
-            let field = self
-                .find_property(actor_class, "Rotation", 0)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "SetRotation property Rotation is missing".to_owned())?;
-            instance.insert(field, StoredValue::Value(Value::Rotator(*rotation)));
-            actions.push(ActorAction::SetRotation {
-                actor,
-                rotation: *rotation,
-            });
-            // ponytail: accept rotations until UE1 collision rejection exists.
-            return Ok(Value::Bool(true));
+            return self
+                .try_move_actor_rotated(actor, actor_class, *rotation, instance, actions)
+                .map(|hit| Value::Bool(hit.fraction == 1.0));
         }
         if index == LOG {
             let (message, tag) = log_arguments(arguments)?;

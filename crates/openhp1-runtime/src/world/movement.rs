@@ -700,7 +700,25 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<MovementHit, String> {
-        self.try_move_actor_inner(actor, actor_class, delta, instance, Some(actions))
+        self.try_move_actor_inner(actor, actor_class, delta, None, instance, Some(actions))
+    }
+
+    pub(super) fn try_move_actor_rotated(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        rotation: [i32; 3],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<MovementHit, String> {
+        self.try_move_actor_inner(
+            actor,
+            actor_class,
+            [0.0; 3],
+            Some(rotation),
+            instance,
+            Some(actions),
+        )
     }
 
     pub(super) fn test_move_actor(
@@ -711,7 +729,7 @@ impl ScriptRuntime {
         instance: &InstanceState,
     ) -> std::result::Result<MovementHit, String> {
         let mut instance = instance.clone();
-        self.try_move_actor_inner(actor, actor_class, delta, &mut instance, None)
+        self.try_move_actor_inner(actor, actor_class, delta, None, &mut instance, None)
     }
 
     fn try_move_actor_inner(
@@ -719,6 +737,7 @@ impl ScriptRuntime {
         actor: usize,
         actor_class: &ResolvedObject,
         delta: [f32; 3],
+        rotation: Option<[i32; 3]>,
         instance: &mut InstanceState,
         mut actions: Option<&mut Vec<ActorAction>>,
     ) -> std::result::Result<MovementHit, String> {
@@ -734,7 +753,7 @@ impl ScriptRuntime {
         }
 
         let delta = Vec3::from_array(delta);
-        if delta.length_squared() < 0.00000001 {
+        if delta.length_squared() < 0.00000001 && rotation.is_none() {
             return Ok(MovementHit {
                 fraction: 1.0,
                 normal: Vec3::ZERO,
@@ -742,7 +761,18 @@ impl ScriptRuntime {
                 node: None,
             });
         }
-        let current = self.collision_actor(actor, actor_class, instance)?;
+        let mut current = self.collision_actor(actor, actor_class, instance)?;
+        let previous_rotation = rotation
+            .map(|_| self.actor_rotator(actor_class, instance, "Rotation"))
+            .transpose()?;
+        if let Some(rotation) = rotation {
+            let axes = crate::rotator_axes(rotation);
+            current.rotation = Mat3::from_cols(
+                Vec3::from_array(axes[0]),
+                Vec3::from_array(axes[1]),
+                Vec3::from_array(axes[2]),
+            );
+        }
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
         let (blocking_hit, hits) =
             self.movement_hit(&current, delta, collide_world, actor, instance)?;
@@ -752,7 +782,14 @@ impl ScriptRuntime {
             return Ok(blocking_hit);
         };
         let location = current.location + delta * blocking_hit.fraction;
-        self.set_actor_location(actor, actor_class, instance, location, actions)?;
+        if delta.length_squared() >= 0.00000001 {
+            self.set_actor_location(actor, actor_class, instance, location, actions)?;
+        }
+        if blocking_hit.fraction == 1.0
+            && let Some(rotation) = rotation
+        {
+            self.set_actor_rotation(actor, actor_class, instance, rotation, actions)?;
+        }
         let actually_moved = delta * blocking_hit.fraction;
         for based_actor in self.based_actors(actor)? {
             let class = self
@@ -778,6 +815,20 @@ impl ScriptRuntime {
             self.instances.insert(based_actor, based_instance);
             result?;
         }
+        if blocking_hit.fraction == 1.0
+            && let (Some(rotation), Some(previous_rotation)) = (rotation, previous_rotation)
+        {
+            self.turn_based_actors(
+                actor,
+                location,
+                [
+                    rotation[0].wrapping_sub(previous_rotation[0]),
+                    rotation[1].wrapping_sub(previous_rotation[1]),
+                    rotation[2].wrapping_sub(previous_rotation[2]),
+                ],
+                actions,
+            )?;
+        }
 
         if let Some(other) = blocking_actor
             && !self
@@ -801,6 +852,109 @@ impl ScriptRuntime {
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
         Ok(blocking_hit)
+    }
+
+    fn set_actor_rotation(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        rotation: [i32; 3],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let field = self
+            .find_property(actor_class, "Rotation", 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "actor property Rotation is missing".to_owned())?;
+        instance.insert(field, StoredValue::Value(Value::Rotator(rotation)));
+        if let Some(Some(cached)) = self.collision_actors.get_mut(actor) {
+            let axes = crate::rotator_axes(rotation);
+            cached.actor.rotation = Mat3::from_cols(
+                Vec3::from_array(axes[0]),
+                Vec3::from_array(axes[1]),
+                Vec3::from_array(axes[2]),
+            );
+            self.reindex_cached_collision_actor(actor);
+        }
+        actions.push(ActorAction::SetRotation { actor, rotation });
+        Ok(())
+    }
+
+    fn turn_based_actors(
+        &mut self,
+        actor: usize,
+        location: Vec3,
+        delta: [i32; 3],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        if delta[1] & 0xffff == 0 {
+            return Ok(());
+        }
+        let axes = crate::rotator_axes([0, delta[1], 0]);
+        let yaw_rotation = Mat3::from_cols(
+            Vec3::from_array(axes[0]),
+            Vec3::from_array(axes[1]),
+            Vec3::from_array(axes[2]),
+        );
+        for based_actor in self.based_actors(actor)? {
+            let class = self
+                .actor_classes
+                .get(&based_actor)
+                .cloned()
+                .ok_or_else(|| format!("based actor {based_actor} has no class"))?;
+            let class = self
+                .resolved_object(&class)
+                .map_err(|error| error.to_string())?;
+            let mut based_instance = self
+                .instances
+                .remove(&based_actor)
+                .ok_or_else(|| format!("based actor {based_actor} instance is active"))?;
+            let result: std::result::Result<(), String> = (|| {
+                let based_location =
+                    Vec3::from_array(self.actor_vector(&class, &based_instance, "Location")?);
+                self.try_move_actor(
+                    based_actor,
+                    &class,
+                    (location + yaw_rotation * (based_location - location) - based_location)
+                        .to_array(),
+                    &mut based_instance,
+                    actions,
+                )?;
+                let based_rotation = self.actor_rotator(&class, &based_instance, "Rotation")?;
+                self.try_move_actor_rotated(
+                    based_actor,
+                    &class,
+                    [
+                        based_rotation[0].wrapping_add(delta[0]),
+                        based_rotation[1].wrapping_add(delta[1]),
+                        based_rotation[2].wrapping_add(delta[2]),
+                    ],
+                    &mut based_instance,
+                    actions,
+                )?;
+                if self
+                    .class_has_name(&class, "Pawn")
+                    .map_err(|error| error.to_string())?
+                {
+                    let view_rotation =
+                        self.actor_rotator(&class, &based_instance, "ViewRotation")?;
+                    self.set_actor_value(
+                        &class,
+                        &mut based_instance,
+                        "ViewRotation",
+                        Value::Rotator([
+                            view_rotation[0],
+                            view_rotation[1].wrapping_add(delta[1]),
+                            view_rotation[2],
+                        ]),
+                    )?;
+                }
+                Ok(())
+            })();
+            self.instances.insert(based_actor, based_instance);
+            result?;
+        }
+        Ok(())
     }
 
     fn movement_hit(
@@ -1127,7 +1281,17 @@ impl ScriptRuntime {
             {
                 continue;
             }
-            let Some(hit) = sweep_collision_actors(current, other, delta) else {
+            let hit = if delta.length_squared() < 0.00000001 {
+                collision_actors_overlap(current, other).then_some(
+                    openhp1_physics::ActorCollisionHit {
+                        fraction: 0.0,
+                        normal: Vec3::ZERO,
+                    },
+                )
+            } else {
+                sweep_collision_actors(current, other, delta)
+            };
+            let Some(hit) = hit else {
                 continue;
             };
             hits.push(ActorSweep {

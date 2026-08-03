@@ -3985,6 +3985,342 @@ fn rot_rand_dispatches_the_extended_native_and_uses_optional_roll() {
 }
 
 #[test]
+fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-set-rotation-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package_for("TestPawn")).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let class_script = |export_index, base_field| {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Class".to_owned(),
+            base_field,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        })
+    };
+    runtime.scripts.insert(
+        class_id.clone(),
+        class_script(0, ObjectReference::Export(3)),
+    );
+    runtime.scripts.insert(
+        object_id(&package, 3),
+        class_script(3, ObjectReference::None),
+    );
+    assert!(runtime.class_has_name(&class, "Pawn").unwrap());
+
+    let fields = [
+        "Location",
+        "Rotation",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "bCollideWorld",
+        "bStatic",
+        "bMovable",
+        "Brush",
+        "PrePivot",
+        "ViewRotation",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "mainscale".to_owned()), None);
+
+    let instance = |location: [f32; 3], block_actors: bool| {
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector(location)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(2.0)),
+            ),
+            (
+                fields["CollisionRadius"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["CollisionWidth"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["CollideType"].clone(),
+                StoredValue::Value(Value::Byte(2)),
+            ),
+            (
+                fields["bCollideActors"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bBlockActors"].clone(),
+                StoredValue::Value(Value::Bool(block_actors)),
+            ),
+            (
+                fields["bBlockPlayers"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bCollideWorld"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bStatic"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bMovable"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (fields["Brush"].clone(), StoredValue::Object(None)),
+            (
+                fields["PrePivot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["ViewRotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    for actor in 1..=3 {
+        let object = runtime_actor_id(actor);
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object);
+        runtime.actor_classes.insert(actor, class_id.clone());
+    }
+    runtime.next_actor = 4;
+    let parent = runtime.actor_objects[&1].clone();
+    let mut current_instance = instance([0.0; 3], true);
+    runtime
+        .instances
+        .insert(2, instance([4.0, 0.0, 0.0], false));
+    runtime.instances.insert(3, instance([0.0, 6.0, 0.0], true));
+    runtime.update_actor_base(2, Some(parent));
+
+    let execute = |runtime: &mut ScriptRuntime,
+                   current_instance: &mut InstanceState,
+                   rotation: [i32; 3],
+                   actions: &mut Vec<ActorAction>| {
+        let mut bytes = vec![0x04, 0x61, 0x2b, 0x22];
+        for value in rotation {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        Frame::new(&bytecode).execute_hosted(|request| match request {
+            FrameRequest::Call {
+                function,
+                arguments,
+                ..
+            } => match function {
+                FunctionCall::Native(index) => {
+                    assert_eq!(index, SET_ROTATION);
+                    runtime
+                        .native(
+                            1,
+                            &class,
+                            &package,
+                            index,
+                            &arguments,
+                            current_instance,
+                            actions,
+                            0,
+                        )
+                        .map(FrameResponse::Value)
+                }
+                _ => panic!("unexpected frame call"),
+            },
+            _ => panic!("unexpected frame request"),
+        })
+    };
+
+    let mut actions = Vec::new();
+    assert_eq!(
+        execute(
+            &mut runtime,
+            &mut current_instance,
+            [0, 16_384, 0],
+            &mut actions,
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    assert!(actions.iter().any(|action| {
+        matches!(
+            action,
+            ActorAction::DispatchEvent {
+                actor: 1 | 3,
+                event: "Bump",
+                ..
+            }
+        )
+    }));
+    assert!(
+        !actions
+            .iter()
+            .any(|action| matches!(action, ActorAction::SetRotation { .. }))
+    );
+    assert_eq!(
+        current_instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0; 3])))
+    );
+
+    runtime.instances.get_mut(&3).unwrap().insert(
+        fields["bBlockActors"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    actions.clear();
+
+    assert_eq!(
+        execute(
+            &mut runtime,
+            &mut current_instance,
+            [0, 16_384, 0],
+            &mut actions,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(actions.contains(&ActorAction::SetRotation {
+        actor: 1,
+        rotation: [0, 16_384, 0],
+    }));
+    assert!(actions.iter().any(|action| {
+        matches!(
+            action,
+            ActorAction::DispatchEvent {
+                actor: 1,
+                event: "Touch",
+                ..
+            }
+        )
+    }));
+    assert_eq!(
+        current_instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 16_384, 0])))
+    );
+    assert_eq!(
+        runtime.instances[&2].get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 16_384, 0])))
+    );
+    assert_eq!(
+        runtime.instances[&2].get(&fields["ViewRotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 16_384, 0])))
+    );
+    let StoredValue::Value(Value::Vector(location)) =
+        runtime.instances[&2].get(&fields["Location"]).unwrap()
+    else {
+        panic!("based actor Location is not a vector");
+    };
+    assert!(Vec3::from_array(*location).abs_diff_eq(Vec3::new(0.0, 4.0, 0.0), 1.0e-5));
+
+    actions.clear();
+    assert_eq!(
+        execute(&mut runtime, &mut current_instance, [0; 3], &mut actions,).unwrap(),
+        Value::Bool(true)
+    );
+    assert!(actions.iter().any(|action| {
+        matches!(
+            action,
+            ActorAction::DispatchEvent {
+                actor: 1,
+                event: "UnTouch",
+                ..
+            }
+        )
+    }));
+    current_instance.insert(
+        fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    runtime.collision = Some(placement_test_collision(100.0));
+    actions.clear();
+    assert_eq!(
+        execute(
+            &mut runtime,
+            &mut current_instance,
+            [0, 16_384, 0],
+            &mut actions,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(actions.contains(&ActorAction::SetRotation {
+        actor: 1,
+        rotation: [0, 16_384, 0],
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn animation_parameters_preserve_optional_tween_time() {
     assert_eq!(
         animation_parameters("LoopAnim", &[Value::None, Value::Float(0.5)]),

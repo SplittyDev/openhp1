@@ -261,6 +261,15 @@ Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 the default aligned cylinder, while `CT_Shape` uses the mesh's offset, rotated
 primitive bounds. A sweep that starts inside an existing overlap may move out
 instead of treating the exit surface as a new impact.
+In the original `res/System/Engine.dll`, `execSetRotation` calls
+`ULevel::MoveActor` through vtable slot `0x8c` with a zero vector and proposed
+rotator; `execSetLocation` uses FarMove slot `0x90`. OpenHP1 follows that
+shared movement path: zero-delta BSP sweeps do not create a new BSP hit, while
+rotated actor bounds use the ordinary blocking,
+`Bump`, `Touch`, and `UnTouch` processing. A successful rotation updates the
+persistent transform, collision index, and scene action; its based actors turn
+around the base's yaw, and every `Pawn` subclass receives that yaw in
+`ViewRotation`.
 `GetWorldCollisionBox(true)` transforms the mesh's serialized primitive bounds
 through its mesh and current actor transforms; the default form returns the
 actor's collision bounds instead.
