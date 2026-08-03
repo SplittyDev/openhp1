@@ -1149,6 +1149,42 @@ impl ScriptRuntime {
             // config properties when settings need to survive process exit.
             return Ok(Value::None);
         }
+        if index == UPDATE_URL {
+            let [
+                Value::String(option),
+                Value::String(value),
+                save_default @ ..,
+            ] = arguments
+            else {
+                return Err(format!(
+                    "UpdateURL expects an option, value, and optional save-default flag, found {}",
+                    arguments.len()
+                ));
+            };
+            let save_default = match save_default {
+                [] | [Value::None] => false,
+                [Value::Bool(value)] => *value,
+                [value] => {
+                    return Err(format!(
+                        "UpdateURL save-default flag is {}, expected bool",
+                        value.kind()
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "UpdateURL expects an option, value, and optional save-default flag, found {}",
+                        arguments.len()
+                    ));
+                }
+            };
+            actions.push(ActorAction::UpdateUrl {
+                actor,
+                option: option.clone(),
+                value: value.clone(),
+                save_default,
+            });
+            return Ok(Value::None);
+        }
         if index == FIND_PATH {
             let [start, destination] = arguments else {
                 return Err(format!(

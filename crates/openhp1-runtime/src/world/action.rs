@@ -240,6 +240,12 @@ pub enum ActorAction {
         travel_type: u8,
         transfer_items: bool,
     },
+    UpdateUrl {
+        actor: usize,
+        option: String,
+        value: String,
+        save_default: bool,
+    },
     SpawnActor {
         actor: usize,
         name: String,
@@ -337,6 +343,7 @@ impl ActorAction {
             | Self::PlaySound { actor, .. }
             | Self::StopSound { actor, .. }
             | Self::ClientTravel { actor, .. }
+            | Self::UpdateUrl { actor, .. }
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }
             | Self::SetRotation { actor, .. }

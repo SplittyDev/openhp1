@@ -340,6 +340,7 @@ fn apply_actions(
             }
             ActorAction::StopSound { .. } => {}
             ActorAction::ClientTravel { .. } => {}
+            ActorAction::UpdateUrl { .. } => {}
             ActorAction::SpawnActor {
                 actor,
                 name,

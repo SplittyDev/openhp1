@@ -805,6 +805,121 @@ fn client_travel_named_native_dispatches_through_function_execution() {
 }
 
 #[test]
+fn update_url_numeric_native_dispatches_optional_defaults() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-update-url-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    runtime.scripts.insert(
+        object_id(&package, 1),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 1,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: openhp1_script::Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: UPDATE_URL,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+
+    assert_eq!(
+        runtime
+            .execute_actor_function(
+                17,
+                &class,
+                &function,
+                &[
+                    Value::String("Name".to_owned()),
+                    Value::String("Harry".to_owned()),
+                ],
+            )
+            .unwrap(),
+        [ActorAction::UpdateUrl {
+            actor: 17,
+            option: "Name".to_owned(),
+            value: "Harry".to_owned(),
+            save_default: false,
+        }]
+    );
+    assert_eq!(
+        runtime
+            .execute_actor_function(
+                17,
+                &class,
+                &function,
+                &[
+                    Value::String("Class".to_owned()),
+                    Value::String("Wizard".to_owned()),
+                    Value::None,
+                ],
+            )
+            .unwrap(),
+        [ActorAction::UpdateUrl {
+            actor: 17,
+            option: "Class".to_owned(),
+            value: "Wizard".to_owned(),
+            save_default: false,
+        }]
+    );
+    assert_eq!(
+        runtime
+            .execute_actor_function(
+                17,
+                &class,
+                &function,
+                &[
+                    Value::String("Voice".to_owned()),
+                    Value::String("Harry".to_owned()),
+                    Value::Bool(true),
+                ],
+            )
+            .unwrap(),
+        [ActorAction::UpdateUrl {
+            actor: 17,
+            option: "Voice".to_owned(),
+            value: "Harry".to_owned(),
+            save_default: true,
+        }]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn get_player_network_address_named_native_dispatches_through_function_execution() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-get-player-network-address-{}-{}",

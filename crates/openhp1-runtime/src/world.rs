@@ -87,6 +87,7 @@ const REMOVE_PAWN: u16 = 530;
 const PLAYER_CAN_SEE_ME: u16 = 532;
 const CAN_SEE: u16 = 533;
 const SAVE_CONFIG: u16 = 536;
+const UPDATE_URL: u16 = 546;
 const COMPARE_GESTURE: u16 = 426;
 const COMPARE_GESTURE_POINT: u16 = 427;
 const RAND_RANGE: u16 = 0x409;
