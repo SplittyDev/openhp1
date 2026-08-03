@@ -393,6 +393,20 @@ impl ScriptRuntime {
                     .map_err(|message| DispatchError::UnresolvedObject { message })?;
                     return Ok(Value::None);
                 }
+                if class.eq_ignore_ascii_case("Pawn")
+                    && function_name.eq_ignore_ascii_case("CheckValidSkinPackage")
+                {
+                    let [Value::String(skin_package), Value::String(mesh_name)] = arguments else {
+                        return Err(DispatchError::UnimplementedNamedNative {
+                            class: class.to_owned(),
+                            function: function_name.to_owned(),
+                        });
+                    };
+                    return Ok(Value::Bool(
+                        skin_package_is_compatible(skin_package, mesh_name)
+                            && self.packages.load(skin_package).is_ok(),
+                    ));
+                }
                 if let Some(value) = named_native(class, function_name, arguments) {
                     return Ok(value);
                 }
@@ -531,6 +545,19 @@ pub(super) fn named_native(class: &str, function: &str, arguments: &[Value]) -> 
         return Some(Value::None);
     }
     None
+}
+
+fn skin_package_is_compatible(skin_package: &str, mesh_name: &str) -> bool {
+    let skin_package = skin_package.to_ascii_lowercase();
+    let mesh_name = mesh_name.to_ascii_lowercase();
+    if skin_package.is_empty()
+        || mesh_name.is_empty()
+        || !skin_package.contains("skins")
+        || matches!(skin_package.as_str(), "unrealshare" | "botpack" | "skins")
+    {
+        return false;
+    }
+    skin_package.contains(&format!("{mesh_name}skins"))
 }
 
 fn concrete_self_value(value: &Value, self_handle: i32) -> Value {
@@ -758,6 +785,13 @@ mod tests {
         assert!(!is_unsupported_scene_property("Mesh"));
         assert!(!is_unsupported_scene_property("DrawType"));
         assert!(!is_unsupported_scene_property("Velocity"));
+    }
+
+    #[test]
+    fn validates_mesh_specific_skin_package_names() {
+        assert!(skin_package_is_compatible("CommandoSkins", "commando"));
+        assert!(!skin_package_is_compatible("SoldierSkins", "commando"));
+        assert!(!skin_package_is_compatible("Botpack", "commando"));
     }
 
     #[test]
