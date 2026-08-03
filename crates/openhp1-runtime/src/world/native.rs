@@ -11,8 +11,8 @@ mod sound;
 mod support;
 
 pub(super) use scalar::{
-    bone_number, object_value, random_float, random_int, random_unit_vector, scalar_native,
-    target_score,
+    bone_number, object_value, random_float, random_int, random_rotator, random_unit_vector,
+    scalar_native, target_score,
 };
 #[cfg(test)]
 pub(super) use sound::sound_arguments;
@@ -1024,6 +1024,23 @@ impl ScriptRuntime {
                 ));
             }
             return Ok(Value::Float(random_float(&mut self.random_state)));
+        }
+        if index == ROT_RAND {
+            let roll = match arguments {
+                [] | [Value::None] => false,
+                [Value::Bool(roll)] => *roll,
+                _ => {
+                    return Err(format!(
+                        "RotRand expects an optional bool, found {}",
+                        arguments
+                            .iter()
+                            .map(Value::kind)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            };
+            return Ok(Value::Rotator(random_rotator(&mut self.random_state, roll)));
         }
         if index == V_RAND {
             if !arguments.is_empty() {

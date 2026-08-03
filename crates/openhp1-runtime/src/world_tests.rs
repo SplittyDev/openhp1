@@ -741,6 +741,67 @@ fn random_vectors_are_normalized_and_deterministic() {
 }
 
 #[test]
+fn rot_rand_dispatches_the_extended_native_and_uses_optional_roll() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-rot-rand-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let execute = |runtime: &mut ScriptRuntime, bytes: Vec<u8>| {
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let mut instance = InstanceState::default();
+        let mut actions = Vec::new();
+        frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                runtime.native(
+                    0,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap()
+    };
+
+    runtime.random_state = 0x8000_0000;
+    assert_eq!(
+        execute(&mut runtime, vec![0x04, 0x61, 0x40, 0x16]),
+        Value::Rotator([0x8908, 0x8008, 0])
+    );
+    runtime.random_state = 0x8000_0000;
+    assert_eq!(
+        execute(&mut runtime, vec![0x04, 0x61, 0x40, 0x27, 0x16]),
+        Value::Rotator([0x8908, 0x8008, 0xaa91])
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn animation_parameters_preserve_optional_tween_time() {
     assert_eq!(
         animation_parameters("LoopAnim", &[Value::None, Value::Float(0.5)]),

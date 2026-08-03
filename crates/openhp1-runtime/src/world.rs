@@ -66,6 +66,7 @@ const TRACE_TEXTURE: u16 = 0x11d;
 const GET_WORLD_COLLISION_BOX: u16 = 0x11e;
 const SET_BASE: u16 = 0x12a;
 const SET_ROTATION: u16 = 0x12b;
+const ROT_RAND: u16 = 0x140;
 const GET_ANIM_GROUP: u16 = 0x125;
 const BONE_NUMBER: u16 = 0x10c;
 const TWEEN_ANIM: u16 = 0x126;

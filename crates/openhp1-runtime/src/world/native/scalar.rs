@@ -579,6 +579,13 @@ pub(in crate::world) fn random_float(state: &mut u32) -> f32 {
     (next_random(state) >> 8) as f32 / 16_777_216.0
 }
 
+pub(in crate::world) fn random_rotator(state: &mut u32, roll: bool) -> [i32; 3] {
+    let yaw = (next_random(state) >> 16) as i32;
+    let pitch = (next_random(state) >> 16) as i32;
+    let roll = roll.then(|| (next_random(state) >> 16) as i32).unwrap_or(0);
+    [pitch, yaw, roll]
+}
+
 pub(in crate::world) fn random_unit_vector(state: &mut u32) -> Vec3 {
     loop {
         let vector = Vec3::new(
