@@ -282,6 +282,23 @@ pub(super) fn within_sight(
                 .is_some_and(|direction| forward.dot(direction) >= peripheral_vision))
 }
 
+pub(super) fn player_can_see_me_candidate(
+    pawn: Vec3,
+    target: Vec3,
+    forward: Vec3,
+    behind_view: bool,
+) -> bool {
+    const SIGHT_RADIUS: f32 = 500.0;
+    const VIEW_CONE_COSINE: f32 = 0.258_819_04;
+
+    let direction = target - pawn;
+    let distance_squared = direction.length_squared();
+    distance_squared <= SIGHT_RADIUS * SIGHT_RADIUS
+        && (behind_view
+            || distance_squared == 0.0
+            || within_sight(pawn, target, forward, SIGHT_RADIUS, VIEW_CONE_COSINE))
+}
+
 pub(super) fn smooth_remaining_delta(delta: Vec3, normal: Vec3, fraction: f32) -> Option<Vec3> {
     if fraction >= 1.0 {
         return None;

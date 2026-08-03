@@ -782,11 +782,95 @@ impl ScriptRuntime {
             other.location - Vec3::Z * (other.height * 0.5),
         ]
         .into_iter()
-        .any(|target| {
-            self.collision
-                .as_ref()
-                .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())
-        }))
+        .any(|target| self.has_line_of_sight(eye, target)))
+    }
+
+    pub(super) fn player_can_see_me(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let target = Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+        let level = self
+            .actor_object(actor_class, instance, "Level")?
+            .ok_or_else(|| "PlayerCanSeeMe actor has no Level".to_owned())?;
+        let level_actor = self
+            .object_actors
+            .get(&level)
+            .copied()
+            .ok_or_else(|| "PlayerCanSeeMe Level is not a registered actor".to_owned())?;
+        let level_class = self
+            .actor_classes
+            .get(&level_actor)
+            .cloned()
+            .ok_or_else(|| format!("PlayerCanSeeMe Level actor {level_actor} has no class"))?;
+        let level_class = self
+            .resolved_object(&level_class)
+            .map_err(|error| error.to_string())?;
+        let level_instance = self.instances.get(&level_actor).cloned().ok_or_else(|| {
+            format!("PlayerCanSeeMe Level actor {level_actor} instance is active")
+        })?;
+        let mut pawn = self.actor_object(&level_class, &level_instance, "PawnList")?;
+        let mut seen = HashSet::default();
+
+        while let Some(pawn_object) = pawn {
+            let pawn_actor = self
+                .object_actors
+                .get(&pawn_object)
+                .copied()
+                .ok_or_else(|| "PlayerCanSeeMe PawnList has an unregistered pawn".to_owned())?;
+            if !seen.insert(pawn_actor) {
+                return Err("PlayerCanSeeMe PawnList has a cycle".to_owned());
+            }
+            if pawn_actor == actor {
+                pawn = self.actor_object(actor_class, instance, "nextPawn")?;
+                continue;
+            }
+            let destroyed = self.destroyed.contains(&pawn_actor);
+            let pawn_class = self
+                .actor_classes
+                .get(&pawn_actor)
+                .cloned()
+                .ok_or_else(|| format!("PlayerCanSeeMe pawn {pawn_actor} has no class"))?;
+            let pawn_class = self
+                .resolved_object(&pawn_class)
+                .map_err(|error| error.to_string())?;
+            let pawn_instance =
+                self.instances.get(&pawn_actor).cloned().ok_or_else(|| {
+                    format!("PlayerCanSeeMe pawn {pawn_actor} instance is active")
+                })?;
+            pawn = self.actor_object(&pawn_class, &pawn_instance, "nextPawn")?;
+
+            if destroyed {
+                continue;
+            }
+            let location =
+                Vec3::from_array(self.actor_vector(&pawn_class, &pawn_instance, "Location")?);
+            let forward = Vec3::from_array(
+                crate::rotator_axes(self.actor_rotator(
+                    &pawn_class,
+                    &pawn_instance,
+                    "ViewRotation",
+                )?)[0],
+            );
+            let behind_view = self.actor_bool(&pawn_class, &pawn_instance, "bBehindView")?;
+            if !player_can_see_me_candidate(location, target, forward, behind_view) {
+                continue;
+            }
+            let mut eye = location;
+            eye.z += self.actor_float(&pawn_class, &pawn_instance, "BaseEyeHeight")?;
+            if self.has_line_of_sight(eye, target) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn has_line_of_sight(&self, eye: Vec3, target: Vec3) -> bool {
+        self.collision
+            .as_ref()
+            .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())
     }
 
     fn ensure_collision_actors(

@@ -1054,6 +1054,17 @@ impl ScriptRuntime {
                 min + random_float(&mut self.random_state) * (max - min),
             ));
         }
+        if index == PLAYER_CAN_SEE_ME {
+            if !arguments.is_empty() {
+                return Err(format!(
+                    "PlayerCanSeeMe expects no arguments, found {}",
+                    arguments.len()
+                ));
+            }
+            return self
+                .player_can_see_me(actor, actor_class, instance)
+                .map(Value::Bool);
+        }
         if index == CAN_SEE {
             let [other] = arguments else {
                 return Err(format!(

@@ -1,3 +1,8 @@
+use std::{
+    fs,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
 use super::*;
 use super::{
     actor::advance_lifespan,
@@ -12,6 +17,39 @@ use super::{
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
 use openhp1_map::PrimitiveBounds;
+
+static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+fn synthetic_runtime_package() -> Vec<u8> {
+    const HEADER_SIZE: usize = 44;
+    let name_offset = HEADER_SIZE;
+    let export_offset = name_offset + b"Test\0".len() + size_of::<u32>();
+    let mut bytes = Vec::new();
+    bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+    bytes.extend(61_u16.to_le_bytes());
+    bytes.extend(0_u16.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    for value in [
+        1,
+        name_offset as i32,
+        1,
+        export_offset as i32,
+        0,
+        export_offset as i32,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(b"Test\0");
+    bytes.extend(0_u32.to_le_bytes());
+    bytes.extend([0, 0]);
+    bytes.extend(0_i32.to_le_bytes());
+    bytes.push(0);
+    bytes.extend(0_u32.to_le_bytes());
+    bytes.push(0);
+    bytes
+}
 
 #[test]
 fn looping_timer_keeps_fractional_overshoot() {
@@ -79,6 +117,98 @@ fn decodes_finish_interpolation_latent_state() {
         decode_latent_action(0x12e, 7),
         LatentAction::FinishInterpolation(7)
     );
+}
+
+#[test]
+fn player_can_see_me_native_skips_the_active_pawn_and_accepts_coincidence() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-player-can-see-me-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    let level = runtime_actor_id(10);
+    let current = runtime_actor_id(11);
+    let other = runtime_actor_id(12);
+    let level_field = runtime_actor_id(20);
+    let pawn_list_field = runtime_actor_id(21);
+    let next_pawn_field = runtime_actor_id(22);
+    let location_field = runtime_actor_id(23);
+    let view_rotation_field = runtime_actor_id(24);
+    let behind_view_field = runtime_actor_id(25);
+    let base_eye_height_field = runtime_actor_id(26);
+    for (name, field) in [
+        ("Level", &level_field),
+        ("PawnList", &pawn_list_field),
+        ("nextPawn", &next_pawn_field),
+        ("Location", &location_field),
+        ("ViewRotation", &view_rotation_field),
+        ("bBehindView", &behind_view_field),
+        ("BaseEyeHeight", &base_eye_height_field),
+    ] {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    for (actor, object) in [(0, &level), (1, &current), (2, &other)] {
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object.clone());
+    }
+
+    let mut level_instance = InstanceState::default();
+    level_instance.insert(pawn_list_field, StoredValue::Object(Some(current.clone())));
+    runtime.instances.insert(0, level_instance);
+    let mut other_instance = InstanceState::default();
+    other_instance.insert(next_pawn_field.clone(), StoredValue::Object(None));
+    other_instance.insert(
+        location_field.clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),
+    );
+    other_instance.insert(
+        view_rotation_field,
+        StoredValue::Value(Value::Rotator([0, 0, 0])),
+    );
+    other_instance.insert(behind_view_field, StoredValue::Value(Value::Bool(false)));
+    other_instance.insert(base_eye_height_field, StoredValue::Value(Value::Float(0.0)));
+    runtime.instances.insert(2, other_instance);
+    let mut current_instance = InstanceState::default();
+    current_instance.insert(level_field, StoredValue::Object(Some(level)));
+    current_instance.insert(next_pawn_field, StoredValue::Object(Some(other)));
+    current_instance.insert(
+        location_field,
+        StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),
+    );
+
+    assert_eq!(
+        runtime
+            .native(
+                1,
+                &class,
+                &package,
+                0x214,
+                &[],
+                &mut current_instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(true),
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
