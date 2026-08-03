@@ -150,6 +150,40 @@ impl ScriptRuntime {
         Ok(hits)
     }
 
+    pub(super) fn floor_height_at(
+        &mut self,
+        actor: usize,
+        instance: &InstanceState,
+        location: Vec3,
+        distance: f32,
+        radius: f32,
+    ) -> std::result::Result<Option<f32>, String> {
+        let start = location + Vec3::Z * distance;
+        let end = location - Vec3::Z * distance;
+        let extent = Vec3::new(radius, radius, 1.0);
+        let actor_hit = self
+            .trace_collision_actors(start, end, extent, actor, instance)?
+            .into_iter()
+            .next()
+            .map(|hit| (hit.fraction, hit.normal));
+        let bsp_hit = self
+            .collision
+            .as_ref()
+            .and_then(|collision| collision.sweep_aabb(start, end, extent))
+            .map(|hit| (hit.fraction, hit.normal));
+        let fraction = match (actor_hit, bsp_hit) {
+            (Some((actor_fraction, _)), Some((bsp_fraction, _)))
+                if actor_fraction < bsp_fraction =>
+            {
+                Some(actor_fraction)
+            }
+            (_, Some((bsp_fraction, _))) => Some(bsp_fraction),
+            (Some((actor_fraction, _)), None) => Some(actor_fraction),
+            (None, None) => None,
+        };
+        Ok(fraction.map(|fraction| start.lerp(end, fraction).z))
+    }
+
     pub(super) fn colliding_actors(
         &mut self,
         location: Vec3,

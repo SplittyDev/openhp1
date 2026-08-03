@@ -352,6 +352,12 @@ Native class imports without serialized class exports remain opaque class
 handles so `DynamicLoadObject` can resolve qualified resources such as sounds.
 `GetSoundDuration` reads embedded WAV metadata or sums MPEG Layer II frames for
 dialogue timing without requiring audio playback.
+`Pawn.FindStairRotation` samples the current and forward floor through the
+walking collision path. It selects `5400` for a rising forward floor and
+`-5000` for a falling one, otherwise neutral. Delta times above `0.33` return
+the current pitch; smaller values use UE1's capped interpolation, including
+its faster final 1000 rotator units. Raw pitches above `0x8000` are stored back
+as `(pitch & 0xffff) - 0x10000` before sampling.
 HP1 `TraceTexture` validates its authored start/end/flags form but returns no
 texture until BSP collision retains surface material identities. `PlaySound`
 and `PlayOwnedSound` share the nonfatal not-audible diagnostic until playback

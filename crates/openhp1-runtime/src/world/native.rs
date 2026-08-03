@@ -111,6 +111,21 @@ impl ScriptRuntime {
                 .map(Value::Bool)
                 .map_err(|error| error.to_string());
         }
+        if index == FIND_STAIR_ROTATION {
+            let [Value::Float(delta_time)] = arguments else {
+                return Err(format!(
+                    "FindStairRotation expects one float, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            return self
+                .find_stair_rotation(actor, actor_class, instance, *delta_time)
+                .map(Value::Int);
+        }
         if index == DESTROY {
             return self
                 .destroy_actor(actor, actor_class, instance, actions)
@@ -1271,4 +1286,67 @@ impl ScriptRuntime {
         }
         scalar_native(index, arguments)
     }
+
+    fn find_stair_rotation(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        delta_time: f32,
+    ) -> std::result::Result<i32, String> {
+        if !delta_time.is_finite() {
+            return Err("FindStairRotation delta time is not finite".to_owned());
+        }
+        let mut rotation = self.actor_rotator(class, instance, "Rotation")?;
+        if rotation[0] > 0x8000 {
+            rotation[0] = (rotation[0] & 0xffff) - 0x10000;
+            self.set_actor_value(class, instance, "Rotation", Value::Rotator(rotation))?;
+        }
+        let current = rotation[0];
+        if delta_time > 0.33 {
+            return Ok(current);
+        }
+        if self.collision.is_none() {
+            return Ok(interpolate_stair_rotation(current, 0, delta_time));
+        }
+
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let radius = self.actor_float(class, instance, "CollisionRadius")?;
+        let height = self.actor_float(class, instance, "CollisionHeight")?;
+        let eye_height = self.actor_float(class, instance, "EyeHeight")?;
+        let distance = height + eye_height;
+        if distance <= f32::EPSILON {
+            return Ok(interpolate_stair_rotation(current, 0, delta_time));
+        }
+        let rotation = [0, rotation[1], rotation[2]];
+        let forward = Vec3::from_array(crate::rotator_axes(rotation)[0]);
+        let floor = self.floor_height_at(actor, instance, location, distance, radius)?;
+        let ahead = self.floor_height_at(
+            actor,
+            instance,
+            location + forward * distance,
+            distance,
+            radius,
+        )?;
+        let target = match (floor, ahead) {
+            (Some(floor), Some(ahead)) if ahead > floor + 6.0 => 5_400,
+            (Some(floor), Some(ahead)) if ahead < floor - 6.0 => -5_000,
+            _ => 0,
+        };
+        Ok(interpolate_stair_rotation(current, target, delta_time))
+    }
+}
+
+fn interpolate_stair_rotation(current: i32, target: i32, delta_time: f32) -> i32 {
+    let difference = current.abs_diff(target);
+    if difference == 0 {
+        return target;
+    }
+    let rate = if difference < 1_000 {
+        8_000.0 / difference as f32
+    } else {
+        8.0
+    };
+    let alpha = (rate * delta_time).min(1.0);
+    (current as f32 * (1.0 - alpha) + target as f32 * alpha).round_ties_even() as i32
 }

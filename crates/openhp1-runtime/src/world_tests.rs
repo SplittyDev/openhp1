@@ -1,6 +1,9 @@
 use std::{
     fs,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata};
@@ -21,6 +24,7 @@ use super::{
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
 use openhp1_map::{BspNode, Model, PrimitiveBounds};
+use openhp1_physics::BspCollision;
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -1870,6 +1874,197 @@ fn get_player_network_address_named_native_dispatches_through_function_execution
             )
             .unwrap(),
         Value::String(String::new()),
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn stair_collision(current_floor: f32, forward_floor: f32) -> Arc<BspCollision> {
+    let mut model = Model {
+        bounds: PrimitiveBounds {
+            minimum: Vec3::ZERO,
+            maximum: Vec3::ZERO,
+            valid: false,
+            sphere: [0.0; 4],
+        },
+        vectors: Vec::new(),
+        points: Vec::new(),
+        nodes: Vec::new(),
+        surfaces: Vec::new(),
+        vertices: Vec::new(),
+        shared_side_count: 0,
+        zones: Vec::new(),
+        polys: ObjectReference::None,
+        light_maps: Vec::new(),
+        light_bits: Vec::new(),
+        collision_bounds: Vec::new(),
+        leaf_hulls: Vec::new(),
+        leaves: Vec::new(),
+        lights: Vec::new(),
+        root_outside: true,
+        linked: false,
+    };
+    for (minimum_x, maximum_x, floor) in [(-80.0, 0.0, current_floor), (0.0, 80.0, forward_floor)] {
+        let first_plane = model.nodes.len();
+        let collision_bound = model.leaf_hulls.len() as i32;
+        let planes = [
+            [1.0, 0.0, 0.0, maximum_x],
+            [-1.0, 0.0, 0.0, -minimum_x],
+            [0.0, 1.0, 0.0, 80.0],
+            [0.0, -1.0, 0.0, 80.0],
+            [0.0, 0.0, 1.0, floor],
+            [0.0, 0.0, -1.0, 100.0],
+        ];
+        model.nodes.extend(
+            planes
+                .into_iter()
+                .enumerate()
+                .map(|(index, plane)| BspNode {
+                    plane,
+                    zone_mask: 0,
+                    flags: 0,
+                    vertex_pool: 0,
+                    surface: -1,
+                    back: -1,
+                    front: -1,
+                    coplanar: -1,
+                    collision_bound: if index == 0 { collision_bound } else { -1 },
+                    render_bound: -1,
+                    zones: [0; 2],
+                    vertex_count: 0,
+                    leaves: [0; 2],
+                }),
+        );
+        model
+            .leaf_hulls
+            .extend((first_plane..first_plane + planes.len()).map(|index| index as i32));
+        model.leaf_hulls.push(-1);
+        model.leaf_hulls.extend(
+            [minimum_x, -80.0, -100.0, maximum_x, 80.0, floor]
+                .map(f32::to_bits)
+                .map(|value| value as i32),
+        );
+    }
+    Arc::new(BspCollision::from_model(&model).unwrap())
+}
+
+fn find_stair_rotation_native(
+    runtime: &mut ScriptRuntime,
+    class: &ResolvedObject,
+    instance: &mut InstanceState,
+    delta_time: f32,
+) -> Value {
+    runtime
+        .native(
+            17,
+            class,
+            &class.package,
+            FIND_STAIR_ROTATION,
+            &[Value::Float(delta_time)],
+            instance,
+            &mut Vec::new(),
+            0,
+        )
+        .unwrap()
+}
+
+#[test]
+fn find_stair_rotation_uses_floor_samples_interpolates_and_matches_pitch_normalization() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-find-stair-rotation-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    let fields = [
+        "Rotation",
+        "Location",
+        "CollisionRadius",
+        "CollisionHeight",
+        "EyeHeight",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        let field = runtime_actor_id(index + 31);
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+        (name, field)
+    })
+    .collect::<HashMap<_, _>>();
+    let mut instance = InstanceState::default();
+    instance.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([4_000, 0, 0])),
+    );
+    instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([-10.0, 0.0, 10.0])),
+    );
+    instance.insert(
+        fields["CollisionRadius"].clone(),
+        StoredValue::Value(Value::Float(1.0)),
+    );
+    instance.insert(
+        fields["CollisionHeight"].clone(),
+        StoredValue::Value(Value::Float(10.0)),
+    );
+    instance.insert(
+        fields["EyeHeight"].clone(),
+        StoredValue::Value(Value::Float(10.0)),
+    );
+
+    runtime.collision = Some(stair_collision(0.0, 0.0));
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.34),
+        Value::Int(4_000)
+    );
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.01),
+        Value::Int(3_680)
+    );
+    runtime.collision = Some(stair_collision(0.0, 20.0));
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.33),
+        Value::Int(5_400)
+    );
+    runtime.collision = Some(stair_collision(20.0, 0.0));
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.33),
+        Value::Int(-5_000)
+    );
+    instance.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0x1_0000, 0, 0])),
+    );
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.0),
+        Value::Int(-0x1_0000)
+    );
+    assert_eq!(
+        instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([-0x1_0000, 0, 0])))
+    );
+    instance.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0x8000, 0, 0])),
+    );
+    assert_eq!(
+        find_stair_rotation_native(&mut runtime, &class, &mut instance, 0.0),
+        Value::Int(0x8000)
     );
     fs::remove_dir_all(root).unwrap();
 }
