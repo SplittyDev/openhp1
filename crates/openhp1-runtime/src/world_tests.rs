@@ -3,6 +3,10 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use openhp1_script::Bytecode;
+
+use crate::{Frame, FunctionCall};
+
 use super::*;
 use super::{
     actor::advance_lifespan,
@@ -250,6 +254,34 @@ fn integer_division_is_checked() {
         scalar_native(0x9c, &[Value::Int(0x1_ffff), Value::Int(0xffff)]),
         Ok(Value::Int(0xffff))
     );
+}
+
+#[test]
+fn integer_left_shift_executes_through_native_dispatch_with_masked_count() {
+    let execute = |left: i32, right: i32| {
+        let mut bytes = vec![0x04, 0x94, 0x1d];
+        bytes.extend(left.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(right.to_le_bytes());
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame
+            .execute(|call, arguments| {
+                assert_eq!(call, FunctionCall::Native(0x94));
+                scalar_native(0x94, arguments)
+            })
+            .unwrap()
+    };
+
+    assert_eq!(execute(1, 31), Value::Int(i32::MIN));
+    assert_eq!(execute(1, 32), Value::Int(1));
+    assert_eq!(execute(1, -1), Value::Int(i32::MIN));
 }
 
 #[test]
