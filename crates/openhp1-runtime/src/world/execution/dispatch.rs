@@ -57,7 +57,7 @@ impl ScriptRuntime {
                 };
                 let function = self.resolved_object(&function)?;
                 let mut output_arguments = Vec::new();
-                match self.execute_function_with_outputs(
+                let value = self.execute_function_with_outputs(
                     actor,
                     actor_class,
                     &function,
@@ -66,22 +66,12 @@ impl ScriptRuntime {
                     actions,
                     depth,
                     Some(&mut output_arguments),
-                ) {
-                    Ok(value) => Ok(CallOutput::from_arguments(
-                        value,
-                        arguments,
-                        output_arguments,
-                    )),
-                    Err(error) => {
-                        // ponytail: keep bootstrapping the subclass while the VM is
-                        // incomplete; remove this deferral once the corpus executes.
-                        actions.push(ActorAction::DeferredCall {
-                            actor,
-                            message: error.to_string(),
-                        });
-                        Ok(CallOutput::value(Value::None))
-                    }
-                }
+                )?;
+                Ok(CallOutput::from_arguments(
+                    value,
+                    arguments,
+                    output_arguments,
+                ))
             }
             FunctionCall::Virtual(name) | FunctionCall::Global(name) => {
                 let Some(name) = usize::try_from(name)

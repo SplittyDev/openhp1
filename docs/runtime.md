@@ -35,6 +35,9 @@ or state package before context operations use their runtime handles.
 `ClassContext` reads instance-variable expressions from the referenced class's
 inherited default object. Function calls through a class object execute against
 that same default object, including inherited static functions.
+`FinalFunction` bytecode executes its serialized function export directly,
+bypassing virtual and state lookup; native exports use the normal native
+dispatcher, and any target failure propagates through the calling frame.
 
 Nested remote calls may inspect or call back into their caller, so the caller's
 live instance remains addressable while the remote context executes. Serialized
