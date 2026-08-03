@@ -42,6 +42,7 @@ const ALL_ACTORS: u16 = 0x130;
 const TRACE_ACTORS: u16 = 0x135;
 const RADIUS_ACTORS: u16 = 0x136;
 const VISIBLE_ACTORS: u16 = 0x137;
+const VISIBLE_COLLIDING_ACTORS: u16 = 0x138;
 const SLEEP: u16 = 0x100;
 const BONE_POS: u16 = 0x101;
 const CLASS_IS_CHILD_OF: u16 = 0x102;

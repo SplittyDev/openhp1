@@ -610,6 +610,14 @@ impl ScriptRuntime {
                 iterator_instance,
             );
         }
+        if index == VISIBLE_COLLIDING_ACTORS {
+            return self.visible_colliding_actors_iterator(
+                iterator_actor,
+                source,
+                arguments,
+                iterator_instance,
+            );
+        }
         if index != ALL_ACTORS {
             return Err(crate::Error::Call {
                 call,
@@ -800,6 +808,114 @@ impl ScriptRuntime {
                     .map_err(|message| DispatchError::UnresolvedObject { message })?,
             );
             if !within_radius(Some(*radius), location, actor_location) {
+                continue;
+            }
+            let object = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            values.push(IteratorValue {
+                value: Value::Object(self.object_handle(object)?),
+                outputs: Vec::new(),
+            });
+        }
+        Ok(values)
+    }
+
+    fn visible_colliding_actors_iterator(
+        &mut self,
+        current_actor: usize,
+        source: &Arc<Package>,
+        arguments: &[Value],
+        current_instance: &InstanceState,
+    ) -> DispatchResult<Vec<IteratorValue>> {
+        let [Value::Object(base_class), Value::None, rest @ ..] = arguments else {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "VisibleCollidingActors expects a class and output actor, found {}",
+                    arguments
+                        .iter()
+                        .map(Value::kind)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        };
+        if rest.len() > 2 {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!(
+                    "VisibleCollidingActors expects at most 4 arguments, found {}",
+                    arguments.len()
+                ),
+            });
+        }
+        let base_class = self
+            .resolve_class_value(source, *base_class)?
+            .ok_or_else(|| DispatchError::UnresolvedObject {
+                message: "VisibleCollidingActors base class is null".to_owned(),
+            })?;
+        let current_class = self.actor_classes.get(&current_actor).cloned().ok_or(
+            DispatchError::UnregisteredActor {
+                actor: current_actor,
+            },
+        )?;
+        let current_class = self.resolved_object(&current_class)?;
+        let radius = match rest.first() {
+            Some(Value::Float(radius)) => *radius,
+            Some(Value::None) | None => self
+                .actor_float(&current_class, current_instance, "CollisionRadius")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("VisibleCollidingActors radius is {}", value.kind()),
+                });
+            }
+        };
+        let location = match rest.get(1) {
+            Some(Value::Vector(location)) => Vec3::from_array(*location),
+            Some(Value::None) | None => Vec3::from_array(
+                self.actor_vector(&current_class, current_instance, "Location")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?,
+            ),
+            Some(value) => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("VisibleCollidingActors location is {}", value.kind()),
+                });
+            }
+        };
+        let mut values = Vec::new();
+        for actor in self
+            .colliding_actors(location, radius, current_actor, current_instance)
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            if !self.class_is_a(
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                &base_class,
+            )? {
+                continue;
+            }
+            let instance = if actor == current_actor {
+                current_instance.clone()
+            } else {
+                self.instances
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::ActiveActorContext { actor })?
+            };
+            if self
+                .actor_bool(&class, &instance, "bHidden")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?
+            {
                 continue;
             }
             let object = self
@@ -1121,7 +1237,7 @@ mod iterator_tests {
     }
 
     fn radius_actors_test_package() -> Vec<u8> {
-        let names = ["Core", "Class", "Base", "Included", "Excluded"];
+        let names = ["Core", "Class", "Base", "PlayerPawn", "PlayerPawn"];
         let mut name_table = Vec::new();
         for name in names {
             name_table.extend(name.as_bytes());
@@ -1397,5 +1513,206 @@ mod iterator_tests {
         );
         assert_eq!(frame.local(8), Some(&Value::Vector([2.0, -1.0, 3.0])));
         assert_eq!(frame.local(9), Some(&Value::Rotator([0, 16_384, 42])));
+    }
+
+    #[test]
+    fn visible_colliding_actors_filters_cached_collisions_and_assigns_the_output_actor() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let base_class = object_id(&source, 0);
+        let included_class = object_id(&source, 1);
+        let excluded_class = object_id(&source, 2);
+        let fields = [
+            "Location",
+            "CollisionHeight",
+            "CollisionRadius",
+            "CollisionWidth",
+            "Rotation",
+            "CollideType",
+            "bCollideActors",
+            "bBlockActors",
+            "bBlockPlayers",
+            "Brush",
+            "PrePivot",
+            "bHidden",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            (
+                name,
+                ObjectId {
+                    package: Arc::from("<visible-colliding-actors-test>"),
+                    export_index: index,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+        for class in [&included_class, &excluded_class] {
+            for (name, field) in &fields {
+                runtime.fields.insert(
+                    (class.clone(), name.to_ascii_lowercase()),
+                    Some(field.clone()),
+                );
+            }
+            runtime
+                .fields
+                .insert((class.clone(), "mainscale".to_owned()), None);
+        }
+        runtime
+            .class_relations
+            .insert((included_class.clone(), base_class.clone()), true);
+        runtime
+            .class_relations
+            .insert((excluded_class.clone(), base_class.clone()), false);
+        for (actor, class) in [
+            (1, excluded_class.clone()),
+            (2, included_class.clone()),
+            (3, included_class.clone()),
+            (4, excluded_class.clone()),
+            (5, included_class.clone()),
+        ] {
+            let object = runtime_actor_id(actor);
+            runtime.object_actors.insert(object.clone(), actor);
+            runtime.actor_objects.insert(actor, object);
+            runtime.actor_classes.insert(actor, class);
+        }
+        runtime.next_actor = 6;
+        let instance = |location, hidden, collide_actors| {
+            [
+                (
+                    fields["Location"].clone(),
+                    StoredValue::Value(Value::Vector(location)),
+                ),
+                (
+                    fields["CollisionHeight"].clone(),
+                    StoredValue::Value(Value::Float(1.0)),
+                ),
+                (
+                    fields["CollisionRadius"].clone(),
+                    StoredValue::Value(Value::Float(1.0)),
+                ),
+                (
+                    fields["CollisionWidth"].clone(),
+                    StoredValue::Value(Value::Float(0.0)),
+                ),
+                (
+                    fields["Rotation"].clone(),
+                    StoredValue::Value(Value::Rotator([0; 3])),
+                ),
+                (
+                    fields["CollideType"].clone(),
+                    StoredValue::Value(Value::Byte(0)),
+                ),
+                (
+                    fields["bCollideActors"].clone(),
+                    StoredValue::Value(Value::Bool(collide_actors)),
+                ),
+                (
+                    fields["bBlockActors"].clone(),
+                    StoredValue::Value(Value::Bool(false)),
+                ),
+                (
+                    fields["bBlockPlayers"].clone(),
+                    StoredValue::Value(Value::Bool(false)),
+                ),
+                (fields["Brush"].clone(), StoredValue::Object(None)),
+                (
+                    fields["PrePivot"].clone(),
+                    StoredValue::Value(Value::Vector([0.0; 3])),
+                ),
+                (
+                    fields["bHidden"].clone(),
+                    StoredValue::Value(Value::Bool(hidden)),
+                ),
+            ]
+            .into_iter()
+            .collect::<InstanceState>()
+        };
+        let current_instance = instance([0.0; 3], false, true);
+        runtime
+            .instances
+            .insert(2, instance([3.0, 0.0, 0.0], false, true));
+        runtime
+            .instances
+            .insert(3, instance([3.0, 0.0, 0.0], true, true));
+        runtime
+            .instances
+            .insert(4, instance([3.0, 0.0, 0.0], false, true));
+        runtime
+            .instances
+            .insert(5, instance([3.0, 0.0, 0.0], false, false));
+        let base_handle = runtime.object_handle(base_class).unwrap();
+        assert!(
+            runtime
+                .dispatch_iterator_call(
+                    1,
+                    -1,
+                    &source,
+                    FunctionCall::Native(VISIBLE_COLLIDING_ACTORS),
+                    &[Value::Object(base_handle), Value::None, Value::Float(-1.0)],
+                    &current_instance,
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let included_handle = runtime
+            .object_handle(runtime.actor_objects.get(&2).cloned().unwrap())
+            .unwrap();
+        let mut bytes = vec![0x2f, 0x61, 0x38, 0x20];
+        bytes.extend(1_i32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(5.0_f32.to_le_bytes());
+        bytes.push(0x16);
+        let end_offset = bytes.len();
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend([0x0f, 0]);
+        bytes.extend(8_i32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x31);
+        let iterator_pop = u16::try_from(bytes.len()).unwrap();
+        bytes[end_offset..end_offset + 2].copy_from_slice(&iterator_pop.to_le_bytes());
+        bytes.extend([0x30, 0x04, 0]);
+        bytes.extend(8_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+
+        let mut frame = Frame::new(&bytecode);
+        assert_eq!(
+            frame
+                .execute_hosted(|request| match request {
+                    FrameRequest::ResolveObject { reference: 1 } => {
+                        Ok(FrameResponse::Value(Value::Object(base_handle)))
+                    }
+                    FrameRequest::CallIterator {
+                        receiver,
+                        function: FunctionCall::Native(VISIBLE_COLLIDING_ACTORS),
+                        arguments,
+                    } => runtime
+                        .dispatch_iterator_call(
+                            1,
+                            receiver,
+                            &source,
+                            FunctionCall::Native(VISIBLE_COLLIDING_ACTORS),
+                            &arguments,
+                            &current_instance,
+                        )
+                        .map(FrameResponse::Iterator)
+                        .map_err(|error| error.to_string()),
+                    _ => panic!("unexpected frame request"),
+                })
+                .unwrap(),
+            Value::Object(included_handle)
+        );
+        assert_eq!(frame.local(7), Some(&Value::Object(0)));
+        assert_eq!(frame.local(8), Some(&Value::Object(included_handle)));
     }
 }

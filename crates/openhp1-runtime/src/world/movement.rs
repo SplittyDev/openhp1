@@ -149,6 +149,40 @@ impl ScriptRuntime {
         Ok(hits)
     }
 
+    pub(super) fn colliding_actors(
+        &mut self,
+        location: Vec3,
+        radius: f32,
+        current_actor: usize,
+        current_instance: &InstanceState,
+    ) -> std::result::Result<Vec<usize>, String> {
+        self.ensure_collision_actors(current_actor, current_instance)?;
+        let minimum_x = location.x - radius;
+        let maximum_x = location.x + radius;
+        let candidate_count = self.collision_actors_by_min_x.partition_point(|&actor| {
+            collision_actor_min_x(&self.collision_actors, actor) <= maximum_x
+        });
+        let candidates = self.collision_actors_by_min_x[..candidate_count].to_vec();
+        let mut actors = Vec::new();
+        for actor in candidates {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let other = &self.collision_actors[actor].as_ref().unwrap().actor;
+            let Some((other_location, other_extents)) = collision_actor_world_bounds(other) else {
+                continue;
+            };
+            if other_location.x + other_extents.x < minimum_x
+                || !sphere_collision_actor_overlap(location, radius, other)
+            {
+                continue;
+            }
+            actors.push(actor);
+        }
+        actors.sort_unstable();
+        Ok(actors)
+    }
+
     pub fn update_player_touches(
         &mut self,
         location: [f32; 3],

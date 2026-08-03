@@ -225,6 +225,9 @@ without allocating an actor handle. Spawned pawns link themselves into
 `Level.PawnList` through `nextPawn`, matching the native `AddPawn` bookkeeping
 used during `PreBeginPlay`; native `RemovePawn` unlinks the same list during
 `Destroyed`.
+HP1's `VisibleCollidingActors` uses the cached collision actors for a sphere
+query, defaults its location and radius to the receiver, filters class and
+hidden state, and does not perform a line-of-sight trace.
 `PlayerCanSeeMe` walks that list and succeeds when a non-self pawn is within
 500 units, has the actor in its 75-degree `ViewRotation` cone (or uses
 `bBehindView`), and has a clear BSP trace from its `BaseEyeHeight`.

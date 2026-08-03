@@ -241,6 +241,27 @@ pub(super) fn collision_actors_overlap(first: &CollisionActor, second: &Collisio
     }
 }
 
+pub(super) fn sphere_collision_actor_overlap(
+    center: Vec3,
+    radius: f32,
+    actor: &CollisionActor,
+) -> bool {
+    if !center.is_finite() || !radius.is_finite() || radius < 0.0 || actor.brush.is_some() {
+        return false;
+    }
+    if actor.collide_type == COLLIDE_BOX
+        || actor.collide_type == COLLIDE_SHAPE && actor.shape_bounds.is_some()
+    {
+        let local = actor.rotation.transpose() * (center - collision_actor_center(actor));
+        let extents = collision_actor_local_extents(actor);
+        return (local - local.clamp(-extents, extents)).length_squared() <= radius * radius;
+    }
+    let half_height = (actor.height - actor.radius).max(0.0);
+    let closest =
+        actor.location + Vec3::Z * (center.z - actor.location.z).clamp(-half_height, half_height);
+    center.distance_squared(closest) <= (radius + actor.radius).powi(2)
+}
+
 pub(super) fn collision_actor_min_x(actors: &[Option<CachedCollisionActor>], actor: usize) -> f32 {
     let actor = &actors[actor].as_ref().unwrap().actor;
     let (location, extents) = collision_actor_world_bounds(actor).unwrap();
