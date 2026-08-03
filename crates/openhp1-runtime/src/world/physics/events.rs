@@ -210,7 +210,7 @@ impl ScriptRuntime {
         }
     }
 
-    pub(super) fn actor_float_any(
+    pub(in crate::world) fn actor_float_any(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,

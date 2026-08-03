@@ -1297,7 +1297,7 @@ impl ScriptRuntime {
         Ok(false)
     }
 
-    fn has_line_of_sight(&self, eye: Vec3, target: Vec3) -> bool {
+    pub(super) fn has_line_of_sight(&self, eye: Vec3, target: Vec3) -> bool {
         self.collision
             .as_ref()
             .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())

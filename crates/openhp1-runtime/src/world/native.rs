@@ -499,9 +499,13 @@ impl ScriptRuntime {
             return trace_texture(arguments);
         }
         if index == MAKE_NOISE {
-            noise_loudness(arguments)?;
-            // ponytail: movement only needs MakeNoise not to abort; populate pawn
-            // noise slots and dispatch HearNoise when AI hearing uses them.
+            self.make_noise(
+                actor,
+                actor_class,
+                instance,
+                noise_loudness(arguments)?,
+                actions,
+            )?;
             return Ok(Value::None);
         }
         if index == CREATE_ANIM_CHANNEL {

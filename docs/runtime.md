@@ -249,8 +249,10 @@ necessarily carry the visible BSP surface's flags.
 The horizontal probe offset uses the pawn's collision diameter, not its height.
 Aligned cylinders sweep BSP box corners as rounded corners so the resulting
 contact normal can slide a pawn through an adjacent opening.
-`MakeNoise` currently validates its loudness without populating pawn noise
-slots or dispatching `HearNoise`.
+`MakeNoise` records its pawn instigator's two short-lived noise slots, coalesces
+nearby equivalent noises, then synchronously dispatches `HearNoise` to linked
+pawns that pass the original class, team, range, stimulus, and BSP-visibility
+checks.
 
 Runtime-spawned actors use the same class-default mesh, material, lighting, and
 animation assembly as actors serialized in the map. Adding their geometry may

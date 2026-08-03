@@ -2802,6 +2802,280 @@ fn noise_loudness_must_be_a_finite_float() {
 }
 
 #[test]
+fn make_noise_bytecode_records_the_instigator_and_dispatches_hear_noise() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-make-noise-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 3,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let fields = [
+        "Instigator",
+        "Level",
+        "TimeSeconds",
+        "PawnList",
+        "nextPawn",
+        "Location",
+        "bIsPlayer",
+        "Enemy",
+        "noise1time",
+        "noise1spot",
+        "noise1loudness",
+        "noise2time",
+        "noise2spot",
+        "noise2loudness",
+        "Alertness",
+        "HearingThreshold",
+        "Stimulus",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "netmode".to_owned()), None);
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+
+    let level = runtime_actor_id(1);
+    let source = runtime_actor_id(2);
+    let noise = runtime_actor_id(3);
+    let listener = runtime_actor_id(4);
+    for (actor, object) in [(0, &level), (1, &source), (2, &noise), (3, &listener)] {
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object.clone());
+    }
+    runtime.instances.insert(
+        0,
+        [
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["PawnList"].clone(),
+                StoredValue::Object(Some(noise.clone())),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        2,
+        [
+            (
+                fields["nextPawn"].clone(),
+                StoredValue::Object(Some(listener.clone())),
+            ),
+            (
+                fields["bIsPlayer"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (fields["Enemy"].clone(), StoredValue::Object(None)),
+            (
+                fields["noise1time"].clone(),
+                StoredValue::Value(Value::Float(-1.0)),
+            ),
+            (
+                fields["noise1spot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["noise1loudness"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["noise2time"].clone(),
+                StoredValue::Value(Value::Float(-1.0)),
+            ),
+            (
+                fields["noise2spot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["noise2loudness"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        3,
+        [
+            (fields["nextPawn"].clone(), StoredValue::Object(None)),
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([10.0, 0.0, 0.0])),
+            ),
+            (
+                fields["bIsPlayer"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["Alertness"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["HearingThreshold"].clone(),
+                StoredValue::Value(Value::Float(0.1)),
+            ),
+            (
+                fields["Stimulus"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut source_instance = [
+        (
+            fields["Instigator"].clone(),
+            StoredValue::Object(Some(noise)),
+        ),
+        (fields["Level"].clone(), StoredValue::Object(Some(level))),
+        (
+            fields["Location"].clone(),
+            StoredValue::Value(Value::Vector([1.0, 2.0, 3.0])),
+        ),
+    ]
+    .into_iter()
+    .collect::<InstanceState>();
+
+    let hear_noise = object_id(&package, 4);
+    runtime.scripts.insert(
+        hear_noise.clone(),
+        Arc::new(ScriptExport {
+            export_index: 4,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 4,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: 10,
+                bytes: vec![0x04, 0xe7, 0x1f, b'h', b'e', b'a', b'r', b'd', 0, 0x16],
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id, None, "HearNoise", 0),
+        Some(hear_noise),
+    );
+
+    let mut bytes = vec![0x04, 0x62, 0x00, 0x1e];
+    bytes.extend(1.0_f32.to_le_bytes());
+    bytes.push(0x16);
+    let execute = |runtime: &mut ScriptRuntime,
+                   source_instance: &mut InstanceState,
+                   actions: &mut Vec<ActorAction>| {
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes: bytes.clone(),
+            tokens: Vec::new(),
+        };
+        Frame::new(&bytecode)
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                runtime.native(
+                    1,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    source_instance,
+                    actions,
+                    0,
+                )
+            })
+            .unwrap()
+    };
+    let mut actions = Vec::new();
+    assert_eq!(
+        execute(&mut runtime, &mut source_instance, &mut actions),
+        Value::None
+    );
+    assert!(
+        matches!(
+            &actions[..],
+            [ActorAction::Log {
+                actor: 3,
+                message,
+                tag: None,
+            }] if message == "heard"
+        ),
+        "{actions:?}"
+    );
+    let noise_instance = runtime.instances.get(&2).unwrap();
+    assert_eq!(
+        noise_instance.get(&fields["noise1time"]),
+        Some(&StoredValue::Value(Value::Float(1.0)))
+    );
+    assert_eq!(
+        noise_instance.get(&fields["noise1spot"]),
+        Some(&StoredValue::Value(Value::Vector([1.0, 2.0, 3.0])))
+    );
+    assert_eq!(
+        noise_instance.get(&fields["noise1loudness"]),
+        Some(&StoredValue::Value(Value::Float(1.0)))
+    );
+    assert_eq!(
+        noise_instance.get(&fields["noise2time"]),
+        Some(&StoredValue::Value(Value::Float(-1.0)))
+    );
+    assert_eq!(
+        runtime.instances[&3].get(&fields["Stimulus"]),
+        Some(&StoredValue::Value(Value::Float(2.0)))
+    );
+
+    actions.clear();
+    assert_eq!(
+        execute(&mut runtime, &mut source_instance, &mut actions),
+        Value::None
+    );
+    assert!(actions.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn landing_surface_and_sound_natives_validate_calls() {
     assert_eq!(
         trace_texture(&[

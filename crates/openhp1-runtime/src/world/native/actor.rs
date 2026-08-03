@@ -1,6 +1,410 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub(in crate::world) fn make_noise(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        loudness: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        const NM_CLIENT: u8 = 3;
+
+        let Some(noise_object) = self.actor_object(actor_class, instance, "Instigator")? else {
+            return Ok(());
+        };
+        let noise_actor = self
+            .object_actors
+            .get(&noise_object)
+            .copied()
+            .ok_or_else(|| "MakeNoise Instigator is not a registered actor".to_owned())?;
+        let noise_class = self
+            .actor_classes
+            .get(&noise_actor)
+            .cloned()
+            .ok_or_else(|| format!("MakeNoise Instigator {noise_actor} has no class"))?;
+        let noise_class = self
+            .resolved_object(&noise_class)
+            .map_err(|error| error.to_string())?;
+        if !self
+            .class_has_name(&noise_class, "Pawn")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(());
+        }
+
+        let level = self
+            .actor_object(actor_class, instance, "Level")?
+            .ok_or_else(|| "MakeNoise actor has no Level".to_owned())?;
+        let level_actor = self
+            .object_actors
+            .get(&level)
+            .copied()
+            .ok_or_else(|| "MakeNoise Level is not a registered actor".to_owned())?;
+        let level_class = self
+            .actor_classes
+            .get(&level_actor)
+            .cloned()
+            .ok_or_else(|| format!("MakeNoise Level actor {level_actor} has no class"))?;
+        let level_class = self
+            .resolved_object(&level_class)
+            .map_err(|error| error.to_string())?;
+        let level_instance = self
+            .instances
+            .get(&level_actor)
+            .cloned()
+            .ok_or_else(|| format!("MakeNoise Level actor {level_actor} instance is active"))?;
+        match self
+            .instance_property(&level_class, &level_instance, "NetMode")
+            .map_err(|error| error.to_string())?
+        {
+            Some(StoredValue::Value(Value::Byte(NM_CLIENT))) => return Ok(()),
+            Some(StoredValue::Value(Value::Byte(_))) | None => {}
+            Some(value) => return Err(format!("MakeNoise Level.NetMode is {value:?}")),
+        }
+
+        let time = self.actor_float_any(&level_class, &level_instance, "TimeSeconds")?;
+        let location = Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+        let recorded = if noise_actor == actor {
+            self.record_noise(&noise_class, instance, time, location, loudness)?
+        } else {
+            let mut noise_instance = self
+                .instances
+                .remove(&noise_actor)
+                .ok_or_else(|| format!("MakeNoise Instigator {noise_actor} instance is active"))?;
+            let result =
+                self.record_noise(&noise_class, &mut noise_instance, time, location, loudness);
+            self.instances.insert(noise_actor, noise_instance);
+            result?
+        };
+        if !recorded {
+            return Ok(());
+        }
+
+        let source = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("MakeNoise actor {actor} has no object identity"))?;
+        let source_handle = self
+            .object_handle(source)
+            .map_err(|error| error.to_string())?;
+        let noise_instance = if noise_actor == actor {
+            instance.clone()
+        } else {
+            self.instances
+                .get(&noise_actor)
+                .cloned()
+                .ok_or_else(|| format!("MakeNoise Instigator {noise_actor} instance is active"))?
+        };
+        let mut pawn = self.actor_object(&level_class, &level_instance, "PawnList")?;
+        let mut seen = HashSet::default();
+        while let Some(pawn_object) = pawn {
+            let pawn_actor = self
+                .object_actors
+                .get(&pawn_object)
+                .copied()
+                .ok_or_else(|| "MakeNoise PawnList has an unregistered pawn".to_owned())?;
+            if !seen.insert(pawn_actor) {
+                return Err("MakeNoise PawnList has a cycle".to_owned());
+            }
+            let pawn_class = self
+                .actor_classes
+                .get(&pawn_actor)
+                .cloned()
+                .ok_or_else(|| format!("MakeNoise pawn {pawn_actor} has no class"))?;
+            let pawn_class = self
+                .resolved_object(&pawn_class)
+                .map_err(|error| error.to_string())?;
+            let mut pawn_instance = if pawn_actor == actor {
+                instance.clone()
+            } else {
+                self.instances
+                    .get(&pawn_actor)
+                    .cloned()
+                    .ok_or_else(|| format!("MakeNoise pawn {pawn_actor} instance is active"))?
+            };
+
+            let should_hear = pawn_actor != noise_actor
+                && !self.destroyed.contains(&pawn_actor)
+                && self.can_hear_noise(
+                    actor_class,
+                    instance,
+                    &noise_class,
+                    &noise_instance,
+                    &pawn_class,
+                    &mut pawn_instance,
+                    loudness,
+                )?;
+            if pawn_actor == actor {
+                *instance = pawn_instance;
+            } else {
+                self.instances.insert(pawn_actor, pawn_instance);
+            }
+            if pawn_actor != noise_actor && !self.destroyed.contains(&pawn_actor) && should_hear {
+                let arguments = vec![Value::Float(loudness), Value::Object(source_handle)];
+                if pawn_actor == actor {
+                    self.call_actor_event(
+                        actor,
+                        actor_class,
+                        instance,
+                        "HearNoise",
+                        arguments,
+                        actions,
+                    )?;
+                } else {
+                    self.call_other_actor_event(pawn_actor, "HearNoise", arguments, actions)?;
+                }
+            }
+
+            pawn = if pawn_actor == actor {
+                self.actor_object(actor_class, instance, "nextPawn")?
+            } else {
+                let pawn_instance = self
+                    .instances
+                    .get(&pawn_actor)
+                    .cloned()
+                    .ok_or_else(|| format!("MakeNoise pawn {pawn_actor} instance is active"))?;
+                self.actor_object(&pawn_class, &pawn_instance, "nextPawn")?
+            };
+        }
+        Ok(())
+    }
+
+    fn record_noise(
+        &mut self,
+        pawn_class: &ResolvedObject,
+        pawn: &mut InstanceState,
+        time: f32,
+        location: Vec3,
+        loudness: f32,
+    ) -> std::result::Result<bool, String> {
+        let noise1_time = self.actor_float_any(pawn_class, pawn, "noise1time")?;
+        let noise1_spot = Vec3::from_array(self.actor_vector(pawn_class, pawn, "noise1spot")?);
+        let noise1_loudness = self.actor_float_any(pawn_class, pawn, "noise1loudness")?;
+        let noise2_time = self.actor_float_any(pawn_class, pawn, "noise2time")?;
+        let noise2_spot = Vec3::from_array(self.actor_vector(pawn_class, pawn, "noise2spot")?);
+        let noise2_loudness = self.actor_float_any(pawn_class, pawn, "noise2loudness")?;
+
+        if (noise1_time > time - 0.2
+            && noise1_spot.distance_squared(location) < 2_500.0
+            && noise1_loudness >= 0.9 * loudness)
+            || (noise2_time > time - 0.2
+                && noise2_spot.distance_squared(location) < 2_500.0
+                && noise2_loudness >= 0.9 * loudness)
+        {
+            return Ok(false);
+        }
+        if noise1_time < time - 0.18 {
+            self.set_noise_slot(pawn_class, pawn, "noise1", time, location, loudness)?;
+        } else if noise2_time < time - 0.18 {
+            self.set_noise_slot(pawn_class, pawn, "noise2", time, location, loudness)?;
+        } else if noise1_spot.distance_squared(location) < 2_500.0 {
+            self.set_noise_slot(pawn_class, pawn, "noise1", time, location, loudness)?;
+        } else if noise2_loudness <= loudness {
+            self.set_noise_slot(pawn_class, pawn, "noise2", time, location, loudness)?;
+        }
+        Ok(true)
+    }
+
+    fn set_noise_slot(
+        &mut self,
+        pawn_class: &ResolvedObject,
+        pawn: &mut InstanceState,
+        slot: &str,
+        time: f32,
+        location: Vec3,
+        loudness: f32,
+    ) -> std::result::Result<(), String> {
+        self.set_actor_value(pawn_class, pawn, &format!("{slot}time"), Value::Float(time))?;
+        self.set_actor_value(
+            pawn_class,
+            pawn,
+            &format!("{slot}spot"),
+            Value::Vector(location.to_array()),
+        )?;
+        self.set_actor_value(
+            pawn_class,
+            pawn,
+            &format!("{slot}loudness"),
+            Value::Float(loudness),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn can_hear_noise(
+        &mut self,
+        source_class: &ResolvedObject,
+        source: &InstanceState,
+        noise_class: &ResolvedObject,
+        noise: &InstanceState,
+        listener_class: &ResolvedObject,
+        listener: &mut InstanceState,
+        loudness: f32,
+    ) -> std::result::Result<bool, String> {
+        let noise_is_player = self.actor_bool(noise_class, noise, "bIsPlayer")?;
+        let noise_enemy_is_player =
+            self.actor_object(noise_class, noise, "Enemy")?
+                .map(|enemy| {
+                    let actor =
+                        self.object_actors.get(&enemy).copied().ok_or_else(|| {
+                            "CanHearNoise Enemy is not a registered actor".to_owned()
+                        })?;
+                    let class = self
+                        .actor_classes
+                        .get(&actor)
+                        .cloned()
+                        .ok_or_else(|| format!("CanHearNoise Enemy {actor} has no class"))?;
+                    let class = self
+                        .resolved_object(&class)
+                        .map_err(|error| error.to_string())?;
+                    let instance =
+                        self.instances.get(&actor).cloned().ok_or_else(|| {
+                            format!("CanHearNoise Enemy {actor} instance is active")
+                        })?;
+                    self.actor_bool(&class, &instance, "bIsPlayer")
+                })
+                .transpose()?
+                .unwrap_or(false);
+        if !noise_is_player && !noise_enemy_is_player {
+            let source_name = source_class.package.summary().name(
+                source_class.package.summary().exports[source_class.export_index].object_name,
+            );
+            let listener_name = listener_class.package.summary().name(
+                listener_class.package.summary().exports[listener_class.export_index].object_name,
+            );
+            if !self
+                .class_has_name(listener_class, source_name)
+                .map_err(|error| error.to_string())?
+                && !self
+                    .class_has_name(source_class, listener_name)
+                    .map_err(|error| error.to_string())?
+            {
+                return Ok(false);
+            }
+        } else if self
+            .class_has_name(listener_class, "PlayerPawn")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+
+        let source_location =
+            Vec3::from_array(self.actor_vector(source_class, source, "Location")?);
+        let listener_location =
+            Vec3::from_array(self.actor_vector(listener_class, listener, "Location")?);
+        let distance_squared = listener_location.distance_squared(source_location);
+        let listener_is_player = self.actor_bool(listener_class, listener, "bIsPlayer")?;
+        let team_mate = listener_is_player
+            && noise_is_player
+            && self.same_team(listener_class, listener, noise_class, noise)?;
+        if distance_squared > (4_000.0 * loudness).powi(2) {
+            return Ok(false);
+        }
+        if !team_mate {
+            let perceived = (1_200_000.0 / distance_squared).min(2.0);
+            let alertness = self.actor_float_any(listener_class, listener, "Alertness")?;
+            let stimulus = loudness * perceived + alertness * perceived.min(0.5);
+            self.set_actor_value(listener_class, listener, "Stimulus", Value::Float(stimulus))?;
+            if stimulus < self.actor_float_any(listener_class, listener, "HearingThreshold")? {
+                return Ok(false);
+            }
+        }
+        Ok(self.has_line_of_sight(source_location, listener_location))
+    }
+
+    fn same_team(
+        &mut self,
+        listener_class: &ResolvedObject,
+        listener: &InstanceState,
+        noise_class: &ResolvedObject,
+        noise: &InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let Some(level) = self.actor_object(listener_class, listener, "Level")? else {
+            return Ok(false);
+        };
+        let Some(level_actor) = self.object_actors.get(&level).copied() else {
+            return Ok(false);
+        };
+        let Some(level_class) = self.actor_classes.get(&level_actor).cloned() else {
+            return Ok(false);
+        };
+        let level_class = self
+            .resolved_object(&level_class)
+            .map_err(|error| error.to_string())?;
+        let Some(level_instance) = self.instances.get(&level_actor).cloned() else {
+            return Ok(false);
+        };
+        let Some(game) = self.actor_object(&level_class, &level_instance, "Game")? else {
+            return Ok(false);
+        };
+        let Some(game_actor) = self.object_actors.get(&game).copied() else {
+            return Ok(false);
+        };
+        let Some(game_class) = self.actor_classes.get(&game_actor).cloned() else {
+            return Ok(false);
+        };
+        let game_class = self
+            .resolved_object(&game_class)
+            .map_err(|error| error.to_string())?;
+        let Some(game_instance) = self.instances.get(&game_actor).cloned() else {
+            return Ok(false);
+        };
+        if !matches!(
+            self.instance_property(&game_class, &game_instance, "bTeamGame")
+                .map_err(|error| error.to_string())?,
+            Some(StoredValue::Value(Value::Bool(true)))
+        ) {
+            return Ok(false);
+        }
+        let Some(listener_pri) =
+            self.actor_object(listener_class, listener, "PlayerReplicationInfo")?
+        else {
+            return Ok(false);
+        };
+        let Some(noise_pri) = self.actor_object(noise_class, noise, "PlayerReplicationInfo")?
+        else {
+            return Ok(false);
+        };
+        let Some(listener_actor) = self.object_actors.get(&listener_pri).copied() else {
+            return Ok(false);
+        };
+        let Some(noise_actor) = self.object_actors.get(&noise_pri).copied() else {
+            return Ok(false);
+        };
+        let listener_class = self
+            .actor_classes
+            .get(&listener_actor)
+            .cloned()
+            .ok_or_else(|| format!("CanHearNoise PRI {listener_actor} has no class"))?;
+        let listener_class = self
+            .resolved_object(&listener_class)
+            .map_err(|error| error.to_string())?;
+        let noise_class = self
+            .actor_classes
+            .get(&noise_actor)
+            .cloned()
+            .ok_or_else(|| format!("CanHearNoise PRI {noise_actor} has no class"))?;
+        let noise_class = self
+            .resolved_object(&noise_class)
+            .map_err(|error| error.to_string())?;
+        let listener_instance = self
+            .instances
+            .get(&listener_actor)
+            .cloned()
+            .ok_or_else(|| format!("CanHearNoise PRI {listener_actor} instance is active"))?;
+        let noise_instance = self
+            .instances
+            .get(&noise_actor)
+            .cloned()
+            .ok_or_else(|| format!("CanHearNoise PRI {noise_actor} instance is active"))?;
+        Ok(
+            self.actor_byte(&listener_class, &listener_instance, "Team")?
+                == self.actor_byte(&noise_class, &noise_instance, "Team")?,
+        )
+    }
+
     pub(in crate::world) fn add_pawn(
         &mut self,
         actor: usize,
