@@ -193,37 +193,46 @@ impl ScriptRuntime {
 
         self.tick_physics(delta_time, &mut actions)?;
 
-        let mut due = Vec::new();
-        let actors = self.timers.keys().copied().collect::<Vec<_>>();
+        let mut actors = self.timers.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
         for actor in actors {
             let Some(timer) = self.timers.get_mut(&actor) else {
                 continue;
             };
-            if !advance_timer(timer, delta_time) {
-                continue;
-            }
-            due.push(actor);
-            if !timer.looping {
-                self.timers.remove(&actor);
-            }
-        }
-
-        for actor in due {
-            let Some(class) = self.actor_classes.get(&actor).cloned() else {
-                continue;
-            };
-            self.timer_callbacks = self.timer_callbacks.saturating_add(1);
-            match self.dispatch_event(
-                actor,
-                Path::new(class.package.as_ref()),
-                class.export_index,
-                "Timer",
-            ) {
-                Ok(mut actor_actions) => actions.append(&mut actor_actions),
-                Err(error) => actions.push(ActorAction::DeferredCall {
+            timer.remaining -= delta_time;
+            while self
+                .timers
+                .get(&actor)
+                .is_some_and(|timer| timer.remaining <= 0.0)
+            {
+                let looping = {
+                    let timer = self.timers.get_mut(&actor).unwrap();
+                    if timer.looping {
+                        timer.remaining += timer.rate;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !looping {
+                    self.timers.remove(&actor);
+                }
+                let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                    break;
+                };
+                self.timer_callbacks = self.timer_callbacks.saturating_add(1);
+                match self.dispatch_event(
                     actor,
-                    message: format!("Timer: {error}"),
-                }),
+                    Path::new(class.package.as_ref()),
+                    class.export_index,
+                    "Timer",
+                ) {
+                    Ok(mut actor_actions) => actions.append(&mut actor_actions),
+                    Err(error) => actions.push(ActorAction::DeferredCall {
+                        actor,
+                        message: format!("Timer: {error}"),
+                    }),
+                }
             }
         }
         Ok(actions)
@@ -870,19 +879,6 @@ pub(in crate::world) fn decode_latent_action(index: i32, actor: usize) -> Latent
         511 => LatentAction::TurnToward(actor),
         _ => LatentAction::Stop,
     }
-}
-
-pub(in crate::world) fn advance_timer(timer: &mut ActorTimer, delta_time: f32) -> bool {
-    timer.remaining -= delta_time;
-    if timer.remaining > 0.0 {
-        return false;
-    }
-    if timer.looping {
-        // ponytail: one callback per rendered frame; add catch-up callbacks
-        // if sub-frame timer fidelity becomes observable.
-        timer.remaining = timer.rate - (-timer.remaining).rem_euclid(timer.rate);
-    }
-    true
 }
 
 pub(in crate::world) fn advance_lifespan(lifespan: &mut f32, delta_time: f32) -> bool {

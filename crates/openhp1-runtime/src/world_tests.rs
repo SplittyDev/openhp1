@@ -13,7 +13,6 @@ use crate::{Frame, FrameRequest, FrameResponse, FunctionCall};
 use super::*;
 use super::{
     actor::advance_lifespan,
-    actor::advance_timer,
     actor::decode_latent_action,
     actor::update_touching_array,
     native::{
@@ -377,17 +376,239 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
 }
 
 #[test]
-fn looping_timer_keeps_fractional_overshoot() {
-    let mut timer = ActorTimer {
-        remaining: 0.1,
-        rate: 0.1,
-        looping: true,
+fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-looping-timer-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
     };
-    assert!(advance_timer(&mut timer, 0.15));
+    let class_id = object_id(&package, class.export_index);
+    let timer_function = object_id(&package, 1);
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+    let fields = [
+        "TimeSeconds",
+        "TimeDilation",
+        "Physics",
+        "LifeSpan",
+        "bStatic",
+        "bNoDelete",
+        "bDeleteMe",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            (name != &"LifeSpan").then_some(field.clone()),
+        );
+    }
+
+    let level = 0;
+    let actor = 1;
+    let actor_object = runtime_actor_id(1_000);
+    runtime.actor_classes.insert(level, class_id.clone());
+    runtime.actor_classes.insert(actor, class_id.clone());
+    runtime.actor_objects.insert(actor, actor_object.clone());
+    runtime.object_actors.insert(actor_object, actor);
+    runtime.level_info = Some(level);
+    runtime.instances.insert(
+        level,
+        [
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["TimeDilation"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        actor,
+        [
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["bStatic"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bNoDelete"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bDeleteMe"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let function = |bytes: Vec<u8>| {
+        Arc::new(ScriptExport {
+            export_index: 1,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        })
+    };
+    runtime
+        .scripts
+        .insert(timer_function.clone(), function(vec![0x04, 0x0b]));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "Timer", 0),
+        Some(timer_function.clone()),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "Destroyed", 0),
+        None,
+    );
+
+    let set_timer = |runtime: &mut ScriptRuntime, rate: f32, looping: bool| {
+        let mut bytes = vec![0x04, 0x61, 0x18, 0x1e];
+        bytes.extend(rate.to_le_bytes());
+        bytes.extend([if looping { 0x27 } else { 0x28 }, 0x16]);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let mut instance = InstanceState::default();
+        frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                assert_eq!(index, SET_TIMER);
+                runtime.native(
+                    actor,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut instance,
+                    &mut Vec::new(),
+                    0,
+                )
+            })
+            .unwrap();
+    };
+
+    set_timer(&mut runtime, 0.1, true);
+    assert_eq!(runtime.tick(0.35).unwrap(), []);
+    assert_eq!(runtime.timer_callbacks(), 3);
+    let timer = runtime.timers[&actor];
     assert!((timer.remaining - 0.05).abs() < 1.0e-6);
-    assert!(!advance_timer(&mut timer, 0.04));
-    assert!(advance_timer(&mut timer, 0.01));
-    assert!((timer.remaining - 0.1).abs() < 1.0e-6);
+
+    let mut reset_timer = vec![0x0e, 0x61, 0x18, 0x1e];
+    reset_timer.extend(0.5_f32.to_le_bytes());
+    reset_timer.extend([0x28, 0x16, 0x04, 0x0b]);
+    runtime
+        .scripts
+        .insert(timer_function.clone(), function(reset_timer));
+    assert_eq!(runtime.tick(0.1).unwrap(), []);
+    assert_eq!(runtime.timer_callbacks(), 4);
+    assert!(matches!(
+        runtime.timers.get(&actor),
+        Some(ActorTimer {
+            remaining,
+            rate,
+            looping: false,
+        }) if (*remaining - 0.5).abs() < 1.0e-6 && (*rate - 0.5).abs() < 1.0e-6
+    ));
+
+    runtime
+        .scripts
+        .insert(timer_function.clone(), function(vec![0x04, 0x0b]));
+    assert_eq!(runtime.tick(0.5).unwrap(), []);
+    assert_eq!(runtime.timer_callbacks(), 5);
+    assert!(!runtime.timers.contains_key(&actor));
+
+    runtime.scripts.insert(
+        timer_function,
+        Arc::new(ScriptExport {
+            export_index: 1,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: 0,
+                bytes: Vec::new(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: DESTROY,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+    set_timer(&mut runtime, 0.1, true);
+    assert_eq!(
+        runtime.tick(0.35).unwrap(),
+        [ActorAction::DestroyActor { actor }]
+    );
+    assert_eq!(runtime.timer_callbacks(), 6);
+    assert!(runtime.destroyed.contains(&actor));
+    assert!(!runtime.timers.contains_key(&actor));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

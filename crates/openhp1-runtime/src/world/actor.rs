@@ -11,7 +11,7 @@ use tick::{
 };
 
 #[cfg(test)]
-pub(super) use tick::{advance_lifespan, advance_timer, update_touching_array};
+pub(super) use tick::{advance_lifespan, update_touching_array};
 
 impl ScriptRuntime {
     pub fn new(game_root: impl AsRef<Path>) -> DispatchResult<Self> {

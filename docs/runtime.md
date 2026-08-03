@@ -95,6 +95,15 @@ integer-indefinite value (`-2147483648`) for non-finite or out-of-range
 results. `DivideEqual_IntFloat` stores and returns zero for either floating-point
 zero divisor.
 
+## Timers
+
+`Actor.SetTimer` accepts only finite positive rates; a non-positive rate clears
+the timer. Timers run after physics in ascending actor order. A looping timer
+dispatches every firing elapsed in a host tick, preserving its fractional phase.
+Each firing advances the timer before its `Timer` callback, which is dispatched
+immediately rather than batched. The callback can therefore reset or clear its
+timer, switch it to a one-shot rate, or destroy its actor without stale firings.
+
 ## Animation actions
 
 - `PlayAnim` and `LoopAnim` use the scene's existing animation path.
