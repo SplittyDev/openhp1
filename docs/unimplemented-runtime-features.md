@@ -1,8 +1,15 @@
-# Unimplemented runtime features used by shipped levels
+# Runtime feature implementation ledger
 
-This is the implementation ledger for UnrealScript and adjacent runtime
-features that the shipped maps exercise but OpenHP1 does not implement, or
-implements only partially. It records requirements, not progress statistics.
+This ledger records the UnrealScript and adjacent runtime gaps identified from
+the 41 shipped maps, the behavior required to close each gap, and their current
+implementation status. Every listed item is now implemented for its audited
+shipped-level use. The original failure and implementation-seam notes remain as
+acceptance criteria and future maintenance context, not as claims about current
+support.
+
+Passing corpus scans and synthetic tests establish audited runtime coverage;
+they do not by themselves prove pixel-perfect rendering, original-game replay
+equivalence, or support for unaudited UE1 content.
 
 ## Scope and evidence
 
@@ -17,7 +24,7 @@ game installation. The inventory combines two kinds of evidence:
   unsupported/partial path. Replay evidence proves impact on that neutral path,
   but absence from a replay does not prove a feature is unused.
 
-OpenHP1's decoder and dispatcher are the authority for current support:
+OpenHP1's decoder and dispatcher are the authority for implemented support:
 [`opcode.rs`](../crates/openhp1-runtime/src/opcode.rs),
 [`frame/execute.rs`](../crates/openhp1-runtime/src/frame/execute.rs),
 [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs), and
@@ -42,12 +49,13 @@ To keep repeated level lists readable:
 
 ## Inventory
 
-The 2026-08-03 replay attempted every map for 120 simulated seconds with the
-release `runtime_scan`. Twenty-seven maps completed. Fourteen stopped during
-the scanner's HUD setup assertion before the timed replay; they are listed in
-the HPHud section below. No `UnsupportedOpcode` error was reached on the neutral
-replay path. The static reachable-script pass nevertheless found two opcode
-gaps, `EatString` and `MetaCast`, behind paths that replay did not enter.
+The initial 2026-08-03 audit attempted every map for 120 simulated seconds with
+the release `runtime_scan`. It exposed the gaps below and a 14-map HPHud setup
+blocker. The final post-implementation audit on 2026-08-04 rebuilt the scanner
+from commit `808d4a4`, then completed all 41 maps for the same 120 simulated
+seconds. Every map exited successfully, and all per-map logs were free of
+`deferred`, `failed`, `unknown`, `Error:`, unsupported opcode/native,
+unimplemented, and ConsoleCommand-failure diagnostics.
 
 The replay command for each map was:
 
@@ -65,11 +73,15 @@ that merely share the same package. The filtered dispatcher diff produced 26
 missing numeric native indexes; every one has a section below. Named-native
 reachability is the conservative intersection of a reachable native declaration
 and a reachable call name, with the declaring class recorded for implementation.
+The final reachable-script and reachable-named scans were byte-identical to the
+initial inventory, so implementation did not reveal additional statically
+reachable constructs.
 
-The short table highlights replay-observed and non-dispatcher gaps. The
-per-feature sections, rather than this summary table, are the complete ledger.
+The short table highlights the original replay-observed and non-dispatcher
+gaps. The per-feature sections, rather than this summary table, are the complete
+52-item ledger.
 
-| Feature | Kind | Replay-observed levels |
+| Feature | Original gap | Replay-observed levels |
 | --- | --- | ---: |
 | `EatString` (`0x0e`) | Missing VM opcode | 0; statically reachable |
 | `MetaCast` (`0x13`) | Missing VM opcode | 0; statically reachable |
@@ -82,7 +94,8 @@ per-feature sections, rather than this summary table, are the complete ledger.
 | `NameToString` (`0x57`) | Partial conversion | 1 |
 | `PatrolPoint.PreBeginPlay` does not terminate | VM/runtime semantic gap | 1 |
 | Nested `HPSounds` import does not resolve | Object-resolution gap | 1 |
-| HPHud setup assertion | Replay coverage blocker; classification unresolved | 14 |
+| HPHud setup assertion | HUD subclass/conversion/native-call blockers | 14 |
+| Serialized `DamageType` names | Physics value-decoding gap | 40 |
 | Final-function failure deferral | Partial VM error semantics | 19 |
 | Non-billboard particle `RenderPrimitive` | Missing particle render mode | 8 initialized levels |
 | Particle collision `Elasticity` | Missing particle collision response | 2 initialized levels |
@@ -91,7 +104,7 @@ per-feature sections, rather than this summary table, are the complete ledger.
 
 ### `EatString` — opcode `0x0e`
 
-- **Status:** Decoded but not executed.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** None on the neutral path.
 - **Required behavior:** Evaluate the nested expression for its side effects,
@@ -106,7 +119,7 @@ per-feature sections, rather than this summary table, are the complete ledger.
 
 ### `MetaCast` — opcode `0x13`
 
-- **Status:** Decoded but not executed.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** None on the neutral path.
 - **Required behavior:** Evaluate an object expected to be a class object and
@@ -122,14 +135,14 @@ per-feature sections, rather than this summary table, are the complete ledger.
 
 ### `Sin` — native `0x0bb` (187)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay-observed levels:** `Lev2_Fire2`, `Lev2_HogFront`, `Lev2_Inc_A`,
   `Lev2_Inc_B`, `Lev2_fire1`, `Lev3_Dungeon`, `Lev3_DungeonB`, `Lev3_Intro`,
   `Lev3_Lumos`, `Lev3_Troll`, `Lev4_Sneak`, `Lev4_Sneak2`, `Lev5_Chess`,
   `Lev5_Final`, `Lev5_fluffy`, `Lev_Tut1b`, `Lev_Tut3`, `Lev_Tut3b`.
 - **Observed callers:** `savepoint` and `Star` ticks.
-- **OpenHP1 failure:** Unrecognized scalar indexes end in
+- **Original failure:** Unrecognized scalar indexes end in
   `native 0x0bb is not implemented`
   ([`world/native/scalar.rs`](../crates/openhp1-runtime/src/world/native/scalar.rs#L162)).
 - **Required behavior:** Return the sine of one float in radians. SurrealEngine
@@ -148,7 +161,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `LessLess_IntInt` — native `0x094` (148)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Return signed integer `A << B`, matching UE1's shift
   count and overflow behavior. SurrealEngine registers it at index 148 and
@@ -160,7 +173,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `GreaterGreater_IntInt` — native `0x095` (149)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Arithmetic right-shift the signed integer `A` by `B`.
   See [`NObject.cpp`](../../SurrealEngine/SurrealEngine/Native/NObject.cpp#L914).
@@ -169,7 +182,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `MultiplyEqual_IntFloat` — native `0x09f` (159)
 
-- **Status:** Unimplemented mutating scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Multiply the integer lvalue by the float, convert the
   result back to integer using HP1's truncation rules, store it, and return it.
@@ -179,7 +192,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `DivideEqual_IntFloat` — native `0x0a0` (160)
 
-- **Status:** Unimplemented mutating scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Divide the integer lvalue by a float, convert back to
   integer, store it, and return it. SurrealEngine's direct reference is
@@ -190,7 +203,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `SubtractEqual_IntInt` — native `0x0a2` (162)
 
-- **Status:** Unimplemented mutating scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Subtract the right integer from the left lvalue, store
   the result, and return it
@@ -200,7 +213,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Cos` — native `0x0bc` (188)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Return the cosine of one float in radians
   ([`NObject.cpp`](../../SurrealEngine/SurrealEngine/Native/NObject.cpp#L547)).
@@ -209,7 +222,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `GreaterGreaterGreater_IntInt` — native `0x0c4` (196)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Logically right-shift `A` as an unsigned 32-bit value
   by `B`, then return the result in the script integer type
@@ -219,7 +232,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Cross_VectorVector` — native `0x0dc` (220)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Return the vector cross product
   ([`NObject.cpp`](../../SurrealEngine/SurrealEngine/Native/NObject.cpp#L552)).
@@ -229,7 +242,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `PlayerCanSeeMe` — native `0x214` (532)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** `Lev2_Fire2`, `Lev2_HogFront`,
   `Lev2_HogFront_2`, `Lev2_HogFront_3`, `Lev2_Inc_A`, `Lev2_Inc_B`,
   `Lev2_RemChase`, `Lev2_fire1`, `Lev3_Dungeon`, `Lev3_DungeonB`, `Lev3_Intro`,
@@ -239,7 +252,7 @@ implementing only the arithmetic result is not sufficient.
   `Lev_Tut3b`, `Snapes_Office`.
 - **Replay-observed levels:** `Lev2_Fire2`, `Lev2_fire1`, `Lev3_Troll`.
 - **Observed caller:** `FireCrab.Tick` through a global function.
-- **OpenHP1 failure:** Falls through the world-native dispatcher to the scalar
+- **Original failure:** Falls through the world-native dispatcher to the scalar
   native error.
 - **Required behavior:** Return true when a pawn in `Level.PawnList`, other than
   the actor itself, is close enough, has the actor inside its view cone unless
@@ -254,7 +267,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Multiply_VectorVector` — native `0x128` (296)
 
-- **Status:** Unimplemented scalar native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All gameplay maps.
 - **Replay-observed levels:** `Lev3_Intro`, `Lev_Tut3b`.
 - **Observed caller:** `gen_male_5.SetInitialState`.
@@ -268,7 +281,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `BonePos` — HP1 native `0x101` (257)
 
-- **Status:** Unimplemented HP1 native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** `Lev5_fluffy`, `Lev5_Snare`.
 - **Replay-observed levels:** `Lev5_fluffy`, `Lev5_Snare`.
 - **Observed callers:** `Fluffy.PostBeginPlay`, `DevilsSnareNew.Timer`, and
@@ -290,10 +303,10 @@ implementing only the arithmetic result is not sufficient.
 
 ### `RadiusActors` — iterator native `0x136` (310)
 
-- **Status:** Unimplemented iterator native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** None on the neutral path.
-- **OpenHP1 failure:** The iterator dispatcher accepts only `AllActors`,
+- **Original failure:** The iterator dispatcher accepts only `AllActors`,
   `TraceActors`, and `VisibleActors`; every other index returns
   `iterator function is not implemented`
   ([`world/execution/dispatch.rs`](../crates/openhp1-runtime/src/world/execution/dispatch.rs#L481)).
@@ -308,7 +321,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `VisibleCollidingActors` — iterator native `0x138` (312)
 
-- **Status:** Unimplemented iterator native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All maps.
 - **Replay observation:** None on the neutral path.
 - **Required behavior:** Query collision actors within the optional radius and
@@ -325,7 +338,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Warp` — native `0x13a` (314)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Transform location, velocity, and rotation from the
   paired warp zone's coordinate space into this warp zone's space, mutating all
@@ -339,7 +352,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `UnWarp` — native `0x13b` (315)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Apply the inverse of `Warp` to the location, velocity,
   and rotation lvalues. See the paired registration and implementation in
@@ -349,7 +362,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `RotRand` — native `0x140` (320)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Return a uniformly randomized Unreal rotator with
   randomized pitch and yaw and optional roll
@@ -359,7 +372,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `LineOfSightTo` — native `0x202` (514)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable level:** `Lev5_Final`.
 - **Required behavior:** Return whether the pawn has line of sight to another
   actor, including the UE1 alternate head/body visibility probes rather than a
@@ -371,7 +384,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `FindPathTo` — native `0x206` (518)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Clear cached paths by default, locate the closest
   navigation point to the requested world position, and return the next
@@ -384,7 +397,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `actorReachable` — native `0x208` (520)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** All maps except `Entry`, `startup`,
   `Lev2_RemChase`, and `Lev5_Chess` (37 maps).
 - **Required behavior:** Test whether the pawn can physically reach the target
@@ -397,7 +410,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `FindStairRotation` — native `0x20c` (524)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Return the pawn pitch/rotation adjustment used while
   traversing stairs for the supplied delta time.
@@ -411,7 +424,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `PickAnyTarget` — native `0x216` (534)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Select an eligible pawn target for the supplied fire
   direction and projectile start while updating the `bestAim` and `bestDist`
@@ -423,7 +436,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `UpdateURL` — native `0x222` (546)
 
-- **Status:** Unimplemented numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Add or replace an option in the current level URL. The
   later overload also accepts a separate value and can persist it as a default;
@@ -435,7 +448,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `FastTrace` — native `0x224` (548)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** `Lev4_Sneak`, `Lev4_Sneak2`.
 - **Required behavior:** Return whether an unobstructed world trace exists from
   the optional start (defaulting to the receiver's location) to the requested
@@ -446,24 +459,32 @@ implementing only the arithmetic result is not sufficient.
 
 ### `ModifySound` — HP1 native `0x237` (567)
 
-- **Status:** Unimplemented HP1 numeric native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** `Lev2_Quid1`, `Lev2_RemChase`, `Lev3_Quid2`,
   `Lev5_FlyKeys`, `Lev_Tut2`, `Quid_HuffleA`, `Quid_HuffleB`, `Quid_HuffleC`,
   `Quid_RavenA`, `Quid_RavenB`, `Quid_RavenC`, `Quid_SlythA`, `Quid_SlythB`,
   `Quid_SlythC`.
+- **Implemented behavior:** Decode the shipped declaration as
+  `ModifySound(parameter, value, optional sound, optional slot)`. Match the
+  receiver's live sound channel by slot and, when supplied, sound object;
+  update volume, radius, or pitch for parameter values 0, 1, or 2. Return
+  `false` without emitting an action when no live matching channel exists.
 - **Required behavior:** Modify an already playing HP1 sound's authored
   playback parameters. The shipped metadata confirms the name/index, but the
   local SurrealEngine clone does not register or implement this HP1 native.
-- **Next investigation:** Record the exact parameter properties and output flags
+- **Original investigation:** Record the exact parameter properties and output flags
   from the shipped `Function` export, then differentially replay changes to
   volume, radius, pitch, slot, and/or actor association. Do not infer the
   signature from `PlaySound` merely because the affected properties overlap.
 - **Implementation seam:** Extend `openhp1-audio`'s existing sound handle/action
   path once the target-selection and parameter semantics are established.
+- **Verification:** The real serialized byte/float/object/byte call shape has a
+  runtime regression. All 14 statically reachable maps completed the
+  120-second replay after the decoder correction in `148f603`.
 
 ### `AutonomousPhysics` — HP1 native `0xf83` (3971)
 
-- **Status:** Unimplemented world native.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Advance the receiving actor's physics for the supplied
   delta time, using the same physics-mode update as its ordinary autonomous
@@ -474,7 +495,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Pawn.CheckValidSkinPackage` — named native
 
-- **Status:** Unimplemented named native (`native_index == 0`).
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Validate that a requested skin package and mesh name
   form an allowed/compatible player skin selection, returning a boolean.
@@ -488,7 +509,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `PlayerPawn.ClientTravel` — named native
 
-- **Status:** Unimplemented named native (`native_index == 0`).
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Request client travel to the supplied URL, honoring the
   travel type and whether inventory should transfer. SurrealEngine forwards the
@@ -500,7 +521,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `PlayerPawn.GetPlayerNetworkAddress` — named native
 
-- **Status:** Unimplemented named native (`native_index == 0`).
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Required behavior:** Return the current player's network address string.
 - **Reference limit:** SurrealEngine also leaves this unimplemented and returns
@@ -513,7 +534,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### `Pawn.StopWaiting` — named native
 
-- **Status:** Unimplemented named native (`native_index == 0`).
+- **Status:** Implemented for audited shipped-level use.
 - **Static-reachable levels:** All maps except `Entry`, `startup`,
   `Lev2_RemChase`, and `Lev5_Chess` (37 maps).
 - **Required behavior:** End the pawn's current waiting/sleep interval by
@@ -524,13 +545,12 @@ implementing only the arithmetic result is not sufficient.
 
 ### `NameToString` — conversion opcode `0x57`
 
-- **Status:** Partial conversion; text-backed names work but serialized numeric
-  `Name` values fail.
+- **Status:** Implemented for audited shipped-level use.
 - **Replay-observed level:** `Lev4_Sneak`.
 - **Observed path:** `QuidPlayer.SetInitialState` calls `GotoState` (`0x071`);
   evaluation of an argument reaches `NameToString` with a package name index and
   fails with `expected supported conversion input value, found name`.
-- **OpenHP1:** The conversion only accepts `Value::NameText`
+- **Original implementation:** The conversion only accepts `Value::NameText`
   ([`frame/operations.rs`](../crates/openhp1-runtime/src/frame/operations.rs#L397)),
   while package-backed name lookup already exists in `runtime_name`
   ([`world/native/support.rs`](../crates/openhp1-runtime/src/world/native/support.rs#L159)).
@@ -542,16 +562,15 @@ implementing only the arithmetic result is not sufficient.
 
 ### `PatrolPoint.PreBeginPlay` execution does not terminate
 
-- **Status:** Unresolved VM/runtime semantic gap, guarded by the instruction
-  limit rather than identified as a particular missing opcode.
+- **Status:** Implemented for audited shipped-level use.
 - **Replay-observed level:** `Lev3_Troll`.
 - **Observed path:** Two `PatrolPoint0.PreBeginPlay` calls exceeded 100,000
   instructions. The prebound-call deferral then let initialization continue.
-- **OpenHP1:** Frames default to the 100,000-instruction safety limit
+- **Original implementation:** Frames default to the 100,000-instruction safety limit
   ([`frame.rs`](../crates/openhp1-runtime/src/frame.rs#L197)); every decoded
   opcode counts toward it
   ([`frame/execute.rs`](../crates/openhp1-runtime/src/frame/execute.rs#L934)).
-- **Next investigation:** Trace the final repeating instruction range and actor
+- **Original investigation:** Trace the final repeating instruction range and actor
   fields, then compare the actual `PatrolPoint.PreBeginPlay` branch and call
   order with HP1. Likely categories include an incorrect comparison, iterator,
   property default, or context result. Do **not** raise or remove the limit;
@@ -559,15 +578,15 @@ implementing only the arithmetic result is not sufficient.
 
 ### Nested `HPSounds` import resolution
 
-- **Status:** Unresolved package/object resolution gap.
+- **Status:** Implemented for audited shipped-level use.
 - **Replay-observed level:** `Lev3_Troll`.
 - **Observed path:** `CutScene0.Tick` attempted to resolve Sound path
   `Hub5_sfx.Hub3_sfx.Vold_Pillar_Thump_06` in package `HPSounds`; no matching
   export was found, so the sound call was deferred.
-- **OpenHP1:** Imported object resolution reconstructs every outer group and
+- **Original implementation:** Imported object resolution reconstructs every outer group and
   requires an exact class/object/group match
   ([`resolver.rs`](../crates/openhp1-package/src/resolver.rs#L147)).
-- **Next investigation:** Inspect the exact import outer chain in the calling
+- **Original investigation:** Inspect the exact import outer chain in the calling
   package, the candidate `HPSounds` exports, and HP1's resolution result. The
   repeated `Hub5_sfx.Hub3_sfx` groups may be authored indirection, a resolver
   reconstruction error, or malformed content tolerated by the original engine.
@@ -575,8 +594,7 @@ implementing only the arithmetic result is not sufficient.
 
 ### HPHud initialization replay blocker
 
-- **Status:** Scanner/runtime setup discrepancy; not yet proven to be a game
-  runtime defect.
+- **Status:** Implemented for audited shipped-level use.
 - **Blocked before timed replay:** `Lev2_Quid1`, `Lev2_RemChase`, `Lev3_Quid2`,
   `Lev5_FlyKeys`, `Lev_Tut2`, `Quid_HuffleA`, `Quid_HuffleB`, `Quid_HuffleC`,
   `Quid_RavenA`, `Quid_RavenB`, `Quid_RavenC`, `Quid_SlythA`, `Quid_SlythB`,
@@ -587,34 +605,63 @@ implementing only the arithmetic result is not sufficient.
   The runtime intentionally returns no action when `myHUD` already exists or
   `HUDType` is absent
   ([`world/actor/player.rs`](../crates/openhp1-runtime/src/world/actor/player.rs#L17)).
-- **Next investigation:** Record the selected player class, `myHUD`, and
+- **Resolution:** The scanner/runtime path now accepts the configured HUD
+  subclass instead of requiring an exact `HPHud` class. Once initialization
+  advanced, the shipped `BroomHarry.PlayerInput` bytecode exposed a serialized
+  `ByteToInt` applied to a boolean field; the shared conversion now maps
+  `false`/`true` to `0`/`1` (`01b9fa7`). The next reached call exposed the
+  reversed `ModifySound` argument decoder, corrected in `148f603`.
+- **Original investigation:** Record the selected player class, `myHUD`, and
   `HUDType` for each blocked map, then compare the game host's lazy `PreRender`
   setup. If the state is valid, relax the scanner assertion; if not, repair the
   shared player/HUD initialization path. Until then, these maps have only
   initialization coverage, not a 120-second neutral replay.
+- **Verification:** All 14 formerly blocked maps now complete the full
+  120-second neutral replay without a deferred or error diagnostic.
+
+### Serialized `DamageType` and `ReducedDamageType` names
+
+- **Status:** Implemented for audited shipped-level use.
+- **Replay-observed levels:** All non-Entry maps.
+- **Observed path:** Zone physics read the shipped `DamageType=None` default and
+  emitted `Physics: actor property DamageType is Name("None")`. The same shared
+  reader is used for pawn `ReducedDamageType` when evaluating pain-zone damage
+  compatibility.
+- **Required behavior:** Accept serialized `NameProperty` values as names,
+  including the `None` sentinel, alongside script-produced text and numeric
+  name values. Preserve the authored damage-type comparison used to decide
+  whether a pawn may traverse a pain zone.
+- **Original failure:** Serialized defaults are stored as
+  `StoredValue::Name(String)`, while `optional_actor_name` accepted only
+  `Value::NameText`, package-indexed `Value::Name`, and `Value::None`.
+- **Implementation seam:** Decode every accepted representation in the shared
+  `optional_actor_name` helper used by zone and pawn movement; do not special
+  case `DamageType` at individual callers.
+- **Verification:** A synthetic zone-physics regression uses the actual
+  `StoredValue::Name("None")` representation. After `808d4a4`, all 40 affected
+  maps complete the 120-second replay without the deferred physics diagnostic.
 
 ### Non-billboard particle `RenderPrimitive`
 
-- **Status:** Unimplemented particle render mode; the scene only renders
-  `RenderPrimitive=1` billboards.
+- **Status:** Implemented for audited shipped-level use.
 - **Initialized-level use:** `Lev2_Fire2`, `Lev2_HogFront`, `Lev2_HogFront_2`,
   `Lev2_HogFront_3`, `Lev2_Inc_A`, `Lev2_Inc_B`, `Lev2_fire1`, `Lev_Tut2`.
-- **OpenHP1:** Every non-1 value produces `particle render primitive is not a
+- **Original implementation:** Every non-1 value produces `particle render primitive is not a
   billboard`
   ([`world/action.rs`](../crates/openhp1-runtime/src/world/action.rs#L87)).
 - **Required behavior:** Decode the authored `RenderPrimitive` enum value and
   render the corresponding particle primitive rather than forcing a camera
   billboard.
-- **Uncertainty:** The local SurrealEngine clone does not implement HP1's
+- **Original uncertainty:** The local SurrealEngine clone does not implement HP1's
   `ParticleFX`. Resolve the enum names and geometry rules from the shipped
   `ParticleFX` metadata and original `AParticleFX`/`UParticle` behavior before
   choosing a scene representation.
 
 ### Particle collision `Elasticity`
 
-- **Status:** Unimplemented particle collision response.
+- **Status:** Implemented for audited shipped-level use.
 - **Initialized-level use:** `Lev2_Fire2`, `Lev2_fire1`.
-- **OpenHP1:** Any nonzero value produces `particle collision elasticity is
+- **Original implementation:** Any nonzero value produces `particle collision elasticity is
   unsupported`
   ([`world/action.rs`](../crates/openhp1-runtime/src/world/action.rs#L99)).
 - **Required behavior:** Detect the particle's authored world collision and
@@ -627,10 +674,10 @@ implementing only the arithmetic result is not sufficient.
 
 ### Particle `WindModifier`
 
-- **Status:** Unimplemented particle response to zone wind.
+- **Status:** Implemented for audited shipped-level use.
 - **Initialized-level use:** `Lev3_Dungeon`, `Lev3_DungeonB`, `Lev3_Quid2`,
   `Lev5_fluffy`.
-- **OpenHP1:** Any nonzero value produces `particle wind response is
+- **Original implementation:** Any nonzero value produces `particle wind response is
   unsupported`
   ([`world/action.rs`](../crates/openhp1-runtime/src/world/action.rs#L102)).
 - **Required behavior:** Apply the active zone's authored wind/velocity to the
@@ -641,14 +688,14 @@ implementing only the arithmetic result is not sufficient.
 
 ### Particle `bVelocityRelative`
 
-- **Status:** Unimplemented emitter/owner-velocity inheritance.
+- **Status:** Implemented for audited shipped-level use.
 - **Initialized-level use:** `Lev4_Sneak`.
-- **OpenHP1:** A true value produces `particle owner-velocity inheritance is
+- **Original implementation:** A true value produces `particle owner-velocity inheritance is
   unsupported`
   ([`world/action.rs`](../crates/openhp1-runtime/src/world/action.rs#L96)).
 - **Required behavior:** Incorporate the owning/emitting actor's movement into
   particle velocity according to HP1's `bVelocityRelative` semantics.
-- **Uncertainty:** Determine from original HP1 whether this is an initial spawn
+- **Original uncertainty:** Determine from original HP1 whether this is an initial spawn
   impulse, a per-tick relative frame, or both. `bSystemRelative` already owns
   position attachment and must remain a separate behavior.
 
@@ -660,12 +707,11 @@ come from the same corpus pass as the hard failures above.
 
 ### `MakeNoise` — native `0x200` (512)
 
-- **Status:** Partial; arguments are validated and the call returns success,
-  but it has no gameplay effect.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The call succeeds silently, so the neutral replay
   cannot distinguish it from a complete implementation.
-- **OpenHP1:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L472)
+- **Original implementation:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L472)
   explicitly defers pawn noise slots and `HearNoise` dispatch.
 - **Required behavior:** Resolve the actor's pawn `Instigator`, suppress recent
   nearby duplicate noises, update one of the pawn's two timestamped
@@ -679,16 +725,15 @@ come from the same corpus pass as the hard failures above.
 
 ### `IsAnimating` root-bone overload — native `0x11a` (282)
 
-- **Status:** Partial; OpenHP1 accepts the optional `RootBone` but reports the
-  actor's single animation channel.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The ignored optional argument produces no diagnostic.
-- **OpenHP1:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L320)
+- **Original implementation:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L320)
 - **Required behavior:** The no-argument form reports whether actor animation is
   active. The HP1 overload can ask about a root-bone animation channel, which
   requires channel-aware animation state before the argument can affect the
   result.
-- **Uncertainty:** SurrealEngine also ignores the HP1 `RootBone` argument and
+- **Original uncertainty:** SurrealEngine also ignores the HP1 `RootBone` argument and
   logs it as unimplemented
   ([`UActor.cpp`](../../SurrealEngine/SurrealEngine/UObject/UActor.cpp#L1928)).
   Recover exact per-channel semantics from original HP1 behavior before
@@ -696,10 +741,10 @@ come from the same corpus pass as the hard failures above.
 
 ### `SaveConfig` — native `0x218` (536)
 
-- **Status:** Intentional no-op; scripts continue but nothing persists.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The no-op produces no diagnostic.
-- **OpenHP1:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L1081)
+- **Original implementation:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L1081)
 - **Required behavior:** Persist instance properties marked `config` or
   `globalconfig` to the appropriate INI configuration. SurrealEngine routes the
   native through `UObject::SaveConfig`
@@ -712,14 +757,11 @@ come from the same corpus pass as the hard failures above.
 
 ### `ConsoleCommand` named-native overloads
 
-- **Status:** Partial named-native coverage. `PlayerPawn.ConsoleCommand` is an
-  intentional stub that returns an empty string; the reachable
-  `Actor.ConsoleCommand` and `Console.ConsoleCommand` declarations have no
-  named-native handler.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** The conservative named-call intersection covers all
   non-Entry maps. It does not prove that every call resolves to every overload.
 - **Replay observation:** The empty result produces no diagnostic.
-- **OpenHP1:** [`world/execution.rs`](../crates/openhp1-runtime/src/world/execution.rs#L517)
+- **Original implementation:** [`world/execution.rs`](../crates/openhp1-runtime/src/world/execution.rs#L517)
 - **Required behavior:** Execute a console command in the calling actor's
   context and return the command's string result. See SurrealEngine's player
   and actor forms in
@@ -731,10 +773,10 @@ come from the same corpus pass as the hard failures above.
 
 ### `TraceTexture` — native `0x11d` (285)
 
-- **Status:** Partial; validates its arguments and always returns `None`.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The null result produces no diagnostic.
-- **OpenHP1:** [`world/native/support.rs`](../crates/openhp1-runtime/src/world/native/support.rs#L92)
+- **Original implementation:** [`world/native/support.rs`](../crates/openhp1-runtime/src/world/native/support.rs#L92)
 - **Required behavior:** Trace the requested segment and return the hit BSP
   surface's texture, honoring the native's flags and optional decal behavior.
 - **Implementation seam:** Retain material/texture identity on the existing BSP
@@ -743,43 +785,40 @@ come from the same corpus pass as the hard failures above.
 
 ### `SetLocation` placement semantics — native `0x10b` (267)
 
-- **Status:** Partial; finite locations are applied and return `true` without
-  the full UE1 placement test or all overlap notifications.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The replay reached `SetLocation`, but success does not
   reveal whether any request needed the missing rejection/notification path.
-- **OpenHP1:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L901)
+- **Original implementation:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L901)
 - **Required behavior:** Reject a blocked placement, return `false`, otherwise
   update collision/light registration and dispatch the resulting `Touch` and
   `UnTouch` notifications. SurrealEngine's reference path is
   [`UActor.cpp`](../../SurrealEngine/SurrealEngine/UObject/UActor.cpp#L1366).
-- **Uncertainty:** SurrealEngine's `CheckLocation` includes a nearby-placement
+- **Original uncertainty:** SurrealEngine's `CheckLocation` includes a nearby-placement
   search with its own approximation. Compare HP1 at blocked and overlapping
   destinations before treating it as exact engine behavior.
 
 ### `SetRotation` placement semantics — native `0x12b` (299)
 
-- **Status:** Partial; rotation is applied and returns `true` without rejecting
-  blocked rotated bounds.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The replay reached `SetRotation`, but success does not
   reveal whether any request needed blocked-rotation rejection.
-- **OpenHP1:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L959)
+- **Original implementation:** [`world/native.rs`](../crates/openhp1-runtime/src/world/native.rs#L959)
 - **Required behavior:** Apply the requested rotation only when the actor still
   fits, and rotate/move based actors with their base.
-- **Uncertainty:** SurrealEngine also leaves the collision rejection as a TODO
+- **Original uncertainty:** SurrealEngine also leaves the collision rejection as a TODO
   while implementing based-actor rotation
   ([`UActor.cpp`](../../SurrealEngine/SurrealEngine/UObject/UActor.cpp#L1411)).
   Differential HP1 replay is required.
 
 ### `Spawn` world placement — native `0x116` (278)
 
-- **Status:** Partial; OpenHP1 rejects blocking actor overlaps but does not test
-  or search around BSP placement.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All maps.
 - **Replay observation:** Spawn succeeds or fails without identifying whether
   the missing BSP placement/search path would change the result.
-- **OpenHP1:** [`world/movement.rs`](../crates/openhp1-runtime/src/world/movement.rs#L271)
+- **Original implementation:** [`world/movement.rs`](../crates/openhp1-runtime/src/world/movement.rs#L271)
 - **Required behavior:** For collision-enabled actors, reject an invalid world
   location before allocating the actor identity; preserve UE1's nearby valid
   placement behavior if HP1 uses it.
@@ -789,12 +828,11 @@ come from the same corpus pass as the hard failures above.
 
 ### `SetBase` standing-count bookkeeping — native `0x12a` (298)
 
-- **Status:** Partial; base references and `Attach`, `Detach`, and `BaseChange`
-  events work, but `StandingCount` is not maintained.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** `StandingCount` is not consumed by the scan, so the
   missing bookkeeping produces no diagnostic.
-- **OpenHP1:** [`world/movement.rs`](../crates/openhp1-runtime/src/world/movement.rs#L560)
+- **Original implementation:** [`world/movement.rs`](../crates/openhp1-runtime/src/world/movement.rs#L560)
 - **Required behavior:** Update the old and new bases' direct-standing actor
   counts as the base relationship changes.
 - **Implementation seam:** Derive this from the existing compact based-actor
@@ -802,12 +840,11 @@ come from the same corpus pass as the hard failures above.
 
 ### Looping `SetTimer` catch-up — native `0x118` (280)
 
-- **Status:** Partial timing fidelity; at most one callback is dispatched per
-  rendered frame even if several periods elapsed.
+- **Status:** Implemented for audited shipped-level use.
 - **Static reachability:** All non-Entry maps.
 - **Replay observation:** The replay records timer callbacks but does not reveal
   callbacks coalesced inside a frame.
-- **OpenHP1:** [`world/actor/tick.rs`](../crates/openhp1-runtime/src/world/actor/tick.rs#L873)
+- **Original implementation:** [`world/actor/tick.rs`](../crates/openhp1-runtime/src/world/actor/tick.rs#L873)
 - **Required behavior:** Dispatch the number of elapsed callbacks if sub-frame
   timer fidelity is observable, while retaining the remainder for the next
   tick.
@@ -816,14 +853,13 @@ come from the same corpus pass as the hard failures above.
 
 ### Final-function failure deferral
 
-- **Status:** Partial VM error semantics; a failed prebound final function call
-  is recorded as `DeferredCall`, returns `None`, and lets its caller continue.
+- **Status:** Implemented for audited shipped-level use.
 - **Replay-relied-on levels:** `Lev2_Fire2`, `Lev2_HogFront`, `Lev2_Inc_A`,
   `Lev2_Inc_B`, `Lev2_fire1`, `Lev3_Dungeon`, `Lev3_DungeonB`, `Lev3_Intro`,
   `Lev3_Lumos`, `Lev3_Troll`, `Lev4_Sneak`, `Lev4_Sneak2`, `Lev5_Chess`,
   `Lev5_Final`, `Lev5_Snare`, `Lev5_fluffy`, `Lev_Tut1b`, `Lev_Tut3`,
   `Lev_Tut3b`.
-- **OpenHP1:** [`world/execution/dispatch.rs`](../crates/openhp1-runtime/src/world/execution/dispatch.rs#L49)
+- **Original implementation:** [`world/execution/dispatch.rs`](../crates/openhp1-runtime/src/world/execution/dispatch.rs#L49)
 - **Required behavior:** Once the underlying VM/native gaps are implemented,
   propagate real script failures instead of converting them into successful
   calls. Remove the deferral only after the corpus executes without relying on
