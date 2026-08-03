@@ -573,6 +573,14 @@ pub(super) fn named_native(
         // command routing when an in-game console exists.
         return Some(Value::String(String::new()));
     }
+    if class.eq_ignore_ascii_case("PlayerPawn")
+        && function.eq_ignore_ascii_case("GetPlayerNetworkAddress")
+        && arguments.is_empty()
+    {
+        // ponytail: OpenHP1 is a local-only host; surface an address when a
+        // network host is introduced.
+        return Some(Value::String(String::new()));
+    }
     if class.eq_ignore_ascii_case("Decal")
         && function.eq_ignore_ascii_case("DetachDecal")
         && arguments.is_empty()

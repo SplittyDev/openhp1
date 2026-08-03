@@ -31,6 +31,8 @@ fn synthetic_runtime_package() -> Vec<u8> {
         + b"PlayerPawn\0".len()
         + size_of::<u32>()
         + b"ClientTravel\0".len()
+        + size_of::<u32>()
+        + b"GetPlayerNetworkAddress\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -38,9 +40,9 @@ fn synthetic_runtime_package() -> Vec<u8> {
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        2,
+        3,
         name_offset as i32,
-        2,
+        3,
         export_offset as i32,
         0,
         export_offset as i32,
@@ -49,11 +51,15 @@ fn synthetic_runtime_package() -> Vec<u8> {
     ] {
         bytes.extend(value.to_le_bytes());
     }
-    for name in [b"PlayerPawn\0".as_slice(), b"ClientTravel\0".as_slice()] {
+    for name in [
+        b"PlayerPawn\0".as_slice(),
+        b"ClientTravel\0".as_slice(),
+        b"GetPlayerNetworkAddress\0".as_slice(),
+    ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
     }
-    for (outer, name) in [(0_i32, 0_u8), (1, 1)] {
+    for (outer, name) in [(0_i32, 0_u8), (1, 1), (1, 2)] {
         bytes.extend([0, 0]);
         bytes.extend(outer.to_le_bytes());
         bytes.push(name);
@@ -564,6 +570,76 @@ fn client_travel_named_native_dispatches_through_function_execution() {
             travel_type: 2,
             transfer_items: true,
         }]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn get_player_network_address_named_native_dispatches_through_function_execution() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-get-player-network-address-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 2,
+    };
+    runtime.scripts.insert(
+        object_id(&package, 2),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 2,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 2,
+            line: 0,
+            text_position: 0,
+            bytecode: openhp1_script::Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+
+    assert_eq!(
+        runtime
+            .execute_function(
+                17,
+                &class,
+                &function,
+                &[],
+                &mut InstanceState::default(),
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::String(String::new()),
     );
     fs::remove_dir_all(root).unwrap();
 }

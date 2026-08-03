@@ -242,7 +242,9 @@ Engine side effects without an OpenHP1 surface do not abort scripts:
 `SaveConfig` is read-only, `ConsoleCommand` returns an empty string, and decal
 detachment is a no-op until decals render. `PlayerPawn.ClientTravel` emits a
 host action with its URL, raw UE1 travel-type byte, and `bItems` flag; the
-script runtime neither parses nor opens the next map.
+script runtime neither parses nor opens the next map. OpenHP1 is a local-only
+host, so `PlayerPawn.GetPlayerNetworkAddress` intentionally returns an empty
+string until a network host supplies an address.
 `Pawn.CheckValidSkinPackage` accepts only a scanned, parseable local package
 whose skin-package name is compatible with the requested mesh; it never treats
 the requested name as an arbitrary filesystem path.
