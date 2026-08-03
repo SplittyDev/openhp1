@@ -431,7 +431,7 @@ impl ScriptRuntime {
             .instances
             .remove(&level_actor)
             .ok_or_else(|| format!("AddPawn Level actor {level_actor} instance is active"))?;
-        let result = (|| {
+        let result: std::result::Result<(), String> = (|| {
             let previous =
                 match self.required_actor_property(&level_class, &level_instance, "PawnList")? {
                     StoredValue::Object(value) => value,
@@ -732,22 +732,27 @@ impl ScriptRuntime {
                 Some(value) => return Err(format!("Destroy property {name} is {value:?}")),
             }
         }
-        if !self.destroyed.insert(actor) {
+        if self.destroyed.contains(&actor) {
             return Ok(true);
-        }
-        self.tick_functions.remove(&actor);
-        self.failed_ticks.remove(&actor);
-        self.state_frames.remove(&actor);
-        self.update_actor_base(actor, None);
-        if let Some(cached) = self.collision_actors.get_mut(actor) {
-            *cached = None;
-            self.reindex_cached_collision_actor(actor);
         }
         let field = self
             .find_property(actor_class, "bDeleteMe", 0)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "Destroy property bDeleteMe is missing".to_owned())?;
+        match instance.get(&field) {
+            Some(StoredValue::Value(Value::Bool(true))) => return Ok(true),
+            Some(StoredValue::Value(Value::Bool(false))) | None => {}
+            Some(value) => return Err(format!("Destroy property bDeleteMe is {value:?}")),
+        }
         instance.insert(field, StoredValue::Value(Value::Bool(true)));
+        self.set_actor_base(actor, actor_class, instance, None, actions)?;
+        self.tick_functions.remove(&actor);
+        self.failed_ticks.remove(&actor);
+        self.state_frames.remove(&actor);
+        if let Some(cached) = self.collision_actors.get_mut(actor) {
+            *cached = None;
+            self.reindex_cached_collision_actor(actor);
+        }
         self.call_actor_event(
             actor,
             actor_class,
@@ -756,6 +761,46 @@ impl ScriptRuntime {
             Vec::new(),
             actions,
         )?;
+        let object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+        let active = std::mem::take(instance);
+        if self.instances.insert(actor, active).is_some() {
+            return Err(DispatchError::ActiveActorContext { actor }.to_string());
+        }
+        let result: std::result::Result<(), String> = (|| {
+            for based_actor in self.base_children.get(&object).cloned().unwrap_or_default() {
+                if self.destroyed.contains(&based_actor) {
+                    continue;
+                }
+                let class = self
+                    .actor_classes
+                    .get(&based_actor)
+                    .cloned()
+                    .ok_or(DispatchError::UnregisteredActor { actor: based_actor })
+                    .map_err(|error| error.to_string())?;
+                let class = self
+                    .resolved_object(&class)
+                    .map_err(|error| error.to_string())?;
+                let mut based_instance = self
+                    .instances
+                    .remove(&based_actor)
+                    .ok_or_else(|| format!("based actor {based_actor} instance is active"))?;
+                let result =
+                    self.set_actor_base(based_actor, &class, &mut based_instance, None, actions);
+                self.instances.insert(based_actor, based_instance);
+                result?;
+            }
+            Ok(())
+        })();
+        *instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| DispatchError::ActiveActorContext { actor }.to_string())?;
+        result?;
+        self.destroyed.insert(actor);
         self.timers.remove(&actor);
         self.animating.remove(&actor);
         self.sound_channels
@@ -910,9 +955,11 @@ impl ScriptRuntime {
         self.destroyed.remove(&spawned);
         self.refresh_tick_actor(spawned, &class)
             .map_err(|error| error.to_string())?;
-        self.update_actor_base(spawned, None);
         self.refresh_cached_collision_actor(spawned, &class, &spawned_instance)?;
+        let level = self.actor_object(&class, &spawned_instance, "Level")?;
         self.instances.insert(spawned, spawned_instance);
+        self.update_actor_base(spawned, None, level)
+            .map_err(|error| error.to_string())?;
         let name = format!("{class_name}{spawned}");
         actions.push(ActorAction::SpawnActor {
             actor: spawned,

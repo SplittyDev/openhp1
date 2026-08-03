@@ -297,8 +297,11 @@ impl ScriptRuntime {
                     Some(StoredValue::Object(base)) => base.clone(),
                     _ => None,
                 });
-        self.update_actor_base(actor, base);
+        let level = self
+            .actor_object(&class, &instance, "Level")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
         self.instances.insert(actor, instance);
+        self.update_actor_base(actor, base, level)?;
         Ok(())
     }
 

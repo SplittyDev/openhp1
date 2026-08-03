@@ -1042,31 +1042,86 @@ impl ScriptRuntime {
         Ok(based)
     }
 
-    pub(super) fn update_actor_base(&mut self, actor: usize, base: Option<ObjectId>) {
+    pub(super) fn update_actor_base(
+        &mut self,
+        actor: usize,
+        base: Option<ObjectId>,
+        level: Option<ObjectId>,
+    ) -> DispatchResult<()> {
         let previous = self.actor_bases.insert(actor, base.clone()).flatten();
-        if previous == base {
-            return;
+        if previous != base {
+            self.unlink_actor_base(actor, previous.as_ref(), level.as_ref())?;
+            self.link_actor_base(actor, base.as_ref(), level.as_ref())?;
         }
-        if let Some(previous) = previous {
-            let remove_entry = self
-                .base_children
-                .get_mut(&previous)
-                .is_some_and(|children| {
-                    if let Ok(index) = children.binary_search(&actor) {
-                        children.remove(index);
-                    }
-                    children.is_empty()
-                });
-            if remove_entry {
-                self.base_children.remove(&previous);
+        if let Some(object) = self
+            .actor_objects
+            .get(&actor)
+            .filter(|object| self.base_children.contains_key(*object))
+            .cloned()
+        {
+            self.update_standing_count(&object)?;
+        }
+        Ok(())
+    }
+
+    fn unlink_actor_base(
+        &mut self,
+        actor: usize,
+        base: Option<&ObjectId>,
+        level: Option<&ObjectId>,
+    ) -> DispatchResult<()> {
+        let Some(base) = base.filter(|base| Some(*base) != level) else {
+            return Ok(());
+        };
+        let remove_entry = self.base_children.get_mut(base).is_some_and(|children| {
+            if let Ok(index) = children.binary_search(&actor) {
+                children.remove(index);
             }
+            children.is_empty()
+        });
+        if remove_entry {
+            self.base_children.remove(base);
         }
-        if let Some(base) = base {
-            let children = self.base_children.entry(base).or_default();
-            if let Err(index) = children.binary_search(&actor) {
-                children.insert(index, actor);
-            }
+        self.update_standing_count(base)
+    }
+
+    fn link_actor_base(
+        &mut self,
+        actor: usize,
+        base: Option<&ObjectId>,
+        level: Option<&ObjectId>,
+    ) -> DispatchResult<()> {
+        let Some(base) = base.filter(|base| Some(*base) != level) else {
+            return Ok(());
+        };
+        let children = self.base_children.entry(base.clone()).or_default();
+        if let Err(index) = children.binary_search(&actor) {
+            children.insert(index, actor);
         }
+        self.update_standing_count(base)
+    }
+
+    fn update_standing_count(&mut self, object: &ObjectId) -> DispatchResult<()> {
+        let Some(actor) = self.object_actors.get(object).copied() else {
+            return Ok(());
+        };
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let Some(field) = self.find_property(&class, "StandingCount", 0)? else {
+            return Ok(());
+        };
+        let count = self
+            .base_children
+            .get(object)
+            .map_or(0, |children| children.len().min(usize::from(u8::MAX)) as u8);
+        if let Some(instance) = self.instances.get_mut(&actor) {
+            instance.insert(field, StoredValue::Value(Value::Byte(count)));
+        }
+        Ok(())
     }
 
     pub(super) fn set_actor_location(
@@ -1193,6 +1248,8 @@ impl ScriptRuntime {
         let actor_handle = self
             .object_handle(actor_object)
             .map_err(|error| error.to_string())?;
+        self.unlink_actor_base(actor, current.as_ref(), level.as_ref())
+            .map_err(|error| error.to_string())?;
         if let Some(old_base) = current
             .as_ref()
             .filter(|old_base| Some(*old_base) != level.as_ref())
@@ -1208,9 +1265,9 @@ impl ScriptRuntime {
         }
 
         instance.insert(field, StoredValue::Object(base.clone()));
-        self.update_actor_base(actor, base.clone());
-        // ponytail: derive direct based actors from this compact index; add
-        // StandingCount bookkeeping when scripts consume it.
+        self.actor_bases.insert(actor, base.clone());
+        self.link_actor_base(actor, base.as_ref(), level.as_ref())
+            .map_err(|error| error.to_string())?;
         if let Some(new_base) = base
             .as_ref()
             .filter(|new_base| Some(*new_base) != level.as_ref())

@@ -338,6 +338,13 @@ fire-direction dot product within 2,500 units, require the receiver's
 output arguments.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
+`SetBase` maintains the reverse direct-base index used to carry attachments
+during movement. It updates the old and new base's saturating `StandingCount`
+before their `Detach` and `Attach` events, rejects self/descendant cycles, and
+then sends the child's `BaseChange`. Destroying a base clears its direct
+children through the same path after `Destroyed`. An actor's serialized
+`Level` base is retained for base-chain reads but is never a direct attachment:
+it receives no reverse child, `StandingCount`, `Attach`, or `Detach` update.
 Engine side effects without an OpenHP1 surface do not abort scripts:
 `SaveConfig` is read-only, `ConsoleCommand` returns an empty string, and decal
 detachment is a no-op until decals render. `PlayerPawn.ClientTravel` emits a

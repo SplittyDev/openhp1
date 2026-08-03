@@ -119,6 +119,116 @@ fn named_native_script(export_index: usize) -> Arc<openhp1_script::ScriptExport>
     })
 }
 
+fn log_event_script(export_index: usize, message: &str) -> Arc<openhp1_script::ScriptExport> {
+    let mut bytes = vec![0x04, LOG as u8, 0x1f];
+    bytes.extend(message.bytes());
+    bytes.extend([0, 0x16]);
+    Arc::new(openhp1_script::ScriptExport {
+        export_index,
+        class_name: "Function".to_owned(),
+        base_field: ObjectReference::None,
+        next_field: ObjectReference::None,
+        script_text: ObjectReference::None,
+        children: ObjectReference::None,
+        friendly_name: export_index,
+        line: 0,
+        text_position: 0,
+        bytecode: Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        },
+        metadata: ScriptMetadata::Function(FunctionMetadata {
+            parameter_size: None,
+            native_index: 0,
+            parameter_count: None,
+            operator_precedence: 0,
+            return_value_offset: None,
+            flags: 0,
+            replication_offset: None,
+        }),
+    })
+}
+
+fn standing_count_event_script(export_index: usize) -> Arc<openhp1_script::ScriptExport> {
+    let mut bytes = vec![0x04, LOG as u8, 0x52, 0x01];
+    bytes.extend(1_i32.to_le_bytes());
+    bytes.push(0x16);
+    Arc::new(openhp1_script::ScriptExport {
+        export_index,
+        class_name: "Function".to_owned(),
+        base_field: ObjectReference::None,
+        next_field: ObjectReference::None,
+        script_text: ObjectReference::None,
+        children: ObjectReference::None,
+        friendly_name: export_index,
+        line: 0,
+        text_position: 0,
+        bytecode: Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        },
+        metadata: ScriptMetadata::Function(FunctionMetadata {
+            parameter_size: None,
+            native_index: 0,
+            parameter_count: None,
+            operator_precedence: 0,
+            return_value_offset: None,
+            flags: 0,
+            replication_offset: None,
+        }),
+    })
+}
+
+fn execute_extended_native_from_bytecode(
+    runtime: &mut ScriptRuntime,
+    actor: usize,
+    class: &ResolvedObject,
+    package: &Arc<Package>,
+    instance: &mut InstanceState,
+    index: u16,
+    object: Option<i32>,
+    actions: &mut Vec<ActorAction>,
+) -> Value {
+    assert_eq!(index >> 8, 1);
+    let mut bytes = vec![0x04, 0x61, u8::try_from(index & 0xff).unwrap()];
+    if object.is_some() {
+        bytes.push(0x20);
+        bytes.extend(1_i32.to_le_bytes());
+    }
+    bytes.push(0x16);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    Frame::new(&bytecode)
+        .execute_hosted(|request| match request {
+            FrameRequest::ResolveObject { reference: 1 } => {
+                Ok(FrameResponse::Value(Value::Object(object.unwrap())))
+            }
+            FrameRequest::Call {
+                receiver,
+                function: FunctionCall::Native(native),
+                arguments,
+            } => {
+                assert_eq!(receiver, -1);
+                assert_eq!(native, index);
+                runtime
+                    .native(
+                        actor, class, package, native, &arguments, instance, actions, 0,
+                    )
+                    .map(FrameResponse::Value)
+            }
+            _ => panic!("unexpected frame request"),
+        })
+        .unwrap()
+}
+
 #[test]
 fn dispatched_finite_function_counts_statements_not_nested_expression_tokens() {
     let root = std::env::temp_dir().join(format!(
@@ -594,6 +704,7 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
         "bStatic",
         "bNoDelete",
         "bDeleteMe",
+        "Base",
     ]
     .into_iter()
     .enumerate()
@@ -652,6 +763,7 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
                 fields["bDeleteMe"].clone(),
                 StoredValue::Value(Value::Bool(false)),
             ),
+            (fields["Base"].clone(), StoredValue::Object(None)),
         ]
         .into_iter()
         .collect(),
@@ -941,6 +1053,319 @@ fn player_can_see_me_native_skips_the_active_pawn_and_accepts_coincidence() {
             .unwrap(),
         Value::Bool(true),
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn set_base_excludes_level_from_based_actors_and_standing_count() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-set-base-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+    let base_field = runtime_actor_id(10);
+    let level_field = runtime_actor_id(11);
+    let standing_count_field = object_id(&package, 0);
+    let static_field = runtime_actor_id(13);
+    let no_delete_field = runtime_actor_id(14);
+    let delete_field = runtime_actor_id(15);
+    for (name, field) in [
+        ("Base", &base_field),
+        ("Level", &level_field),
+        ("StandingCount", &standing_count_field),
+        ("bStatic", &static_field),
+        ("bNoDelete", &no_delete_field),
+        ("bDeleteMe", &delete_field),
+    ] {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    for (event, export) in [("Attach", 1), ("Detach", 2)] {
+        let function = object_id(&package, export);
+        runtime
+            .scripts
+            .insert(function.clone(), standing_count_event_script(export));
+        runtime.function_lookups.insert(
+            FunctionLookup::new(class_id.clone(), None, event, 0),
+            Some(function),
+        );
+    }
+    let base_change = object_id(&package, 3);
+    runtime
+        .scripts
+        .insert(base_change.clone(), log_event_script(3, "BaseChange"));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "BaseChange", 0),
+        Some(base_change),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "Destroyed", 0),
+        None,
+    );
+
+    let level = runtime_actor_id(20);
+    let child = runtime_actor_id(21);
+    let real_base = runtime_actor_id(22);
+    for (actor, object) in [(0, &child), (1, &real_base), (2, &level)] {
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object.clone());
+    }
+    let instance = |base: Option<ObjectId>, standing_count| {
+        [
+            (base_field.clone(), StoredValue::Object(base)),
+            (
+                level_field.clone(),
+                StoredValue::Object(Some(level.clone())),
+            ),
+            (
+                standing_count_field.clone(),
+                StoredValue::Value(Value::Byte(standing_count)),
+            ),
+            (static_field.clone(), StoredValue::Value(Value::Bool(false))),
+            (
+                no_delete_field.clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (delete_field.clone(), StoredValue::Value(Value::Bool(false))),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    let mut child_instance = instance(Some(level.clone()), 0);
+    runtime.instances.insert(1, instance(None, 0));
+    runtime.instances.insert(2, instance(None, 0));
+    runtime
+        .update_actor_base(0, Some(level.clone()), Some(level.clone()))
+        .unwrap();
+    assert!(runtime.base_children.get(&level).is_none());
+    assert_eq!(
+        runtime.instances[&2].get(&standing_count_field),
+        Some(&StoredValue::Value(Value::Byte(0)))
+    );
+
+    let level_handle = runtime.object_handle(level.clone()).unwrap();
+    let real_base_handle = runtime.object_handle(real_base.clone()).unwrap();
+    let child_handle = runtime.object_handle(child).unwrap();
+    let mut actions = Vec::new();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            0,
+            &class,
+            &package,
+            &mut child_instance,
+            SET_BASE,
+            Some(0),
+            &mut actions,
+        ),
+        Value::None
+    );
+    assert_eq!(
+        child_instance.get(&base_field),
+        Some(&StoredValue::Object(None))
+    );
+    assert_eq!(
+        actions,
+        vec![ActorAction::Log {
+            actor: 0,
+            message: "BaseChange".to_owned(),
+            tag: None,
+        }]
+    );
+
+    actions.clear();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            0,
+            &class,
+            &package,
+            &mut child_instance,
+            SET_BASE,
+            Some(level_handle),
+            &mut actions,
+        ),
+        Value::None
+    );
+    assert_eq!(
+        actions,
+        vec![ActorAction::Log {
+            actor: 0,
+            message: "BaseChange".to_owned(),
+            tag: None,
+        }]
+    );
+    assert!(runtime.base_children.get(&level).is_none());
+    assert_eq!(
+        runtime.instances[&2].get(&standing_count_field),
+        Some(&StoredValue::Value(Value::Byte(0)))
+    );
+
+    actions.clear();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            0,
+            &class,
+            &package,
+            &mut child_instance,
+            SET_BASE,
+            Some(real_base_handle),
+            &mut actions,
+        ),
+        Value::None
+    );
+    assert_eq!(
+        actions,
+        vec![
+            ActorAction::Log {
+                actor: 1,
+                message: "1".to_owned(),
+                tag: None,
+            },
+            ActorAction::Log {
+                actor: 0,
+                message: "BaseChange".to_owned(),
+                tag: None,
+            },
+        ]
+    );
+    assert_eq!(
+        runtime.instances[&1].get(&standing_count_field),
+        Some(&StoredValue::Value(Value::Byte(1)))
+    );
+    assert_eq!(runtime.base_children.get(&real_base), Some(&vec![0]));
+    assert!(runtime.base_children.get(&level).is_none());
+
+    actions.clear();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            0,
+            &class,
+            &package,
+            &mut child_instance,
+            SET_BASE,
+            Some(level_handle),
+            &mut actions,
+        ),
+        Value::None
+    );
+    assert_eq!(
+        actions,
+        vec![
+            ActorAction::Log {
+                actor: 1,
+                message: "0".to_owned(),
+                tag: None,
+            },
+            ActorAction::Log {
+                actor: 0,
+                message: "BaseChange".to_owned(),
+                tag: None,
+            },
+        ]
+    );
+    assert_eq!(
+        runtime.instances[&1].get(&standing_count_field),
+        Some(&StoredValue::Value(Value::Byte(0)))
+    );
+    assert!(runtime.base_children.get(&real_base).is_none());
+    assert!(runtime.base_children.get(&level).is_none());
+
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            0,
+            &class,
+            &package,
+            &mut child_instance,
+            SET_BASE,
+            Some(real_base_handle),
+            &mut Vec::new(),
+        ),
+        Value::None
+    );
+    let mut real_base_instance = runtime.instances.remove(&1).unwrap();
+    actions.clear();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            1,
+            &class,
+            &package,
+            &mut real_base_instance,
+            SET_BASE,
+            Some(child_handle),
+            &mut actions,
+        ),
+        Value::None
+    );
+    assert!(actions.is_empty());
+    assert_eq!(
+        real_base_instance.get(&base_field),
+        Some(&StoredValue::Object(None))
+    );
+    runtime.instances.insert(0, child_instance);
+    actions.clear();
+    assert_eq!(
+        execute_extended_native_from_bytecode(
+            &mut runtime,
+            1,
+            &class,
+            &package,
+            &mut real_base_instance,
+            DESTROY,
+            None,
+            &mut actions,
+        ),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        runtime.instances[&0].get(&base_field),
+        Some(&StoredValue::Object(None))
+    );
+    assert_eq!(
+        real_base_instance.get(&standing_count_field),
+        Some(&StoredValue::Value(Value::Byte(0)))
+    );
+    assert_eq!(
+        actions,
+        vec![
+            ActorAction::Log {
+                actor: 1,
+                message: "0".to_owned(),
+                tag: None,
+            },
+            ActorAction::Log {
+                actor: 0,
+                message: "BaseChange".to_owned(),
+                tag: None,
+            },
+            ActorAction::DestroyActor { actor: 1 },
+        ]
+    );
+    assert!(runtime.base_children.get(&real_base).is_none());
+    assert!(runtime.destroyed.contains(&1));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -4696,6 +5121,9 @@ fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
     runtime
         .fields
         .insert((class_id.clone(), "mainscale".to_owned()), None);
+    runtime
+        .fields
+        .insert((class_id.clone(), "standingcount".to_owned()), None);
 
     let instance = |location: [f32; 3], block_actors: bool| {
         [
@@ -4773,7 +5201,7 @@ fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
         .instances
         .insert(2, instance([4.0, 0.0, 0.0], false));
     runtime.instances.insert(3, instance([0.0, 6.0, 0.0], true));
-    runtime.update_actor_base(2, Some(parent));
+    runtime.update_actor_base(2, Some(parent), None).unwrap();
 
     let execute = |runtime: &mut ScriptRuntime,
                    current_instance: &mut InstanceState,

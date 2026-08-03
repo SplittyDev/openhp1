@@ -486,13 +486,10 @@ impl ScriptRuntime {
             is_unsupported_scene_property(&field_name).then(|| field_name.clone());
         let tracks_scene_value = unsupported_scene_property.is_some()
             || scene_property_action(actor, &field_name, &value).is_some();
-        if is_base {
-            let base = match &value {
-                StoredValue::Object(base) => base.clone(),
-                _ => None,
-            };
-            self.update_actor_base(actor, base);
-        }
+        let base = is_base.then(|| match &value {
+            StoredValue::Object(base) => base.clone(),
+            _ => None,
+        });
         let hidden = match (is_hidden, &value) {
             (true, StoredValue::Value(Value::Bool(hidden))) => Some(*hidden),
             _ => None,
@@ -557,6 +554,27 @@ impl ScriptRuntime {
                 .insert(field.clone(), value);
             self.update_cached_collision_property(actor, &field, None)
                 .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        if let Some(base) = base {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class)?;
+            let level = if actor == current_actor {
+                self.actor_object(&class, current_instance, "Level")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?
+            } else {
+                let instance = self
+                    .instances
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::ActiveActorContext { actor })?;
+                self.actor_object(&class, &instance, "Level")
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?
+            };
+            self.update_actor_base(actor, base, level)?;
         }
         if let Some(hidden) = hidden {
             actions.push(ActorAction::SetHidden { actor, hidden });
