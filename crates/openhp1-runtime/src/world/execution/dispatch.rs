@@ -152,6 +152,15 @@ impl ScriptRuntime {
                 outputs: vec![(0, Value::Float(best_aim)), (1, Value::Float(best_dist))],
             });
         }
+        if index == WARP {
+            return self
+                .warp_native(actor_class, arguments, instance)
+                .map_err(|message| crate::Error::Call {
+                    call: FunctionCall::Native(index),
+                    message,
+                })
+                .map_err(DispatchError::from);
+        }
         let value = self
             .native(
                 actor,
@@ -180,6 +189,75 @@ impl ScriptRuntime {
             arguments,
             output_arguments,
         ))
+    }
+
+    fn warp_native(
+        &mut self,
+        actor_class: &ResolvedObject,
+        arguments: &[Value],
+        instance: &InstanceState,
+    ) -> std::result::Result<CallOutput, String> {
+        let [
+            Value::Vector(location),
+            Value::Vector(velocity),
+            Value::Rotator(rotation),
+        ] = arguments
+        else {
+            return Err(format!(
+                "Warp expects location, velocity, and rotation, found {}",
+                arguments
+                    .iter()
+                    .map(Value::kind)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        let StoredValue::Value(Value::Struct(coords)) =
+            self.required_actor_property(actor_class, instance, "WarpCoords")?
+        else {
+            return Err("WarpCoords is not a coordinate struct".to_owned());
+        };
+        let vector = |name| match coords.get(name) {
+            Some(Value::Vector(value)) if value.iter().all(|value| value.is_finite()) => {
+                Ok(Vec3::from_array(*value))
+            }
+            Some(value) => Err(format!("WarpCoords.{name} is {}", value.kind())),
+            None => Err(format!("WarpCoords.{name} is missing")),
+        };
+        let origin = vector("Origin")?;
+        let axes = [vector("XAxis")?, vector("YAxis")?, vector("ZAxis")?];
+        let rotate = |value: Vec3| {
+            Vec3::new(
+                axes[0].x * value.x + axes[1].x * value.y + axes[2].x * value.z,
+                axes[0].y * value.x + axes[1].y * value.y + axes[2].y * value.z,
+                axes[0].z * value.x + axes[1].z * value.y + axes[2].z * value.z,
+            )
+        };
+        let inverse_rotate =
+            |value: Vec3| Vec3::new(axes[0].dot(value), axes[1].dot(value), axes[2].dot(value));
+        let forward = rotate(Vec3::from_array(crate::rotator_axes(*rotation)[0]));
+        let units = 65_536.0 / std::f32::consts::TAU;
+        let rotation = [
+            ((-forward.z).atan2(forward.x.hypot(forward.y)) * units) as i32,
+            (forward.y.atan2(forward.x) * units) as i32,
+            rotation[2],
+        ];
+        Ok(CallOutput {
+            value: Value::None,
+            outputs: vec![
+                (
+                    0,
+                    Value::Vector(
+                        (inverse_rotate(Vec3::from_array(*location)) + origin).to_array(),
+                    ),
+                ),
+                (
+                    1,
+                    Value::Vector(inverse_rotate(Vec3::from_array(*velocity)).to_array()),
+                ),
+                (2, Value::Rotator(rotation)),
+            ],
+        })
     }
 
     fn trace_native(
@@ -1245,5 +1323,79 @@ mod iterator_tests {
 
         assert_eq!(run(2).unwrap(), Value::Object(included_handle));
         assert_eq!(run(3).unwrap(), Value::Object(0));
+    }
+
+    #[test]
+    fn warp_native_transforms_all_three_output_lvalues() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let actor_class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        let warp_coords = ObjectId {
+            package: Arc::from("<warp-test>"),
+            export_index: 0,
+        };
+        runtime.fields.insert(
+            (object_id(&source, 0), "warpcoords".to_owned()),
+            Some(warp_coords.clone()),
+        );
+        let coords = std::collections::HashMap::from([
+            ("Origin".to_owned(), Value::Vector([100.0, 200.0, 300.0])),
+            ("XAxis".to_owned(), Value::Vector([0.0, 1.0, 0.0])),
+            ("YAxis".to_owned(), Value::Vector([-1.0, 0.0, 0.0])),
+            ("ZAxis".to_owned(), Value::Vector([0.0, 0.0, 1.0])),
+        ]);
+        let mut instance = [(warp_coords, StoredValue::Value(Value::Struct(coords)))]
+            .into_iter()
+            .collect::<InstanceState>();
+        let mut bytes = vec![0x61, 0x3a];
+        for field in [7_i32, 8, 9] {
+            bytes.push(0x00);
+            bytes.extend(field.to_le_bytes());
+        }
+        bytes.extend([0x16, 0x04, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Vector([4.0, 5.0, 6.0]));
+        frame.set_local(8, Value::Vector([1.0, 2.0, 3.0]));
+        frame.set_local(9, Value::Rotator([0, 0, 42]));
+        let mut actions = Vec::new();
+
+        assert_eq!(
+            frame
+                .execute_hosted(|request| match request {
+                    FrameRequest::Call {
+                        function,
+                        arguments,
+                        ..
+                    } => runtime
+                        .dispatch_call(
+                            1,
+                            &actor_class,
+                            &source,
+                            function,
+                            &arguments,
+                            &mut instance,
+                            &mut actions,
+                            0,
+                        )
+                        .map(CallOutput::into_response)
+                        .map_err(|error| error.to_string()),
+                    _ => panic!("unexpected frame request"),
+                })
+                .unwrap(),
+            Value::Vector([105.0, 196.0, 306.0])
+        );
+        assert_eq!(frame.local(8), Some(&Value::Vector([2.0, -1.0, 3.0])));
+        assert_eq!(frame.local(9), Some(&Value::Rotator([0, 16_384, 42])));
     }
 }
