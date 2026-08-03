@@ -83,6 +83,7 @@ const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
 const LINE_OF_SIGHT_TO: u16 = 514;
 const ACTOR_REACHABLE: u16 = 520;
+const FIND_PATH_TO: u16 = 518;
 const FIND_STAIR_ROTATION: u16 = 524;
 const PICK_TARGET: u16 = 531;
 const PICK_ANY_TARGET: u16 = 534;

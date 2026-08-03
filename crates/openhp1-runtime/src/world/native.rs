@@ -1,7 +1,7 @@
 use glam::Vec3;
 
 use super::physics::{PHYS_FALLING, PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING};
-use super::state::set_event_disabled;
+use super::state::{event_disabled, set_event_disabled};
 use super::*;
 
 mod actor;
@@ -1246,6 +1246,95 @@ impl ScriptRuntime {
             });
             return Ok(Value::None);
         }
+        if index == FIND_PATH_TO {
+            let [Value::Vector(destination), options @ ..] = arguments else {
+                return Err(format!(
+                    "FindPathTo expects a destination vector and up to two optional bools, found {}",
+                    arguments.len()
+                ));
+            };
+            if options.len() > 2 || !destination.iter().all(|value| value.is_finite()) {
+                return Err("FindPathTo arguments are invalid".to_owned());
+            }
+            let optional_flag = |index, default| match options.get(index) {
+                Some(Value::Bool(value)) => Ok(*value),
+                Some(Value::None) | None => Ok(default),
+                Some(value) => Err(format!("FindPathTo optional flag is {}", value.kind())),
+            };
+            let _single_path = optional_flag(0, false)?;
+            let clear_paths = optional_flag(1, true)?;
+            let destination = Vec3::from_array(*destination);
+            let location =
+                Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+            let base_eye_height = self.actor_float(actor_class, instance, "BaseEyeHeight")?;
+            let radius = self.actor_float(actor_class, instance, "CollisionRadius")?;
+            let height = self.actor_float(actor_class, instance, "CollisionHeight")?;
+            let is_player = self
+                .optional_actor_bool(actor_class, instance, "bIsPlayer")?
+                .unwrap_or(
+                    self.class_has_name(actor_class, "PlayerPawn")
+                        .map_err(|error| error.to_string())?,
+                );
+            if clear_paths {
+                self.clear_navigation_paths(actor, actions, depth)?;
+            }
+            let mut target_candidates = self.navigation_points(is_player)?;
+            target_candidates
+                .retain(|(_, _, point)| point.distance_squared(destination) <= 500.0_f32.powi(2));
+            target_candidates.sort_by(|(_, _, left), (_, _, right)| {
+                left.distance_squared(destination)
+                    .total_cmp(&right.distance_squared(destination))
+            });
+            let target = target_candidates
+                .into_iter()
+                .take(4)
+                .find(|(_, _, point)| {
+                    matches!(
+                        self.fast_trace_native(
+                            actor_class,
+                            &[
+                                Value::Vector(destination.to_array()),
+                                Value::Vector((*point + Vec3::Z * base_eye_height).to_array()),
+                            ],
+                            instance,
+                        ),
+                        Ok(Value::Bool(true))
+                    )
+                })
+                .map(|(_, point, _)| point);
+            let Some(target) = target else {
+                self.set_route_cache(actor_class, instance, &[])?;
+                return Ok(Value::Object(0));
+            };
+            let endpoints = self.mark_reachable_navigation_endpoints(
+                actor,
+                actor_class,
+                instance,
+                location,
+                is_player,
+            )?;
+            let Some(route) = self.find_path_to_endpoint(
+                &endpoints,
+                &target,
+                radius as i32,
+                height as i32,
+                is_player,
+                location,
+            )?
+            else {
+                self.set_route_cache(actor_class, instance, &[])?;
+                return Ok(Value::Object(0));
+            };
+            let Some(next) =
+                self.path_special_handling(actor, actor_class, instance, &route, actions, depth)?
+            else {
+                return Ok(Value::Object(0));
+            };
+            return self
+                .object_handle(next)
+                .map(Value::Object)
+                .map_err(|error| error.to_string());
+        }
         if index == FIND_PATH {
             let [start, destination] = arguments else {
                 return Err(format!(
@@ -1297,6 +1386,509 @@ impl ScriptRuntime {
                 .map_err(|error| error.to_string());
         }
         scalar_native(index, arguments)
+    }
+
+    fn navigation_points(
+        &mut self,
+        include_player_only: bool,
+    ) -> std::result::Result<Vec<(usize, ObjectId, Vec3)>, String> {
+        let mut actors = self
+            .actor_classes
+            .iter()
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
+        actors.sort_unstable_by_key(|(actor, _)| *actor);
+        let mut points = Vec::new();
+        for (actor, class) in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class = self
+                .resolved_object(&class)
+                .map_err(|error| error.to_string())?;
+            if !self
+                .class_has_name(&class, "NavigationPoint")
+                .map_err(|error| error.to_string())?
+            {
+                continue;
+            }
+            let Some(point) = self.actor_objects.get(&actor).cloned() else {
+                continue;
+            };
+            let Some(instance) = self.instances.get(&actor).cloned() else {
+                continue;
+            };
+            if self
+                .optional_actor_bool(&class, &instance, "bPlayerOnly")?
+                .unwrap_or(false)
+                && !include_player_only
+            {
+                continue;
+            }
+            let point_location =
+                Vec3::from_array(self.actor_vector(&class, &instance, "Location")?);
+            points.push((actor, point, point_location));
+        }
+        Ok(points)
+    }
+
+    fn clear_navigation_paths(
+        &mut self,
+        pawn: usize,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> std::result::Result<(), String> {
+        let points = self.navigation_points(true)?;
+        let pawn = self
+            .actor_objects
+            .get(&pawn)
+            .cloned()
+            .ok_or_else(|| format!("FindPathTo pawn {pawn} has no object identity"))?;
+        let pawn = Value::Object(
+            self.object_handle(pawn)
+                .map_err(|error| error.to_string())?,
+        );
+        for (actor, _, _) in points {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or_else(|| format!("navigation point {actor} has no class"))?;
+            let class = self
+                .resolved_object(&class)
+                .map_err(|error| error.to_string())?;
+            let mut instance = self
+                .instances
+                .remove(&actor)
+                .ok_or_else(|| format!("navigation point {actor} instance is active"))?;
+            let result = (|| {
+                self.set_optional_actor_value(
+                    &class,
+                    &mut instance,
+                    "bEndPoint",
+                    Value::Bool(false),
+                )?;
+                let cost = if self
+                    .optional_actor_bool(&class, &instance, "bSpecialCost")?
+                    .unwrap_or(false)
+                {
+                    match self.call_navigation_event(
+                        actor,
+                        &class,
+                        &mut instance,
+                        "SpecialCost",
+                        &[pawn.clone()],
+                        actions,
+                        depth,
+                    )? {
+                        Some(Value::Int(cost)) => cost,
+                        Some(value) => {
+                            return Err(format!("SpecialCost returned {}", value.kind()));
+                        }
+                        None => 0,
+                    }
+                } else {
+                    match self
+                        .instance_property(&class, &instance, "ExtraCost")
+                        .map_err(|error| error.to_string())?
+                    {
+                        Some(StoredValue::Value(Value::Int(cost))) => cost,
+                        Some(value) => return Err(format!("ExtraCost is {value:?}")),
+                        None => 0,
+                    }
+                };
+                self.set_optional_actor_value(&class, &mut instance, "cost", Value::Int(cost))
+            })();
+            self.instances.insert(actor, instance);
+            result?;
+        }
+        Ok(())
+    }
+
+    fn mark_reachable_navigation_endpoints(
+        &mut self,
+        pawn: usize,
+        pawn_class: &ResolvedObject,
+        pawn_instance: &InstanceState,
+        location: Vec3,
+        is_player: bool,
+    ) -> std::result::Result<Vec<ObjectId>, String> {
+        let points = self.navigation_points(true)?;
+        for (actor, _, _) in &points {
+            self.set_navigation_endpoint(*actor, false)?;
+        }
+        let mut endpoints = Vec::new();
+        for (point_actor, point, point_location) in points {
+            if endpoints.len() == 8 {
+                break;
+            }
+            if !self.navigation_point_allowed(&point, is_player)? {
+                continue;
+            }
+            if point_location.distance_squared(location) > 1_000_000.0 {
+                continue;
+            }
+            if self.actor_reachable(pawn, pawn_class, pawn_instance, point_actor)? {
+                self.set_navigation_endpoint(point_actor, true)?;
+                endpoints.push(point);
+            }
+        }
+        Ok(endpoints)
+    }
+
+    fn find_path_to_endpoint(
+        &mut self,
+        endpoints: &[ObjectId],
+        target: &ObjectId,
+        radius: i32,
+        height: i32,
+        is_player: bool,
+        location: Vec3,
+    ) -> std::result::Result<Option<Vec<ObjectId>>, String> {
+        if !self.navigation_point_allowed(target, is_player)? {
+            return Ok(None);
+        }
+        if endpoints.contains(target) {
+            return Ok(Some(vec![target.clone()]));
+        }
+        let specs = self.reach_specs.clone();
+        let mut distances = HashMap::default();
+        let mut next = HashMap::default();
+        let mut pending = vec![target.clone()];
+        distances.insert(target.clone(), 0_i32);
+        for _ in 0..1000 {
+            let Some((index, _)) = pending
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, point)| distances.get(*point).copied().unwrap_or(i32::MAX))
+            else {
+                break;
+            };
+            let current = pending.swap_remove(index);
+            if endpoints.contains(&current) {
+                let mut route = vec![current.clone()];
+                while route.last().is_some_and(|point| point != target) {
+                    route.push(
+                        next.get(route.last().unwrap())
+                            .cloned()
+                            .ok_or_else(|| "FindPathTo route ended before its target".to_owned())?,
+                    );
+                }
+                let mut route_without_touched_points = Vec::new();
+                for point in route {
+                    let point_location = self.navigation_point_location(&point)?;
+                    let delta = point_location - location;
+                    if delta.length_squared() < (radius as f32).powi(2)
+                        && delta.z.abs() < height as f32
+                    {
+                        route_without_touched_points.clear();
+                    } else {
+                        route_without_touched_points.push(point);
+                    }
+                }
+                return Ok((!route_without_touched_points.is_empty())
+                    .then_some(route_without_touched_points));
+            }
+            let distance = distances[&current];
+            for spec in specs.iter().filter(|spec| {
+                spec.end == current
+                    && !spec.pruned
+                    && spec.collision_radius >= radius
+                    && spec.collision_height >= height
+            }) {
+                if !self.navigation_point_allowed(&spec.start, is_player)? {
+                    continue;
+                }
+                let candidate = distance.saturating_add(spec.distance.max(0));
+                if distances
+                    .get(&spec.start)
+                    .is_some_and(|known| *known <= candidate)
+                {
+                    continue;
+                }
+                distances.insert(spec.start.clone(), candidate);
+                next.insert(spec.start.clone(), current.clone());
+                if !pending.contains(&spec.start) {
+                    pending.push(spec.start.clone());
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn path_special_handling(
+        &mut self,
+        pawn: usize,
+        pawn_class: &ResolvedObject,
+        pawn_instance: &mut InstanceState,
+        route: &[ObjectId],
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> std::result::Result<Option<ObjectId>, String> {
+        self.set_route_cache(pawn_class, pawn_instance, route)?;
+        let Some(old_best_point) = route.first().cloned() else {
+            return Ok(None);
+        };
+        let Some(point_actor) = self.object_actors.get(&old_best_point).copied() else {
+            return Ok(None);
+        };
+        let point_class = self
+            .actor_classes
+            .get(&point_actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {point_actor} has no class"))?;
+        let point_class = self
+            .resolved_object(&point_class)
+            .map_err(|error| error.to_string())?;
+        let mut point_instance = self
+            .instances
+            .remove(&point_actor)
+            .ok_or_else(|| format!("navigation point {point_actor} instance is active"))?;
+        let pawn_object = self
+            .actor_objects
+            .get(&pawn)
+            .cloned()
+            .ok_or_else(|| format!("FindPathTo pawn {pawn} has no object identity"))?;
+        let pawn_handle = self
+            .object_handle(pawn_object)
+            .map_err(|error| error.to_string())?;
+        let special = self.call_navigation_event(
+            point_actor,
+            &point_class,
+            &mut point_instance,
+            "SpecialHandling",
+            &[Value::Object(pawn_handle)],
+            actions,
+            depth,
+        );
+        self.instances.insert(point_actor, point_instance);
+        let Some(special) = special? else {
+            if self.actor_object(pawn_class, pawn_instance, "SpecialGoal")?
+                == Some(old_best_point.clone())
+            {
+                self.set_actor_stored(
+                    pawn_class,
+                    pawn_instance,
+                    "SpecialGoal",
+                    StoredValue::Object(None),
+                )?;
+            }
+            return Ok(Some(old_best_point));
+        };
+        let best_point = match special {
+            Value::Object(handle) if handle != 0 => self
+                .object_for_handle(handle)
+                .map_err(|error| error.to_string())
+                .ok()
+                .filter(|point| self.object_actors.contains_key(point)),
+            Value::None | Value::Object(_) => None,
+            _ => None,
+        };
+        let best_point = self
+            .actor_bool(pawn_class, pawn_instance, "bCanDoSpecial")?
+            .then_some(best_point)
+            .flatten();
+        self.set_actor_stored(
+            pawn_class,
+            pawn_instance,
+            "SpecialGoal",
+            StoredValue::Object(best_point.clone()),
+        )?;
+        let Some(best_point) = best_point else {
+            return Ok(None);
+        };
+        if best_point != old_best_point {
+            let Some(best_actor) = self.object_actors.get(&best_point).copied() else {
+                return Ok(None);
+            };
+            if !self.actor_reachable(pawn, pawn_class, pawn_instance, best_actor)? {
+                self.set_route_cache(pawn_class, pawn_instance, &[])?;
+                return Ok(None);
+            }
+        }
+        Ok(Some(best_point))
+    }
+
+    fn call_navigation_event(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        event: &str,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+    ) -> std::result::Result<Option<Value>, String> {
+        if event_disabled(
+            &self.disabled_events,
+            actor,
+            self.actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref()),
+            event,
+        ) || self
+            .state_ignores_event(actor, class, event)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(None);
+        }
+        let Some(function) = self
+            .find_actor_function(
+                actor,
+                ResolvedObject {
+                    package: Arc::clone(&class.package),
+                    export_index: class.export_index,
+                },
+                event,
+                0,
+            )
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        let state_revision = self.state_revision(actor);
+        let value = self
+            .execute_function(
+                actor,
+                class,
+                &function,
+                arguments,
+                instance,
+                actions,
+                depth + 1,
+            )
+            .map_err(|error| error.to_string())?;
+        if self.state_revision(actor) != state_revision {
+            self.execute_ready_state(actor, class, instance, actions)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(Some(value))
+    }
+
+    fn set_route_cache(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        route: &[ObjectId],
+    ) -> std::result::Result<(), String> {
+        let Some(field) = self
+            .find_property(class, "RouteCache", 0)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(());
+        };
+        let Some(StoredValue::Array(cache)) = self
+            .instance_property(class, instance, "RouteCache")
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(());
+        };
+        let cache = cache
+            .into_iter()
+            .enumerate()
+            .map(|(index, _)| StoredValue::Object(route.get(index).cloned()))
+            .collect();
+        instance.insert(field, StoredValue::Array(cache));
+        Ok(())
+    }
+
+    fn set_navigation_endpoint(
+        &mut self,
+        actor: usize,
+        endpoint: bool,
+    ) -> std::result::Result<(), String> {
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {actor} has no class"))?;
+        let class = self
+            .resolved_object(&class)
+            .map_err(|error| error.to_string())?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| format!("navigation point {actor} instance is active"))?;
+        let result = self.set_optional_actor_value(
+            &class,
+            &mut instance,
+            "bEndPoint",
+            Value::Bool(endpoint),
+        );
+        self.instances.insert(actor, instance);
+        result
+    }
+
+    fn navigation_point_allowed(
+        &mut self,
+        point: &ObjectId,
+        is_player: bool,
+    ) -> std::result::Result<bool, String> {
+        let Some(actor) = self.object_actors.get(point).copied() else {
+            return Ok(false);
+        };
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {actor} has no class"))?;
+        let class = self
+            .resolved_object(&class)
+            .map_err(|error| error.to_string())?;
+        if !self
+            .class_has_name(&class, "NavigationPoint")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {actor} instance is active"))?;
+        Ok(!self
+            .optional_actor_bool(&class, &instance, "bPlayerOnly")?
+            .unwrap_or(false)
+            || is_player)
+    }
+
+    fn navigation_point_location(&mut self, point: &ObjectId) -> std::result::Result<Vec3, String> {
+        let Some(actor) = self.object_actors.get(point).copied() else {
+            return Err("FindPathTo route has an unregistered navigation point".to_owned());
+        };
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {actor} has no class"))?;
+        let class = self
+            .resolved_object(&class)
+            .map_err(|error| error.to_string())?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("navigation point {actor} instance is active"))?;
+        Ok(Vec3::from_array(
+            self.actor_vector(&class, &instance, "Location")?,
+        ))
+    }
+
+    fn set_optional_actor_value(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        name: &str,
+        value: Value,
+    ) -> std::result::Result<(), String> {
+        let Some(field) = self
+            .find_property(class, name, 0)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(());
+        };
+        instance.insert(field, StoredValue::Value(value));
+        Ok(())
     }
 
     fn find_stair_rotation(

@@ -22,7 +22,7 @@ use super::{
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
-use openhp1_map::{BspNode, Model, PrimitiveBounds};
+use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
 use openhp1_physics::BspCollision;
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -476,6 +476,90 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     ));
     assert!(runtime.initialize_player_hud().unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
+}
+
+fn solid_box_collision() -> Arc<BspCollision> {
+    let mut model = Model {
+        bounds: PrimitiveBounds {
+            minimum: Vec3::ZERO,
+            maximum: Vec3::ZERO,
+            valid: false,
+            sphere: [0.0; 4],
+        },
+        vectors: Vec::new(),
+        points: Vec::new(),
+        nodes: Vec::new(),
+        surfaces: Vec::new(),
+        vertices: Vec::new(),
+        shared_side_count: 0,
+        zones: Vec::new(),
+        polys: ObjectReference::None,
+        light_maps: Vec::new(),
+        light_bits: Vec::new(),
+        collision_bounds: Vec::new(),
+        leaf_hulls: Vec::new(),
+        leaves: Vec::new(),
+        lights: Vec::new(),
+        root_outside: true,
+        linked: false,
+    };
+    model.surfaces.push(BspSurface {
+        texture: ObjectReference::None,
+        poly_flags: PolyFlags::HIGH_LEDGE,
+        base_point: 0,
+        normal: 0,
+        texture_u: 0,
+        texture_v: 0,
+        light_map: -1,
+        brush_poly: -1,
+        pan_u: 0,
+        pan_v: 0,
+        brush_actor: ObjectReference::None,
+    });
+    model.surfaces.push(BspSurface {
+        poly_flags: PolyFlags::default(),
+        ..model.surfaces[0].clone()
+    });
+    model.points = vec![
+        Vec3::new(10.0, -100.0, -100.0),
+        Vec3::new(10.0, 100.0, -100.0),
+        Vec3::new(10.0, 100.0, 100.0),
+        Vec3::new(10.0, -100.0, 100.0),
+    ];
+    model.vertices = (0..4).map(|point| BspVertex { point, side: -1 }).collect();
+    model.nodes = [
+        [1.0, 0.0, 0.0, 10.0],
+        [-1.0, 0.0, 0.0, 10.0],
+        [0.0, 1.0, 0.0, 10.0],
+        [0.0, -1.0, 0.0, 10.0],
+        [0.0, 0.0, 1.0, 10.0],
+        [0.0, 0.0, -1.0, 10.0],
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, plane)| BspNode {
+        plane,
+        zone_mask: 0,
+        flags: 0,
+        vertex_pool: 0,
+        surface: if index == 0 { 0 } else { 1 },
+        back: -1,
+        front: -1,
+        coplanar: -1,
+        collision_bound: if index == 0 { 0 } else { -1 },
+        render_bound: -1,
+        zones: [0; 2],
+        vertex_count: if index == 0 { 4 } else { 0 },
+        leaves: [0; 2],
+    })
+    .collect();
+    model.leaf_hulls = vec![0, 1, 2, 3, 4, 5, -1];
+    model.leaf_hulls.extend(
+        [-10.0_f32, -10.0, -10.0, 10.0, 10.0, 10.0]
+            .map(f32::to_bits)
+            .map(|value| value as i32),
+    );
+    Arc::new(BspCollision::from_model(&model).unwrap())
 }
 
 #[test]
@@ -3857,6 +3941,539 @@ fn navigation_uses_the_shortest_unpruned_reachable_step() {
         Some(short)
     );
     assert_eq!(next_navigation_step(&specs, &start, &target, 50, 20), None);
+}
+
+#[test]
+fn find_path_to_dispatches_numeric_native_through_navigation_graph() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-find-path-to-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    let navigation_path = system.join("Navigation.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+    fs::write(
+        &navigation_path,
+        synthetic_runtime_package_for("NavigationPoint"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let navigation_package = runtime.packages.load_path(&navigation_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    let navigation_class_id = object_id(&navigation_package, 0);
+    runtime.scripts.insert(
+        navigation_class_id.clone(),
+        Arc::new(ScriptExport {
+            export_index: 0,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 0,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                raw_len: 0,
+                bytes: Vec::new(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    runtime.scripts.insert(
+        class_id.clone(),
+        Arc::new(ScriptExport {
+            export_index: 0,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 0,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                raw_len: 0,
+                bytes: Vec::new(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    let fields = [
+        "Location",
+        "CollisionRadius",
+        "CollisionHeight",
+        "CollisionWidth",
+        "Rotation",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "BaseEyeHeight",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "bStatic",
+        "bMovable",
+        "Physics",
+        "bIsPlayer",
+        "bPlayerOnly",
+        "Paths",
+        "PrunedPaths",
+        "bCanDoSpecial",
+        "SpecialGoal",
+        "RouteCache",
+        "bEndPoint",
+        "bSpecialCost",
+        "ExtraCost",
+        "cost",
+        "ZoneGravity",
+        "ZoneVelocity",
+        "ZoneGroundFriction",
+        "ZoneFluidFriction",
+        "ZoneTerminalVelocity",
+        "bWaterZone",
+        "bPainZone",
+        "DamageType",
+        "ReducedDamageType",
+        "bCanSwim",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            name,
+            ObjectId {
+                package: Arc::from("<find-path-to-test>"),
+                export_index: index,
+            },
+        )
+    })
+    .collect::<HashMap<_, _>>();
+    for class in [&class_id, &navigation_class_id] {
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+        }
+        runtime
+            .fields
+            .insert((class.clone(), "mainscale".to_owned()), None);
+    }
+    let pawn = runtime_actor_id(1);
+    let start = runtime_actor_id(2);
+    let short = runtime_actor_id(3);
+    let long = runtime_actor_id(4);
+    let target = runtime_actor_id(5);
+    let alternate = navigation_class_id.clone();
+    for (actor, object) in [
+        (1, pawn),
+        (2, start.clone()),
+        (3, short.clone()),
+        (4, long.clone()),
+        (5, target.clone()),
+        (6, alternate.clone()),
+    ] {
+        runtime.actor_classes.insert(
+            actor,
+            if actor == 1 {
+                class_id.clone()
+            } else {
+                navigation_class_id.clone()
+            },
+        );
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object);
+    }
+    let instance = |location| {
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector(location)),
+            ),
+            (
+                fields["CollisionRadius"].clone(),
+                StoredValue::Value(Value::Float(5.0)),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(5.0)),
+            ),
+            (
+                fields["CollisionWidth"].clone(),
+                StoredValue::Value(Value::Float(5.0)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["CollideType"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["bCollideActors"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bBlockActors"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bBlockPlayers"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (fields["Brush"].clone(), StoredValue::Object(None)),
+            (
+                fields["PrePivot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["BaseEyeHeight"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["bCollideWorld"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bCollideWhenPlacing"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bStatic"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bMovable"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(4)),
+            ),
+            (
+                fields["bIsPlayer"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bPlayerOnly"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (fields["Paths"].clone(), StoredValue::Array(Vec::new())),
+            (
+                fields["PrunedPaths"].clone(),
+                StoredValue::Array(Vec::new()),
+            ),
+            (
+                fields["bCanDoSpecial"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bCanSwim"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["ReducedDamageType"].clone(),
+                StoredValue::Value(Value::NameText("None".to_owned())),
+            ),
+            (fields["SpecialGoal"].clone(), StoredValue::Object(None)),
+            (
+                fields["RouteCache"].clone(),
+                StoredValue::Array(vec![StoredValue::Object(None); 16]),
+            ),
+            (
+                fields["bEndPoint"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bSpecialCost"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["ExtraCost"].clone(),
+                StoredValue::Value(Value::Int(0)),
+            ),
+            (fields["cost"].clone(), StoredValue::Value(Value::Int(0))),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    runtime.instances.insert(2, instance([0.0; 3]));
+    runtime.instances.insert(3, instance([20.0, 0.0, 0.0]));
+    runtime.instances.insert(4, instance([60.0, 0.0, 0.0]));
+    runtime.instances.insert(5, instance([100.0, 0.0, 0.0]));
+    runtime.instances.insert(6, instance([2_000.0, 0.0, 0.0]));
+    let mut next_spec_index = 0;
+    let mut spec = |start, end, distance| {
+        let index = next_spec_index;
+        next_spec_index += 1;
+        NavigationReachSpec {
+            index,
+            distance,
+            start,
+            end,
+            collision_radius: 20,
+            collision_height: 20,
+            pruned: false,
+        }
+    };
+    runtime.reach_specs = vec![
+        spec(start.clone(), long.clone(), 10),
+        spec(long.clone(), target.clone(), 10),
+        spec(start.clone(), short.clone(), 3),
+        spec(short.clone(), target.clone(), 3),
+    ];
+    for (actor, paths) in [(2, vec![0, 2]), (3, vec![3]), (4, vec![1]), (5, vec![])] {
+        runtime.instances.get_mut(&actor).unwrap().insert(
+            fields["Paths"].clone(),
+            StoredValue::Array(
+                paths
+                    .into_iter()
+                    .map(|path| StoredValue::Value(Value::Int(path)))
+                    .collect(),
+            ),
+        );
+    }
+
+    let mut bytes = vec![0x04, 0x62, 0x06, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.extend([0x27, 0x28, 0x16]);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let execute = |runtime: &mut ScriptRuntime, destination, pawn_location, can_do_special| {
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Vector(destination));
+        let mut pawn_instance = instance(pawn_location);
+        pawn_instance.insert(
+            fields["bCanDoSpecial"].clone(),
+            StoredValue::Value(Value::Bool(can_do_special)),
+        );
+        let result = frame.execute(|call, arguments| {
+            assert_eq!(call, FunctionCall::Native(0x206));
+            runtime.native(
+                1,
+                &class,
+                &package,
+                0x206,
+                arguments,
+                &mut pawn_instance,
+                &mut Vec::new(),
+                0,
+            )
+        });
+        (result, pawn_instance)
+    };
+    let expected = runtime.object_handle(target.clone()).unwrap();
+    assert_eq!(
+        execute(&mut runtime, [100.0, 0.0, 0.0], [0.0; 3], true)
+            .0
+            .unwrap(),
+        Value::Object(expected)
+    );
+    assert_eq!(
+        execute(&mut runtime, [700.0, 0.0, 0.0], [0.0; 3], true)
+            .0
+            .unwrap(),
+        Value::Object(0)
+    );
+    // The closest destination node is BSP-occluded. The next visible target
+    // is routed from the farther endpoint because the nearer node fails the
+    // full actorReachable check through its pruned authored reachspec.
+    let level = runtime_actor_id(0);
+    runtime.actor_classes.insert(0, class_id.clone());
+    runtime.object_actors.insert(level.clone(), 0);
+    runtime.actor_objects.insert(0, level);
+    runtime.instances.insert(
+        0,
+        [
+            (
+                fields["ZoneGravity"].clone(),
+                Value::Vector([0.0, 0.0, -950.0]),
+            ),
+            (fields["ZoneVelocity"].clone(), Value::Vector([0.0; 3])),
+            (fields["ZoneGroundFriction"].clone(), Value::Float(1.0)),
+            (fields["ZoneFluidFriction"].clone(), Value::Float(1.0)),
+            (
+                fields["ZoneTerminalVelocity"].clone(),
+                Value::Float(2_500.0),
+            ),
+            (fields["bWaterZone"].clone(), Value::Bool(false)),
+            (fields["bPainZone"].clone(), Value::Bool(false)),
+            (
+                fields["DamageType"].clone(),
+                Value::NameText("None".to_owned()),
+            ),
+        ]
+        .into_iter()
+        .map(|(field, value)| (field, StoredValue::Value(value)))
+        .collect(),
+    );
+    runtime.collision = Some(solid_box_collision());
+    runtime.level_info = Some(0);
+    runtime.instances.insert(2, instance([-800.0, 0.0, 0.0]));
+    runtime.instances.insert(3, instance([100.0, 0.0, 0.0]));
+    runtime.instances.insert(4, instance([-700.0, 0.0, 0.0]));
+    runtime.instances.insert(5, instance([-250.0, 0.0, 0.0]));
+    let mut pruned = spec(target.clone(), start.clone(), 1);
+    pruned.pruned = true;
+    runtime.reach_specs = vec![
+        pruned,
+        spec(start.clone(), long.clone(), 1),
+        spec(long.clone(), target.clone(), 1),
+    ];
+    for (actor, paths) in [(2, vec![5]), (3, vec![]), (4, vec![6]), (5, vec![4])] {
+        runtime.instances.get_mut(&actor).unwrap().insert(
+            fields["Paths"].clone(),
+            StoredValue::Array(
+                paths
+                    .into_iter()
+                    .map(|path| StoredValue::Value(Value::Int(path)))
+                    .collect(),
+            ),
+        );
+    }
+    assert!(
+        runtime
+            .actor_reachable(1, &class, &instance([-1_300.0, 0.0, 0.0]), 4)
+            .unwrap()
+    );
+    assert_eq!(
+        runtime
+            .fast_trace_native(
+                &class,
+                &[
+                    Value::Vector([0.0, 0.0, 0.0]),
+                    Value::Vector([100.0, 0.0, 0.0]),
+                ],
+                &instance([-1_300.0, 0.0, 0.0]),
+            )
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        runtime
+            .fast_trace_native(
+                &class,
+                &[
+                    Value::Vector([0.0, 0.0, 0.0]),
+                    Value::Vector([-250.0, 0.0, 0.0]),
+                ],
+                &instance([-1_300.0, 0.0, 0.0]),
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    let expected_long = runtime.object_handle(long.clone()).unwrap();
+    assert_eq!(
+        execute(&mut runtime, [0.0, 0.0, 0.0], [-1_300.0, 0.0, 0.0], true)
+            .0
+            .unwrap(),
+        Value::Object(expected_long)
+    );
+    let special = ResolvedObject {
+        package: Arc::clone(&navigation_package),
+        export_index: 1,
+    };
+    runtime
+        .class_defaults
+        .insert(navigation_class_id.clone(), InstanceState::default());
+    runtime.scripts.insert(
+        object_id(&navigation_package, special.export_index),
+        Arc::new(ScriptExport {
+            export_index: special.export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: 6,
+                bytes: vec![0x04, 0x20, 1, 0, 0, 0],
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(navigation_class_id, None, "SpecialHandling", 0),
+        Some(object_id(&navigation_package, special.export_index)),
+    );
+    let (result, pawn_instance) =
+        execute(&mut runtime, [0.0, 0.0, 0.0], [-1_300.0, 0.0, 0.0], true);
+    assert_eq!(result.unwrap(), Value::Object(0));
+    assert_eq!(
+        pawn_instance.get(&fields["SpecialGoal"]),
+        Some(&StoredValue::Object(Some(alternate)))
+    );
+    assert!(matches!(
+        pawn_instance.get(&fields["RouteCache"]),
+        Some(StoredValue::Array(entries))
+            if entries.iter().all(|entry| matches!(entry, StoredValue::Object(None)))
+    ));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

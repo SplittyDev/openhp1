@@ -130,6 +130,18 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
   before script ticks and preserve the displayed tween interpolation.
 - HP1's native `FindPath` follows the level's serialized reach specifications,
   respecting pruned links and the pawn's collision size.
+- Pawn `FindPathTo` clears authored navigation endpoint/cost state unless its
+  optional `bClearPaths` is false. It sorts player-eligible navigation points
+  within 500 units, checks only the nearest four with `FastTrace` from the
+  requested destination to each node's eye height, and then uses the first
+  visible candidate. It marks up to eight endpoints within 1000 units only
+  when the full `ActorReachable` path accepts them, then searches reachspecs
+  backward from the target while preserving pruned, collision-size, and
+  player-only eligibility. The resulting route cache is passed through the
+  first node's authored `SpecialHandling`; its `bCanDoSpecial` and
+  `SpecialGoal` state control the returned next actor. If that handler selects
+  an unreachable different actor, the guarded nested navigation lookup clears
+  `RouteCache` and returns none while preserving `SpecialGoal`.
 - `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions; its HP1
   root-bone overload resolves the parent's skeletal bone and reports that
   bone's animation channel instead.

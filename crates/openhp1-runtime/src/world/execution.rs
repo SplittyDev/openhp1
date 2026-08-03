@@ -279,7 +279,7 @@ impl ScriptRuntime {
         Err(DispatchError::CallDepth)
     }
 
-    fn state_revision(&self, actor: usize) -> u64 {
+    pub(super) fn state_revision(&self, actor: usize) -> u64 {
         self.state_revisions.get(&actor).copied().unwrap_or(0)
     }
 
