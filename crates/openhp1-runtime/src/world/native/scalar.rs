@@ -52,6 +52,7 @@ enum ScalarNative {
     Subtract_PreVector,
     Multiply_VectorFloat,
     Multiply_FloatVector,
+    Multiply_VectorVector,
     Divide_VectorFloat,
     Add_VectorVector,
     Subtract_VectorVector,
@@ -134,6 +135,7 @@ impl TryFrom<u16> for ScalarNative {
             0xd3 => Ok(Self::Subtract_PreVector),
             0xd4 => Ok(Self::Multiply_VectorFloat),
             0xd5 => Ok(Self::Multiply_FloatVector),
+            0x128 => Ok(Self::Multiply_VectorVector),
             0xd6 => Ok(Self::Divide_VectorFloat),
             0xd7 => Ok(Self::Add_VectorVector),
             0xd8 => Ok(Self::Subtract_VectorVector),
@@ -397,6 +399,9 @@ pub(in crate::world) fn scalar_native(
         (ScalarNative::Multiply_VectorFloat, [Value::Vector(value), Value::Float(scale)])
         | (ScalarNative::Multiply_FloatVector, [Value::Float(scale), Value::Vector(value)]) => {
             Value::Vector([value[0] * scale, value[1] * scale, value[2] * scale])
+        }
+        (ScalarNative::Multiply_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Vector([left[0] * right[0], left[1] * right[1], left[2] * right[2]])
         }
         (ScalarNative::Divide_VectorFloat, [Value::Vector(value), Value::Float(divisor)]) => {
             Value::Vector([value[0] / divisor, value[1] / divisor, value[2] / divisor])

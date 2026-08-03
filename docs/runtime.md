@@ -43,6 +43,7 @@ Random natives share the runtime's deterministic stream. `RotRand` draws yaw,
 then pitch, from the full `0..=65535` Unreal angle range; its optional `bRoll`
 defaults to false and draws roll from that same stream only when true.
 `Sin`, `Cos`, and `Tan` take radians.
+`vector * vector` multiplies the matching X, Y, and Z components.
 
 ## State execution
 
