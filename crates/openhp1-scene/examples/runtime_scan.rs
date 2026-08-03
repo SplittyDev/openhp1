@@ -339,6 +339,7 @@ fn apply_actions(
                 stats.sounds += 1;
             }
             ActorAction::StopSound { .. } => {}
+            ActorAction::ClientTravel { .. } => {}
             ActorAction::SpawnActor {
                 actor,
                 name,

@@ -27,16 +27,20 @@ static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
 fn synthetic_runtime_package() -> Vec<u8> {
     const HEADER_SIZE: usize = 44;
     let name_offset = HEADER_SIZE;
-    let export_offset = name_offset + b"Test\0".len() + size_of::<u32>();
+    let export_offset = name_offset
+        + b"PlayerPawn\0".len()
+        + size_of::<u32>()
+        + b"ClientTravel\0".len()
+        + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
     bytes.extend(61_u16.to_le_bytes());
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        1,
+        2,
         name_offset as i32,
-        1,
+        2,
         export_offset as i32,
         0,
         export_offset as i32,
@@ -45,13 +49,17 @@ fn synthetic_runtime_package() -> Vec<u8> {
     ] {
         bytes.extend(value.to_le_bytes());
     }
-    bytes.extend(b"Test\0");
-    bytes.extend(0_u32.to_le_bytes());
-    bytes.extend([0, 0]);
-    bytes.extend(0_i32.to_le_bytes());
-    bytes.push(0);
-    bytes.extend(0_u32.to_le_bytes());
-    bytes.push(0);
+    for name in [b"PlayerPawn\0".as_slice(), b"ClientTravel\0".as_slice()] {
+        bytes.extend(name);
+        bytes.extend(0_u32.to_le_bytes());
+    }
+    for (outer, name) in [(0_i32, 0_u8), (1, 1)] {
+        bytes.extend([0, 0]);
+        bytes.extend(outer.to_le_bytes());
+        bytes.push(name);
+        bytes.extend(0_u32.to_le_bytes());
+        bytes.push(0);
+    }
     bytes
 }
 
@@ -346,21 +354,99 @@ fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
 }
 
 #[test]
+fn client_travel_named_native_dispatches_through_function_execution() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-client-travel-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    runtime.scripts.insert(
+        object_id(&package, 1),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 1,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: openhp1_script::Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+    assert_eq!(
+        runtime
+            .execute_actor_function(
+                17,
+                &class,
+                &function,
+                &[
+                    Value::String("Lev2_HogFront?entry".to_owned()),
+                    Value::Byte(2),
+                    Value::Bool(true),
+                ],
+            )
+            .unwrap(),
+        [ActorAction::ClientTravel {
+            actor: 17,
+            url: "Lev2_HogFront?entry".to_owned(),
+            travel_type: 2,
+            transfer_items: true,
+        }]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn named_native_shims_validate_their_engine_calls() {
+    let mut actions = Vec::new();
     assert_eq!(
         execution::named_native(
+            17,
             "PlayerPawn",
             "ConsoleCommand",
-            &[Value::String("GETPING".to_owned())]
+            &[Value::String("GETPING".to_owned())],
+            &mut actions,
         ),
         Some(Value::String(String::new()))
     );
     assert_eq!(
-        execution::named_native("Decal", "DetachDecal", &[]),
+        execution::named_native(17, "Decal", "DetachDecal", &[], &mut actions),
         Some(Value::None)
     );
     assert_eq!(
-        execution::named_native("PlayerPawn", "ConsoleCommand", &[]),
+        execution::named_native(17, "PlayerPawn", "ConsoleCommand", &[], &mut actions),
         None
     );
 }

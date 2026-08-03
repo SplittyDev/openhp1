@@ -414,7 +414,7 @@ impl ScriptRuntime {
                             && self.packages.load(skin_package).is_ok(),
                     ));
                 }
-                if let Some(value) = named_native(class, function_name, arguments) {
+                if let Some(value) = named_native(actor, class, function_name, arguments, actions) {
                     return Ok(value);
                 }
                 return Err(DispatchError::UnimplementedNamedNative {
@@ -542,7 +542,29 @@ fn is_unsupported_scene_property(name: &str) -> bool {
     .any(|property| name.eq_ignore_ascii_case(property))
 }
 
-pub(super) fn named_native(class: &str, function: &str, arguments: &[Value]) -> Option<Value> {
+pub(super) fn named_native(
+    actor: usize,
+    class: &str,
+    function: &str,
+    arguments: &[Value],
+    actions: &mut Vec<ActorAction>,
+) -> Option<Value> {
+    if class.eq_ignore_ascii_case("PlayerPawn")
+        && function.eq_ignore_ascii_case("ClientTravel")
+        && let [
+            Value::String(url),
+            Value::Byte(travel_type),
+            Value::Bool(transfer_items),
+        ] = arguments
+    {
+        actions.push(ActorAction::ClientTravel {
+            actor,
+            url: url.clone(),
+            travel_type: *travel_type,
+            transfer_items: *transfer_items,
+        });
+        return Some(Value::None);
+    }
     if class.eq_ignore_ascii_case("PlayerPawn")
         && function.eq_ignore_ascii_case("ConsoleCommand")
         && matches!(arguments, [Value::String(_)])
