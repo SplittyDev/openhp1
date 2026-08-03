@@ -158,23 +158,20 @@ impl PackageStore {
             ObjectReference::Import(import_index) => {
                 let target = import_target(source.summary(), import_index)?;
                 let package = self.load(&target.package)?;
-                let export_index = find_export(
-                    package.summary(),
-                    &target.class,
-                    &target.object,
-                    &target.groups,
-                )
-                .ok_or_else(|| ResolveError::MissingObject {
-                    package: target.package,
-                    class: target.class,
-                    path: target
-                        .groups
-                        .iter()
-                        .chain(std::iter::once(&target.object))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join("."),
-                })?;
+                let export_index =
+                    find_import_export(package.summary(), &target).ok_or_else(|| {
+                        ResolveError::MissingObject {
+                            package: target.package,
+                            class: target.class,
+                            path: target
+                                .groups
+                                .iter()
+                                .map(|group| group.name.clone())
+                                .chain(std::iter::once(target.object.clone()))
+                                .collect::<Vec<_>>()
+                                .join("."),
+                        }
+                    })?;
                 Ok(Some(ResolvedObject {
                     package,
                     export_index,
@@ -186,8 +183,13 @@ impl PackageStore {
 
 struct ImportTarget {
     package: String,
-    groups: Vec<String>,
+    groups: Vec<ImportGroup>,
     object: String,
+    class: String,
+}
+
+struct ImportGroup {
+    name: String,
     class: String,
 }
 
@@ -214,16 +216,19 @@ fn import_target(summary: &PackageSummary, import_index: usize) -> ResolveResult
                         index,
                         import_count: summary.imports.len(),
                     })?;
-                let name = summary.name(entry.object_name).to_owned();
+                let group = ImportGroup {
+                    name: summary.name(entry.object_name).to_owned(),
+                    class: summary.name(entry.class_name).to_owned(),
+                };
                 if entry.outer == ObjectReference::None {
                     return Ok(ImportTarget {
-                        package: name,
+                        package: group.name,
                         groups,
                         object,
                         class,
                     });
                 }
-                groups.push(name);
+                groups.push(group);
                 outer = entry.outer;
             }
             ObjectReference::None | ObjectReference::Export(_) => {
@@ -240,16 +245,54 @@ fn find_export(
     object: &str,
     groups: &[String],
 ) -> Option<usize> {
-    summary.exports.iter().position(|export| {
-        summary
-            .name(export.object_name)
-            .eq_ignore_ascii_case(object)
-            && (summary
-                .class_name(export)
-                .is_some_and(|actual| actual.eq_ignore_ascii_case(class))
-                || (class.eq_ignore_ascii_case("Class") && export.class == ObjectReference::None))
-            && export_groups(summary, export).is_some_and(|actual| equal_names(&actual, groups))
+    summary
+        .exports
+        .iter()
+        .position(|export| export_matches(summary, export, class, object, groups))
+}
+
+fn find_import_export(summary: &PackageSummary, target: &ImportTarget) -> Option<usize> {
+    let groups = target
+        .groups
+        .iter()
+        .map(|group| group.name.clone())
+        .collect::<Vec<_>>();
+    find_export(summary, &target.class, &target.object, &groups).or_else(|| {
+        let mut matches = summary
+            .exports
+            .iter()
+            .enumerate()
+            .filter_map(|(index, export)| {
+                let actual = export_groups(summary, export)?;
+                // HP1 imports can include parent Package objects the target package omits.
+                (actual.len() < groups.len()
+                    && equal_names(&actual, &groups[..actual.len()])
+                    && target.groups[actual.len()..]
+                        .iter()
+                        .all(|group| group.class.eq_ignore_ascii_case("Package"))
+                    && export_matches(summary, export, &target.class, &target.object, &actual))
+                .then_some(index)
+            });
+        let export_index = matches.next()?;
+        matches.next().is_none().then_some(export_index)
     })
+}
+
+fn export_matches(
+    summary: &PackageSummary,
+    export: &Export,
+    class: &str,
+    object: &str,
+    groups: &[String],
+) -> bool {
+    summary
+        .name(export.object_name)
+        .eq_ignore_ascii_case(object)
+        && (summary
+            .class_name(export)
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(class))
+            || (class.eq_ignore_ascii_case("Class") && export.class == ObjectReference::None))
+        && export_groups(summary, export).is_some_and(|actual| equal_names(&actual, groups))
 }
 
 fn export_groups(summary: &PackageSummary, export: &Export) -> Option<Vec<String>> {
@@ -470,7 +513,9 @@ mod tests {
 
     use crate::{
         Export, Import, NameEntry, ObjectReference, PackageHeader, PackageSummary,
-        resolver::{core_system_paths, find_export, localization_value},
+        resolver::{
+            core_system_paths, find_export, find_import_export, import_target, localization_value,
+        },
     };
 
     #[test]
@@ -596,6 +641,106 @@ mod tests {
             }],
         };
         assert_eq!(find_export(&summary, "Class", "lamppost", &[]), Some(0));
+    }
+
+    #[test]
+    fn resolves_unique_sound_export_beneath_a_missing_parent_package() {
+        let names: Vec<_> = [
+            "None",
+            "Package",
+            "Sound",
+            "HPSounds",
+            "Hub3_sfx",
+            "Hub5_sfx",
+            "Vold_Pillar_Thump_06",
+        ]
+        .into_iter()
+        .map(|value| NameEntry {
+            value: value.into(),
+            flags: 0,
+        })
+        .collect();
+        let header = PackageHeader {
+            version: 76,
+            licensee_version: 0,
+            package_flags: 0,
+            name_count: 7,
+            name_offset: 0,
+            export_count: 0,
+            export_offset: 0,
+            import_count: 4,
+            import_offset: 0,
+            history: crate::HeaderHistory::Generations {
+                guid: [0; 16],
+                generations: Vec::new(),
+            },
+        };
+        let source = PackageSummary {
+            source: Arc::from("Lev3_Troll"),
+            header: header.clone(),
+            names: names.clone(),
+            imports: vec![
+                Import {
+                    class_package: 0,
+                    class_name: 1,
+                    outer: ObjectReference::None,
+                    object_name: 3,
+                },
+                Import {
+                    class_package: 0,
+                    class_name: 1,
+                    outer: ObjectReference::Import(0),
+                    object_name: 4,
+                },
+                Import {
+                    class_package: 0,
+                    class_name: 1,
+                    outer: ObjectReference::Import(1),
+                    object_name: 5,
+                },
+                Import {
+                    class_package: 0,
+                    class_name: 2,
+                    outer: ObjectReference::Import(2),
+                    object_name: 6,
+                },
+            ],
+            exports: vec![],
+        };
+        let target = PackageSummary {
+            source: Arc::from("HPSounds"),
+            header,
+            names,
+            imports: vec![Import {
+                class_package: 0,
+                class_name: 0,
+                outer: ObjectReference::None,
+                object_name: 2,
+            }],
+            exports: vec![
+                Export {
+                    class: ObjectReference::None,
+                    super_class: ObjectReference::None,
+                    outer: ObjectReference::None,
+                    object_name: 5,
+                    object_flags: 0,
+                    serial_size: 0,
+                    serial_offset: None,
+                },
+                Export {
+                    class: ObjectReference::Import(0),
+                    super_class: ObjectReference::None,
+                    outer: ObjectReference::Export(0),
+                    object_name: 6,
+                    object_flags: 0,
+                    serial_size: 0,
+                    serial_offset: None,
+                },
+            ],
+        };
+
+        let import = import_target(&source, 3).unwrap();
+        assert_eq!(find_import_export(&target, &import), Some(1));
     }
 
     #[test]
