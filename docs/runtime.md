@@ -73,6 +73,8 @@ Integer scalar shifts preserve UE1's 32-bit behavior: shift counts are masked
 to five bits, left-shift results wrap, and right shifts retain sign extension.
 Native `MultiplyEqual_IntFloat` (`0x09f`) stores the floating-point product
 back in its integer target, truncating toward zero.
+Native `SubtractEqual_IntInt` (`0x0a2`) stores and returns the wrapped 32-bit
+difference.
 
 ## Animation actions
 

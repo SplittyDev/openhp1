@@ -547,6 +547,30 @@ fn compound_native_assignment_preserves_the_target_slot() {
 }
 
 #[test]
+fn subtract_equal_int_int_dispatches_and_stores_the_wrapped_difference() {
+    let mut bytes = vec![0xa2, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.push(0x1d);
+    bytes.extend(1_i32.to_le_bytes());
+    bytes.extend([0x16, 0x04, 0x00]);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    frame.set_local(7, Value::Int(i32::MIN));
+
+    assert_eq!(
+        frame.execute(|_, _| unreachable!()).unwrap(),
+        Value::Int(i32::MAX)
+    );
+    assert_eq!(frame.local(7), Some(&Value::Int(i32::MAX)));
+}
+
+#[test]
 fn multiply_equal_int_float_dispatches_and_stores_the_truncated_product() {
     let mut bytes = vec![0x9f, 0x00];
     bytes.extend(7_i32.to_le_bytes());
