@@ -266,6 +266,12 @@ impl BspCollision {
         self.sweep_shape(start, end, SweepShape::Cylinder { radius, height })
     }
 
+    pub fn overlaps_aabb(&self, location: Vec3, extents: Vec3) -> bool {
+        location.is_finite()
+            && extents.is_finite()
+            && !extents.cmplt(Vec3::ZERO).any()
+            && self.overlaps_shape(location, SweepShape::Aabb(extents))
+    }
     pub fn overlaps_cylinder(&self, location: Vec3, radius: f32, height: f32) -> bool {
         location.is_finite()
             && radius.is_finite()
@@ -446,23 +452,52 @@ impl BspCollision {
 
     fn overlaps_shape(&self, location: Vec3, shape: SweepShape) -> bool {
         let extents = shape.bounds();
-        let minimum = location - extents;
-        let maximum = location + extents;
+        let query_bounds = Aabb {
+            minimum: location - extents,
+            maximum: location + extents,
+        };
         let candidate_count = self
             .hulls_by_min_x
-            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= maximum.x);
-        self.hulls_by_min_x[..candidate_count].iter().any(|&index| {
-            let hull = &self.hulls[index];
-            hull.bounds.maximum.x >= minimum.x
-                && hull.bounds.maximum.y >= minimum.y
-                && hull.bounds.minimum.y <= maximum.y
-                && hull.bounds.maximum.z >= minimum.z
-                && hull.bounds.minimum.z <= maximum.z
-                && hull.planes.iter().all(|plane| {
-                    plane.plane.normal.dot(location) - plane.plane.distance
-                        <= shape.support(plane.plane.normal)
-                })
-        })
+            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= query_bounds.maximum.x);
+
+        for &hull_index in &self.hulls_by_min_x[..candidate_count] {
+            let hull = &self.hulls[hull_index];
+            if hull.bounds.maximum.x < query_bounds.minimum.x
+                || hull.bounds.maximum.y < query_bounds.minimum.y
+                || hull.bounds.minimum.y > query_bounds.maximum.y
+                || hull.bounds.maximum.z < query_bounds.minimum.z
+                || hull.bounds.minimum.z > query_bounds.maximum.z
+            {
+                continue;
+            }
+            let bounds = Aabb {
+                minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
+                maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
+            };
+            let mut cursor = SweepCursor::new(location, location, shape);
+            if !cursor.clip_box(bounds)
+                || !hull
+                    .planes
+                    .iter()
+                    .copied()
+                    .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
+            {
+                continue;
+            }
+            for (index, plane) in hull.planes.iter().copied().enumerate() {
+                for other in hull.planes[..index].iter().copied() {
+                    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                        if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
+                            cursor.clip_bevel(plane.plane, other.plane, axis);
+                        }
+                    }
+                }
+            }
+            if !cursor.no_hit {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {

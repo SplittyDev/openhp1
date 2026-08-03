@@ -980,15 +980,15 @@ impl ScriptRuntime {
             if !location.iter().all(|value| value.is_finite()) {
                 return Err("SetLocation coordinates are not finite".to_owned());
             }
-            self.set_actor_location(
-                actor,
-                actor_class,
-                instance,
-                Vec3::from_array(*location),
-                actions,
-            )?;
-            // ponytail: accept finite locations until UE1 BSP collision rejection exists.
-            return Ok(Value::Bool(true));
+            return self
+                .set_actor_location_placing(
+                    actor,
+                    actor_class,
+                    instance,
+                    Vec3::from_array(*location),
+                    actions,
+                )
+                .map(Value::Bool);
         }
         if index == SET_BASE {
             let [base] = arguments else {

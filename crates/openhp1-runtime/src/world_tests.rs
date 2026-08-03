@@ -1106,6 +1106,316 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
 }
 
 #[test]
+fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-set-location-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let fields = [
+        "Location",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "Rotation",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            name,
+            ObjectId {
+                package: Arc::from("<set-location-test>"),
+                export_index: index,
+            },
+        )
+    })
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "mainscale".to_owned()), None);
+
+    let actor = runtime_actor_id(1);
+    let other = runtime_actor_id(2);
+    for (index, object) in [(0, actor), (1, other)] {
+        runtime.actor_classes.insert(index, class_id.clone());
+        runtime.object_actors.insert(object.clone(), index);
+        runtime.actor_objects.insert(index, object);
+    }
+    runtime.next_actor = 2;
+    let instance_at = |location, collide_when_placing| {
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector(location)),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(20.0)),
+            ),
+            (
+                fields["CollisionRadius"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["CollisionWidth"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["CollideType"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["bCollideActors"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bBlockActors"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bBlockPlayers"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (fields["Brush"].clone(), StoredValue::Object(None)),
+            (
+                fields["PrePivot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["bCollideWorld"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bCollideWhenPlacing"].clone(),
+                StoredValue::Value(Value::Bool(collide_when_placing)),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    let mut instance = instance_at([0.0; 3], false);
+    runtime
+        .instances
+        .insert(1, instance_at([25.0, 0.0, 0.0], false));
+
+    let execute = |runtime: &mut ScriptRuntime,
+                   instance: &mut InstanceState,
+                   location: [f32; 3],
+                   actions: &mut Vec<ActorAction>| {
+        let mut bytes = vec![0x04, 0x61, 0x0b, 0x23];
+        bytes.extend(location.into_iter().flat_map(f32::to_le_bytes));
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame
+            .execute(|call, arguments| {
+                assert_eq!(call, FunctionCall::Native(0x10b));
+                runtime.native(0, &class, &package, 0x10b, arguments, instance, actions, 0)
+            })
+            .unwrap()
+    };
+
+    let mut actions = Vec::new();
+    assert_eq!(
+        execute(&mut runtime, &mut instance, [25.0, 0.0, 0.0], &mut actions),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        instance.get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([25.0, 0.0, 0.0])))
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [
+            ActorAction::SetLocation {
+                actor: 0,
+                location: [25.0, 0.0, 0.0],
+            },
+            ActorAction::DispatchEvent {
+                actor: 0,
+                event: "Touch",
+                ..
+            },
+            ActorAction::DispatchEvent {
+                actor: 1,
+                event: "Touch",
+                ..
+            },
+        ]
+    ));
+    assert!(runtime.touching.contains(&(0, 1)));
+
+    actions.clear();
+    assert_eq!(
+        execute(&mut runtime, &mut instance, [100.0, 0.0, 0.0], &mut actions),
+        Value::Bool(true)
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [
+            ActorAction::SetLocation {
+                actor: 0,
+                location: [100.0, 0.0, 0.0],
+            },
+            ActorAction::DispatchEvent {
+                actor: 0,
+                event: "UnTouch",
+                ..
+            },
+            ActorAction::DispatchEvent {
+                actor: 1,
+                event: "UnTouch",
+                ..
+            },
+        ]
+    ));
+    assert!(!runtime.touching.contains(&(0, 1)));
+
+    runtime
+        .actor_bases
+        .insert(0, Some(runtime.actor_objects[&1].clone()));
+    runtime.collision = Some(placement_test_collision(10.0));
+    instance.insert(
+        fields["bCollideWhenPlacing"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    actions.clear();
+    assert_eq!(
+        execute(&mut runtime, &mut instance, [0.0; 3], &mut actions),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        instance.get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([20.0, 0.0, 0.0])))
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::SetLocation {
+            actor: 0,
+            location: [20.0, 0.0, 0.0],
+        }]
+    ));
+    assert!(!runtime.touching.contains(&(0, 1)));
+
+    runtime.collision = Some(placement_test_collision(100.0));
+    actions.clear();
+    assert_eq!(
+        execute(&mut runtime, &mut instance, [0.0; 3], &mut actions),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        instance.get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([20.0, 0.0, 0.0])))
+    );
+    assert!(actions.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn placement_test_collision(half_extent: f32) -> Arc<BspCollision> {
+    let mut model = Model {
+        bounds: PrimitiveBounds {
+            minimum: glam::Vec3::ZERO,
+            maximum: glam::Vec3::ZERO,
+            valid: false,
+            sphere: [0.0; 4],
+        },
+        vectors: Vec::new(),
+        points: Vec::new(),
+        nodes: Vec::new(),
+        surfaces: Vec::new(),
+        vertices: Vec::new(),
+        shared_side_count: 0,
+        zones: Vec::new(),
+        polys: ObjectReference::None,
+        light_maps: Vec::new(),
+        light_bits: Vec::new(),
+        collision_bounds: Vec::new(),
+        leaf_hulls: Vec::new(),
+        leaves: Vec::new(),
+        lights: Vec::new(),
+        root_outside: true,
+        linked: false,
+    };
+    model.nodes = [
+        [1.0, 0.0, 0.0, half_extent],
+        [-1.0, 0.0, 0.0, half_extent],
+        [0.0, 1.0, 0.0, half_extent],
+        [0.0, -1.0, 0.0, half_extent],
+        [0.0, 0.0, 1.0, half_extent],
+        [0.0, 0.0, -1.0, half_extent],
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, plane)| openhp1_map::BspNode {
+        plane,
+        zone_mask: 0,
+        flags: 0,
+        vertex_pool: 0,
+        surface: -1,
+        back: -1,
+        front: -1,
+        coplanar: -1,
+        collision_bound: if index == 0 { 0 } else { -1 },
+        render_bound: -1,
+        zones: [0; 2],
+        vertex_count: 0,
+        leaves: [0; 2],
+    })
+    .collect();
+    model.leaf_hulls = vec![0, 1, 2, 3, 4, 5, -1];
+    model.leaf_hulls.extend(
+        [
+            -half_extent,
+            -half_extent,
+            -half_extent,
+            half_extent,
+            half_extent,
+            half_extent,
+        ]
+        .map(f32::to_bits)
+        .map(|value| value as i32),
+    );
+    Arc::new(BspCollision::from_model(&model).unwrap())
+}
+
+#[test]
 fn touch_events_keep_the_engine_touching_array_in_sync() {
     let first = runtime_actor_id(1);
     let second = runtime_actor_id(2);

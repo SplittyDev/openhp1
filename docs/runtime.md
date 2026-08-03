@@ -231,6 +231,14 @@ that every UE1 `PlayerPawn` movement action uses generic pawn rotation.
 untraveled delta along the collision plane; it is not an alias for `Move`.
 Walking players use the same wall-slide response for non-pushable actor
 collisions as for BSP walls.
+`Actor.SetLocation` validates its finite target before changing persistent or
+scene state. When `bCollideWorld` or `bCollideWhenPlacing` is set, the target
+cylinder or box is checked at the target and its nearby UE1 placement grid;
+failure to find a clear point returns false without a location action. Actor
+occupancy does not reject this placement, but a successful placement updates
+the cached collision location, emits its scene action, sends `Touch` only for
+overlapping collidable non-based actors, and sends `UnTouch` for ended
+contacts. Unlike swept `Move`, `SetLocation` does not carry based actors.
 Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 `CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
 the default aligned cylinder, while `CT_Shape` uses the mesh's offset, rotated

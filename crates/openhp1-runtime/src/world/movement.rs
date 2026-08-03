@@ -942,6 +942,62 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    pub(super) fn set_actor_location_placing(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        location: Vec3,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        let mut candidate = self.collision_actor(actor, actor_class, instance)?;
+        let location = if self.actor_bool(actor_class, instance, "bCollideWorld")?
+            || self.actor_bool(actor_class, instance, "bCollideWhenPlacing")?
+        {
+            let collision = self.collision.as_ref().ok_or_else(|| {
+                "SetLocation requires a configured BSP collision model".to_owned()
+            })?;
+            let scale = candidate.radius.max(candidate.height);
+            let mut found = None;
+            'locations: for z in [0.0, 1.0, -1.0] {
+                for y in [0.0, 1.0, -1.0] {
+                    for x in [0.0, 1.0, -1.0] {
+                        let candidate_location = location + scale * Vec3::new(x, y, z);
+                        candidate.location = candidate_location;
+                        let blocked = if candidate.collide_type == COLLIDE_BOX {
+                            collision.overlaps_aabb(
+                                candidate.location,
+                                collision_actor_world_extents(&candidate),
+                            )
+                        } else {
+                            collision.overlaps_cylinder(
+                                candidate.location,
+                                candidate.radius,
+                                candidate.height,
+                            )
+                        };
+                        if !blocked {
+                            found = Some(candidate_location);
+                            break 'locations;
+                        }
+                    }
+                }
+            }
+            let Some(location) = found else {
+                return Ok(false);
+            };
+            location
+        } else {
+            location
+        };
+        candidate.location = location;
+
+        self.set_actor_location(actor, actor_class, instance, location, actions)?;
+        self.queue_location_touches(actor, &candidate, instance, actions)?;
+        self.queue_ended_touches(actor, &candidate, location, instance, actions)?;
+        Ok(true)
+    }
+
     pub(super) fn set_actor_base(
         &mut self,
         actor: usize,
@@ -1111,6 +1167,57 @@ impl ScriptRuntime {
                 self.touching.remove(&pair);
                 self.queue_pair_event(actions, actor, other, "UnTouch")?;
                 self.queue_pair_event(actions, other, actor, "UnTouch")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn queue_location_touches(
+        &mut self,
+        actor: usize,
+        current: &CollisionActor,
+        current_instance: &InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        if !current.collide_actors || current.brush.is_some() {
+            return Ok(());
+        }
+        self.ensure_collision_actors(actor, current_instance)?;
+        let extents = collision_actor_world_extents(current);
+        let query_minimum = current.location - extents;
+        let query_maximum = current.location + extents;
+        let candidate_count = self.collision_actors_by_min_x.partition_point(|&other| {
+            collision_actor_min_x(&self.collision_actors, other) <= query_maximum.x
+        });
+        let candidates = self.collision_actors_by_min_x[..candidate_count].to_vec();
+        for other in candidates {
+            if other == actor || self.destroyed.contains(&other) {
+                continue;
+            }
+            let other_collision = &self.collision_actors[other].as_ref().unwrap().actor;
+            let Some((other_location, other_extents)) =
+                collision_actor_world_bounds(other_collision)
+                    .filter(|_| other_collision.brush.is_none())
+            else {
+                continue;
+            };
+            if !other_collision.collide_actors
+                || other_location.x + other_extents.x < query_minimum.x
+                || other_location.y + other_extents.y < query_minimum.y
+                || other_location.y - other_extents.y > query_maximum.y
+                || other_location.z + other_extents.z < query_minimum.z
+                || other_location.z - other_extents.z > query_maximum.z
+                || self
+                    .actors_share_base_chain(actor, other)
+                    .map_err(|error| error.to_string())?
+                || !collision_actors_overlap(current, other_collision)
+            {
+                continue;
+            }
+            let pair = actor_pair(actor, other);
+            if self.touching.insert(pair) {
+                self.queue_pair_event(actions, actor, other, "Touch")?;
+                self.queue_pair_event(actions, other, actor, "Touch")?;
             }
         }
         Ok(())

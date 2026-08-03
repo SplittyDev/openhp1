@@ -3572,12 +3572,47 @@ mod tests {
     use openhp1_map::{BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
     use openhp1_package::{ObjectReference, PackageStore};
     use openhp1_physics::BspCollision;
-    use openhp1_runtime::{ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind};
+    use openhp1_runtime::{
+        ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, ScriptRuntime,
+    };
     use openhp1_texture::TextureRenderFlags;
 
     use crate::SurfaceMode;
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn runtime_set_location_action_updates_scene_actor() {
+        let root = std::env::temp_dir().join(format!(
+            "openhp1-scene-set-location-{}-{}",
+            std::process::id(),
+            PARTICLE_TEST_ROOT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let system = root.join("System");
+        fs::create_dir_all(&system).unwrap();
+        fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+        let mut runtime = ScriptRuntime::new(&root).unwrap();
+        let mut scene = particle_test_scene();
+
+        assert_eq!(
+            crate::apply_runtime_actions(
+                &mut scene,
+                &mut runtime,
+                vec![ActorAction::SetLocation {
+                    actor: 0,
+                    location: [3.0, 4.0, 5.0],
+                }],
+            )
+            .unwrap(),
+            (0, 0, true)
+        );
+        assert_eq!(scene.actors[0].location, glam::Vec3::new(3.0, 4.0, 5.0));
+        assert_eq!(
+            scene.actor_states[0].actor.location,
+            glam::Vec3::new(3.0, 4.0, 5.0)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {

@@ -66,6 +66,9 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
 
     assert_eq!(collision.hull_count(), 1);
     assert!(collision.node_has_poly_flag(0, PolyFlags::HIGH_LEDGE));
+    assert!(collision.overlaps_aabb(Vec3::ZERO, Vec3::ONE));
+    assert!(collision.overlaps_cylinder(Vec3::ZERO, 1.0, 1.0));
+    assert!(!collision.overlaps_aabb(Vec3::splat(20.0), Vec3::ONE));
     assert!(
         hit.fraction > 0.35 && hit.fraction < 0.45,
         "{}",
