@@ -547,6 +547,30 @@ fn compound_native_assignment_preserves_the_target_slot() {
 }
 
 #[test]
+fn multiply_equal_int_float_dispatches_and_stores_the_truncated_product() {
+    let mut bytes = vec![0x9f, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.push(0x1e);
+    bytes.extend(1.5_f32.to_le_bytes());
+    bytes.extend([0x16, 0x04, 0x00]);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    frame.set_local(7, Value::Int(-3));
+
+    assert_eq!(
+        frame.execute(|_, _| unreachable!()).unwrap(),
+        Value::Int(-4)
+    );
+    assert_eq!(frame.local(7), Some(&Value::Int(-4)));
+}
+
+#[test]
 fn increment_natives_preserve_prefix_and_postfix_results() {
     let run = |native, initial| {
         let mut bytes = vec![0x0f, 0x00];

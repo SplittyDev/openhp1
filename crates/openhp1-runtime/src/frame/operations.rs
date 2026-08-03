@@ -203,6 +203,7 @@ pub(super) fn increment_decrement(
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum CompoundAssignment {
     AddEqual_IntInt,
+    MultiplyEqual_IntFloat,
     MultiplyEqual_FloatFloat,
     DivideEqual_FloatFloat,
     AddEqual_FloatFloat,
@@ -220,6 +221,7 @@ impl TryFrom<u16> for CompoundAssignment {
     fn try_from(index: u16) -> std::result::Result<Self, Self::Error> {
         match index {
             0xa1 => Ok(Self::AddEqual_IntInt),
+            0x9f => Ok(Self::MultiplyEqual_IntFloat),
             0xb6 => Ok(Self::MultiplyEqual_FloatFloat),
             0xb7 => Ok(Self::DivideEqual_FloatFloat),
             0xb8 => Ok(Self::AddEqual_FloatFloat),
@@ -241,7 +243,9 @@ pub(super) fn compound_assignment(
 ) -> Result<Value> {
     if matches!(left, Value::None) {
         let zero = match assignment {
-            CompoundAssignment::AddEqual_IntInt => Value::Int(0),
+            CompoundAssignment::AddEqual_IntInt | CompoundAssignment::MultiplyEqual_IntFloat => {
+                Value::Int(0)
+            }
             CompoundAssignment::MultiplyEqual_FloatFloat
             | CompoundAssignment::DivideEqual_FloatFloat
             | CompoundAssignment::AddEqual_FloatFloat
@@ -253,6 +257,9 @@ pub(super) fn compound_assignment(
     Ok(match (assignment, left, right) {
         (CompoundAssignment::AddEqual_IntInt, Value::Int(left), Value::Int(right)) => {
             Value::Int(left.wrapping_add(*right))
+        }
+        (CompoundAssignment::MultiplyEqual_IntFloat, Value::Int(left), Value::Float(right)) => {
+            Value::Int((*left as f32 * right) as i32)
         }
         (CompoundAssignment::MultiplyEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
             Value::Float(left * right)
