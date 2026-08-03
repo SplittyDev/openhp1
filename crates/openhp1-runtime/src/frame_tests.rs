@@ -676,6 +676,29 @@ fn object_to_string_uses_frame_host() {
 }
 
 #[test]
+fn name_to_string_resolves_numeric_names_through_the_frame_host() {
+    let mut bytes = vec![0x04, 0x57, 0x21];
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    assert_eq!(
+        Frame::new(&bytecode)
+            .execute_hosted(|request| match request {
+                FrameRequest::NameToString {
+                    value: Value::Name(7),
+                } => Ok(FrameResponse::Value(Value::String("Run".to_owned()))),
+                _ => unreachable!(),
+            })
+            .unwrap(),
+        Value::String("Run".to_owned())
+    );
+}
+
+#[test]
 fn context_reads_and_writes_remote_instance_fields() {
     let mut context = vec![0x19, 0x20];
     context.extend(1_i32.to_le_bytes());

@@ -82,6 +82,9 @@ pub(crate) enum FrameRequest {
     ObjectToString {
         value: Value,
     },
+    NameToString {
+        value: Value,
+    },
     ResolveObject {
         reference: i32,
     },

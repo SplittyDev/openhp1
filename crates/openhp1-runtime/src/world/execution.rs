@@ -196,6 +196,10 @@ impl ScriptRuntime {
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)
                         .map(FrameResponse::Value),
+                    FrameRequest::NameToString { value } => runtime_name(&state.package, &value)
+                        .map(Value::String)
+                        .map(FrameResponse::Value)
+                        .map_err(|message| DispatchError::UnresolvedObject { message }),
                     FrameRequest::ResolveObject { reference } => self
                         .object_reference_value(&state.package, reference)
                         .map(FrameResponse::Value),
@@ -462,6 +466,10 @@ impl ScriptRuntime {
                     FrameRequest::ObjectToString { value } => self
                         .object_to_string(actor, value)
                         .map(FrameResponse::Value),
+                    FrameRequest::NameToString { value } => runtime_name(&function.package, &value)
+                        .map(Value::String)
+                        .map(FrameResponse::Value)
+                        .map_err(|message| DispatchError::UnresolvedObject { message }),
                     FrameRequest::ResolveObject { reference } => self
                         .object_reference_value(&function.package, reference)
                         .map(FrameResponse::Value),

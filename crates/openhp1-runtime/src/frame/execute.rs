@@ -20,6 +20,9 @@ impl<'a> Frame<'a> {
             FrameRequest::ObjectToString { .. } => {
                 Err("standalone frames do not host object conversions".to_owned())
             }
+            FrameRequest::NameToString { .. } => {
+                Err("standalone frames do not host name conversions".to_owned())
+            }
             FrameRequest::ResolveObject { reference } => {
                 Ok(FrameResponse::Value(Value::Object(reference)))
             }
@@ -447,14 +450,18 @@ impl<'a> Frame<'a> {
             Opcode::Conversion(conversion) => {
                 let value = self.expression(host)?;
                 let value = self.value(value, host)?;
-                if conversion == ConversionOpcode::ObjectToString {
-                    Expression::Value(
+                match (conversion, value) {
+                    (ConversionOpcode::ObjectToString, value) => Expression::Value(
                         host(FrameRequest::ObjectToString { value }, &mut self.instance)
                             .and_then(FrameResponse::into_value)
                             .map_err(|message| Error::Context { message })?,
-                    )
-                } else {
-                    Expression::Value(convert(conversion, value)?)
+                    ),
+                    (ConversionOpcode::NameToString, value @ Value::Name(_)) => Expression::Value(
+                        host(FrameRequest::NameToString { value }, &mut self.instance)
+                            .and_then(FrameResponse::into_value)
+                            .map_err(|message| Error::Context { message })?,
+                    ),
+                    (conversion, value) => Expression::Value(convert(conversion, value)?),
                 }
             }
             Opcode::ExtendedNative(high) => {
