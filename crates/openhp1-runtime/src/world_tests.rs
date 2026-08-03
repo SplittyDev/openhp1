@@ -1923,6 +1923,249 @@ fn pawn_stop_waiting_named_native_cancels_sleep_through_function_execution() {
 }
 
 #[test]
+fn pick_any_target_rejects_beyond_sight_radius_without_changing_outputs() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-pick-any-target-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let receiver_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let target_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    let pawn_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 3,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 2,
+    };
+    let class_script = |export_index| {
+        Arc::new(openhp1_script::ScriptExport {
+            export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        })
+    };
+    for export_index in [0, 1, 3] {
+        runtime.scripts.insert(
+            object_id(&package, export_index),
+            class_script(export_index),
+        );
+    }
+    runtime.scripts.insert(
+        object_id(&package, 2),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 2,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 2,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: 0x216,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+
+    let fields = [
+        "Location",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "Rotation",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "BaseEyeHeight",
+        "SightRadius",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            name,
+            ObjectId {
+                package: Arc::from("<pick-any-target-test>"),
+                export_index: index,
+            },
+        )
+    })
+    .collect::<HashMap<_, _>>();
+    for class in [&receiver_class, &target_class, &pawn_class] {
+        let class_id = object_id(&package, class.export_index);
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class_id.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+        }
+        runtime
+            .fields
+            .insert((class_id, "mainscale".to_owned()), None);
+    }
+    let target_class_id = object_id(&package, target_class.export_index);
+    let proj_target_field = runtime_actor_id(10);
+    runtime.fields.insert(
+        (target_class_id, "bprojtarget".to_owned()),
+        Some(proj_target_field.clone()),
+    );
+    let receiver = runtime_actor_id(20);
+    let eligible = runtime_actor_id(21);
+    let not_a_projectile_target = runtime_actor_id(22);
+    let pawn = runtime_actor_id(23);
+    for (actor, class, object) in [
+        (0, &receiver_class, &receiver),
+        (1, &target_class, &eligible),
+        (2, &target_class, &not_a_projectile_target),
+        (3, &pawn_class, &pawn),
+    ] {
+        runtime
+            .actor_classes
+            .insert(actor, object_id(&package, class.export_index));
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object.clone());
+    }
+    runtime.next_actor = 4;
+    let mut receiver_instance = InstanceState::default();
+    receiver_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    receiver_instance.insert(
+        fields["BaseEyeHeight"].clone(),
+        StoredValue::Value(Value::Float(20.0)),
+    );
+    receiver_instance.insert(
+        fields["SightRadius"].clone(),
+        StoredValue::Value(Value::Float(50.0)),
+    );
+    runtime.instances.insert(0, receiver_instance.clone());
+    let target_instance = |projectile_target, location| {
+        let mut instance = InstanceState::default();
+        instance.insert(
+            proj_target_field.clone(),
+            StoredValue::Value(Value::Bool(projectile_target)),
+        );
+        instance.insert(
+            fields["Location"].clone(),
+            StoredValue::Value(Value::Vector(location)),
+        );
+        instance.insert(
+            fields["CollisionHeight"].clone(),
+            StoredValue::Value(Value::Float(40.0)),
+        );
+        instance
+    };
+    runtime
+        .instances
+        .insert(1, target_instance(true, [100.0, 0.0, 0.0]));
+    runtime
+        .instances
+        .insert(2, target_instance(false, [50.0, 0.0, 0.0]));
+    runtime.instances.insert(
+        3,
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([200.0, 0.0, 0.0])),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(40.0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+
+    let arguments = [
+        Value::Float(0.5),
+        Value::Float(2_500.0),
+        Value::Vector([1.0, 0.0, 0.0]),
+        Value::Vector([0.0, 0.0, 0.0]),
+    ];
+    let (value, best_aim, best_dist) = runtime
+        .pick_target(0, &receiver_class, &receiver_instance, &arguments, false)
+        .unwrap();
+    assert_eq!(value, Value::Object(0));
+    assert_eq!(best_aim, 0.5);
+    assert_eq!(best_dist, 2_500.0);
+
+    let mut outputs = Vec::new();
+    runtime
+        .execute_actor_function_with_outputs(
+            0,
+            &receiver_class,
+            &function,
+            &arguments,
+            &mut outputs,
+        )
+        .unwrap();
+    assert_eq!(&outputs[..2], &arguments[..2]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn named_native_shims_validate_their_engine_calls() {
     let mut actions = Vec::new();
     let mut state_frames = HashMap::default();

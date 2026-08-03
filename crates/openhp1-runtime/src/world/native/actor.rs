@@ -149,8 +149,16 @@ impl ScriptRuntime {
     pub(in crate::world) fn pick_target(
         &mut self,
         actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &InstanceState,
         arguments: &[Value],
+        pawns_only: bool,
     ) -> std::result::Result<(Value, f32, f32), String> {
+        let native = if pawns_only {
+            "PickTarget"
+        } else {
+            "PickAnyTarget"
+        };
         let [
             Value::Float(best_aim),
             Value::Float(best_dist),
@@ -159,7 +167,7 @@ impl ScriptRuntime {
         ] = arguments
         else {
             return Err(format!(
-                "PickTarget expects best aim, best distance, fire direction, and projectile start, found {}",
+                "{native} expects best aim, best distance, fire direction, and projectile start, found {}",
                 arguments
                     .iter()
                     .map(Value::kind)
@@ -176,7 +184,7 @@ impl ScriptRuntime {
             || !fire_direction.is_finite()
             || !projectile_start.is_finite()
         {
-            return Err("PickTarget arguments are not finite".to_owned());
+            return Err(format!("{native} arguments are not finite"));
         }
 
         let mut best = None;
@@ -190,27 +198,31 @@ impl ScriptRuntime {
                 .actor_classes
                 .get(&candidate)
                 .cloned()
-                .ok_or_else(|| format!("PickTarget actor {candidate} has no class"))?;
+                .ok_or_else(|| format!("{native} actor {candidate} has no class"))?;
             let class = self
                 .resolved_object(&class)
                 .map_err(|error| error.to_string())?;
-            if !self
+            let is_pawn = self
                 .class_has_name(&class, "Pawn")
-                .map_err(|error| error.to_string())?
-            {
+                .map_err(|error| error.to_string())?;
+            if is_pawn != pawns_only {
                 continue;
             }
             let candidate_instance = self
                 .instances
                 .get(&candidate)
                 .cloned()
-                .ok_or_else(|| format!("PickTarget actor {candidate} has no instance"))?;
-            let health =
-                match self.required_actor_property(&class, &candidate_instance, "Health")? {
-                    StoredValue::Value(Value::Int(health)) => health,
-                    value => return Err(format!("PickTarget Health is {value:?}")),
-                };
-            if health <= 0 {
+                .ok_or_else(|| format!("{native} actor {candidate} has no instance"))?;
+            if pawns_only {
+                let health =
+                    match self.required_actor_property(&class, &candidate_instance, "Health")? {
+                        StoredValue::Value(Value::Int(health)) => health,
+                        value => return Err(format!("{native} Health is {value:?}")),
+                    };
+                if health <= 0 {
+                    continue;
+                }
+            } else if !self.actor_bool(&class, &candidate_instance, "bProjTarget")? {
                 continue;
             }
             let location =
@@ -220,11 +232,7 @@ impl ScriptRuntime {
             else {
                 continue;
             };
-            if self.collision.as_ref().is_some_and(|collision| {
-                collision
-                    .sweep_aabb(projectile_start, location, Vec3::ZERO)
-                    .is_some()
-            }) {
+            if !self.line_of_sight_to(actor, actor_class, instance, candidate)? {
                 continue;
             }
             best_aim = aim;
@@ -238,7 +246,7 @@ impl ScriptRuntime {
                     .actor_objects
                     .get(&candidate)
                     .cloned()
-                    .ok_or_else(|| format!("PickTarget actor {candidate} has no object"))?;
+                    .ok_or_else(|| format!("{native} actor {candidate} has no object"))?;
                 Value::Object(
                     self.object_handle(object)
                         .map_err(|error| error.to_string())?,

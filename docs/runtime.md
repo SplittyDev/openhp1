@@ -281,6 +281,11 @@ nearby-location probe, then uses the ordinary movement sweeps and wall-slide
 response for up to five walking, flying, or swimming probes. Walking reaches
 its horizontal goal first, then makes its final vertical sweep only toward
 gravity. It is not a line-of-sight query.
+`PickAnyTarget` considers non-Pawn actors with `bProjTarget` set, while
+`PickTarget` considers living Pawns. Both retain only the best non-negative
+fire-direction dot product within 2,500 units, require the receiver's
+`LineOfSightTo` visibility, and write its aim and distance back through their
+output arguments.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
 Engine side effects without an OpenHP1 surface do not abort scripts:

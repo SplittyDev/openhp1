@@ -149,9 +149,15 @@ impl ScriptRuntime {
                 })
                 .map_err(DispatchError::from);
         }
-        if index == PICK_TARGET {
+        if matches!(index, PICK_TARGET | PICK_ANY_TARGET) {
             let (value, best_aim, best_dist) = self
-                .pick_target(actor, arguments)
+                .pick_target(
+                    actor,
+                    actor_class,
+                    instance,
+                    arguments,
+                    index == PICK_TARGET,
+                )
                 .map_err(|message| crate::Error::Call {
                     call: FunctionCall::Native(index),
                     message,
