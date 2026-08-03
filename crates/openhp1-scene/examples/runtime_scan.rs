@@ -200,6 +200,7 @@ fn main() -> Result<()> {
                 let actions = runtime.animation_finished(actor)?;
                 apply_actions(&mut scene, &mut runtime, actions, &mut stats, &mut deferred)?;
             }
+            openhp1_scene::sync_runtime_bone_positions(&scene, &mut runtime)?;
             if player.is_some() {
                 runtime.set_player_input(PlayerInput::default())?;
             }

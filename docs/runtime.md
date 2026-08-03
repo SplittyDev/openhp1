@@ -80,6 +80,9 @@ offsets.
 - HP1's `RootBone='Move'` argument extracts skeletal root translation from the
   rendered pose and applies it through UE1 smooth movement so a blocked forward
   component can slide upward during a mount.
+- HP1's numeric `BonePos` native uses the current sampled skeletal bone origin
+  after the mesh and actor transforms, in Unreal coordinates. Pose updates run
+  before script ticks and preserve the displayed tween interpolation.
 - HP1's native `FindPath` follows the level's serialized reach specifications,
   respecting pruned links and the pawn's collision size.
 - `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions.

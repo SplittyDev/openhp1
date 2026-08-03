@@ -42,6 +42,7 @@ const ALL_ACTORS: u16 = 0x130;
 const TRACE_ACTORS: u16 = 0x135;
 const VISIBLE_ACTORS: u16 = 0x137;
 const SLEEP: u16 = 0x100;
+const BONE_POS: u16 = 0x101;
 const CLASS_IS_CHILD_OF: u16 = 0x102;
 const PLAY_ANIM: u16 = 0x103;
 const LOOP_ANIM: u16 = 0x104;
@@ -204,6 +205,7 @@ pub struct ScriptRuntime {
     player_alt_fire_pressed: bool,
     animation_sequences: HashMap<usize, HashMap<String, AnimationSequence>>,
     actor_bone_names: HashMap<usize, Vec<String>>,
+    actor_bone_positions: HashMap<usize, Vec<[f32; 3]>>,
     actor_visual_bounds: HashMap<usize, (Vec3, Vec3)>,
     animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,

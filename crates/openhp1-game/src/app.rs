@@ -660,6 +660,11 @@ impl Graphics {
             }
             Err(error) => self.last_error = Some(format!("animation failed: {error:#}")),
         }
+        if let Err(error) =
+            openhp1_scene::sync_runtime_bone_positions(&self.scene, &mut self.runtime)
+        {
+            self.last_error = Some(format!("bone pose sync failed: {error:#}"));
+        }
         match self.scene.tick_water(delta_time) {
             Ok(changed)
                 if !self.renderer.update_textures(

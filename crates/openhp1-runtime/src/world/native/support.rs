@@ -172,6 +172,22 @@ pub(in crate::world) fn runtime_name(
     }
 }
 
+pub(in crate::world) fn bone_position(
+    bones: Option<&[String]>,
+    positions: Option<&[[f32; 3]]>,
+    bone: &str,
+) -> [f32; 3] {
+    bones
+        .and_then(|bones| {
+            bones
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(bone))
+        })
+        .and_then(|index| positions.and_then(|positions| positions.get(index)))
+        .copied()
+        .unwrap_or([0.0; 3])
+}
+
 pub(in crate::world) fn collision_updates(
     arguments: &[Value],
 ) -> std::result::Result<[Option<bool>; 3], String> {

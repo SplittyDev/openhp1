@@ -179,6 +179,25 @@ impl Mesh {
         ))
     }
 
+    pub fn sample_skeletal_bone_positions(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+        extract_root_motion: bool,
+    ) -> Result<Vec<Vec3>> {
+        if !phase.is_finite() {
+            return Err(Error::InvalidAnimationPhase(phase));
+        }
+        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
+        let (_, _, bones) =
+            animation.sample_pose(skeletal, sequence, phase, extract_root_motion)?;
+        Ok(bones
+            .into_iter()
+            .map(|bone| mirror_skeletal_position(bone.transform_point3(Vec3::ZERO)))
+            .collect())
+    }
+
     pub fn sample_skeletal_sequence_with_root_motion(
         &self,
         animation: &SkeletalAnimation,
@@ -495,7 +514,7 @@ mod tests {
             normals: Vec::new(),
             face_vertices: Vec::new(),
             attachment_vertices: None,
-            skeletal: Some(mesh),
+            skeletal: Some(mesh.clone()),
         }
         .sample_skeletal_weapon_transform(&animation, 0, 0.5, true)
         .unwrap()
@@ -513,5 +532,25 @@ mod tests {
                 .transform_vector3(-Vec3::Z)
                 .abs_diff_eq(Vec3::X, 0.0001)
         );
+        let positions = Mesh {
+            triangles: Vec::new(),
+            textures: Vec::new(),
+            animation_sequences: Vec::new(),
+            bounds: None,
+            frame_vertices: 0,
+            animation_frames: 0,
+            scale: Vec3::ONE,
+            origin: Vec3::ZERO,
+            rotation_origin: IVec3::ZERO,
+            default_animation: ObjectReference::None,
+            vertices: Vec::new(),
+            normals: Vec::new(),
+            face_vertices: Vec::new(),
+            attachment_vertices: None,
+            skeletal: Some(mesh),
+        }
+        .sample_skeletal_bone_positions(&animation, 0, 0.5, false)
+        .unwrap();
+        assert_eq!(positions, vec![Vec3::new(2.0, -1.0, 3.0)]);
     }
 }

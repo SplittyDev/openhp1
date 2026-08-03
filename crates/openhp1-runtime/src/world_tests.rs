@@ -5,9 +5,9 @@ use super::{
     actor::decode_latent_action,
     actor::update_touching_array,
     native::{
-        animation_parameters, bone_number, collision_updates, log_arguments, next_navigation_step,
-        noise_loudness, random_float, random_int, random_unit_vector, scalar_native,
-        sound_arguments, target_score, trace_texture,
+        animation_parameters, bone_number, bone_position, collision_updates, log_arguments,
+        next_navigation_step, noise_loudness, random_float, random_int, random_unit_vector,
+        scalar_native, sound_arguments, target_score, trace_texture,
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
@@ -155,6 +155,20 @@ fn bone_numbers_follow_case_insensitive_skeletal_order() {
     let bones = vec!["Root".to_owned(), "Head".to_owned()];
     assert_eq!(bone_number(Some(&bones), "head"), 1);
     assert_eq!(bone_number(Some(&bones), "missing"), 0);
+}
+
+#[test]
+fn bone_positions_use_the_current_case_insensitive_skeletal_pose() {
+    let bones = vec!["Root".to_owned(), "Head".to_owned()];
+    let positions = [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]];
+    assert_eq!(
+        bone_position(Some(&bones), Some(&positions), "head"),
+        [40.0, 50.0, 60.0]
+    );
+    assert_eq!(
+        bone_position(Some(&bones), Some(&positions), "missing"),
+        [0.0; 3]
+    );
 }
 
 #[test]

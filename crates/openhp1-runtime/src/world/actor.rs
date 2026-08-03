@@ -58,6 +58,7 @@ impl ScriptRuntime {
             player_alt_fire_pressed: false,
             animation_sequences: HashMap::default(),
             actor_bone_names: HashMap::default(),
+            actor_bone_positions: HashMap::default(),
             actor_visual_bounds: HashMap::default(),
             animation_commands: HashMap::default(),
             animating: HashSet::default(),
@@ -142,6 +143,15 @@ impl ScriptRuntime {
     pub fn set_actor_bone_names(&mut self, actor: usize, bones: impl IntoIterator<Item = String>) {
         self.actor_bone_names
             .insert(actor, bones.into_iter().collect());
+    }
+
+    pub fn set_actor_bone_positions(
+        &mut self,
+        actor: usize,
+        positions: impl IntoIterator<Item = [f32; 3]>,
+    ) {
+        self.actor_bone_positions
+            .insert(actor, positions.into_iter().collect());
     }
 
     pub fn set_actor_visual_bounds(

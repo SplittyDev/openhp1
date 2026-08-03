@@ -63,6 +63,7 @@ pub fn initialize_runtime_with(
             runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
         }
     }
+    sync_runtime_bone_positions(scene, &mut runtime)?;
     let game_actions = runtime.initialize_game()?;
     apply_runtime_actions_with(scene, &mut runtime, game_actions, &mut external)?;
     let mut events = 0;
@@ -113,6 +114,7 @@ pub fn apply_runtime_actions_with(
     let mut animations = 0;
     let mut deferred = 0;
     let mut transformed = false;
+    let mut bone_positions_changed = false;
     let mut actions = VecDeque::from(actions);
     while let Some(action) = actions.pop_front() {
         scene.ensure_runtime_actor(action.actor());
@@ -138,6 +140,7 @@ pub fn apply_runtime_actions_with(
                         .diagnostics
                         .push(format!("runtime could not play animation {sequence}"));
                 }
+                bone_positions_changed = true;
             }
             ActorAction::LoopAnimation {
                 actor,
@@ -160,6 +163,7 @@ pub fn apply_runtime_actions_with(
                         .diagnostics
                         .push(format!("runtime could not play animation {sequence}"));
                 }
+                bone_positions_changed = true;
             }
             ActorAction::AwaitAnimation { actor } => {
                 scene.finish_actor_animation(actor);
@@ -209,9 +213,11 @@ pub fn apply_runtime_actions_with(
                     runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
                 }
                 transformed = true;
+                bone_positions_changed = true;
             }
             ActorAction::SetLocation { actor, location } => {
                 transformed |= scene.set_actor_location(actor, Vec3::from_array(location))?;
+                bone_positions_changed = true;
             }
             ActorAction::SetRotation { actor, rotation } => {
                 transformed |= scene.set_actor_rotation(
@@ -222,9 +228,11 @@ pub fn apply_runtime_actions_with(
                         roll: rotation[2],
                     },
                 )?;
+                bone_positions_changed = true;
             }
             ActorAction::SetPrePivot { actor, pre_pivot } => {
                 transformed |= scene.set_actor_pre_pivot(actor, Vec3::from_array(pre_pivot))?;
+                bone_positions_changed = true;
             }
             ActorAction::SetHidden { actor, hidden } => {
                 transformed |= scene.set_actor_hidden(actor, hidden)?;
@@ -241,6 +249,7 @@ pub fn apply_runtime_actions_with(
                 if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
                     runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
                 }
+                bone_positions_changed = true;
             }
             ActorAction::SetDrawScale { actor, draw_scale } => {
                 transformed |= scene.set_actor_draw_scale(actor, draw_scale)?;
@@ -248,6 +257,7 @@ pub fn apply_runtime_actions_with(
                 if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
                     runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
                 }
+                bone_positions_changed = true;
             }
             ActorAction::SetStyle { actor, style } => {
                 transformed |= scene.set_actor_style(actor, style)?;
@@ -263,6 +273,7 @@ pub fn apply_runtime_actions_with(
                 runtime
                     .set_actor_animation_sequences(actor, scene.actor_animation_sequences(actor))?;
                 runtime.set_actor_bone_names(actor, scene.actor_bone_names(actor));
+                bone_positions_changed = true;
             }
             ActorAction::SetAmbientGlow {
                 actor,
@@ -349,5 +360,15 @@ pub fn apply_runtime_actions_with(
             }
         }
     }
+    if bone_positions_changed {
+        sync_runtime_bone_positions(scene, runtime)?;
+    }
     Ok((animations, deferred, transformed))
+}
+
+pub fn sync_runtime_bone_positions(scene: &LoadedScene, runtime: &mut ScriptRuntime) -> Result<()> {
+    for (actor, positions) in scene.runtime_bone_positions()? {
+        runtime.set_actor_bone_positions(actor, positions);
+    }
+    Ok(())
 }

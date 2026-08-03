@@ -214,6 +214,11 @@ impl LoadedScene {
             if let Some(attachment) = &mut animation.tween_attachment_from {
                 *attachment = transform * *attachment;
             }
+            if let Some(positions) = &mut animation.tween_bone_positions_from {
+                for position in positions {
+                    *position = transform.transform_point3(*position);
+                }
+            }
         }
         self.relight_actor_vertices_at(actor_index)?;
         Ok(true)
@@ -608,6 +613,7 @@ impl AnimationPlayback {
         // ever changes display properties during a tween.
         animation.tween_from = None;
         animation.tween_attachment_from = None;
+        animation.tween_bone_positions_from = None;
         if let Some(actor) = actor {
             actor.sequence = self.sequence;
             actor.phase = self.phase;

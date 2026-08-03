@@ -1084,6 +1084,22 @@ impl LoadedScene {
             .unwrap_or_default()
     }
 
+    pub(crate) fn runtime_bone_positions(&self) -> Result<Vec<(usize, Vec<[f32; 3]>)>> {
+        self.animations
+            .iter()
+            .map(|animation| {
+                Ok((
+                    animation.actor_index,
+                    animation
+                        .bone_positions()?
+                        .into_iter()
+                        .map(|position| position.to_array())
+                        .collect(),
+                ))
+            })
+            .collect()
+    }
+
     pub fn actor_visual_bounds(&self, actor: usize) -> Option<([f32; 3], [f32; 3])> {
         self.actors
             .get(actor)
@@ -1193,6 +1209,7 @@ impl LoadedScene {
             if tween == Some(1.0) {
                 animation.tween_from = None;
                 animation.tween_attachment_from = None;
+                animation.tween_bone_positions_from = None;
             }
         }
         Ok((changed, completed))
@@ -1349,10 +1366,15 @@ impl LoadedScene {
         let source_name = source.name.clone();
         let source_rate = source.rate;
         let source_frames = source.frame_count;
-        animation.tween_attachment_from = (tween_time > 0.0)
+        let tween_attachment_from = (tween_time > 0.0)
             .then(|| animation.local_attachment())
             .transpose()?
             .flatten();
+        let tween_bone_positions_from = (tween_time > 0.0)
+            .then(|| animation.bone_positions())
+            .transpose()?;
+        animation.tween_attachment_from = tween_attachment_from;
+        animation.tween_bone_positions_from = tween_bone_positions_from;
         // ponytail: keep the displayed render-space pose until moving actors need
         // concurrent root-motion tweening.
         animation.tween_from = (tween_time > 0.0)
@@ -1497,6 +1519,7 @@ struct AnimatedActorMesh {
     root_motion_position: Vec3,
     tween_from: Option<Vec<Vec3>>,
     tween_attachment_from: Option<Mat4>,
+    tween_bone_positions_from: Option<Vec<Vec3>>,
     tween_elapsed: f32,
     tween_duration: f32,
     vertices: Range<usize>,
@@ -1756,6 +1779,27 @@ impl AnimatedActorMesh {
                 self.transform * local
             })
         })
+    }
+
+    fn bone_positions(&self) -> openhp1_mesh::Result<Vec<Vec3>> {
+        let Some(animation) = &self.skeletal_animation else {
+            return Ok(Vec::new());
+        };
+        let positions = self
+            .mesh
+            .sample_skeletal_bone_positions(animation, self.sequence, self.phase, self.root_motion)?
+            .into_iter()
+            .map(|position| self.transform.transform_point3(position))
+            .collect::<Vec<_>>();
+        Ok(self
+            .tween_bone_positions_from
+            .as_ref()
+            .map_or(positions.clone(), |from| {
+                from.iter()
+                    .zip(&positions)
+                    .map(|(from, to)| from.lerp(*to, self.tween_elapsed / self.tween_duration))
+                    .collect()
+            }))
     }
 
     fn local_attachment(&self) -> openhp1_mesh::Result<Option<Mat4>> {
@@ -2930,6 +2974,7 @@ fn append_actor_mesh(
             root_motion_position: Vec3::ZERO,
             tween_from: None,
             tween_attachment_from: None,
+            tween_bone_positions_from: None,
             tween_elapsed: 0.0,
             tween_duration: 0.0,
             vertices: first_vertex..render_mesh.positions.len(),

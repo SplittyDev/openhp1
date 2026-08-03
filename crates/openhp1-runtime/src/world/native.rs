@@ -17,7 +17,7 @@ pub(super) use scalar::{
 #[cfg(test)]
 pub(super) use sound::sound_arguments;
 pub(super) use support::{
-    animation_parameters, animation_root_motion, collision_updates, log_arguments,
+    animation_parameters, animation_root_motion, bone_position, collision_updates, log_arguments,
     next_navigation_step, noise_loudness, runtime_name, trace_texture,
 };
 
@@ -529,6 +529,20 @@ impl ScriptRuntime {
             let bone = runtime_name(source, bone)?;
             return Ok(Value::Int(bone_number(
                 self.actor_bone_names.get(&actor).map(Vec::as_slice),
+                &bone,
+            )));
+        }
+        if index == BONE_POS {
+            let [bone] = arguments else {
+                return Err(format!(
+                    "BonePos expects one name, found {}",
+                    arguments.len()
+                ));
+            };
+            let bone = runtime_name(source, bone)?;
+            return Ok(Value::Vector(bone_position(
+                self.actor_bone_names.get(&actor).map(Vec::as_slice),
+                self.actor_bone_positions.get(&actor).map(Vec::as_slice),
                 &bone,
             )));
         }
