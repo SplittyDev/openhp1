@@ -3740,12 +3740,13 @@ fn modify_sound_dispatches_the_hp1_action() {
     let mut instance = InstanceState::default();
     let mut actions = Vec::new();
     let run = |runtime: &mut ScriptRuntime,
+               parameter: u8,
                sound: Option<i32>,
                slot: u8,
-               parameter: u8,
                instance: &mut InstanceState,
                actions: &mut Vec<ActorAction>| {
-        let mut bytes = vec![0x04, 0x62, 0x37];
+        let mut bytes = vec![0x04, 0x62, 0x37, 0x24, parameter, 0x1e];
+        bytes.extend(0.75_f32.to_le_bytes());
         match sound {
             Some(sound) => {
                 bytes.push(0x20);
@@ -3753,9 +3754,7 @@ fn modify_sound_dispatches_the_hp1_action() {
             }
             None => bytes.push(0x2a),
         }
-        bytes.push(0x1e);
-        bytes.extend(0.75_f32.to_le_bytes());
-        bytes.extend([0x24, parameter, 0x24, slot, 0x16]);
+        bytes.extend([0x24, slot, 0x16]);
         let bytecode = Bytecode {
             version: 76,
             raw_len: bytes.len(),
@@ -3781,7 +3780,7 @@ fn modify_sound_dispatches_the_hp1_action() {
     };
 
     assert_eq!(
-        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        run(&mut runtime, 1, None, 3, &mut instance, &mut actions),
         Value::Bool(false)
     );
     assert!(actions.is_empty());
@@ -3793,7 +3792,7 @@ fn modify_sound_dispatches_the_hp1_action() {
     assert!(runtime.start_sound(0, 3, sound.clone(), 1.0, 1.0, false));
 
     assert_eq!(
-        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        run(&mut runtime, 1, None, 3, &mut instance, &mut actions),
         Value::Bool(true)
     );
     assert!(matches!(
@@ -3810,9 +3809,9 @@ fn modify_sound_dispatches_the_hp1_action() {
     assert_eq!(
         run(
             &mut runtime,
+            2,
             Some(sound_handle),
             3,
-            2,
             &mut instance,
             &mut actions,
         ),
@@ -3828,9 +3827,9 @@ fn modify_sound_dispatches_the_hp1_action() {
     assert_eq!(
         run(
             &mut runtime,
+            1,
             Some(other_sound_handle),
             3,
-            1,
             &mut instance,
             &mut actions,
         ),
@@ -3838,7 +3837,7 @@ fn modify_sound_dispatches_the_hp1_action() {
     );
     assert!(actions.is_empty());
     assert_eq!(
-        run(&mut runtime, None, 0, 1, &mut instance, &mut actions),
+        run(&mut runtime, 1, None, 0, &mut instance, &mut actions),
         Value::Bool(false)
     );
     assert!(actions.is_empty());
@@ -3865,14 +3864,14 @@ fn modify_sound_dispatches_the_hp1_action() {
     ));
     actions.clear();
     assert_eq!(
-        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        run(&mut runtime, 1, None, 3, &mut instance, &mut actions),
         Value::Bool(false)
     );
 
     assert!(runtime.start_sound(0, 3, sound.clone(), 0.5, 1.0, false));
     runtime.tick_sound_channels(0.5);
     assert_eq!(
-        run(&mut runtime, None, 3, 1, &mut instance, &mut actions),
+        run(&mut runtime, 1, None, 3, &mut instance, &mut actions),
         Value::Bool(false)
     );
     assert!(actions.is_empty());

@@ -484,10 +484,11 @@ parameter as the surface and texture polyflags combined; a miss returns `None`
 and writes zero. `bTraceDecals` falls back to that base texture when no decal is
 attached. The runtime
 tracks non-transient actor sound channels until their WAV or MP2 duration
-expires. `ModifySound` returns true only for a live actor/slot channel,
-optionally filters by sound (`None` is a wildcard), and changes volume, radius,
-or pitch for parameter values 0, 1, or 2. Slot zero uses an allocated transient
-channel and is not selectable by `ModifySound`.
+expires. `ModifySound(parameter, value, optional sound, optional slot)` returns
+true only for a live actor/slot channel, optionally filters by sound (`None` is
+a wildcard), and changes volume, radius, or pitch for parameter values 0, 1,
+or 2. Slot zero uses an allocated transient channel and is not selectable by
+`ModifySound`.
 
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick
