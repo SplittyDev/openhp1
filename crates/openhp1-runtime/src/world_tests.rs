@@ -141,6 +141,16 @@ fn tangent_uses_radians() {
 }
 
 #[test]
+fn sine_uses_radians() {
+    let Value::Float(value) =
+        scalar_native(0xbb, &[Value::Float(std::f32::consts::FRAC_PI_2)]).unwrap()
+    else {
+        panic!("expected float");
+    };
+    assert!((value - 1.0).abs() < 1.0e-6);
+}
+
+#[test]
 fn bone_numbers_follow_case_insensitive_skeletal_order() {
     let bones = vec!["Root".to_owned(), "Head".to_owned()];
     assert_eq!(bone_number(Some(&bones), "head"), 1);
