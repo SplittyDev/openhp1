@@ -224,6 +224,118 @@ fn player_can_see_me_native_skips_the_active_pawn_and_accepts_coincidence() {
 }
 
 #[test]
+fn line_of_sight_to_dispatches_numeric_native() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-line-of-sight-to-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    let fields = [
+        "Location",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "Rotation",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "BaseEyeHeight",
+        "SightRadius",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            name,
+            ObjectId {
+                package: Arc::from("<line-of-sight-to-test>"),
+                export_index: index,
+            },
+        )
+    })
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "mainscale".to_owned()), None);
+    let actor = runtime_actor_id(1);
+    let other = runtime_actor_id(2);
+    for (index, object) in [(1, actor), (2, other.clone())] {
+        runtime.actor_classes.insert(index, class_id.clone());
+        runtime.object_actors.insert(object.clone(), index);
+        runtime.actor_objects.insert(index, object);
+    }
+    runtime.next_actor = 3;
+    let mut instance = InstanceState::default();
+    instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    instance.insert(
+        fields["BaseEyeHeight"].clone(),
+        StoredValue::Value(Value::Float(20.0)),
+    );
+    instance.insert(
+        fields["SightRadius"].clone(),
+        StoredValue::Value(Value::Float(100.0)),
+    );
+    runtime.instances.insert(
+        2,
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([50.0, 0.0, 0.0])),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(40.0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let other = runtime.object_handle(other).unwrap();
+
+    assert_eq!(
+        runtime
+            .native(
+                1,
+                &class,
+                &package,
+                0x202,
+                &[Value::Object(other)],
+                &mut instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(true),
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn touch_events_keep_the_engine_touching_array_in_sync() {
     let first = runtime_actor_id(1);
     let second = runtime_actor_id(2);

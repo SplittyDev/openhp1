@@ -810,13 +810,26 @@ impl ScriptRuntime {
         ) {
             return Ok(false);
         }
-        Ok([
-            other.location,
-            other.location + Vec3::Z * (other.height * 0.5),
-            other.location - Vec3::Z * (other.height * 0.5),
-        ]
-        .into_iter()
-        .any(|target| self.has_line_of_sight(eye, target)))
+        Ok(self.actor_is_visible(eye, &other))
+    }
+
+    pub(super) fn line_of_sight_to(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        other: usize,
+    ) -> std::result::Result<bool, String> {
+        let Some(other) = self.collision_actor_by_index(other, actor, instance)? else {
+            return Ok(false);
+        };
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        if location.distance(other.location) > self.actor_float(class, instance, "SightRadius")? {
+            return Ok(false);
+        }
+        let mut eye = location;
+        eye.z += self.actor_float(class, instance, "BaseEyeHeight")?;
+        Ok(self.actor_is_visible(eye, &other))
     }
 
     pub(super) fn player_can_see_me(
@@ -905,6 +918,16 @@ impl ScriptRuntime {
         self.collision
             .as_ref()
             .is_none_or(|collision| collision.sweep_aabb(eye, target, Vec3::ZERO).is_none())
+    }
+
+    fn actor_is_visible(&self, eye: Vec3, other: &CollisionActor) -> bool {
+        [
+            other.location,
+            other.location + Vec3::Z * (other.height * 0.5),
+            other.location - Vec3::Z * (other.height * 0.5),
+        ]
+        .into_iter()
+        .any(|target| self.has_line_of_sight(eye, target))
     }
 
     fn ensure_collision_actors(

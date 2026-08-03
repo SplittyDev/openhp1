@@ -233,6 +233,9 @@ hidden state, and does not perform a line-of-sight trace.
 `PlayerCanSeeMe` walks that list and succeeds when a non-self pawn is within
 500 units, has the actor in its 75-degree `ViewRotation` cone (or uses
 `bBehindView`), and has a clear BSP trace from its `BaseEyeHeight`.
+`LineOfSightTo` applies the receiver's `SightRadius` and accepts a clear BSP
+trace from its `BaseEyeHeight` to the target's center, half-height top, or
+half-height bottom; unlike `CanSee`, it does not apply peripheral vision.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
 Engine side effects without an OpenHP1 surface do not abort scripts:

@@ -80,6 +80,7 @@ const MOVE_TOWARD: u16 = 502;
 const TURN_TO: u16 = 508;
 const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
+const LINE_OF_SIGHT_TO: u16 = 514;
 const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
 const REMOVE_PAWN: u16 = 530;
