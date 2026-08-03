@@ -44,6 +44,8 @@ then pitch, from the full `0..=65535` Unreal angle range; its optional `bRoll`
 defaults to false and draws roll from that same stream only when true.
 `Sin`, `Cos`, and `Tan` take radians.
 `vector * vector` multiplies the matching X, Y, and Z components.
+`Cross_VectorVector` computes the ordinary `A × B` in Unreal coordinates;
+render-coordinate conversion remains at the renderer boundary.
 
 ## State execution
 

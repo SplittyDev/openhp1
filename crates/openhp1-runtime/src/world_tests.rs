@@ -581,6 +581,62 @@ fn vector_vector_multiply_dispatches_from_extended_bytecode_through_runtime_nati
 }
 
 #[test]
+fn cross_vector_vector_dispatches_from_bytecode_through_runtime_native() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-cross-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut bytes = vec![0x04, 0xdc];
+    for vector in [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]] {
+        bytes.push(0x23);
+        bytes.extend(vector.into_iter().flat_map(f32::to_le_bytes));
+    }
+    bytes.push(0x16);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    let result = frame
+        .execute(|call, arguments| {
+            let FunctionCall::Native(index) = call else {
+                unreachable!()
+            };
+            assert_eq!(index, 0xdc);
+            runtime.native(
+                0,
+                &class,
+                &package,
+                index,
+                arguments,
+                &mut instance,
+                &mut actions,
+                0,
+            )
+        })
+        .unwrap();
+    assert_eq!(result, Value::Vector([-3.0, 6.0, -3.0]));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bone_numbers_follow_case_insensitive_skeletal_order() {
     let bones = vec!["Root".to_owned(), "Head".to_owned()];
     assert_eq!(bone_number(Some(&bones), "head"), 1);

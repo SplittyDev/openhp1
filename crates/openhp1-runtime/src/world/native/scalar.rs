@@ -1,3 +1,5 @@
+use glam::Vec3;
+
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ScalarNative {
@@ -61,6 +63,7 @@ enum ScalarNative {
     EqualEqual_VectorVector,
     NotEqual_VectorVector,
     Dot_VectorVector,
+    Cross_VectorVector,
     VSize,
     Normal,
     MirrorVectorByNormal,
@@ -144,6 +147,7 @@ impl TryFrom<u16> for ScalarNative {
             0xd9 => Ok(Self::EqualEqual_VectorVector),
             0xda => Ok(Self::NotEqual_VectorVector),
             0xdb => Ok(Self::Dot_VectorVector),
+            0xdc => Ok(Self::Cross_VectorVector),
             0xe1 => Ok(Self::VSize),
             0xe2 => Ok(Self::Normal),
             0x12c => Ok(Self::MirrorVectorByNormal),
@@ -442,6 +446,13 @@ pub(in crate::world) fn scalar_native(
         }
         (ScalarNative::Dot_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
             Value::Float(left[0] * right[0] + left[1] * right[1] + left[2] * right[2])
+        }
+        (ScalarNative::Cross_VectorVector, [Value::Vector(left), Value::Vector(right)]) => {
+            Value::Vector(
+                Vec3::from_array(*left)
+                    .cross(Vec3::from_array(*right))
+                    .to_array(),
+            )
         }
         (ScalarNative::VSize, [Value::Vector(value)]) => {
             Value::Float((value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
