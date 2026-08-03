@@ -205,6 +205,7 @@ pub(super) enum CompoundAssignment {
     AddEqual_IntInt,
     SubtractEqual_IntInt,
     MultiplyEqual_IntFloat,
+    DivideEqual_IntFloat,
     MultiplyEqual_FloatFloat,
     DivideEqual_FloatFloat,
     AddEqual_FloatFloat,
@@ -224,6 +225,7 @@ impl TryFrom<u16> for CompoundAssignment {
             0xa1 => Ok(Self::AddEqual_IntInt),
             0xa2 => Ok(Self::SubtractEqual_IntInt),
             0x9f => Ok(Self::MultiplyEqual_IntFloat),
+            0xa0 => Ok(Self::DivideEqual_IntFloat),
             0xb6 => Ok(Self::MultiplyEqual_FloatFloat),
             0xb7 => Ok(Self::DivideEqual_FloatFloat),
             0xb8 => Ok(Self::AddEqual_FloatFloat),
@@ -247,7 +249,8 @@ pub(super) fn compound_assignment(
         let zero = match assignment {
             CompoundAssignment::AddEqual_IntInt
             | CompoundAssignment::SubtractEqual_IntInt
-            | CompoundAssignment::MultiplyEqual_IntFloat => Value::Int(0),
+            | CompoundAssignment::MultiplyEqual_IntFloat
+            | CompoundAssignment::DivideEqual_IntFloat => Value::Int(0),
             CompoundAssignment::MultiplyEqual_FloatFloat
             | CompoundAssignment::DivideEqual_FloatFloat
             | CompoundAssignment::AddEqual_FloatFloat
@@ -264,7 +267,14 @@ pub(super) fn compound_assignment(
             Value::Int(left.wrapping_sub(*right))
         }
         (CompoundAssignment::MultiplyEqual_IntFloat, Value::Int(left), Value::Float(right)) => {
-            Value::Int((*left as f32 * right) as i32)
+            Value::Int(compound_int_from_float(f64::from((*left as f32) * *right)))
+        }
+        (CompoundAssignment::DivideEqual_IntFloat, Value::Int(left), Value::Float(right)) => {
+            Value::Int(if *right == 0.0 {
+                0
+            } else {
+                compound_int_from_float(f64::from(*left) / f64::from(*right))
+            })
         }
         (CompoundAssignment::MultiplyEqual_FloatFloat, Value::Float(left), Value::Float(right)) => {
             Value::Float(left * right)
@@ -310,6 +320,14 @@ pub(super) fn compound_assignment(
             });
         }
     })
+}
+
+fn compound_int_from_float(value: f64) -> i32 {
+    if value.is_finite() && value > f64::from(i32::MIN) - 1.0 && value < f64::from(i32::MAX) + 1.0 {
+        value as i32
+    } else {
+        i32::MIN
+    }
 }
 
 pub(super) fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {

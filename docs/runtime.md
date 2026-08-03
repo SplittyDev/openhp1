@@ -75,10 +75,14 @@ offsets.
 Integer scalar shifts preserve UE1's 32-bit behavior: shift counts are masked
 to five bits, left-shift results wrap, signed right shifts retain sign extension,
 and logical right shifts operate on unsigned 32-bit values.
-Native `MultiplyEqual_IntFloat` (`0x09f`) stores the floating-point product
-back in its integer target, truncating toward zero.
 Native `SubtractEqual_IntInt` (`0x0a2`) stores and returns the wrapped 32-bit
 difference.
+Native `MultiplyEqual_IntFloat` (`0x09f`) stores its `f32` product back in its
+integer target. `DivideEqual_IntFloat` (`0x0a0`) calculates from the original
+integer value. Both truncate valid results toward zero and use the x86
+integer-indefinite value (`-2147483648`) for non-finite or out-of-range
+results. `DivideEqual_IntFloat` stores and returns zero for either floating-point
+zero divisor.
 
 ## Animation actions
 

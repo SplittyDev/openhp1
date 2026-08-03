@@ -595,6 +595,40 @@ fn multiply_equal_int_float_dispatches_and_stores_the_truncated_product() {
 }
 
 #[test]
+fn divide_equal_int_float_dispatches_with_ue1_precision_and_edges() {
+    let run = |initial: i32, operand: f32| {
+        let mut bytes = vec![0xa0, 0x00];
+        bytes.extend(7_i32.to_le_bytes());
+        bytes.push(0x1e);
+        bytes.extend(operand.to_le_bytes());
+        bytes.extend([0x16, 0x04, 0x00]);
+        bytes.extend(7_i32.to_le_bytes());
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame.set_local(7, Value::Int(initial));
+        let returned = frame.execute(|_, _| unreachable!()).unwrap();
+        (returned, frame.local(7).cloned())
+    };
+
+    assert_eq!(run(-3, 1.5), (Value::Int(-2), Some(Value::Int(-2))));
+    assert_eq!(
+        run(i32::MAX, 2.0),
+        (Value::Int(1_073_741_823), Some(Value::Int(1_073_741_823)))
+    );
+    assert_eq!(run(7, 0.0), (Value::Int(0), Some(Value::Int(0))));
+    assert_eq!(run(7, -0.0), (Value::Int(0), Some(Value::Int(0))));
+    assert_eq!(
+        run(7, f32::NAN),
+        (Value::Int(i32::MIN), Some(Value::Int(i32::MIN)))
+    );
+}
+
+#[test]
 fn increment_natives_preserve_prefix_and_postfix_results() {
     let run = |native, initial| {
         let mut bytes = vec![0x0f, 0x00];
