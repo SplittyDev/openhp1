@@ -49,6 +49,8 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
         + b"StopWaiting\0".len()
         + size_of::<u32>()
         + b"QuidHud\0".len()
+        + size_of::<u32>()
+        + b"Head\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -56,7 +58,7 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        6,
+        7,
         name_offset as i32,
         6,
         export_offset as i32,
@@ -74,6 +76,7 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
         b"Pawn\0".as_slice(),
         b"StopWaiting\0".as_slice(),
         b"QuidHud\0".as_slice(),
+        b"Head\0".as_slice(),
     ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
@@ -1339,6 +1342,84 @@ fn cosine_dispatches_from_bytecode_through_runtime_native() {
         panic!("expected float");
     };
     assert!((value + 1.0).abs() < 1.0e-6);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn is_animating_root_bone_dispatches_to_the_matching_channel() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-is-animating-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    runtime
+        .actor_bone_names
+        .insert(0, vec!["Root".to_owned(), "Head".to_owned()]);
+    runtime.animation_channels.insert(
+        0,
+        vec![AnimationChannel {
+            root_bone: 1,
+            actor: 1,
+        }],
+    );
+    runtime.animating.insert(0);
+    runtime.animating.insert(1);
+
+    let execute = |runtime: &mut ScriptRuntime, bytes: Vec<u8>| {
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let mut instance = InstanceState::default();
+        let mut actions = Vec::new();
+        frame
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                assert_eq!(index, IS_ANIMATING);
+                runtime.native(
+                    0,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap()
+    };
+
+    assert_eq!(
+        execute(&mut runtime, vec![0x04, 0x61, 0x1a, 0x21, 6, 0, 0, 0, 0x16],),
+        Value::Bool(true)
+    );
+    runtime.animating.remove(&1);
+    assert_eq!(
+        execute(&mut runtime, vec![0x04, 0x61, 0x1a, 0x21, 6, 0, 0, 0, 0x16],),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        execute(&mut runtime, vec![0x04, 0x61, 0x1a, 0x16]),
+        Value::Bool(true)
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

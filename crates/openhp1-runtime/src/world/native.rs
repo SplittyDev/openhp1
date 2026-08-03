@@ -355,14 +355,34 @@ impl ScriptRuntime {
                     arguments.len()
                 ));
             }
-            if let Some(root) = arguments.first()
-                && !matches!(root, Value::None)
-            {
-                // ponytail: runtime animation has one channel per actor; distinguish
-                // root-bone channels when the sampler supports them.
-                runtime_name(source, root)?;
-            }
-            return Ok(Value::Bool(self.animating.contains(&actor)));
+            let channel = match arguments.first() {
+                None | Some(Value::None) => actor,
+                Some(root) => {
+                    let root = runtime_name(source, root)?;
+                    if root.eq_ignore_ascii_case("None") {
+                        actor
+                    } else {
+                        let Some(root_bone) = self.actor_bone_names.get(&actor).and_then(|bones| {
+                            bones
+                                .iter()
+                                .position(|bone| bone.eq_ignore_ascii_case(&root))
+                        }) else {
+                            return Ok(Value::Bool(false));
+                        };
+                        let Some(channel) =
+                            self.animation_channels.get(&actor).and_then(|channels| {
+                                channels
+                                    .iter()
+                                    .find(|channel| channel.root_bone == root_bone)
+                            })
+                        else {
+                            return Ok(Value::Bool(false));
+                        };
+                        channel.actor
+                    }
+                }
+            };
+            return Ok(Value::Bool(self.animating.contains(&channel)));
         }
         if index == TURN_TO {
             let [Value::Vector(focus)] = arguments else {
@@ -502,15 +522,36 @@ impl ScriptRuntime {
             {
                 return Err("CreateAnimChannel transient flag is not a bool".to_owned());
             }
-            runtime_name(source, root_bone)?;
-            return self.spawn_actor(
+            let root_bone = runtime_name(source, root_bone)?;
+            let channel = self.spawn_actor(
                 actor,
                 actor_class,
                 source,
                 std::slice::from_ref(class),
                 instance,
                 actions,
-            );
+            )?;
+            if let Value::Object(handle) = &channel
+                && *handle != 0
+                && let Some(root_bone) = self.actor_bone_names.get(&actor).and_then(|bones| {
+                    bones
+                        .iter()
+                        .position(|bone| bone.eq_ignore_ascii_case(&root_bone))
+                })
+            {
+                let channel_actor = self
+                    .actor_for_handle(*handle)
+                    .map_err(|error| error.to_string())?;
+                self.animation_channels
+                    .entry(actor)
+                    .or_default()
+                    .push(AnimationChannel {
+                        root_bone,
+                        actor: channel_actor,
+                    });
+                return Ok(Value::Object(*handle));
+            }
+            return Ok(channel);
         }
         if index == GET_ANIM_GROUP {
             let [sequence] = arguments else {

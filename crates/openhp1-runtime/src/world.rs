@@ -222,6 +222,7 @@ pub struct ScriptRuntime {
     actor_bone_names: HashMap<usize, Vec<String>>,
     actor_bone_positions: HashMap<usize, Vec<[f32; 3]>>,
     actor_visual_bounds: HashMap<usize, (Vec3, Vec3)>,
+    animation_channels: HashMap<usize, Vec<AnimationChannel>>,
     animation_commands: HashMap<usize, AnimationCommand>,
     animating: HashSet<usize>,
     sound_channels: HashMap<(usize, u8), SoundChannel>,
@@ -307,6 +308,12 @@ struct AnimationCommand {
     tween_time: f32,
     looping: bool,
     tween_only: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AnimationChannel {
+    root_bone: usize,
+    actor: usize,
 }
 
 #[derive(Clone, Debug)]

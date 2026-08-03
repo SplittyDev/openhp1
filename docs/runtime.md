@@ -113,7 +113,9 @@ zero divisor.
   before script ticks and preserve the displayed tween interpolation.
 - HP1's native `FindPath` follows the level's serialized reach specifications,
   respecting pruned links and the pawn's collision size.
-- `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions.
+- `IsAnimating` reflects active `PlayAnim` and `LoopAnim` actions; its HP1
+  root-bone overload resolves the parent's skeletal bone and reports that
+  bone's animation channel instead.
 
 Unsupported actions should remain nonfatal actor diagnostics until their
 subsystem exists; they must not silently claim successful behavior.

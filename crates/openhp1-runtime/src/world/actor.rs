@@ -61,6 +61,7 @@ impl ScriptRuntime {
             actor_bone_names: HashMap::default(),
             actor_bone_positions: HashMap::default(),
             actor_visual_bounds: HashMap::default(),
+            animation_channels: HashMap::default(),
             animation_commands: HashMap::default(),
             animating: HashSet::default(),
             sound_channels: HashMap::default(),
