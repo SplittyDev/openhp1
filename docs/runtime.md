@@ -42,6 +42,7 @@ geometry; HP1 uses this while temporarily shrinking Harry's mount collision.
 Random natives share the runtime's deterministic stream. `RotRand` draws yaw,
 then pitch, from the full `0..=65535` Unreal angle range; its optional `bRoll`
 defaults to false and draws roll from that same stream only when true.
+`Sin`, `Cos`, and `Tan` take radians.
 
 ## State execution
 

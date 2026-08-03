@@ -46,6 +46,7 @@ enum ScalarNative {
     NotEqual_FloatFloat,
     Abs,
     Sin,
+    Cos,
     Tan,
     Sqrt,
     Subtract_PreVector,
@@ -127,6 +128,7 @@ impl TryFrom<u16> for ScalarNative {
             0xb5 => Ok(Self::NotEqual_FloatFloat),
             0xba => Ok(Self::Abs),
             0xbb => Ok(Self::Sin),
+            0xbc => Ok(Self::Cos),
             0xbd => Ok(Self::Tan),
             0xc1 => Ok(Self::Sqrt),
             0xd3 => Ok(Self::Subtract_PreVector),
@@ -386,6 +388,7 @@ pub(in crate::world) fn scalar_native(
         }
         (ScalarNative::Abs, [Value::Float(value)]) => Value::Float(value.abs()),
         (ScalarNative::Sin, [Value::Float(value)]) => Value::Float(value.sin()),
+        (ScalarNative::Cos, [Value::Float(value)]) => Value::Float(value.cos()),
         (ScalarNative::Tan, [Value::Float(value)]) => Value::Float(value.tan()),
         (ScalarNative::Sqrt, [Value::Float(value)]) => Value::Float(value.sqrt()),
         (ScalarNative::Subtract_PreVector, [Value::Vector(value)]) => {

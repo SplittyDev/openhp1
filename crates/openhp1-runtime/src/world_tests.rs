@@ -467,6 +467,61 @@ fn sine_uses_radians() {
 }
 
 #[test]
+fn cosine_dispatches_from_bytecode_through_runtime_native() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-cos-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut bytes = vec![0x04, 0xbc, 0x1e];
+    bytes.extend(std::f32::consts::PI.to_le_bytes());
+    bytes.push(0x16);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    let Value::Float(value) = frame
+        .execute(|call, arguments| {
+            let FunctionCall::Native(index) = call else {
+                unreachable!()
+            };
+            runtime.native(
+                0,
+                &class,
+                &package,
+                index,
+                arguments,
+                &mut instance,
+                &mut actions,
+                0,
+            )
+        })
+        .unwrap()
+    else {
+        panic!("expected float");
+    };
+    assert!((value + 1.0).abs() < 1.0e-6);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn bone_numbers_follow_case_insensitive_skeletal_order() {
     let bones = vec!["Root".to_owned(), "Head".to_owned()];
     assert_eq!(bone_number(Some(&bones), "head"), 1);
