@@ -244,6 +244,8 @@ targeting reticle to destroy their child emitters.
 
 Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
+Zone `DamageType` and pawn `ReducedDamageType` accept serialized NameProperty
+values, including `Name("None")`, so zone physics remains runnable.
 `Actor.AutonomousPhysics` uses that same per-actor physics update and suppresses
 the later scheduled physics pass for its actor in the current runtime tick.
 An idle walking pawn still steps down to a reachable floor; a floor probe alone

@@ -377,6 +377,7 @@ impl ScriptRuntime {
             .instance_property(class, instance, name)
             .map_err(|error| error.to_string())?
         {
+            Some(StoredValue::Name(value)) => Ok(Some(value)),
             Some(StoredValue::Value(Value::NameText(value))) => Ok(Some(value)),
             Some(StoredValue::Value(Value::Name(index))) => usize::try_from(index)
                 .ok()

@@ -2885,7 +2885,7 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
             ),
             (
                 fields["DamageType"].clone(),
-                StoredValue::Value(Value::NameText("None".to_owned())),
+                StoredValue::Name("None".to_owned()),
             ),
         ]
         .into_iter()
@@ -2893,6 +2893,15 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
     );
     runtime.collision = Some(actor_reachable_bsp());
     runtime.level_info = Some(0);
+    assert_eq!(
+        runtime
+            .zone_physics(Vec3::ZERO, 0, &runtime.instances[&0].clone())
+            .unwrap()
+            .unwrap()
+            .damage_type
+            .as_deref(),
+        Some("None"),
+    );
     let navigation = runtime.object_handle(navigation).unwrap();
     let mut pawn_instance = [
         (fields["Location"].clone(), Value::Vector([0.0; 3])),
