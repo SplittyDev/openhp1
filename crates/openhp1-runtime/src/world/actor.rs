@@ -94,7 +94,7 @@ impl ScriptRuntime {
             }
         })?;
         self.reach_specs.clear();
-        for spec in level.reach_specs {
+        for (index, spec) in level.reach_specs.into_iter().enumerate() {
             let Some(start) = self.packages.resolve(&package, spec.start_actor)? else {
                 continue;
             };
@@ -102,6 +102,7 @@ impl ScriptRuntime {
                 continue;
             };
             self.reach_specs.push(NavigationReachSpec {
+                index,
                 distance: spec.distance,
                 start: object_id(&start.package, start.export_index),
                 end: object_id(&end.package, end.export_index),

@@ -273,6 +273,14 @@ hidden state, and does not perform a line-of-sight trace.
 `LineOfSightTo` applies the receiver's `SightRadius` and accepts a clear BSP
 trace from its `BaseEyeHeight` to the target's center, half-height top, or
 half-height bottom; unlike `CanSee`, it does not apply peripheral vision.
+`Pawn.actorReachable` is a bounded, non-mutating collision simulation: it
+rejects unsuitable or player-only navigation points using their authored,
+unpruned reach-spec paths sized for the pawn, rejects water and pain zones the
+pawn cannot enter, checks the destination against BSP using UE1's 3x3x3
+nearby-location probe, then uses the ordinary movement sweeps and wall-slide
+response for up to five walking, flying, or swimming probes. Walking reaches
+its horizontal goal first, then makes its final vertical sweep only toward
+gravity. It is not a line-of-sight query.
 `SetOwner` updates the persistent `Owner` reference and sends `LostChild` and
 `GainedChild` to the old and new owners.
 Engine side effects without an OpenHP1 surface do not abort scripts:

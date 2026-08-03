@@ -50,7 +50,9 @@ pub(super) struct ZonePhysics {
     ground_friction: f32,
     fluid_friction: f32,
     terminal_velocity: f32,
-    water: bool,
+    pub(in crate::world) water: bool,
+    pub(in crate::world) pain: bool,
+    pub(in crate::world) damage_type: Option<String>,
 }
 
 impl ScriptRuntime {

@@ -59,6 +59,7 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
     );
 
     let collision = BspCollision::from_model(&model).unwrap();
+    assert!(collision.overlaps_cylinder(Vec3::ZERO, 1.0, 1.0));
     let hit = collision
         .sweep_aabb(Vec3::new(20.0, 0.0, 0.0), Vec3::ZERO, Vec3::ONE)
         .unwrap();

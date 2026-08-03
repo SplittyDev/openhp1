@@ -266,6 +266,15 @@ impl BspCollision {
         self.sweep_shape(start, end, SweepShape::Cylinder { radius, height })
     }
 
+    pub fn overlaps_cylinder(&self, location: Vec3, radius: f32, height: f32) -> bool {
+        location.is_finite()
+            && radius.is_finite()
+            && height.is_finite()
+            && radius >= 0.0
+            && height >= 0.0
+            && self.overlaps_shape(location, SweepShape::Cylinder { radius, height })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn sweep_transformed_aabb(
         &self,
@@ -433,6 +442,27 @@ impl BspCollision {
             }
         }
         nearest.map(|(_, hit)| hit)
+    }
+
+    fn overlaps_shape(&self, location: Vec3, shape: SweepShape) -> bool {
+        let extents = shape.bounds();
+        let minimum = location - extents;
+        let maximum = location + extents;
+        let candidate_count = self
+            .hulls_by_min_x
+            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= maximum.x);
+        self.hulls_by_min_x[..candidate_count].iter().any(|&index| {
+            let hull = &self.hulls[index];
+            hull.bounds.maximum.x >= minimum.x
+                && hull.bounds.maximum.y >= minimum.y
+                && hull.bounds.minimum.y <= maximum.y
+                && hull.bounds.maximum.z >= minimum.z
+                && hull.bounds.minimum.z <= maximum.z
+                && hull.planes.iter().all(|plane| {
+                    plane.plane.normal.dot(location) - plane.plane.distance
+                        <= shape.support(plane.plane.normal)
+                })
+        })
     }
 
     pub fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {

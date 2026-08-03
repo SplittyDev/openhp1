@@ -1134,6 +1134,24 @@ impl ScriptRuntime {
                 .line_of_sight_to(actor, actor_class, instance, other)
                 .map(Value::Bool);
         }
+        if index == ACTOR_REACHABLE {
+            let [other] = arguments else {
+                return Err(format!(
+                    "actorReachable expects one actor, found {}",
+                    arguments.len()
+                ));
+            };
+            let other = match other {
+                Value::None | Value::Object(0) => return Ok(Value::Bool(false)),
+                Value::Object(handle) => self
+                    .actor_for_handle(*handle)
+                    .map_err(|error| error.to_string())?,
+                value => return Err(format!("actorReachable actor is {}", value.kind())),
+            };
+            return self
+                .actor_reachable(actor, actor_class, instance, other)
+                .map(Value::Bool);
+        }
         if index == ADD_PAWN {
             if !arguments.is_empty() {
                 return Err(format!(

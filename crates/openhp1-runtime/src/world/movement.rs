@@ -1,6 +1,7 @@
 use glam::{Mat3, Vec3};
 use openhp1_physics::{boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder};
 
+use super::physics::{PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING};
 use super::*;
 
 mod collision;
@@ -285,6 +286,339 @@ impl ScriptRuntime {
         Ok(Value::Bool(hit.fraction == 1.0))
     }
 
+    pub(super) fn actor_reachable(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &InstanceState,
+        target: usize,
+    ) -> std::result::Result<bool, String> {
+        if self.destroyed.contains(&target) {
+            return Ok(false);
+        }
+        let target_object = self
+            .actor_objects
+            .get(&target)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {target} has no object identity"))?;
+        let target_class = self
+            .actor_classes
+            .get(&target)
+            .cloned()
+            .ok_or_else(|| format!("actorReachable target actor {target} has no class"))?;
+        let target_class = self
+            .resolved_object(&target_class)
+            .map_err(|error| error.to_string())?;
+        let target_instance = if target == actor {
+            instance.clone()
+        } else {
+            self.instances
+                .get(&target)
+                .cloned()
+                .ok_or_else(|| format!("actorReachable target actor {target} instance is active"))?
+        };
+        let target_location =
+            Vec3::from_array(self.actor_vector(&target_class, &target_instance, "Location")?);
+        let current_location =
+            Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+        let navpoint = if self
+            .class_has_name(&target_class, "NavigationPoint")
+            .map_err(|error| error.to_string())?
+        {
+            Some(target_object)
+        } else if self
+            .class_has_name(&target_class, "Inventory")
+            .map_err(|error| error.to_string())?
+        {
+            self.other_actor_object(target, "myMarker")?
+        } else {
+            None
+        };
+        let target_is_pawn = navpoint.is_none()
+            && self
+                .class_has_name(&target_class, "Pawn")
+                .map_err(|error| error.to_string())?;
+        if !target_is_pawn && current_location.distance_squared(target_location) > 1_000_000.0 {
+            return Ok(false);
+        }
+        let is_player = self
+            .optional_actor_bool(actor_class, instance, "bIsPlayer")?
+            .unwrap_or(
+                self.class_has_name(actor_class, "PlayerPawn")
+                    .map_err(|error| error.to_string())?,
+            );
+        let radius = self.actor_float(actor_class, instance, "CollisionRadius")?;
+        let height = self.actor_float(actor_class, instance, "CollisionHeight")?;
+        if let Some(navpoint) = navpoint {
+            let player_only =
+                self.object_actors
+                    .get(&navpoint)
+                    .copied()
+                    .map(|navpoint| {
+                        let class =
+                            self.actor_classes.get(&navpoint).cloned().ok_or_else(|| {
+                                format!("navigation point {navpoint} has no class")
+                            })?;
+                        let class = self
+                            .resolved_object(&class)
+                            .map_err(|error| error.to_string())?;
+                        let instance = if navpoint == actor {
+                            instance.clone()
+                        } else {
+                            self.instances.get(&navpoint).cloned().ok_or_else(|| {
+                                format!("navigation point {navpoint} instance is active")
+                            })?
+                        };
+                        self.optional_actor_bool(&class, &instance, "bPlayerOnly")
+                    })
+                    .transpose()?
+                    .flatten()
+                    .unwrap_or(false);
+            if player_only && !is_player {
+                return Ok(false);
+            }
+            if !self.navigation_point_reaches(&navpoint, radius, height)? {
+                return Ok(false);
+            }
+        }
+
+        if self.collision.is_some() {
+            if self
+                .zone_physics(target_location, actor, instance)?
+                .is_some_and(|zone| zone.water)
+                && !self.actor_bool(actor_class, instance, "bCanSwim")?
+            {
+                return Ok(false);
+            }
+            let foot = if target_is_pawn {
+                target_location
+                    - Vec3::Z
+                        * self.actor_float(&target_class, &target_instance, "CollisionHeight")?
+            } else {
+                target_location
+            };
+            let reduced_damage_type =
+                self.optional_actor_name(actor_class, instance, "ReducedDamageType")?;
+            if let Some(zone) = self.zone_physics(foot, actor, instance)? {
+                let damage_matches = match (&zone.damage_type, &reduced_damage_type) {
+                    (Some(zone), Some(reduced)) => zone.eq_ignore_ascii_case(reduced),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if zone.pain && !damage_matches {
+                    return Ok(false);
+                }
+            }
+        }
+        let mut eye = current_location;
+        eye.z += self.actor_float(actor_class, instance, "BaseEyeHeight")?;
+        if !self.has_line_of_sight(eye, target_location) {
+            return Ok(false);
+        }
+
+        let check_location = self.actor_bool(actor_class, instance, "bCollideWorld")?
+            || self.actor_bool(actor_class, instance, "bCollideWhenPlacing")?;
+        if !self.actor_reachable_check_location(target_location, radius, height, check_location)? {
+            return Ok(false);
+        }
+
+        let mut current = self.collision_actor(actor, actor_class, instance)?;
+        let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
+        let physics = self.actor_byte(actor_class, instance, "Physics")?;
+        let mut reached = false;
+        for _ in 0..5 {
+            let mut delta = target_location - current.location;
+            if physics == PHYS_WALKING {
+                delta.z = 0.0;
+                if delta.length_squared() <= 1.0 {
+                    reached = true;
+                    break;
+                }
+                let step_height = self.actor_float(actor_class, instance, "MaxStepHeight")?;
+                let gravity_direction = self
+                    .collision
+                    .is_some()
+                    .then(|| self.zone_physics(current.location, actor, instance))
+                    .transpose()?
+                    .flatten()
+                    .map_or(-1.0, |zone| if zone.gravity.z > 0.0 { 1.0 } else { -1.0 });
+                let step_up = Vec3::new(0.0, 0.0, -gravity_direction * step_height);
+                let (hit, _) =
+                    self.movement_hit(&current, step_up, collide_world, actor, instance)?;
+                current.location += step_up * hit.fraction;
+
+                let (hit, _) =
+                    self.movement_hit(&current, delta, collide_world, actor, instance)?;
+                let mut moved = delta * hit.fraction;
+                current.location += moved;
+                if hit.fraction < 1.0 {
+                    let remaining = target_location - current.location;
+                    let Some(aligned) = smooth_remaining_delta(remaining, hit.normal, hit.fraction)
+                    else {
+                        break;
+                    };
+                    if aligned.length_squared() <= 0.00000001 {
+                        break;
+                    }
+                    let (hit, _) =
+                        self.movement_hit(&current, aligned, collide_world, actor, instance)?;
+                    moved = remaining * hit.fraction;
+                    current.location += moved;
+                }
+                let (hit, _) =
+                    self.movement_hit(&current, -step_up, collide_world, actor, instance)?;
+                current.location -= step_up * hit.fraction;
+                if moved.length_squared() <= 1.0 {
+                    break;
+                }
+            } else if matches!(physics, PHYS_FLYING | PHYS_SWIMMING) {
+                if delta.length_squared() <= 1.0 {
+                    reached = true;
+                    break;
+                }
+                let (hit, _) =
+                    self.movement_hit(&current, delta, collide_world, actor, instance)?;
+                let mut moved = delta * hit.fraction;
+                current.location += moved;
+                if hit.fraction < 1.0 {
+                    let remaining = target_location - current.location;
+                    let Some(aligned) = smooth_remaining_delta(remaining, hit.normal, hit.fraction)
+                    else {
+                        break;
+                    };
+                    if aligned.length_squared() <= 0.00000001 {
+                        break;
+                    }
+                    let (hit, _) =
+                        self.movement_hit(&current, aligned, collide_world, actor, instance)?;
+                    moved = remaining * hit.fraction;
+                    current.location += moved;
+                }
+                if moved.length_squared() <= 1.0 {
+                    break;
+                }
+            } else {
+                return Ok(false);
+            }
+        }
+        if reached && physics == PHYS_WALKING {
+            let vertical = target_location.z - current.location.z;
+            let gravity_direction = self
+                .collision
+                .is_some()
+                .then(|| self.zone_physics(current.location, actor, instance))
+                .transpose()?
+                .flatten()
+                .map_or(-1.0, |zone| if zone.gravity.z > 0.0 { 1.0 } else { -1.0 });
+            if (vertical < -0.1 && gravity_direction == -1.0)
+                || (vertical > 0.1 && gravity_direction == 1.0)
+            {
+                let (hit, _) = self.movement_hit(
+                    &current,
+                    Vec3::new(0.0, 0.0, vertical),
+                    collide_world,
+                    actor,
+                    instance,
+                )?;
+                current.location.z += vertical * hit.fraction;
+            }
+            reached = (target_location.z - current.location.z).abs() <= height;
+        }
+        Ok(reached)
+    }
+
+    fn navigation_point_reaches(
+        &mut self,
+        target: &ObjectId,
+        radius: f32,
+        height: f32,
+    ) -> std::result::Result<bool, String> {
+        let navigation_points = self
+            .actor_classes
+            .iter()
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
+        for (actor, class) in navigation_points {
+            let class = self
+                .resolved_object(&class)
+                .map_err(|error| error.to_string())?;
+            if self
+                .find_property(&class, "Paths", 0)
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                continue;
+            }
+            if !self
+                .class_has_name(&class, "NavigationPoint")
+                .map_err(|error| error.to_string())?
+            {
+                continue;
+            }
+            let instance = self
+                .instances
+                .get(&actor)
+                .cloned()
+                .ok_or_else(|| format!("navigation point {actor} instance is active"))?;
+            for property in ["Paths", "PrunedPaths"] {
+                let Some(StoredValue::Array(paths)) = self
+                    .instance_property(&class, &instance, property)
+                    .map_err(|error| error.to_string())?
+                else {
+                    continue;
+                };
+                for path in paths {
+                    let StoredValue::Value(Value::Int(index)) = path else {
+                        return Err(format!("navigation point {actor} {property} is not an int"));
+                    };
+                    let Ok(index) = usize::try_from(index) else {
+                        break;
+                    };
+                    let Some(spec) = self.reach_specs.iter().find(|spec| spec.index == index)
+                    else {
+                        continue;
+                    };
+                    if spec.end == *target
+                        && !spec.pruned
+                        && spec.collision_radius as f32 >= radius
+                        && spec.collision_height as f32 >= height
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn actor_reachable_check_location(
+        &self,
+        location: Vec3,
+        radius: f32,
+        height: f32,
+        check: bool,
+    ) -> std::result::Result<bool, String> {
+        if !check {
+            return Ok(true);
+        }
+        let collision = self
+            .collision
+            .as_ref()
+            .ok_or_else(|| "actorReachable requires a configured BSP collision model".to_owned())?;
+        let scale = radius.max(height);
+        for z in [0.0, 1.0, -1.0] {
+            for y in [0.0, 1.0, -1.0] {
+                for x in [0.0, 1.0, -1.0] {
+                    let location = location + Vec3::new(x, y, z) * scale;
+                    if !collision.overlaps_cylinder(location, radius, height) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn move_actor_smooth(
         &mut self,
         actor: usize,
@@ -316,8 +650,6 @@ impl ScriptRuntime {
         }
         let candidate = self.collision_actor(usize::MAX, class, instance)?;
         self.ensure_collision_actors(active_actor, active_instance)?;
-        // ponytail: authored spawn points are world-valid; add nearby BSP-aware
-        // placement search when arbitrary runtime spawn locations need it.
         Ok(self
             .collision_actors
             .iter()
@@ -378,66 +710,9 @@ impl ScriptRuntime {
         }
         let current = self.collision_actor(actor, actor_class, instance)?;
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let world_hit = if collide_world && current.brush.is_none() {
-            let collision = self
-                .collision
-                .as_ref()
-                .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?;
-            if current.collide_type == COLLIDE_BOX {
-                collision.sweep_aabb(
-                    current.location,
-                    current.location + delta,
-                    collision_actor_world_extents(&current),
-                )
-            } else {
-                collision.sweep_cylinder(
-                    current.location,
-                    current.location + delta,
-                    current.radius,
-                    current.height,
-                )
-            }
-        } else {
-            None
-        };
-        let mut blocking_hit = if let Some(hit) = world_hit {
-            MovementHit {
-                fraction: hit.fraction,
-                normal: hit.normal,
-                actor: None,
-                node: Some(hit.node),
-            }
-        } else {
-            MovementHit {
-                fraction: 1.0,
-                normal: Vec3::ZERO,
-                actor: None,
-                node: None,
-            }
-        };
-
-        let mut hits = if (current.collide_actors || collide_world) && current.brush.is_none() {
-            self.actor_sweeps(&current, delta, collide_world, actor, instance)?
-        } else {
-            Vec::new()
-        };
-        hits.sort_by(|left, right| {
-            left.fraction
-                .total_cmp(&right.fraction)
-                .then_with(|| left.actor.cmp(&right.actor))
-        });
-        let blocking_actor = hits
-            .iter()
-            .find(|hit| hit.blocking && hit.fraction < blocking_hit.fraction)
-            .map(|hit| {
-                blocking_hit = MovementHit {
-                    fraction: hit.fraction,
-                    normal: hit.normal,
-                    actor: Some(hit.actor),
-                    node: None,
-                };
-                hit.actor
-            });
+        let (blocking_hit, hits) =
+            self.movement_hit(&current, delta, collide_world, actor, instance)?;
+        let blocking_actor = blocking_hit.actor;
 
         let Some(actions) = actions.as_mut() else {
             return Ok(blocking_hit);
@@ -492,6 +767,80 @@ impl ScriptRuntime {
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
         Ok(blocking_hit)
+    }
+
+    fn movement_hit(
+        &mut self,
+        current: &CollisionActor,
+        delta: Vec3,
+        collide_world: bool,
+        current_actor: usize,
+        current_instance: &InstanceState,
+    ) -> std::result::Result<(MovementHit, Vec<ActorSweep>), String> {
+        let world_hit = if collide_world && current.brush.is_none() {
+            let collision = self
+                .collision
+                .as_ref()
+                .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?;
+            if current.collide_type == COLLIDE_BOX {
+                collision.sweep_aabb(
+                    current.location,
+                    current.location + delta,
+                    collision_actor_world_extents(current),
+                )
+            } else {
+                collision.sweep_cylinder(
+                    current.location,
+                    current.location + delta,
+                    current.radius,
+                    current.height,
+                )
+            }
+        } else {
+            None
+        };
+        let mut blocking_hit = if let Some(hit) = world_hit {
+            MovementHit {
+                fraction: hit.fraction,
+                normal: hit.normal,
+                actor: None,
+                node: Some(hit.node),
+            }
+        } else {
+            MovementHit {
+                fraction: 1.0,
+                normal: Vec3::ZERO,
+                actor: None,
+                node: None,
+            }
+        };
+        let mut hits = Vec::new();
+        if (current.collide_actors || collide_world) && current.brush.is_none() {
+            hits = self.actor_sweeps(
+                current,
+                delta,
+                collide_world,
+                current_actor,
+                current_instance,
+            )?;
+            hits.sort_by(|left, right| {
+                left.fraction
+                    .total_cmp(&right.fraction)
+                    .then_with(|| left.actor.cmp(&right.actor))
+            });
+            if let Some(hit) = hits
+                .iter()
+                .find(|hit| hit.blocking && hit.fraction < blocking_hit.fraction)
+            {
+                blocking_hit = MovementHit {
+                    fraction: hit.fraction,
+                    normal: hit.normal,
+                    actor: Some(hit.actor),
+                    node: None,
+                };
+            }
+        }
+        Ok((blocking_hit, hits))
     }
 
     fn based_actors(&self, actor: usize) -> std::result::Result<Vec<usize>, String> {

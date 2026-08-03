@@ -149,6 +149,10 @@ impl ScriptRuntime {
             fluid_friction: self.actor_float(&class, &instance, "ZoneFluidFriction")?,
             terminal_velocity: self.actor_float(&class, &instance, "ZoneTerminalVelocity")?,
             water: self.actor_bool(&class, &instance, "bWaterZone")?,
+            pain: self
+                .optional_actor_bool(&class, &instance, "bPainZone")?
+                .unwrap_or(false),
+            damage_type: self.optional_actor_name(&class, &instance, "DamageType")?,
         }))
     }
 
@@ -218,7 +222,7 @@ impl ScriptRuntime {
         }
     }
 
-    pub(super) fn other_actor_object(
+    pub(in crate::world) fn other_actor_object(
         &mut self,
         actor: usize,
         name: &str,
@@ -347,7 +351,7 @@ impl ScriptRuntime {
         }
     }
 
-    pub(super) fn optional_actor_bool(
+    pub(in crate::world) fn optional_actor_bool(
         &mut self,
         class: &ResolvedObject,
         instance: &InstanceState,
@@ -358,6 +362,28 @@ impl ScriptRuntime {
             .map_err(|error| error.to_string())?
         {
             Some(StoredValue::Value(Value::Bool(value))) => Ok(Some(value)),
+            Some(value) => Err(format!("actor property {name} is {value:?}")),
+            None => Ok(None),
+        }
+    }
+
+    pub(in crate::world) fn optional_actor_name(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        match self
+            .instance_property(class, instance, name)
+            .map_err(|error| error.to_string())?
+        {
+            Some(StoredValue::Value(Value::NameText(value))) => Ok(Some(value)),
+            Some(StoredValue::Value(Value::Name(index))) => usize::try_from(index)
+                .ok()
+                .filter(|&index| index < class.package.summary().names.len())
+                .map(|index| Some(class.package.summary().name(index).to_owned()))
+                .ok_or_else(|| format!("actor property {name} has invalid name index {index}")),
+            Some(StoredValue::Value(Value::None)) => Ok(Some("None".to_owned())),
             Some(value) => Err(format!("actor property {name} is {value:?}")),
             None => Ok(None),
         }

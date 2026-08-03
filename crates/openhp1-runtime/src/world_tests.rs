@@ -20,15 +20,21 @@ use super::{
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
-use openhp1_map::PrimitiveBounds;
+use openhp1_map::{BspNode, Model, PrimitiveBounds};
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
 
 fn synthetic_runtime_package() -> Vec<u8> {
+    synthetic_runtime_package_for("PlayerPawn")
+}
+
+fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     const HEADER_SIZE: usize = 44;
+    let mut class_name = class_name.as_bytes().to_vec();
+    class_name.push(0);
     let name_offset = HEADER_SIZE;
     let export_offset = name_offset
-        + b"PlayerPawn\0".len()
+        + class_name.len()
         + size_of::<u32>()
         + b"ClientTravel\0".len()
         + size_of::<u32>()
@@ -58,7 +64,7 @@ fn synthetic_runtime_package() -> Vec<u8> {
         bytes.extend(value.to_le_bytes());
     }
     for name in [
-        b"PlayerPawn\0".as_slice(),
+        class_name.as_slice(),
         b"ClientTravel\0".as_slice(),
         b"GetPlayerNetworkAddress\0".as_slice(),
         b"Pawn\0".as_slice(),
@@ -632,6 +638,463 @@ fn line_of_sight_to_dispatches_numeric_native() {
             .unwrap(),
         Value::Bool(true),
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn actor_reachable_bsp() -> Arc<BspCollision> {
+    let planes = [
+        [1.0, 0.0, 0.0, 105.0],
+        [-1.0, 0.0, 0.0, -95.0],
+        [0.0, 1.0, 0.0, 5.0],
+        [0.0, -1.0, 0.0, 5.0],
+        [0.0, 0.0, 1.0, 5.0],
+        [0.0, 0.0, -1.0, 5.0],
+    ];
+    let model = Model {
+        bounds: PrimitiveBounds {
+            minimum: Vec3::ZERO,
+            maximum: Vec3::ZERO,
+            valid: false,
+            sphere: [0.0; 4],
+        },
+        vectors: Vec::new(),
+        points: Vec::new(),
+        nodes: planes
+            .into_iter()
+            .enumerate()
+            .map(|(index, plane)| BspNode {
+                plane,
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 0,
+                surface: -1,
+                back: -1,
+                front: -1,
+                coplanar: -1,
+                collision_bound: (index == 0).then_some(0).unwrap_or(-1),
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 0,
+                leaves: [0; 2],
+            })
+            .collect(),
+        surfaces: Vec::new(),
+        vertices: Vec::new(),
+        shared_side_count: 0,
+        zones: Vec::new(),
+        polys: ObjectReference::None,
+        light_maps: Vec::new(),
+        light_bits: Vec::new(),
+        collision_bounds: Vec::new(),
+        leaf_hulls: vec![
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            -1,
+            95.0_f32.to_bits() as i32,
+            (-5.0_f32).to_bits() as i32,
+            (-5.0_f32).to_bits() as i32,
+            105.0_f32.to_bits() as i32,
+            5.0_f32.to_bits() as i32,
+            5.0_f32.to_bits() as i32,
+        ],
+        leaves: Vec::new(),
+        lights: Vec::new(),
+        root_outside: true,
+        linked: false,
+    };
+    Arc::new(BspCollision::from_model(&model).unwrap())
+}
+
+#[test]
+fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_routes() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-actor-reachable-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let pawn_path = system.join("Pawn.u");
+    let navigation_path = system.join("Navigation.u");
+    fs::write(&pawn_path, synthetic_runtime_package()).unwrap();
+    fs::write(
+        &navigation_path,
+        synthetic_runtime_package_for("NavigationPoint"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let pawn_package = runtime.packages.load_path(&pawn_path).unwrap();
+    let navigation_package = runtime.packages.load_path(&navigation_path).unwrap();
+    let pawn_class = ResolvedObject {
+        package: Arc::clone(&pawn_package),
+        export_index: 0,
+    };
+    let pawn_class_id = object_id(&pawn_package, 0);
+    let navigation_class_id = object_id(&navigation_package, 0);
+    runtime.scripts.insert(
+        navigation_class_id.clone(),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 0,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 0,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                raw_len: 0,
+                bytes: Vec::new(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    let function = ResolvedObject {
+        package: Arc::clone(&pawn_package),
+        export_index: 1,
+    };
+    runtime.scripts.insert(
+        object_id(&pawn_package, 1),
+        Arc::new(openhp1_script::ScriptExport {
+            export_index: 1,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                raw_len: 0,
+                bytes: Vec::new(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: ACTOR_REACHABLE,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        }),
+    );
+
+    let fields = [
+        "Location",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "Rotation",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "bStatic",
+        "bMovable",
+        "Physics",
+        "BaseEyeHeight",
+        "bIsPlayer",
+        "bPlayerOnly",
+        "Paths",
+        "PrunedPaths",
+        "ZoneGravity",
+        "ZoneVelocity",
+        "ZoneGroundFriction",
+        "ZoneFluidFriction",
+        "ZoneTerminalVelocity",
+        "bWaterZone",
+        "bPainZone",
+        "DamageType",
+        "ReducedDamageType",
+        "bCanSwim",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| {
+        (
+            name,
+            ObjectId {
+                package: Arc::from("<actor-reachable-test>"),
+                export_index: index,
+            },
+        )
+    })
+    .collect::<HashMap<_, _>>();
+    for class in [&pawn_class_id, &navigation_class_id] {
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class.clone(), name.to_ascii_lowercase()),
+                if class == &pawn_class_id && matches!(*name, "Paths" | "PrunedPaths") {
+                    None
+                } else {
+                    Some(field.clone())
+                },
+            );
+        }
+        runtime
+            .fields
+            .insert((class.clone(), "mainscale".to_owned()), None);
+    }
+
+    let pawn = runtime_actor_id(1);
+    let navigation = runtime_actor_id(2);
+    runtime.actor_classes.insert(1, pawn_class_id.clone());
+    runtime.actor_classes.insert(2, navigation_class_id);
+    runtime.actor_classes.insert(0, pawn_class_id.clone());
+    runtime.object_actors.insert(pawn.clone(), 1);
+    runtime.object_actors.insert(navigation.clone(), 2);
+    runtime.actor_objects.insert(1, pawn.clone());
+    runtime.actor_objects.insert(2, navigation.clone());
+    runtime.next_actor = 3;
+    runtime.instances.insert(
+        2,
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
+            ),
+            (
+                fields["bPlayerOnly"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["Paths"].clone(),
+                StoredValue::Array(vec![StoredValue::Value(Value::Int(0))]),
+            ),
+            (
+                fields["PrunedPaths"].clone(),
+                StoredValue::Array(Vec::new()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.reach_specs.push(NavigationReachSpec {
+        index: 0,
+        distance: 100,
+        start: pawn,
+        end: navigation.clone(),
+        collision_radius: 20,
+        collision_height: 40,
+        pruned: false,
+    });
+    runtime.reach_specs.push(NavigationReachSpec {
+        index: 1,
+        distance: 100,
+        start: runtime_actor_id(1),
+        end: navigation.clone(),
+        collision_radius: 20,
+        collision_height: 40,
+        pruned: false,
+    });
+    runtime.instances.insert(
+        0,
+        [
+            (
+                fields["ZoneGravity"].clone(),
+                StoredValue::Value(Value::Vector([0.0, 0.0, -950.0])),
+            ),
+            (
+                fields["ZoneVelocity"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["ZoneGroundFriction"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["ZoneFluidFriction"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["ZoneTerminalVelocity"].clone(),
+                StoredValue::Value(Value::Float(2_500.0)),
+            ),
+            (
+                fields["bWaterZone"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bPainZone"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["DamageType"].clone(),
+                StoredValue::Value(Value::NameText("None".to_owned())),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.collision = Some(actor_reachable_bsp());
+    runtime.level_info = Some(0);
+    let navigation = runtime.object_handle(navigation).unwrap();
+    let mut pawn_instance = [
+        (fields["Location"].clone(), Value::Vector([0.0; 3])),
+        (fields["CollisionHeight"].clone(), Value::Float(20.0)),
+        (fields["CollisionRadius"].clone(), Value::Float(10.0)),
+        (fields["bCollideActors"].clone(), Value::Bool(true)),
+        (fields["bBlockPlayers"].clone(), Value::Bool(true)),
+        (fields["bCollideWorld"].clone(), Value::Bool(false)),
+        (fields["bCollideWhenPlacing"].clone(), Value::Bool(true)),
+        (fields["bStatic"].clone(), Value::Bool(false)),
+        (fields["bMovable"].clone(), Value::Bool(true)),
+        (fields["Physics"].clone(), Value::Byte(4)),
+        (fields["BaseEyeHeight"].clone(), Value::Float(0.0)),
+        (fields["bIsPlayer"].clone(), Value::Bool(true)),
+        (
+            fields["ReducedDamageType"].clone(),
+            Value::NameText("None".to_owned()),
+        ),
+    ]
+    .into_iter()
+    .map(|(field, value)| (field, StoredValue::Value(value)))
+    .collect::<InstanceState>();
+
+    let collision = runtime.collision.as_ref().unwrap();
+    assert!(collision.overlaps_cylinder(Vec3::new(100.0, 0.0, 0.0), 10.0, 20.0));
+    assert!(!collision.overlaps_cylinder(Vec3::new(120.0, 0.0, 0.0), 10.0, 20.0));
+
+    assert_eq!(
+        runtime
+            .execute_function(
+                1,
+                &pawn_class,
+                &function,
+                &[Value::Object(navigation)],
+                &mut pawn_instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(true),
+    );
+    runtime.reach_specs[0].pruned = true;
+    assert_eq!(
+        runtime
+            .execute_function(
+                1,
+                &pawn_class,
+                &function,
+                &[Value::Object(navigation)],
+                &mut pawn_instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(false),
+    );
+    runtime.reach_specs[0].pruned = false;
+    let blocker = runtime_actor_id(3);
+    runtime.actor_classes.insert(3, pawn_class_id);
+    runtime.object_actors.insert(blocker.clone(), 3);
+    runtime.actor_objects.insert(3, blocker);
+    runtime.instances.insert(
+        3,
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([50.0, 0.0, 0.0])),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(20.0)),
+            ),
+            (
+                fields["CollisionRadius"].clone(),
+                StoredValue::Value(Value::Float(20.0)),
+            ),
+            (
+                fields["bCollideActors"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bBlockPlayers"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.next_actor = 4;
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    assert_eq!(
+        runtime
+            .execute_function(
+                1,
+                &pawn_class,
+                &function,
+                &[Value::Object(navigation)],
+                &mut pawn_instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(false),
+    );
+    assert!(matches!(
+        pawn_instance.get(&fields["Location"]),
+        Some(StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])))
+    ));
+    runtime.instances.get_mut(&2).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, -100.0])),
+    );
+    pawn_instance.insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(1)),
+    );
+    assert_eq!(
+        runtime
+            .execute_function(
+                1,
+                &pawn_class,
+                &function,
+                &[Value::Object(navigation)],
+                &mut pawn_instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap(),
+        Value::Bool(true),
+    );
+    assert!(matches!(
+        pawn_instance.get(&fields["Location"]),
+        Some(StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])))
+    ));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1788,7 +2251,8 @@ fn navigation_uses_the_shortest_unpruned_reachable_step() {
     let short = runtime_actor_id(2);
     let long = runtime_actor_id(3);
     let target = runtime_actor_id(4);
-    let spec = |start, end, distance| NavigationReachSpec {
+    let spec = |index, start, end, distance| NavigationReachSpec {
+        index,
         distance,
         start,
         end,
@@ -1797,10 +2261,10 @@ fn navigation_uses_the_shortest_unpruned_reachable_step() {
         pruned: false,
     };
     let specs = [
-        spec(start.clone(), long.clone(), 10),
-        spec(long, target.clone(), 10),
-        spec(start.clone(), short.clone(), 3),
-        spec(short.clone(), target.clone(), 3),
+        spec(0, start.clone(), long.clone(), 10),
+        spec(1, long, target.clone(), 10),
+        spec(2, start.clone(), short.clone(), 3),
+        spec(3, short.clone(), target.clone(), 3),
     ];
     assert_eq!(
         next_navigation_step(&specs, &start, &target, 20, 20),

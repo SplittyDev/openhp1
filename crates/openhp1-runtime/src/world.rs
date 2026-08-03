@@ -81,6 +81,7 @@ const TURN_TO: u16 = 508;
 const TURN_TOWARD: u16 = 510;
 const MAKE_NOISE: u16 = 512;
 const LINE_OF_SIGHT_TO: u16 = 514;
+const ACTOR_REACHABLE: u16 = 520;
 const PICK_TARGET: u16 = 531;
 const ADD_PAWN: u16 = 529;
 const REMOVE_PAWN: u16 = 530;
@@ -306,6 +307,7 @@ struct AnimationCommand {
 
 #[derive(Clone, Debug)]
 struct NavigationReachSpec {
+    index: usize,
     distance: i32,
     start: ObjectId,
     end: ObjectId,
