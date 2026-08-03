@@ -68,8 +68,8 @@ Label lookup uses the final top-level `LabelTable` in canonical decoded
 bytecode. Serialized state metadata offsets are not canonical decoded-byte
 offsets.
 
-Integer scalar left shifts preserve UE1's 32-bit behavior: shift counts are
-masked to five bits and results wrap.
+Integer scalar shifts preserve UE1's 32-bit behavior: shift counts are masked
+to five bits, left-shift results wrap, and right shifts retain sign extension.
 
 ## Animation actions
 

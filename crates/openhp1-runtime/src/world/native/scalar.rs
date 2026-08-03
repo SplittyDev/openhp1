@@ -24,6 +24,7 @@ enum ScalarNative {
     Add_IntInt,
     Subtract_IntInt,
     LessLess_IntInt,
+    GreaterGreater_IntInt,
     Less_IntInt,
     Greater_IntInt,
     LessEqual_IntInt,
@@ -104,6 +105,7 @@ impl TryFrom<u16> for ScalarNative {
             0x92 => Ok(Self::Add_IntInt),
             0x93 => Ok(Self::Subtract_IntInt),
             0x94 => Ok(Self::LessLess_IntInt),
+            0x95 => Ok(Self::GreaterGreater_IntInt),
             0x96 => Ok(Self::Less_IntInt),
             0x97 => Ok(Self::Greater_IntInt),
             0x98 => Ok(Self::LessEqual_IntInt),
@@ -282,6 +284,9 @@ pub(in crate::world) fn scalar_native(
         }
         (ScalarNative::LessLess_IntInt, [Value::Int(left), Value::Int(right)]) => {
             Value::Int(left.wrapping_shl(*right as u32))
+        }
+        (ScalarNative::GreaterGreater_IntInt, [Value::Int(left), Value::Int(right)]) => {
+            Value::Int(left.wrapping_shr(*right as u32))
         }
         (ScalarNative::Less_IntInt, [Value::Int(left), Value::Int(right)]) => {
             Value::Bool(left < right)

@@ -293,6 +293,34 @@ fn integer_left_shift_executes_through_native_dispatch_with_masked_count() {
 }
 
 #[test]
+fn integer_right_shift_executes_through_native_dispatch_with_sign_extension() {
+    let execute = |left: i32, right: i32| {
+        let mut bytes = vec![0x04, 0x95, 0x1d];
+        bytes.extend(left.to_le_bytes());
+        bytes.push(0x1d);
+        bytes.extend(right.to_le_bytes());
+        bytes.push(0x16);
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        frame
+            .execute(|call, arguments| {
+                assert_eq!(call, FunctionCall::Native(0x95));
+                scalar_native(0x95, arguments)
+            })
+            .unwrap()
+    };
+
+    assert_eq!(execute(i32::MIN, 31), Value::Int(-1));
+    assert_eq!(execute(i32::MIN, 32), Value::Int(i32::MIN));
+    assert_eq!(execute(-1, -1), Value::Int(-1));
+}
+
+#[test]
 fn float_remainder_uses_unreal_dividend_sign() {
     assert_eq!(
         scalar_native(0xad, &[Value::Float(-7.5), Value::Float(2.0)]),
