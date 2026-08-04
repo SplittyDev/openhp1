@@ -146,6 +146,86 @@ fn synthetic_runtime_package_with_extras(
     bytes
 }
 
+fn synthetic_particle_parent_package() -> Vec<u8> {
+    const HEADER_SIZE: usize = 44;
+    let names = ["ParticleFX", "ChildParticleFX"];
+    let name_offset = HEADER_SIZE;
+    let names_len = names.iter().map(|name| name.len() + 5).sum::<usize>();
+    let export_offset = name_offset + names_len;
+    let class_payload = |base| {
+        let mut payload = Vec::new();
+        for reference in [base, 0, 0, 0, 0] {
+            payload.extend(compact_index(reference));
+        }
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u64.to_le_bytes());
+        payload.extend(0_u64.to_le_bytes());
+        payload.extend(0_u16.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend([0; 16]);
+        for _ in 0..5 {
+            payload.extend(compact_index(0));
+        }
+        payload
+    };
+    let payloads = [class_payload(0), class_payload(1)];
+    let export_table = |payload_offset| {
+        let mut table = Vec::new();
+        let mut serial_offset = payload_offset;
+        for (index, payload) in payloads.iter().enumerate() {
+            table.extend(compact_index(0));
+            table.extend(compact_index(0));
+            table.extend(0_i32.to_le_bytes());
+            table.extend(compact_index(index as i32));
+            table.extend(0_u32.to_le_bytes());
+            table.extend(compact_index(payload.len() as i32));
+            table.extend(compact_index(serial_offset as i32));
+            serial_offset += payload.len();
+        }
+        table
+    };
+    let mut payload_offset = export_offset;
+    let export = loop {
+        let table = export_table(payload_offset);
+        let next = export_offset + table.len();
+        if next == payload_offset {
+            break table;
+        }
+        payload_offset = next;
+    };
+    let mut bytes = Vec::new();
+    bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+    bytes.extend(62_u16.to_le_bytes());
+    bytes.extend(0_u16.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    for value in [
+        names.len() as i32,
+        name_offset as i32,
+        payloads.len() as i32,
+        export_offset as i32,
+        0,
+        export_offset as i32,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for name in names {
+        bytes.extend(name.as_bytes());
+        bytes.push(0);
+        bytes.extend(0_u32.to_le_bytes());
+    }
+    bytes.extend(export);
+    assert_eq!(bytes.len(), payload_offset);
+    for payload in payloads {
+        bytes.extend(payload);
+    }
+    bytes
+}
+
 fn compact_index(value: i32) -> Vec<u8> {
     let negative = value < 0;
     let mut value = value.unsigned_abs();
@@ -8349,6 +8429,90 @@ fn spawned_animation_command_waits_until_sequence_metadata_is_known() {
         runtime.instances[&1].get(&fields["AnimSequence"]),
         Some(&StoredValue::Name("None".to_owned()))
     );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn particle_emitters_blend_immediate_superclass_defaults() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-particle-parent-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_particle_parent_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let parent_class = object_id(&package, 0);
+    let child_class = object_id(&package, 1);
+    let fields = [
+        ("ParticlesPerSec", runtime_actor_id(500)),
+        ("SourceWidth", runtime_actor_id(501)),
+        ("SizeWidth", runtime_actor_id(502)),
+        ("AlphaStart", runtime_actor_id(503)),
+        ("AlphaEnd", runtime_actor_id(504)),
+        ("ParentBlend", runtime_actor_id(505)),
+    ]
+    .into_iter()
+    .collect::<std::collections::HashMap<_, _>>();
+    for class in [&parent_class, &child_class] {
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+        }
+    }
+    let float_param = |base, random| {
+        StoredValue::Value(Value::Struct(std::collections::HashMap::from([
+            ("Base".to_owned(), Value::Float(base)),
+            ("Rand".to_owned(), Value::Float(random)),
+        ])))
+    };
+    let values = |rate, source_width, size_width, alpha_start, alpha_end, parent_blend| {
+        [
+            (fields["ParticlesPerSec"].clone(), float_param(rate, 0.0)),
+            (
+                fields["SourceWidth"].clone(),
+                float_param(source_width, 0.0),
+            ),
+            (fields["SizeWidth"].clone(), float_param(size_width, 0.0)),
+            (fields["AlphaStart"].clone(), float_param(alpha_start, 0.0)),
+            (fields["AlphaEnd"].clone(), float_param(alpha_end, 0.0)),
+            (
+                fields["ParentBlend"].clone(),
+                StoredValue::Value(Value::Float(parent_blend)),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    runtime.class_defaults.insert(
+        parent_class.clone(),
+        values(16.0, 12.0, 6.0, 0.75, 1.0, 0.0),
+    );
+    for (actor, blend) in [(7, 0.25), (8, -0.5)] {
+        runtime.actor_classes.insert(actor, child_class.clone());
+        runtime
+            .instances
+            .insert(actor, values(8.0, 4.0, 2.0, 0.25, 0.5, blend));
+    }
+
+    let mut emitters = runtime.particle_emitters().unwrap();
+    emitters.sort_by_key(|emitter| emitter.actor);
+
+    assert_eq!(emitters[0].parent_particles_per_second.unwrap().base, 16.0);
+    assert_eq!(emitters[0].source_width.base, 6.0);
+    assert_eq!(emitters[0].size_width.base, 3.0);
+    assert_eq!(emitters[0].alpha_start.base, 0.375);
+    assert_eq!(emitters[0].alpha_end.base, 0.625);
+    assert_eq!(emitters[1].parent_particles_per_second.unwrap().base, 16.0);
+    assert_eq!(emitters[1].source_width.base, 4.0);
 
     fs::remove_dir_all(root).unwrap();
 }

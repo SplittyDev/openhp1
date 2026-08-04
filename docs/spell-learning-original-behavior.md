@@ -121,11 +121,16 @@ superclass's default `ParticleFX`; it does not inspect the emitter's `Owner`.
 At zero or below, the native returns the child system. At one or above, it
 returns the superclass default system. Between those endpoints it linearly
 blends the source dimensions, angular spreads, speed, lifetime, start/end
-colors, start/end alpha, spin rate, and drip time. Size width, length, and end
-scale remain the child's values at fractional blends, but come from the parent
-at the full-one endpoint because the complete parent system is selected then.
-Emission rate is handled separately: each emission samples the child and
-parent `ParticlesPerSec` independently and blends those two sampled rates.
+colors, start/end alpha, size width, size length, size end scale, spin rate, and
+drip time.
+
+Emission rate is handled separately from that system-parameter selection. For
+any nonzero `ParentBlend`, including negative values, each emission samples the
+child and immediate parent's `ParticlesPerSec` independently and blends those
+two sampled rates with the raw, unclamped value. Consequently values outside
+zero through one extrapolate the sampled emission rate even though
+`GetSysParams` selects the child system at or below zero and the complete
+parent system at or above one.
 
 ## Lesson speech is an ordinary positional `PlaySound`
 

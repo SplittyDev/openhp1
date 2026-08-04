@@ -491,6 +491,12 @@ impl ScriptRuntime {
                     "ColorStart",
                 )?),
                 color_end: particle_color(self.instance_property(&class, &instance, "ColorEnd")?),
+                alpha_start: particle_float(self.instance_property(
+                    &class,
+                    &instance,
+                    "AlphaStart",
+                )?),
+                alpha_end: particle_float(self.instance_property(&class, &instance, "AlphaEnd")?),
                 color_delay: particle_scalar(self.instance_property(
                     &class,
                     &instance,
@@ -559,7 +565,7 @@ impl ScriptRuntime {
                 pattern,
                 textures,
             };
-            if emitter.parent_blend > 0.0
+            if emitter.parent_blend != 0.0
                 && let Some(parent) = self.particle_parent_parameters(&class)?
             {
                 emitter.blend_parent_parameters(&parent);
@@ -594,6 +600,8 @@ impl ScriptRuntime {
             size_end_scale: particle_float(property(self, "SizeEndScale")?),
             color_start: particle_color(property(self, "ColorStart")?),
             color_end: particle_color(property(self, "ColorEnd")?),
+            alpha_start: particle_float(property(self, "AlphaStart")?),
+            alpha_end: particle_float(property(self, "AlphaEnd")?),
             spin_rate: particle_float(property(self, "SpinRate")?),
             drip_time: particle_float(property(self, "DripTime")?),
             ..Default::default()

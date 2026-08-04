@@ -4097,6 +4097,8 @@ mod tests {
                 base: [255; 4],
                 random: [0; 4],
             },
+            alpha_start: ParticleFloat::default(),
+            alpha_end: ParticleFloat::default(),
             color_delay: 0.0,
             size_delay: 0.0,
             size_grow_period: 0.0,
@@ -4165,6 +4167,33 @@ mod tests {
             child + (parent - child) * 0.25
         );
         assert_eq!(actual_random, expected_random);
+    }
+
+    #[test]
+    fn parent_blended_emission_rate_uses_the_raw_nonzero_blend() {
+        let mut emitter = ParticleEmitter {
+            particles_per_second: ParticleFloat {
+                base: 10.0,
+                random: 0.0,
+            },
+            parent_particles_per_second: Some(ParticleFloat {
+                base: 30.0,
+                random: 0.0,
+            }),
+            parent_blend: 1.5,
+            ..Default::default()
+        };
+        let mut random = 0x1234_5678;
+        assert_eq!(
+            super::sample_particle_emission_rate(&emitter, &mut random),
+            40.0
+        );
+
+        emitter.parent_blend = -0.5;
+        assert_eq!(
+            super::sample_particle_emission_rate(&emitter, &mut random),
+            0.0
+        );
     }
 
     #[test]

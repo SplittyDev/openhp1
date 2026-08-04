@@ -119,6 +119,8 @@ pub struct ParticleEmitter {
     pub size_end_scale: ParticleFloat,
     pub color_start: ParticleColor,
     pub color_end: ParticleColor,
+    pub alpha_start: ParticleFloat,
+    pub alpha_end: ParticleFloat,
     pub color_delay: f32,
     pub size_delay: f32,
     pub size_grow_period: f32,
@@ -148,10 +150,13 @@ pub struct ParticleEmitter {
 impl ParticleEmitter {
     pub(crate) fn blend_parent_parameters(&mut self, parent: &Self) {
         let blend = self.parent_blend;
-        if blend <= 0.0 {
+        if blend == 0.0 {
             return;
         }
         self.parent_particles_per_second = Some(parent.particles_per_second);
+        if blend < 0.0 {
+            return;
+        }
         if blend >= 1.0 {
             self.source_width = parent.source_width;
             self.source_height = parent.source_height;
@@ -165,6 +170,8 @@ impl ParticleEmitter {
             self.size_end_scale = parent.size_end_scale;
             self.color_start = parent.color_start;
             self.color_end = parent.color_end;
+            self.alpha_start = parent.alpha_start;
+            self.alpha_end = parent.alpha_end;
             self.spin_rate = parent.spin_rate;
             self.drip_time = parent.drip_time;
             return;
@@ -184,8 +191,14 @@ impl ParticleEmitter {
         );
         self.speed = lerp_particle_float(self.speed, parent.speed, blend);
         self.lifetime = lerp_particle_float(self.lifetime, parent.lifetime, blend);
+        self.size_width = lerp_particle_float(self.size_width, parent.size_width, blend);
+        self.size_length = lerp_particle_float(self.size_length, parent.size_length, blend);
+        self.size_end_scale =
+            lerp_particle_float(self.size_end_scale, parent.size_end_scale, blend);
         self.color_start = lerp_particle_color(self.color_start, parent.color_start, blend);
         self.color_end = lerp_particle_color(self.color_end, parent.color_end, blend);
+        self.alpha_start = lerp_particle_float(self.alpha_start, parent.alpha_start, blend);
+        self.alpha_end = lerp_particle_float(self.alpha_end, parent.alpha_end, blend);
         self.spin_rate = lerp_particle_float(self.spin_rate, parent.spin_rate, blend);
         self.drip_time = lerp_particle_float(self.drip_time, parent.drip_time, blend);
     }
@@ -214,9 +227,9 @@ fn lerp_particle_float(child: ParticleFloat, parent: ParticleFloat, blend: f32) 
 
 fn lerp_particle_color(child: ParticleColor, parent: ParticleColor, blend: f32) -> ParticleColor {
     let component = |child: u8, parent: u8| {
-        let child = (f32::from(child) * (1.0 - blend)).round().clamp(0.0, 255.0) as u8;
-        let parent = (f32::from(parent) * blend).round().clamp(0.0, 255.0) as u8;
-        child.saturating_add(parent)
+        (f32::from(child) + (f32::from(parent) - f32::from(child)) * blend)
+            .round()
+            .clamp(0.0, 255.0) as u8
     };
     let color = |child: [u8; 4], parent: [u8; 4]| {
         std::array::from_fn(|index| component(child[index], parent[index]))
@@ -279,6 +292,14 @@ mod particle_tests {
                 base: [20, 40, 60, 80],
                 random: [4, 8, 12, 16],
             },
+            alpha_start: ParticleFloat {
+                base: 0.25,
+                random: 0.5,
+            },
+            alpha_end: ParticleFloat {
+                base: 0.5,
+                random: 0.75,
+            },
             ..Default::default()
         };
         let parent = ParticleEmitter {
@@ -301,6 +322,14 @@ mod particle_tests {
             color_start: ParticleColor {
                 base: [100, 120, 140, 160],
                 random: [20, 24, 28, 32],
+            },
+            alpha_start: ParticleFloat {
+                base: 0.75,
+                random: 1.0,
+            },
+            alpha_end: ParticleFloat {
+                base: 1.0,
+                random: 1.25,
             },
             ..Default::default()
         };
@@ -326,30 +355,122 @@ mod particle_tests {
             }
         );
         assert_eq!(child.color_start.base, [40, 60, 80, 100]);
-        assert_eq!(child.size_width.base, 2.0);
+        assert_eq!(
+            child.alpha_start,
+            ParticleFloat {
+                base: 0.375,
+                random: 0.625
+            }
+        );
+        assert_eq!(
+            child.alpha_end,
+            ParticleFloat {
+                base: 0.625,
+                random: 0.875
+            }
+        );
+        assert_eq!(child.size_width.base, 3.5);
     }
 
     #[test]
-    fn full_parent_blend_uses_all_parent_spawn_parameters() {
+    fn fractional_parent_color_blend_preserves_identical_colors() {
+        let color = ParticleColor {
+            base: [1, 3, 5, 7],
+            random: [9, 11, 13, 15],
+        };
         let mut child = ParticleEmitter {
-            parent_blend: 1.0,
-            size_width: ParticleFloat {
-                base: 2.0,
-                random: 3.0,
-            },
+            parent_blend: 0.5,
+            color_start: color,
             ..Default::default()
         };
         let parent = ParticleEmitter {
-            size_width: ParticleFloat {
-                base: 8.0,
-                random: 9.0,
+            color_start: color,
+            ..Default::default()
+        };
+
+        child.blend_parent_parameters(&parent);
+
+        assert_eq!(child.color_start, color);
+    }
+
+    #[test]
+    fn negative_parent_blend_keeps_child_parameters_and_retains_parent_rate() {
+        let source_width = ParticleFloat {
+            base: 10.0,
+            random: 2.0,
+        };
+        let parent_rate = ParticleFloat {
+            base: 30.0,
+            random: 4.0,
+        };
+        let mut child = ParticleEmitter {
+            parent_blend: -0.5,
+            particles_per_second: ParticleFloat {
+                base: 20.0,
+                random: 3.0,
+            },
+            source_width,
+            ..Default::default()
+        };
+        let parent = ParticleEmitter {
+            particles_per_second: parent_rate,
+            source_width: ParticleFloat {
+                base: 50.0,
+                random: 6.0,
             },
             ..Default::default()
         };
 
         child.blend_parent_parameters(&parent);
 
+        assert_eq!(child.parent_particles_per_second, Some(parent_rate));
+        assert_eq!(child.source_width, source_width);
+    }
+
+    #[test]
+    fn full_parent_blend_uses_all_parent_spawn_parameters() {
+        let child_rate = ParticleFloat {
+            base: 2.0,
+            random: 3.0,
+        };
+        let mut child = ParticleEmitter {
+            parent_blend: 1.5,
+            particles_per_second: child_rate,
+            size_width: ParticleFloat {
+                base: 2.0,
+                random: 3.0,
+            },
+            alpha_start: ParticleFloat {
+                base: 0.25,
+                random: 0.5,
+            },
+            ..Default::default()
+        };
+        let parent = ParticleEmitter {
+            particles_per_second: ParticleFloat {
+                base: 6.0,
+                random: 7.0,
+            },
+            size_width: ParticleFloat {
+                base: 8.0,
+                random: 9.0,
+            },
+            alpha_start: ParticleFloat {
+                base: 0.75,
+                random: 1.0,
+            },
+            ..Default::default()
+        };
+
+        child.blend_parent_parameters(&parent);
+
+        assert_eq!(child.particles_per_second, child_rate);
+        assert_eq!(
+            child.parent_particles_per_second,
+            Some(parent.particles_per_second)
+        );
         assert_eq!(child.size_width, parent.size_width);
+        assert_eq!(child.alpha_start, parent.alpha_start);
     }
 }
 
