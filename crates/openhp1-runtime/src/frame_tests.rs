@@ -517,6 +517,40 @@ fn dynamic_arrays_grow_on_access_and_report_their_length() {
 }
 
 #[test]
+fn dynamic_array_access_does_not_shrink_existing_values() {
+    let mut bytes = vec![0x10, 0x2c, 0, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.extend([0x0f, 0x10, 0x2c, 1, 0x00]);
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.push(0x1d);
+    bytes.extend(42_i32.to_le_bytes());
+    bytes.extend([0x04, 0x37, 0x00]);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    frame.set_local(
+        7,
+        Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+    );
+    frame.set_array_element_default(7, Value::Int(0));
+
+    assert_eq!(frame.execute(|_, _| unreachable!()).unwrap(), Value::Int(3));
+    assert_eq!(
+        frame.local(7),
+        Some(&Value::Array(vec![
+            Value::Int(1),
+            Value::Int(42),
+            Value::Int(3)
+        ]))
+    );
+}
+
+#[test]
 fn compound_native_assignment_preserves_the_target_slot() {
     let mut bytes = vec![0xb8, 0x00];
     bytes.extend(7_i32.to_le_bytes());

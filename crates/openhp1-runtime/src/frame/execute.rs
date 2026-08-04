@@ -810,7 +810,9 @@ impl<'a> Frame<'a> {
                     index,
                     length: values.len(),
                 })?;
-                values.resize(index.saturating_add(1), default);
+                if index >= values.len() {
+                    values.resize(index.saturating_add(1), default);
+                }
                 values[index] = value;
                 self.assign_slot(*target, target_value, host)?;
             }
@@ -897,7 +899,9 @@ impl<'a> Frame<'a> {
                     index: *index,
                     length: values.len(),
                 })?;
-                values.resize(index.saturating_add(1), default);
+                if index >= values.len() {
+                    values.resize(index.saturating_add(1), default);
+                }
                 let value = values[index].clone();
                 self.assign_slot((**target).clone(), target_value, host)?;
                 Some(value)
