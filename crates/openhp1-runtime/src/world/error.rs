@@ -40,6 +40,9 @@ pub enum DispatchError {
     #[error("runtime actor {actor} is not registered")]
     UnregisteredActor { actor: usize },
 
+    #[error("runtime actor {actor} placement failed: {message}")]
+    ActorPlacement { actor: usize, message: String },
+
     #[error("the level has no registered player pawn")]
     MissingPlayer,
 

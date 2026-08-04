@@ -3369,6 +3369,19 @@ fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
     ));
     assert!(runtime.touching.contains(&(0, 1)));
 
+    runtime.instances.insert(0, instance.clone());
+    actions.clear();
+    let (placed, mut actions) = runtime.place_actor(0, [25.0, 0.0, 0.0]).unwrap();
+    assert!(placed);
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::SetLocation {
+            actor: 0,
+            location: [25.0, 0.0, 0.0],
+        }]
+    ));
+    instance = runtime.instances.remove(&0).unwrap();
+
     actions.clear();
     assert_eq!(
         execute(&mut runtime, &mut instance, [100.0, 0.0, 0.0], &mut actions),

@@ -318,6 +318,41 @@ impl ScriptRuntime {
         Ok(actions)
     }
 
+    pub fn place_actor(
+        &mut self,
+        actor: usize,
+        location: [f32; 3],
+    ) -> DispatchResult<(bool, Vec<ActorAction>)> {
+        if !location.iter().all(|component| component.is_finite()) {
+            return Err(DispatchError::ActorPlacement {
+                actor,
+                message: format!("location {location:?} is invalid"),
+            });
+        }
+        let class_id = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class_id)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mut actions = Vec::new();
+        let result = self
+            .set_actor_location_placing(
+                actor,
+                &class,
+                &mut instance,
+                Vec3::from_array(location),
+                &mut actions,
+            )
+            .map_err(|message| DispatchError::ActorPlacement { actor, message });
+        self.instances.insert(actor, instance);
+        result.map(|placed| (placed, actions))
+    }
+
     pub(super) fn move_actor(
         &mut self,
         actor: usize,
