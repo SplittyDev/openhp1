@@ -213,6 +213,8 @@ impl ScriptRuntime {
                 )
                 .map_err(|error| error.to_string())?;
             }
+            let latent = self.state_frames.get(&actor).map(|frame| frame.latent);
+            self.finish_latent_movement(actor_class, instance, latent)?;
             self.set_actor_state(actor, actor_class, state, &label)
                 .map_err(|error| error.to_string())?;
             if !old_state.eq_ignore_ascii_case(&new_state)

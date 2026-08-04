@@ -77,6 +77,9 @@ re-entering a state must not inherit an event disabled during an earlier visit.
 
 Context latent calls suspend the caller's state while movement and animation
 completion are polled on the actor that received the call.
+Completing or cancelling latent `MoveTo` and `MoveToward` clears the pawn's
+movement acceleration before resumed or replacement state code runs, so the
+previous destination cannot fight later script-driven `MoveSmooth` movement.
 `FinishInterpolation` resumes the retained frame when mover physics clears
 `bInterpolating`.
 `Pawn.StopWaiting` zeros only a receiving pawn's pending `Sleep` delay, so the

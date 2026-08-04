@@ -6369,6 +6369,148 @@ fn rotator_addition_wraps_each_ue1_component() {
 }
 
 #[test]
+fn latent_movement_exit_releases_acceleration_before_resuming() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-latent-acceleration-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let acceleration = runtime_actor_id(100);
+    runtime.scripts.insert(
+        object_id(&package, class.export_index),
+        Arc::new(ScriptExport {
+            export_index: class.export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 0,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        }),
+    );
+    runtime.fields.insert(
+        (
+            object_id(&package, class.export_index),
+            "acceleration".to_owned(),
+        ),
+        Some(acceleration.clone()),
+    );
+    let mut instance = [(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([400.0, -200.0, 0.0])),
+    )]
+    .into_iter()
+    .collect::<InstanceState>();
+
+    runtime.state_frames.insert(
+        7,
+        StateFrame {
+            state: object_id(&package, class.export_index),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(7),
+        },
+    );
+    runtime
+        .native(
+            7,
+            &class,
+            &package,
+            GOTO_STATE,
+            &[],
+            &mut instance,
+            &mut Vec::new(),
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        instance.get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+    );
+
+    instance.insert(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([-75.0, 125.0, 0.0])),
+    );
+    runtime.state_frames.insert(
+        7,
+        StateFrame {
+            state: object_id(&package, class.export_index),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveToward(7),
+        },
+    );
+    runtime
+        .native(
+            7,
+            &class,
+            &package,
+            GOTO_STATE,
+            &[],
+            &mut instance,
+            &mut Vec::new(),
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        instance.get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+    );
+
+    instance.insert(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([25.0, 50.0, 0.0])),
+    );
+    runtime
+        .finish_latent_movement(
+            &class,
+            &mut instance,
+            Some(LatentAction::FinishAnimation(7)),
+        )
+        .unwrap();
+    assert_eq!(
+        instance.get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([25.0, 50.0, 0.0])))
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn requested_core_math_and_random_natives_match_unreal_semantics() {
     assert_eq!(
         scalar_native(0xc1, &[Value::Float(9.0)]),

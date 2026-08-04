@@ -136,7 +136,14 @@ impl ScriptRuntime {
                     }
                     _ => unreachable!(),
                 };
+                let completed_movement = if matches!(result, Ok(true)) {
+                    self.finish_latent_movement(&class, &mut instance, latent)
+                } else {
+                    Ok(())
+                };
                 self.instances.insert(target, instance);
+                completed_movement
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
                 match result {
                     Ok(true) => {
                         self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
@@ -236,6 +243,21 @@ impl ScriptRuntime {
             }
         }
         Ok(actions)
+    }
+
+    pub(in crate::world) fn finish_latent_movement(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        latent: Option<LatentAction>,
+    ) -> std::result::Result<(), String> {
+        if matches!(
+            latent,
+            Some(LatentAction::MoveTo(_) | LatentAction::MoveToward(_))
+        ) {
+            self.set_actor_value(class, instance, "Acceleration", Value::Vector([0.0; 3]))?;
+        }
+        Ok(())
     }
 
     pub(super) fn tick_player_events(
