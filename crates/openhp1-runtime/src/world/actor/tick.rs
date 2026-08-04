@@ -137,7 +137,7 @@ impl ScriptRuntime {
                     _ => unreachable!(),
                 };
                 let completed_movement = if matches!(result, Ok(true)) {
-                    self.finish_latent_movement(&class, &mut instance, latent)
+                    self.finish_latent_movement(target, &class, &mut instance, latent)
                 } else {
                     Ok(())
                 };
@@ -247,17 +247,44 @@ impl ScriptRuntime {
 
     pub(in crate::world) fn finish_latent_movement(
         &mut self,
-        class: &ResolvedObject,
-        instance: &mut InstanceState,
+        active_actor: usize,
+        active_class: &ResolvedObject,
+        active_instance: &mut InstanceState,
         latent: Option<LatentAction>,
     ) -> std::result::Result<(), String> {
-        if matches!(
-            latent,
-            Some(LatentAction::MoveTo(_) | LatentAction::MoveToward(_))
-        ) {
-            self.set_actor_value(class, instance, "Acceleration", Value::Vector([0.0; 3]))?;
+        let movement_actor = match latent {
+            Some(LatentAction::MoveTo(actor) | LatentAction::MoveToward(actor)) => actor,
+            _ => return Ok(()),
+        };
+        if movement_actor == active_actor {
+            return self.set_actor_value(
+                active_class,
+                active_instance,
+                "Acceleration",
+                Value::Vector([0.0; 3]),
+            );
         }
-        Ok(())
+
+        let class = self
+            .actor_classes
+            .get(&movement_actor)
+            .cloned()
+            .ok_or_else(|| format!("latent movement actor {movement_actor} has no class"))?;
+        let class = self
+            .resolved_object(&class)
+            .map_err(|error| error.to_string())?;
+        let mut instance = self
+            .instances
+            .remove(&movement_actor)
+            .ok_or_else(|| format!("latent movement actor {movement_actor} instance is active"))?;
+        let result = self.set_actor_value(
+            &class,
+            &mut instance,
+            "Acceleration",
+            Value::Vector([0.0; 3]),
+        );
+        self.instances.insert(movement_actor, instance);
+        result
     }
 
     pub(super) fn tick_player_events(

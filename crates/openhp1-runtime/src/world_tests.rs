@@ -6387,9 +6387,9 @@ fn latent_movement_exit_releases_acceleration_before_resuming() {
         package: Arc::clone(&package),
         export_index: 0,
     };
-    let acceleration = runtime_actor_id(100);
+    let class_id = object_id(&package, class.export_index);
     runtime.scripts.insert(
-        object_id(&package, class.export_index),
+        class_id.clone(),
         Arc::new(ScriptExport {
             export_index: class.export_index,
             class_name: "Class".to_owned(),
@@ -6424,88 +6424,345 @@ fn latent_movement_exit_releases_acceleration_before_resuming() {
             }),
         }),
     );
-    runtime.fields.insert(
-        (
-            object_id(&package, class.export_index),
-            "acceleration".to_owned(),
-        ),
-        Some(acceleration.clone()),
-    );
-    let mut instance = [(
-        acceleration.clone(),
-        StoredValue::Value(Value::Vector([400.0, -200.0, 0.0])),
-    )]
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+
+    let acceleration = object_id(&package, 1);
+    let movement_state = object_id(&package, 2);
+    let goto_replacement = object_id(&package, 4);
+    let begin_state = object_id(&package, 6);
+    let move_target = object_id(&package, 7);
+    let observed_acceleration = object_id(&package, 8);
+    let fields = [
+        ("Acceleration", acceleration.clone()),
+        ("MoveTarget", move_target.clone()),
+        ("MoveTimer", runtime_actor_id(200)),
+        ("Physics", runtime_actor_id(201)),
+        ("Location", runtime_actor_id(202)),
+        ("Destination", runtime_actor_id(203)),
+        ("Velocity", runtime_actor_id(204)),
+        ("DesiredRotation", runtime_actor_id(205)),
+        ("AccelRate", runtime_actor_id(206)),
+        ("TimeSeconds", runtime_actor_id(207)),
+        ("TimeDilation", runtime_actor_id(208)),
+    ]
     .into_iter()
-    .collect::<InstanceState>();
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "lifespan".to_owned()), None);
 
+    let mut observe_receiver = vec![0x0f, 0x01];
+    observe_receiver.extend(9_i32.to_le_bytes());
+    observe_receiver.extend([0x19, 0x01]);
+    observe_receiver.extend(8_i32.to_le_bytes());
+    observe_receiver.extend(5_u16.to_le_bytes());
+    observe_receiver.push(12);
+    observe_receiver.push(0x01);
+    observe_receiver.extend(2_i32.to_le_bytes());
+    observe_receiver.extend([0x04, 0x0b]);
+    runtime.scripts.insert(
+        movement_state.clone(),
+        Arc::new(ScriptExport {
+            export_index: movement_state.export_index,
+            class_name: "State".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: movement_state.export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: observe_receiver.len(),
+                bytes: observe_receiver.clone(),
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::State(openhp1_script::StateMetadata {
+                probe_mask: 0,
+                ignore_mask: 0,
+                label_table_offset: 0,
+                flags: 0,
+            }),
+        }),
+    );
+    let function_script = |export_index, bytes: Vec<u8>| {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        })
+    };
+    let mut goto_bytes = vec![0x04, GOTO_STATE as u8, 0x21];
+    goto_bytes.extend(2_i32.to_le_bytes());
+    goto_bytes.push(0x16);
+    runtime.scripts.insert(
+        goto_replacement.clone(),
+        function_script(goto_replacement.export_index, goto_bytes),
+    );
+    runtime.scripts.insert(
+        begin_state.clone(),
+        function_script(begin_state.export_index, observe_receiver),
+    );
+    runtime.state_lookups.insert(
+        StateLookup::new(class_id.clone(), "GetPlayerNetworkAddress"),
+        Some(movement_state.clone()),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(
+            class_id.clone(),
+            Some("GetPlayerNetworkAddress"),
+            "BeginState",
+            0,
+        ),
+        Some(begin_state),
+    );
+
+    let level = 0;
+    let caller = 7;
+    let receiver = 8;
+    let level_object = runtime_actor_id(700);
+    let caller_object = runtime_actor_id(701);
+    let receiver_object = runtime_actor_id(702);
+    for (actor, object) in [
+        (level, level_object),
+        (caller, caller_object),
+        (receiver, receiver_object.clone()),
+    ] {
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.actor_objects.insert(actor, object.clone());
+        runtime.object_actors.insert(object, actor);
+    }
+    runtime.level_info = Some(level);
+    let instance = |acceleration_value| {
+        [
+            (
+                acceleration.clone(),
+                StoredValue::Value(Value::Vector(acceleration_value)),
+            ),
+            (move_target.clone(), StoredValue::Object(None)),
+            (
+                observed_acceleration.clone(),
+                StoredValue::Value(Value::Vector([-1.0; 3])),
+            ),
+            (
+                fields["MoveTimer"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(physics::PHYS_WALKING)),
+            ),
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["Destination"].clone(),
+                StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
+            ),
+            (
+                fields["Velocity"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["DesiredRotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["AccelRate"].clone(),
+                StoredValue::Value(Value::Float(100.0)),
+            ),
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["TimeDilation"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    runtime.instances.insert(level, instance([0.0; 3]));
+    let mut caller_instance = instance([11.0, 12.0, 13.0]);
+    caller_instance.insert(
+        move_target.clone(),
+        StoredValue::Object(Some(receiver_object)),
+    );
+    runtime.instances.insert(caller, caller_instance);
+    runtime
+        .instances
+        .insert(receiver, instance([50.0, 25.0, 0.0]));
+
+    runtime
+        .actor_states
+        .insert(caller, Some("OldState".to_owned()));
     runtime.state_frames.insert(
-        7,
+        caller,
         StateFrame {
-            state: object_id(&package, class.export_index),
+            state: movement_state.clone(),
             frame: FrameSnapshot::at(0),
-            latent: LatentAction::MoveTo(7),
+            latent: LatentAction::MoveToward(receiver),
+        },
+    );
+    let goto_function = runtime.resolved_object(&goto_replacement).unwrap();
+    runtime
+        .execute_actor_function(caller, &class, &goto_function, &[])
+        .unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([11.0, 12.0, 13.0])))
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&observed_acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3]))),
+        "replacement BeginState must observe the cleared receiver"
+    );
+
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([30.0, 40.0, 0.0])),
+    );
+    runtime.instances.get_mut(&caller).unwrap().insert(
+        observed_acceleration.clone(),
+        StoredValue::Value(Value::Vector([-1.0; 3])),
+    );
+    runtime
+        .actor_states
+        .insert(caller, Some("OldState".to_owned()));
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state.clone(),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::FinishAnimation(receiver),
         },
     );
     runtime
-        .native(
-            7,
-            &class,
-            &package,
-            GOTO_STATE,
-            &[],
-            &mut instance,
-            &mut Vec::new(),
-            0,
-        )
+        .execute_actor_function(caller, &class, &goto_function, &[])
         .unwrap();
     assert_eq!(
-        instance.get(&acceleration),
-        Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([30.0, 40.0, 0.0])))
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&observed_acceleration),
+        Some(&StoredValue::Value(Value::Vector([30.0, 40.0, 0.0])))
     );
 
-    instance.insert(
-        acceleration.clone(),
-        StoredValue::Value(Value::Vector([-75.0, 125.0, 0.0])),
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["MoveTimer"].clone(),
+        StoredValue::Value(Value::Float(10.0)),
     );
+    runtime.instances.get_mut(&caller).unwrap().insert(
+        observed_acceleration.clone(),
+        StoredValue::Value(Value::Vector([-1.0; 3])),
+    );
+    runtime
+        .actor_states
+        .insert(caller, Some("GetPlayerNetworkAddress".to_owned()));
     runtime.state_frames.insert(
-        7,
+        caller,
         StateFrame {
-            state: object_id(&package, class.export_index),
+            state: movement_state.clone(),
             frame: FrameSnapshot::at(0),
-            latent: LatentAction::MoveToward(7),
+            latent: LatentAction::MoveTo(receiver),
         },
     );
-    runtime
-        .native(
-            7,
-            &class,
-            &package,
-            GOTO_STATE,
-            &[],
-            &mut instance,
-            &mut Vec::new(),
-            0,
-        )
-        .unwrap();
+    runtime.tick(0.0).unwrap();
     assert_eq!(
-        instance.get(&acceleration),
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
+        "active latent movement must retain its acceleration"
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&observed_acceleration),
+        Some(&StoredValue::Value(Value::Vector([-1.0; 3])))
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["MoveTimer"].clone(),
+        StoredValue::Value(Value::Float(-1.0)),
+    );
+    runtime.tick(0.0).unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
         Some(&StoredValue::Value(Value::Vector([0.0; 3])))
     );
+    assert_eq!(
+        runtime.instances[&caller].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([11.0, 12.0, 13.0])))
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&observed_acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3]))),
+        "resumed caller state must observe the cleared receiver"
+    );
 
-    instance.insert(
+    runtime
+        .fields
+        .remove(&(class_id.clone(), "acceleration".to_owned()));
+    runtime.instances.get_mut(&receiver).unwrap().insert(
         acceleration.clone(),
-        StoredValue::Value(Value::Vector([25.0, 50.0, 0.0])),
+        StoredValue::Value(Value::Vector([9.0, 8.0, 7.0])),
     );
     runtime
-        .finish_latent_movement(
-            &class,
-            &mut instance,
-            Some(LatentAction::FinishAnimation(7)),
-        )
-        .unwrap();
+        .actor_states
+        .insert(caller, Some("OldState".to_owned()));
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state,
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(receiver),
+        },
+    );
+    let _error = runtime
+        .execute_actor_function(caller, &class, &goto_function, &[])
+        .unwrap_err();
+    assert_eq!(runtime.actor_states[&caller].as_deref(), Some("OldState"));
     assert_eq!(
-        instance.get(&acceleration),
-        Some(&StoredValue::Value(Value::Vector([25.0, 50.0, 0.0])))
+        runtime.instances[&caller].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([11.0, 12.0, 13.0])))
+    );
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([9.0, 8.0, 7.0]))),
+        "receiver instance must be restored when clearing acceleration fails"
     );
     fs::remove_dir_all(root).unwrap();
 }
