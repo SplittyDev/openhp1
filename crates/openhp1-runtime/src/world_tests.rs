@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata};
+use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata, Token};
 
 use crate::{
     ConsoleCommandAction, ConsoleCommands, Frame, FrameRequest, FrameResponse, FunctionCall,
@@ -42,6 +42,7 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
 
 fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) -> Vec<u8> {
     const HEADER_SIZE: usize = 44;
+    let bump_move = member_name == "BumpMove";
     let mut class_name = class_name.as_bytes().to_vec();
     class_name.push(0);
     let mut member_name = member_name.as_bytes().to_vec();
@@ -67,6 +68,16 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         + b"CallConsoleCommand\0".len()
         + size_of::<u32>()
         + b"IsRelevantToMover\0".len()
+        + size_of::<u32>()
+        + b"State\0".len()
+        + size_of::<u32>()
+        + b"Move\0".len()
+        + size_of::<u32>()
+        + b"None\0".len()
+        + size_of::<u32>()
+        + b"DoOpen\0".len()
+        + size_of::<u32>()
+        + b"FinishedOpening\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -74,9 +85,9 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        10,
+        15,
         name_offset as i32,
-        9,
+        10,
         export_offset as i32,
         0,
         export_offset as i32,
@@ -96,22 +107,28 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         b"ConsoleCommand\0".as_slice(),
         b"CallConsoleCommand\0".as_slice(),
         b"IsRelevantToMover\0".as_slice(),
+        b"State\0".as_slice(),
+        b"Move\0".as_slice(),
+        b"None\0".as_slice(),
+        b"DoOpen\0".as_slice(),
+        b"FinishedOpening\0".as_slice(),
     ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
     }
-    for (outer, name) in [
-        (0_i32, 0_u8),
-        (1, 1),
-        (1, 2),
-        (0, 3),
-        (4, 4),
-        (0, 5),
-        (1, 6),
-        (1, 7),
-        (1, 8),
+    for (class, outer, name) in [
+        (0_u8, 0_i32, 0_u8),
+        (u8::from(bump_move) * 10, 1, 1),
+        (0, 1, 2),
+        (0, 0, 3),
+        (0, 4, 4),
+        (0, 0, 5),
+        (0, 1, 6),
+        (0, 1, 7),
+        (0, 1, 8),
+        (0, 0, 10),
     ] {
-        bytes.extend([0, 0]);
+        bytes.extend([class, 0]);
         bytes.extend(outer.to_le_bytes());
         bytes.push(name);
         bytes.extend(0_u32.to_le_bytes());
@@ -1836,6 +1853,8 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
         "TimeDilation",
         "Physics",
         "LifeSpan",
+        "Physics",
+        "LifeSpan",
         "bStatic",
         "bNoDelete",
         "bDeleteMe",
@@ -1870,6 +1889,14 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
             (
                 fields["TimeDilation"].clone(),
                 StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["LifeSpan"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
             ),
             (
                 fields["Physics"].clone(),
@@ -6913,6 +6940,17 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     );
 
     let state_id = object_id(&package, 1);
+    let mut state_bytes = vec![0x1b];
+    state_bytes.extend(13_i32.to_le_bytes());
+    state_bytes.extend([0x16, 0x61, 0x2d, 0x16, 0x1b]);
+    state_bytes.extend(14_i32.to_le_bytes());
+    state_bytes.extend([0x16, 0x08]);
+    let label_table_offset = state_bytes.len();
+    state_bytes.push(0x0c);
+    state_bytes.extend(11_i32.to_le_bytes());
+    state_bytes.extend(0_u32.to_le_bytes());
+    state_bytes.extend(12_i32.to_le_bytes());
+    state_bytes.extend(0_u32.to_le_bytes());
     runtime.scripts.insert(
         state_id.clone(),
         Arc::new(ScriptExport {
@@ -6926,10 +6964,15 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             line: 0,
             text_position: 0,
             bytecode: Bytecode {
-                version: 61,
-                bytes: Vec::new(),
-                raw_len: 0,
-                tokens: Vec::new(),
+                version: 76,
+                raw_len: state_bytes.len(),
+                bytes: state_bytes,
+                tokens: vec![Token {
+                    offset: label_table_offset,
+                    depth: 0,
+                    opcode: 0x0c,
+                    call: None,
+                }],
             },
             metadata: ScriptMetadata::State(openhp1_script::StateMetadata {
                 probe_mask: 0,
@@ -6972,6 +7015,37 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             }),
         })
     };
+    let state_callback = |message: &[u8], final_location: Option<[f32; 3]>| {
+        let mut bytes = Vec::new();
+        if let Some(location) = final_location {
+            bytes.extend([0x61, 0x0b, 0x23]);
+            bytes.extend(location.into_iter().flat_map(f32::to_le_bytes));
+            bytes.push(0x16);
+        }
+        bytes.extend([0x04, 0xe7, 0x1f]);
+        bytes.extend(message);
+        bytes.extend([0, 0x16]);
+        bytes
+    };
+    for (name, export_index, message, final_location) in [
+        ("DoOpen", 5, b"DoOpen".as_slice(), None),
+        (
+            "FinishedOpening",
+            6,
+            b"FinishedOpening".as_slice(),
+            Some([96.0, 0.0, 0.0]),
+        ),
+    ] {
+        let function = object_id(&projectile_package, export_index);
+        runtime.scripts.insert(
+            function.clone(),
+            function_script(export_index, state_callback(message, final_location)),
+        );
+        runtime.function_lookups.insert(
+            FunctionLookup::new(mover_class_id.clone(), Some("BumpMove"), name, 1),
+            Some(function),
+        );
+    }
     let other_parameter = 2_i32;
     let b_proj_target = object_id(&projectile_package, 2);
     let relevance_checked = object_id(&projectile_package, 3);
@@ -7117,6 +7191,8 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     bump[direction_end + 1..direction_end + 3].copy_from_slice(&(goto_state as u16).to_le_bytes());
     bump.extend([0x71, 0x21]);
     bump.extend(1_i32.to_le_bytes());
+    bump.push(0x21);
+    bump.extend(11_i32.to_le_bytes());
     bump.extend([0x16, 0x04, 0x0b]);
     let bump_id = object_id(&package, 3);
     runtime
@@ -7147,8 +7223,13 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         "bCollideWhenPlacing",
         "bStatic",
         "bMovable",
+        "bInterpolating",
         "Brush",
         "PrePivot",
+        "TimeSeconds",
+        "TimeDilation",
+        "Physics",
+        "LifeSpan",
     ]
     .into_iter()
     .enumerate()
@@ -7232,10 +7313,30 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
                 fields["bMovable"].clone(),
                 StoredValue::Value(Value::Bool(true)),
             ),
+            (
+                fields["bInterpolating"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
             (fields["Brush"].clone(), StoredValue::Object(None)),
             (
                 fields["PrePivot"].clone(),
                 StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["TimeDilation"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["LifeSpan"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
             ),
         ]
         .into_iter()
@@ -7313,7 +7414,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     let mover_query = runtime
         .test_move_actor(0, &mover_class, [80.0, 0.0, 0.0], &moving_mover)
         .unwrap();
-    assert_eq!(mover_query.actor, Some(1));
+    assert_eq!(mover_query.actor, None);
     assert_eq!(
         moving_mover.get(&relevance_checked),
         Some(&StoredValue::Value(Value::Bool(false)))
@@ -7362,7 +7463,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     let query_hit = runtime
         .test_move_actor(1, &spell_class, [80.0, 0.0, 0.0], &projectile_instance)
         .unwrap();
-    assert_eq!(query_hit.actor, Some(0));
+    assert_eq!(query_hit.actor, None);
     assert_eq!(
         runtime.instances[&0].get(&relevance_checked),
         Some(&StoredValue::Value(Value::Bool(false))),
@@ -7439,6 +7540,11 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         unreachable!()
     };
     runtime.instances.insert(1, projectile_instance);
+    runtime.level_info = Some(1);
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["bInterpolating"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
     let bump_actions = runtime
         .dispatch_event_with_arguments(0, &package_path, 0, "Bump", &arguments)
         .unwrap();
@@ -7460,7 +7566,63 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             StoredValue::Value(Value::Vector([0.0; 3])),
         ]))
     );
-    assert!(bump_actions.is_empty());
+    assert!(bump_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::Log {
+            actor: 0,
+            message,
+            tag: None,
+        } if message == "DoOpen"
+    )));
+    assert!(!bump_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::Log { message, .. } if message == "FinishedOpening"
+    )));
+    assert_eq!(
+        runtime.state_frames[&0].latent,
+        LatentAction::FinishInterpolation(0)
+    );
+    assert_eq!(
+        runtime.instances[&0].get(&fields["bInterpolating"]),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    runtime.tick_functions.clear();
+    assert!(runtime.tick(0.0).unwrap().is_empty());
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["bInterpolating"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    let completion_actions = runtime.tick(0.0).unwrap();
+    let final_location_action = completion_actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                ActorAction::SetLocation {
+                    actor: 0,
+                    location: [96.0, 0.0, 0.0],
+                }
+            )
+        })
+        .expect("completed interpolation did not place the pillar");
+    let finished_opening = completion_actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                ActorAction::Log {
+                    actor: 0,
+                    message,
+                    tag: None,
+                } if message == "FinishedOpening"
+            )
+        })
+        .expect("FinishedOpening did not run after interpolation");
+    assert!(final_location_action < finished_opening);
+    assert_eq!(
+        runtime.instances[&0].get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([96.0, 0.0, 0.0])))
+    );
     runtime.instances.get_mut(&1).unwrap().insert(
         location.clone(),
         StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),

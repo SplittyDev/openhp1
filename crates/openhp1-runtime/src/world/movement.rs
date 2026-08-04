@@ -1486,6 +1486,9 @@ impl ScriptRuntime {
         let Some((mover, other)) = mover else {
             return Ok(actors_block(first, second));
         };
+        let MovementEvaluation::Real(actions) = evaluation else {
+            return Ok(actors_block(first, second));
+        };
 
         let mover_class = self
             .actor_classes
@@ -1516,8 +1519,6 @@ impl ScriptRuntime {
             .object_handle(other_object)
             .map_err(|error| error.to_string())?;
 
-        let query_instances =
-            matches!(evaluation, MovementEvaluation::Query).then(|| self.instances.clone());
         if mover != current_actor && !self.instances.contains_key(&mover) {
             return Err(format!("mover {mover} instance is active"));
         }
@@ -1527,11 +1528,6 @@ impl ScriptRuntime {
             self.instances
                 .insert(current_actor, current_instance.clone());
         }
-        let mut disposable_actions = Vec::new();
-        let actions = match evaluation {
-            MovementEvaluation::Real(actions) => &mut **actions,
-            MovementEvaluation::Query => &mut disposable_actions,
-        };
         let result = if mover == current_actor {
             self.execute_function(
                 mover,
@@ -1539,7 +1535,7 @@ impl ScriptRuntime {
                 &function,
                 &[Value::Object(other_handle)],
                 current_instance,
-                actions,
+                &mut **actions,
                 0,
             )
         } else {
@@ -1553,17 +1549,13 @@ impl ScriptRuntime {
                 &function,
                 &[Value::Object(other_handle)],
                 &mut mover_instance,
-                actions,
+                &mut **actions,
                 0,
             );
-            if query_instances.is_none() {
-                self.instances.insert(mover, mover_instance);
-            }
+            self.instances.insert(mover, mover_instance);
             result
         };
-        if let Some(instances) = query_instances {
-            self.instances = instances;
-        } else if inserted_current {
+        if inserted_current {
             *current_instance = self
                 .instances
                 .remove(&current_actor)

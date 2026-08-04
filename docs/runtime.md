@@ -304,8 +304,10 @@ while another projectile passes through. Ordinary `BumpType` behavior remains
 in `Mover.IsRelevant` for non-projectiles. During real movement, callback
 instance mutations and emitted actions are retained in call order before the
 movement and `Bump` actions. Collision-only probes such as `test_move_actor`
-and `actorReachable` evaluate the same virtual chain against disposable state
-and discard its actions.
+and `actorReachable` deliberately retain the pure baseline actor-blocking
+predicate and do not execute `Mover.IsRelevant`; arbitrary virtual script can
+mutate more than instance fields and therefore cannot be made observational by
+discarding only its returned actions.
 
 The shipped `GridMover.Bump` derives `KeyPos[1]` from `Location - BasePos`,
 then applies `MoveIncrement` on the dominant impact axis, subtracting for a
