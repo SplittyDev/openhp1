@@ -230,7 +230,7 @@ fn ue1_sound_volume(volume: f32) -> f32 {
     } else if volume >= 8.0 {
         0.8
     } else {
-        (volume - 1.0) * 0.25 + 1.0
+        ((volume - 1.0) * 0.25 + 1.0).min(1.0)
     }
 }
 
@@ -271,7 +271,7 @@ mod tests {
     fn compresses_authored_ue1_sound_volumes() {
         assert_eq!(ue1_sound_volume(0.0), 0.0);
         assert_eq!(ue1_sound_volume(1.0), 1.0);
-        assert!((ue1_sound_volume(3.2) - 1.55).abs() < 1.0e-6);
+        assert_eq!(ue1_sound_volume(3.2), 1.0);
         assert_eq!(ue1_sound_volume(8.0), 0.8);
     }
 
