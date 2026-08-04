@@ -7996,6 +7996,32 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         })
         .expect("relevant projectile did not dispatch Mover.Bump");
     assert!(relevance_log < bump_position);
+    runtime
+        .actor_bases
+        .insert(1, Some(runtime.actor_objects[&0].clone()));
+    projectile_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([-40.0, 0.0, 0.0])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let based_hit = runtime
+        .try_move_actor(
+            1,
+            &spell_class,
+            [80.0, 0.0, 0.0],
+            &mut projectile_instance,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        based_hit.actor,
+        Some(0),
+        "an actor's own base must still block its normal movement"
+    );
+    runtime.actor_bases.remove(&1);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
     let bump = actions
         .iter()
         .find(|action| {

@@ -45,7 +45,10 @@ pub(super) struct ActorSweep {
 }
 
 enum MovementEvaluation<'a> {
-    Real(&'a mut Vec<ActorAction>),
+    Real {
+        actions: &'a mut Vec<ActorAction>,
+        own_base_blocks: bool,
+    },
     Query,
 }
 
@@ -783,7 +786,15 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<MovementHit, String> {
-        self.try_move_actor_inner(actor, actor_class, delta, None, instance, Some(actions))
+        self.try_move_actor_inner(
+            actor,
+            actor_class,
+            delta,
+            None,
+            true,
+            instance,
+            Some(actions),
+        )
     }
 
     pub(super) fn try_move_actor_rotated(
@@ -799,6 +810,7 @@ impl ScriptRuntime {
             actor_class,
             [0.0; 3],
             Some(rotation),
+            true,
             instance,
             Some(actions),
         )
@@ -812,15 +824,17 @@ impl ScriptRuntime {
         instance: &InstanceState,
     ) -> std::result::Result<MovementHit, String> {
         let mut instance = instance.clone();
-        self.try_move_actor_inner(actor, actor_class, delta, None, &mut instance, None)
+        self.try_move_actor_inner(actor, actor_class, delta, None, true, &mut instance, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn try_move_actor_inner(
         &mut self,
         actor: usize,
         actor_class: &ResolvedObject,
         delta: [f32; 3],
         rotation: Option<[i32; 3]>,
+        own_base_blocks: bool,
         instance: &mut InstanceState,
         mut actions: Option<&mut Vec<ActorAction>>,
     ) -> std::result::Result<MovementHit, String> {
@@ -859,7 +873,10 @@ impl ScriptRuntime {
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
         let (blocking_hit, hits) = {
             let mut evaluation = match actions.as_deref_mut() {
-                Some(actions) => MovementEvaluation::Real(actions),
+                Some(actions) => MovementEvaluation::Real {
+                    actions,
+                    own_base_blocks,
+                },
                 None => MovementEvaluation::Query,
             };
             self.movement_hit(
@@ -900,12 +917,14 @@ impl ScriptRuntime {
                 .instances
                 .remove(&based_actor)
                 .ok_or_else(|| format!("based actor {based_actor} instance is active"))?;
-            let result = self.try_move_actor(
+            let result = self.try_move_actor_inner(
                 based_actor,
                 &class,
                 actually_moved.to_array(),
+                None,
+                false,
                 &mut based_instance,
-                actions,
+                Some(actions),
             );
             self.instances.insert(based_actor, based_instance);
             result?;
@@ -1007,25 +1026,29 @@ impl ScriptRuntime {
             let result: std::result::Result<(), String> = (|| {
                 let based_location =
                     Vec3::from_array(self.actor_vector(&class, &based_instance, "Location")?);
-                self.try_move_actor(
+                self.try_move_actor_inner(
                     based_actor,
                     &class,
                     (location + yaw_rotation * (based_location - location) - based_location)
                         .to_array(),
+                    None,
+                    false,
                     &mut based_instance,
-                    actions,
+                    Some(actions),
                 )?;
                 let based_rotation = self.actor_rotator(&class, &based_instance, "Rotation")?;
-                self.try_move_actor_rotated(
+                self.try_move_actor_inner(
                     based_actor,
                     &class,
-                    [
+                    [0.0; 3],
+                    Some([
                         based_rotation[0].wrapping_add(delta[0]),
                         based_rotation[1].wrapping_add(delta[1]),
                         based_rotation[2].wrapping_add(delta[2]),
-                    ],
+                    ]),
+                    false,
                     &mut based_instance,
-                    actions,
+                    Some(actions),
                 )?;
                 if self
                     .class_has_name(&class, "Pawn")
@@ -1418,9 +1441,20 @@ impl ScriptRuntime {
             {
                 continue;
             }
+            let own_base_blocks = !matches!(
+                evaluation,
+                MovementEvaluation::Real {
+                    own_base_blocks: false,
+                    ..
+                }
+            );
             if self
-                .actors_share_base_chain(current.actor, actor)
+                .actor_is_based_on(actor, current.actor)
                 .map_err(|error| error.to_string())?
+                || !own_base_blocks
+                    && self
+                        .actor_is_based_on(current.actor, actor)
+                        .map_err(|error| error.to_string())?
             {
                 continue;
             }
@@ -1486,7 +1520,7 @@ impl ScriptRuntime {
         let Some((mover, other)) = mover else {
             return Ok(actors_block(first, second));
         };
-        let MovementEvaluation::Real(actions) = evaluation else {
+        let MovementEvaluation::Real { actions, .. } = evaluation else {
             return Ok(actors_block(first, second));
         };
 
@@ -1535,7 +1569,7 @@ impl ScriptRuntime {
                 &function,
                 &[Value::Object(other_handle)],
                 current_instance,
-                &mut **actions,
+                actions,
                 0,
             )
         } else {
@@ -1549,7 +1583,7 @@ impl ScriptRuntime {
                 &function,
                 &[Value::Object(other_handle)],
                 &mut mover_instance,
-                &mut **actions,
+                actions,
                 0,
             );
             self.instances.insert(mover, mover_instance);

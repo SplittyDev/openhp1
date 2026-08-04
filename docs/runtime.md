@@ -309,6 +309,8 @@ through its mesh and current actor transforms; the default form returns the
 actor's collision bounds instead.
 Movers participate in world collision through their transformed brush-model
 hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
+Normal movement continues to collide with an actor's own base so walking floor
+probes stay supported; only movement imparted by that base ignores it.
 Mover contacts evaluate the mover's virtual `IsRelevant` callback before
 deciding whether the sweep blocks. This preserves the authored
 `bProjTarget` path: projectile subclasses dispatch their virtual
