@@ -571,23 +571,6 @@ impl LoadedScene {
                 continue;
             }
             if let Some(system) = self.particles.get_mut(&emitter.actor) {
-                if let Some(capacity) = particle_capacity_growth(system, &emitter) {
-                    let old_vertices = system.vertices.clone();
-                    let texture_coordinates = self.render.mesh.texture_coordinates
-                        [old_vertices.start..old_vertices.start + 4]
-                        .try_into()
-                        .expect("particle quad has four texture coordinates");
-                    let surface = self.render.mesh.vertex_surfaces[old_vertices.start];
-                    self.render.mesh.positions[old_vertices].fill(Vec3::ZERO);
-                    system.vertices = append_particle_slots(
-                        &mut self.render.mesh,
-                        capacity,
-                        surface,
-                        texture_coordinates,
-                    );
-                    system.capacity = capacity;
-                    changed = true;
-                }
                 system.config = emitter;
                 continue;
             }
@@ -755,14 +738,28 @@ impl LoadedScene {
                 } else {
                     system.config.particles_max.saturating_sub(system.emitted)
                 };
-                let count = (system.residue.floor() as usize)
-                    .min(remaining)
-                    .min(system.capacity);
+                let requested = (system.residue.floor() as usize).min(remaining);
+                let needed = system.particles.len().saturating_add(requested);
+                if system.config.particles_alive == 0 && needed > system.capacity {
+                    let capacity = system
+                        .capacity
+                        .saturating_mul(2)
+                        .max(needed)
+                        .min(MAX_PARTICLE_CAPACITY);
+                    grow_particle_system(&mut self.render.mesh, system, capacity);
+                }
+                let count = if system.config.particles_alive == 0 {
+                    requested.min(system.capacity.saturating_sub(system.particles.len()))
+                } else {
+                    requested.min(system.capacity)
+                };
                 system.residue -= count as f32;
-                let recycle =
-                    count.saturating_sub(system.capacity.saturating_sub(system.particles.len()));
-                if recycle != 0 {
-                    system.particles.drain(..recycle);
+                if system.config.particles_alive != 0 {
+                    let recycle = count
+                        .saturating_sub(system.capacity.saturating_sub(system.particles.len()));
+                    if recycle != 0 {
+                        system.particles.drain(..recycle);
+                    }
                 }
                 for index in 0..count {
                     let fraction = (index as f32 + 0.5) / count.max(1) as f32;
@@ -1660,14 +1657,15 @@ struct Particle {
 
 const MAX_PARTICLE_CAPACITY: usize = 100_000;
 
-fn particle_capacity_growth(system: &ParticleSystem, emitter: &ParticleEmitter) -> Option<usize> {
-    (emitter.emit
-        && emitter.particles_max == 0
-        && emitter.lifetime.base <= 0.0
-        && emitter.lifetime.random <= 0.0
-        && system.particles.len() == system.capacity
-        && system.capacity < MAX_PARTICLE_CAPACITY)
-        .then(|| (system.capacity * 2).min(MAX_PARTICLE_CAPACITY))
+fn grow_particle_system(mesh: &mut TriangleMesh, system: &mut ParticleSystem, capacity: usize) {
+    let old_vertices = system.vertices.clone();
+    let texture_coordinates = mesh.texture_coordinates[old_vertices.start..old_vertices.start + 4]
+        .try_into()
+        .expect("particle quad has four texture coordinates");
+    let surface = mesh.vertex_surfaces[old_vertices.start];
+    mesh.positions[old_vertices].fill(Vec3::ZERO);
+    system.vertices = append_particle_slots(mesh, capacity, surface, texture_coordinates);
+    system.capacity = capacity;
 }
 
 fn append_particle_slots(
@@ -3812,20 +3810,29 @@ mod tests {
     }
 
     #[test]
-    fn zero_lifetime_emitter_grows_past_its_live_limit() {
+    fn unlimited_emitter_grows_before_a_burst_without_recycling() {
         let mut scene = particle_test_scene();
         let system = scene.particles.get_mut(&0).unwrap();
-        let emitter = ParticleEmitter {
+        system.config = ParticleEmitter {
             emit: true,
-            particles_alive: 1,
-            particles_max: 0,
-            lifetime: ParticleFloat::default(),
+            particles_alive: 0,
+            particles_per_second: ParticleFloat {
+                base: 2.0,
+                random: 0.0,
+            },
+            lifetime: ParticleFloat {
+                base: 10.0,
+                random: 0.0,
+            },
+            render_primitive: 1,
             ..Default::default()
         };
-
-        assert_eq!(super::particle_capacity_growth(system, &emitter), Some(2));
         system.particles.clear();
-        assert_eq!(super::particle_capacity_growth(system, &emitter), None);
+
+        assert!(scene.tick_particles(1.0));
+        let system = &scene.particles[&0];
+        assert_eq!(system.capacity, 2);
+        assert_eq!(system.particles.len(), 2);
     }
 
     #[test]
@@ -3958,7 +3965,9 @@ mod tests {
             render: crate::RenderScene {
                 mesh: openhp1_map::TriangleMesh {
                     positions: vec![glam::Vec3::ZERO; 4],
+                    texture_coordinates: vec![glam::Vec2::ZERO; 4],
                     vertex_colors: vec![glam::Vec3::ONE; 4],
+                    vertex_surfaces: vec![0; 4],
                     ..Default::default()
                 },
                 textures: Vec::new(),
