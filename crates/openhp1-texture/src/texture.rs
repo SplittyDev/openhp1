@@ -177,9 +177,8 @@ impl Texture {
         }
         match class {
             TextureClass::Regular => {}
-            TextureClass::Wet | TextureClass::Ice => {
-                // Both classes start from their source image. Water later
-                // displaces it; ice retains it until its native update.
+            TextureClass::Wet => {
+                // Water starts from its source image and later displaces it.
                 if let ObjectReference::Export(source_index) = source_texture
                     && source_index != export_index
                     && let source = Self::decode(package, source_index)?
@@ -191,6 +190,7 @@ impl Texture {
                     destination.indices.clone_from(&source.indices);
                 }
             }
+            TextureClass::Ice => {}
             TextureClass::Fire => {
                 let count_offset = reader.absolute_position();
                 let spark_count =
