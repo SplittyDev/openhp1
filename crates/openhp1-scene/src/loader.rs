@@ -1662,7 +1662,6 @@ const MAX_PARTICLE_CAPACITY: usize = 100_000;
 
 fn particle_capacity_growth(system: &ParticleSystem, emitter: &ParticleEmitter) -> Option<usize> {
     (emitter.emit
-        && emitter.particles_alive == 0
         && emitter.particles_max == 0
         && emitter.lifetime.base <= 0.0
         && emitter.lifetime.random <= 0.0
@@ -3813,12 +3812,12 @@ mod tests {
     }
 
     #[test]
-    fn unlimited_zero_lifetime_emitter_grows_when_full() {
+    fn zero_lifetime_emitter_grows_past_its_live_limit() {
         let mut scene = particle_test_scene();
         let system = scene.particles.get_mut(&0).unwrap();
         let emitter = ParticleEmitter {
             emit: true,
-            particles_alive: 0,
+            particles_alive: 1,
             particles_max: 0,
             lifetime: ParticleFloat::default(),
             ..Default::default()
