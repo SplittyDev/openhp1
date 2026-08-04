@@ -1901,10 +1901,6 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
                 fields["Physics"].clone(),
                 StoredValue::Value(Value::Byte(0)),
             ),
-            (
-                fields["LifeSpan"].clone(),
-                StoredValue::Value(Value::Float(0.0)),
-            ),
         ]
         .into_iter()
         .collect(),
