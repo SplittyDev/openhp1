@@ -103,11 +103,13 @@ impl ApplicationHandler for GameApp {
                 RenderOutcome::Exit => event_loop.exit(),
                 RenderOutcome::Load(saved) => {
                     let window = Arc::clone(&graphics.window);
+                    let slot = saved.slot;
                     let path = saved.map_path(&graphics.scene.path);
                     match path.and_then(LoadedScene::load).and_then(|scene| {
                         Graphics::new_with_save(window, scene, &saved.bytes, self.renderer_settings)
                     }) {
                         Ok(mut replacement) => {
+                            replacement.last_save_slot = Some(slot);
                             std::mem::swap(
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
@@ -244,6 +246,7 @@ enum RenderOutcome {
 }
 
 struct SavedGame {
+    slot: u32,
     map: String,
     bytes: Vec<u8>,
 }
@@ -384,6 +387,7 @@ struct Graphics {
     egui_renderer: egui_wgpu::Renderer,
     screenshot_dir: PathBuf,
     save_dir: PathBuf,
+    last_save_slot: Option<u32>,
     pending_screenshots: Vec<Option<u32>>,
     display_settings: DisplaySettings,
 }
@@ -590,6 +594,7 @@ impl Graphics {
             egui_renderer,
             screenshot_dir,
             save_dir,
+            last_save_slot: None,
             pending_screenshots: Vec::new(),
             display_settings,
         })
@@ -824,6 +829,8 @@ impl Graphics {
                 ConsoleCommandAction::SaveGame { slot } => {
                     if let Err(error) = self.save_game(slot) {
                         self.last_error = Some(format!("could not save game: {error:#}"));
+                    } else {
+                        self.last_save_slot = Some(slot);
                     }
                 }
                 ConsoleCommandAction::OpenSave { slot } => match self.open_save(slot) {
@@ -860,7 +867,7 @@ impl Graphics {
         let bytes =
             fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
         let map = ScriptRuntime::saved_game_map(&bytes)?;
-        Ok(SavedGame { map, bytes })
+        Ok(SavedGame { slot, map, bytes })
     }
 
     fn save_path(&self, slot: u32) -> PathBuf {
