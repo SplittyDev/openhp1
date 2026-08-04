@@ -273,7 +273,8 @@ impl ScriptRuntime {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("PlayAnim", rest)?;
             let root_motion = animation_root_motion("PlayAnim", source, rest, 3)?;
-            self.start_animation(
+            let sequence_metadata_pending = !self.animation_sequences.contains_key(&actor);
+            let configured = self.start_animation(
                 actor,
                 actor_class,
                 instance,
@@ -291,7 +292,9 @@ impl ScriptRuntime {
                 tween_time,
                 root_motion,
             });
-            self.animating.insert(actor);
+            if configured || sequence_metadata_pending {
+                self.animating.insert(actor);
+            }
             return Ok(Value::None);
         }
         if index == LOOP_ANIM
@@ -300,7 +303,8 @@ impl ScriptRuntime {
             let name = runtime_name(source, name)?;
             let (rate, tween_time) = animation_parameters("LoopAnim", rest)?;
             let root_motion = animation_root_motion("LoopAnim", source, rest, 4)?;
-            self.start_animation(
+            let sequence_metadata_pending = !self.animation_sequences.contains_key(&actor);
+            let configured = self.start_animation(
                 actor,
                 actor_class,
                 instance,
@@ -318,7 +322,9 @@ impl ScriptRuntime {
                 tween_time,
                 root_motion,
             });
-            self.animating.insert(actor);
+            if configured || sequence_metadata_pending {
+                self.animating.insert(actor);
+            }
             return Ok(Value::None);
         }
         if index == TWEEN_ANIM

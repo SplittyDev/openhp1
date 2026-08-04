@@ -322,7 +322,7 @@ fn apply_actions(
                 if played {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     unavailable_animation(scene, actor, &sequence);
                 }
             }
@@ -344,7 +344,7 @@ fn apply_actions(
                 if played {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     unavailable_animation(scene, actor, &sequence);
                 }
             }
@@ -371,7 +371,7 @@ fn apply_actions(
                 )? {
                     stats.animations_applied += 1;
                     stats.animated_actors.insert(actor);
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     unavailable_animation(scene, actor, &sequence);
                 }
             }

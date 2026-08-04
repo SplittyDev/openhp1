@@ -181,7 +181,7 @@ pub fn apply_runtime_actions_with(
                 };
                 if played {
                     animations += 1;
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     let target = &mut scene.actors[actor];
                     record_animation_diagnostic(
                         actor,
@@ -208,7 +208,7 @@ pub fn apply_runtime_actions_with(
                 };
                 if played {
                     animations += 1;
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     let target = &mut scene.actors[actor];
                     record_animation_diagnostic(
                         actor,
@@ -241,7 +241,7 @@ pub fn apply_runtime_actions_with(
                 )?;
                 if played {
                     animations += 1;
-                } else {
+                } else if scene.animation_request_exposes_capability_gap(actor, &sequence) {
                     let target = &mut scene.actors[actor];
                     record_animation_diagnostic(
                         actor,

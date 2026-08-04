@@ -1032,7 +1032,7 @@ impl ScriptRuntime {
         looping: bool,
         tween_only: bool,
         root_motion: bool,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<bool, String> {
         let command = AnimationCommand {
             sequence,
             relative_rate,
@@ -1042,7 +1042,11 @@ impl ScriptRuntime {
             root_motion,
         };
         self.animation_commands.insert(actor, command.clone());
-        self.configure_animation_instance(actor, class, instance, &command)
+        let configured = self.configure_animation_instance(actor, class, instance, &command)?;
+        if self.animation_sequences.contains_key(&actor) && !configured {
+            self.animation_commands.remove(&actor);
+        }
+        Ok(configured)
     }
 
     pub(in crate::world) fn synchronize_animation_command(
@@ -1062,7 +1066,16 @@ impl ScriptRuntime {
             .remove(&actor)
             .ok_or_else(|| format!("animation actor {actor} is active"))?;
         let result = if let Some(command) = self.animation_commands.get(&actor).cloned() {
-            self.configure_animation_instance(actor, &class, &mut instance, &command)
+            match self.configure_animation_instance(actor, &class, &mut instance, &command) {
+                Ok(configured) => {
+                    if !configured {
+                        self.animation_commands.remove(&actor);
+                        self.animating.remove(&actor);
+                    }
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
         } else {
             let anim_rate = self.actor_signed_float(&class, &instance, "AnimRate")?;
             let anim_frame = self.actor_signed_float(&class, &instance, "AnimFrame")?;
@@ -1082,7 +1095,15 @@ impl ScriptRuntime {
         class: &ResolvedObject,
         instance: &mut InstanceState,
         command: &AnimationCommand,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<bool, String> {
+        let Some(sequence) = self
+            .animation_sequences
+            .get(&actor)
+            .and_then(|sequences| sequences.get(&command.sequence.to_ascii_lowercase()))
+            .cloned()
+        else {
+            return Ok(false);
+        };
         let current_sequence =
             match self.required_actor_property(class, instance, "AnimSequence")? {
                 StoredValue::Name(name) => name,
@@ -1102,14 +1123,6 @@ impl ScriptRuntime {
         self.set_actor_value(class, instance, "bAnimNotify", Value::Bool(false))?;
         self.set_actor_value(class, instance, "bAnimFinished", Value::Bool(false))?;
 
-        let Some(sequence) = self
-            .animation_sequences
-            .get(&actor)
-            .and_then(|sequences| sequences.get(&command.sequence.to_ascii_lowercase()))
-            .cloned()
-        else {
-            return Ok(());
-        };
         self.set_actor_value(
             class,
             instance,
@@ -1127,7 +1140,7 @@ impl ScriptRuntime {
             for (name, value) in [("AnimRate", anim_rate), ("TweenRate", tween_rate)] {
                 self.set_actor_value(class, instance, name, Value::Float(value))?;
             }
-            return Ok(());
+            return Ok(true);
         }
         let (anim_frame, anim_last, anim_rate) = if command.tween_only {
             (
@@ -1171,7 +1184,7 @@ impl ScriptRuntime {
         } else {
             self.animating.remove(&actor);
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(in crate::world) fn resolve_class_value(

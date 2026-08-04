@@ -120,6 +120,10 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
 ## Animation actions
 
 - `PlayAnim` and `LoopAnim` use the scene's existing animation path.
+- A request for a sequence absent from the actor's mesh is a successful no-op:
+  it does not change the persistent animation fields or report a renderer
+  capability gap. Sequence metadata is retained for non-rendered actor meshes
+  so this decision follows the authored asset rather than draw visibility.
 - Their native calls also update the persistent UE animation fields before the
   actor's next script tick. `AnimFrame` advances before `Tick`, including
   tweening and velocity-scaled rates, so authored transition guards observe

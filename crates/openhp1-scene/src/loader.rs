@@ -1160,31 +1160,45 @@ impl LoadedScene {
         &self,
         actor: usize,
     ) -> Vec<(String, String, f32, usize, Vec<(f32, String)>)> {
-        self.animations
+        let sequences = self
+            .animations
             .iter()
             .find(|animation| animation.actor_index == actor)
-            .map(|animation| {
-                animation
-                    .sequences()
-                    .iter()
-                    .map(|sequence| {
-                        (
-                            sequence.name.clone(),
-                            sequence.group.clone(),
-                            sequence.rate,
-                            sequence.frame_count,
-                            sequence
-                                .notifications
-                                .iter()
-                                .map(|notification| {
-                                    (notification.time, notification.function.clone())
-                                })
-                                .collect(),
-                        )
-                    })
-                    .collect()
+            .map(|animation| animation.sequences().to_vec())
+            .or_else(|| {
+                let mesh = self.actor_states.get(actor)?.actor.mesh.as_ref()?;
+                Mesh::decode(&mesh.package, mesh.export_index)
+                    .ok()
+                    .map(|mesh| mesh.animation_sequences)
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        sequences
+            .into_iter()
+            .map(|sequence| {
+                (
+                    sequence.name,
+                    sequence.group,
+                    sequence.rate,
+                    sequence.frame_count,
+                    sequence
+                        .notifications
+                        .into_iter()
+                        .map(|notification| (notification.time, notification.function))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    pub fn animation_request_exposes_capability_gap(&self, actor: usize, sequence: &str) -> bool {
+        self.actors.get(actor).is_some_and(|target| {
+            target.draw_type == 2
+                && target.mesh.is_some()
+                && self
+                    .actor_animation_sequences(actor)
+                    .iter()
+                    .any(|(name, ..)| name.eq_ignore_ascii_case(sequence))
+        })
     }
 
     pub fn actor_bone_names(&self, actor: usize) -> Vec<String> {
@@ -3775,6 +3789,40 @@ mod tests {
             scene.actor_states[0].actor.location,
             glam::Vec3::new(3.0, 4.0, 5.0)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_animation_action_is_an_authored_no_op() {
+        let root = std::env::temp_dir().join(format!(
+            "openhp1-scene-missing-animation-{}-{}",
+            std::process::id(),
+            PARTICLE_TEST_ROOT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let system = root.join("System");
+        fs::create_dir_all(&system).unwrap();
+        fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+        let mut runtime = ScriptRuntime::new(&root).unwrap();
+        let mut scene = particle_test_scene();
+
+        assert_eq!(
+            crate::apply_runtime_actions(
+                &mut scene,
+                &mut runtime,
+                vec![ActorAction::LoopAnimation {
+                    actor: 0,
+                    sequence: "Missing".to_owned(),
+                    rate: 1.0,
+                    tween_time: 0.0,
+                    root_motion: false,
+                }],
+            )
+            .unwrap(),
+            (0, 0, false)
+        );
+        assert!(scene.actors[0].animation.is_none());
+        assert!(scene.actors[0].diagnostics.is_empty());
+
         fs::remove_dir_all(root).unwrap();
     }
 

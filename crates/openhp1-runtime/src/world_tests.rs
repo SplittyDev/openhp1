@@ -8139,6 +8139,80 @@ fn animation_parameters_preserve_optional_tween_time() {
 }
 
 #[test]
+fn missing_loop_animation_is_a_no_op_through_extended_native_dispatch() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-missing-loop-animation-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    runtime.animation_sequences.insert(
+        0,
+        [(
+            "all".to_owned(),
+            AnimationSequence {
+                group: String::new(),
+                rate: 1.0,
+                frame_count: 1,
+                notifications: Vec::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: 9,
+        // LoopAnim(Name'ClientTravel'); `ClientTravel` is absent from the actor mesh.
+        bytes: vec![0x04, 0x61, 0x04, 0x21, 1, 0, 0, 0, 0x16],
+        tokens: Vec::new(),
+    };
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+
+    assert_eq!(
+        Frame::new(&bytecode)
+            .execute(|call, arguments| {
+                let FunctionCall::Native(index) = call else {
+                    unreachable!()
+                };
+                runtime.native(
+                    0,
+                    &class,
+                    &package,
+                    index,
+                    arguments,
+                    &mut instance,
+                    &mut actions,
+                    0,
+                )
+            })
+            .unwrap(),
+        Value::None
+    );
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::LoopAnimation { sequence, .. }] if sequence == "ClientTravel"
+    ));
+    assert!(!runtime.animation_commands.contains_key(&0));
+    assert!(!runtime.animating.contains(&0));
+    assert!(instance.is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn function_lookups_are_case_insensitive_and_state_scoped() {
     let class = ObjectId {
         package: Arc::from("Test.u"),
