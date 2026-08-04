@@ -182,9 +182,13 @@ pub fn apply_runtime_actions_with(
                 if played {
                     animations += 1;
                 } else {
-                    scene.actors[actor]
-                        .diagnostics
-                        .push(format!("runtime could not play animation {sequence}"));
+                    let target = &mut scene.actors[actor];
+                    record_animation_diagnostic(
+                        actor,
+                        &target.name,
+                        &mut target.diagnostics,
+                        format!("runtime could not play animation {sequence}"),
+                    );
                 }
                 bone_positions_changed = true;
             }
@@ -205,9 +209,13 @@ pub fn apply_runtime_actions_with(
                 if played {
                     animations += 1;
                 } else {
-                    scene.actors[actor]
-                        .diagnostics
-                        .push(format!("runtime could not play animation {sequence}"));
+                    let target = &mut scene.actors[actor];
+                    record_animation_diagnostic(
+                        actor,
+                        &target.name,
+                        &mut target.diagnostics,
+                        format!("runtime could not play animation {sequence}"),
+                    );
                 }
                 bone_positions_changed = true;
             }
@@ -234,9 +242,13 @@ pub fn apply_runtime_actions_with(
                 if played {
                     animations += 1;
                 } else {
-                    scene.actors[actor]
-                        .diagnostics
-                        .push(format!("runtime could not restore animation {sequence}"));
+                    let target = &mut scene.actors[actor];
+                    record_animation_diagnostic(
+                        actor,
+                        &target.name,
+                        &mut target.diagnostics,
+                        format!("runtime could not restore animation {sequence}"),
+                    );
                 }
                 bone_positions_changed = true;
             }
@@ -448,4 +460,30 @@ pub fn sync_runtime_bone_positions(scene: &LoadedScene, runtime: &mut ScriptRunt
         runtime.set_actor_bone_positions(actor, positions);
     }
     Ok(())
+}
+
+fn record_animation_diagnostic(
+    actor: usize,
+    actor_name: &str,
+    diagnostics: &mut Vec<String>,
+    diagnostic: String,
+) {
+    if diagnostics.contains(&diagnostic) {
+        return;
+    }
+    warn!(actor, actor_name, %diagnostic, "animation capability diagnostic");
+    diagnostics.push(diagnostic);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::record_animation_diagnostic;
+
+    #[test]
+    fn animation_diagnostics_are_unique_per_actor() {
+        let mut diagnostics = Vec::new();
+        record_animation_diagnostic(7, "Wand7", &mut diagnostics, "missing Select".to_owned());
+        record_animation_diagnostic(7, "Wand7", &mut diagnostics, "missing Select".to_owned());
+        assert_eq!(diagnostics, ["missing Select"]);
+    }
 }

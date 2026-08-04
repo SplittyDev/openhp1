@@ -13,9 +13,7 @@ use anyhow::{Context, Result, bail};
 use app::GameApp;
 use openhp1_scene::LoadedScene;
 use tracing::{info, warn};
-use tracing_subscriber::{
-    EnvFilter, Layer, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
@@ -68,7 +66,7 @@ fn init_logging() -> Result<PathBuf> {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(Mutex::new(file))
-                .with_filter(LevelFilter::INFO),
+                .with_filter(EnvFilter::new("info,symphonia_bundle_mp3=off")),
         )
         .try_init()
         .context("could not initialize diagnostic logging")?;
