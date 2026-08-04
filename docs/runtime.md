@@ -445,9 +445,11 @@ Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
-`DeltaTime * 150` rate normalization. The held cast button is exposed through
-the player input properties, while its press dispatches the original `AltFire`
-exec so the active state owns sound, animation, and spell logic. `PlayerInput`
+`DeltaTime * 150` rate normalization. Desktop raw motion receives an additional
+2.5x scale so a full-height spell gesture fits within a modern trackpad stroke.
+The held cast button is exposed through the player input properties, while its
+press dispatches the original `AltFire` exec so the active state owns sound,
+animation, and spell logic. `PlayerInput`
 and `PlayerTick` run at the player's position in the actor tick order, so later
 actors observe the current frame's processed mouse values as they do in UE1.
 Captured mouse-button events always reach gameplay after egui observes them, so

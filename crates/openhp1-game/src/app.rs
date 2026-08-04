@@ -303,7 +303,8 @@ fn mouse_axis(delta: f64, delta_time: f32, speed: f32) -> f32 {
     if !delta_time.is_finite() || delta_time <= 0.0 {
         return 0.0;
     }
-    delta as f32 * 16.0 * speed / (delta_time * 150.0)
+    const DESKTOP_MOUSE_SCALE: f32 = 2.5;
+    delta as f32 * 16.0 * speed * DESKTOP_MOUSE_SCALE / (delta_time * 150.0)
 }
 
 struct Graphics {
@@ -1413,8 +1414,8 @@ mod tests {
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
         assert_eq!(player.strafe, 0.0);
-        assert!((player.mouse_x - 76.8).abs() < 1e-5);
-        assert!((player.mouse_y - 38.4).abs() < 1e-5);
+        assert!((player.mouse_x - 192.0).abs() < 1e-4);
+        assert!((player.mouse_y - 96.0).abs() < 1e-4);
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
         assert!(player.jump);
@@ -1425,8 +1426,8 @@ mod tests {
         let player = input.player_input(1.0 / 60.0);
         assert_eq!(player.base_x, 3_000.0);
         assert_eq!(player.base_y, 6_000.0);
-        assert!((player.mouse_x - 76.8).abs() < 1e-5);
-        assert!((player.mouse_y - 38.4).abs() < 1e-5);
+        assert!((player.mouse_x - 192.0).abs() < 1e-4);
+        assert!((player.mouse_y - 96.0).abs() < 1e-4);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
         assert!(!input.player_input(1.0 / 60.0).alt_fire_pressed);
