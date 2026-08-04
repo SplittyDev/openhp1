@@ -4052,6 +4052,7 @@ mod tests {
                 },
                 textures: Vec::new(),
                 lightmaps: Vec::new(),
+                coronas: Vec::new(),
                 surface_materials: Vec::new(),
                 sky_zone: None,
             },
