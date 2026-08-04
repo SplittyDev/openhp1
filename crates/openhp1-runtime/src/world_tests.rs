@@ -41,62 +41,46 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
 }
 
 fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) -> Vec<u8> {
+    synthetic_runtime_package_with_extras(class_name, member_name, &[], false)
+}
+
+fn synthetic_mover_runtime_package() -> Vec<u8> {
+    synthetic_runtime_package_with_extras(
+        "Mover",
+        "BumpMove",
+        &[
+            b"IsRelevantToMover\0",
+            b"State\0",
+            b"Move\0",
+            b"None\0",
+            b"DoOpen\0",
+            b"FinishedOpening\0",
+        ],
+        true,
+    )
+}
+
+fn synthetic_mover_projectile_package() -> Vec<u8> {
+    synthetic_runtime_package_with_extras(
+        "Projectile",
+        "ClientTravel",
+        &[b"IsRelevantToMover\0"],
+        false,
+    )
+}
+
+fn synthetic_runtime_package_with_extras(
+    class_name: &str,
+    member_name: &str,
+    extra_names: &[&[u8]],
+    state_member: bool,
+) -> Vec<u8> {
     const HEADER_SIZE: usize = 44;
-    let bump_move = member_name == "BumpMove";
     let mut class_name = class_name.as_bytes().to_vec();
     class_name.push(0);
     let mut member_name = member_name.as_bytes().to_vec();
     member_name.push(0);
-    let name_offset = HEADER_SIZE;
-    let export_offset = name_offset
-        + class_name.len()
-        + size_of::<u32>()
-        + member_name.len()
-        + size_of::<u32>()
-        + b"GetPlayerNetworkAddress\0".len()
-        + size_of::<u32>()
-        + b"Pawn\0".len()
-        + size_of::<u32>()
-        + b"StopWaiting\0".len()
-        + size_of::<u32>()
-        + b"QuidHud\0".len()
-        + size_of::<u32>()
-        + b"Head\0".len()
-        + size_of::<u32>()
-        + b"ConsoleCommand\0".len()
-        + size_of::<u32>()
-        + b"CallConsoleCommand\0".len()
-        + size_of::<u32>()
-        + b"IsRelevantToMover\0".len()
-        + size_of::<u32>()
-        + b"State\0".len()
-        + size_of::<u32>()
-        + b"Move\0".len()
-        + size_of::<u32>()
-        + b"None\0".len()
-        + size_of::<u32>()
-        + b"DoOpen\0".len()
-        + size_of::<u32>()
-        + b"FinishedOpening\0".len()
-        + size_of::<u32>();
-    let mut bytes = Vec::new();
-    bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
-    bytes.extend(61_u16.to_le_bytes());
-    bytes.extend(0_u16.to_le_bytes());
-    bytes.extend(0_u32.to_le_bytes());
-    for value in [
-        15,
-        name_offset as i32,
-        10,
-        export_offset as i32,
-        0,
-        export_offset as i32,
-        0,
-        0,
-    ] {
-        bytes.extend(value.to_le_bytes());
-    }
-    for name in [
+    let names = [
         class_name.as_slice(),
         member_name.as_slice(),
         b"GetPlayerNetworkAddress\0".as_slice(),
@@ -106,19 +90,38 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         b"Head\0".as_slice(),
         b"ConsoleCommand\0".as_slice(),
         b"CallConsoleCommand\0".as_slice(),
-        b"IsRelevantToMover\0".as_slice(),
-        b"State\0".as_slice(),
-        b"Move\0".as_slice(),
-        b"None\0".as_slice(),
-        b"DoOpen\0".as_slice(),
-        b"FinishedOpening\0".as_slice(),
+    ];
+    let name_offset = HEADER_SIZE;
+    let export_offset = name_offset
+        + names
+            .iter()
+            .chain(extra_names)
+            .map(|name| name.len() + size_of::<u32>())
+            .sum::<usize>();
+    let mut bytes = Vec::new();
+    bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
+    bytes.extend(61_u16.to_le_bytes());
+    bytes.extend(0_u16.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    for value in [
+        i32::try_from(names.len() + extra_names.len()).unwrap(),
+        name_offset as i32,
+        9 + i32::from(state_member),
+        export_offset as i32,
+        0,
+        export_offset as i32,
+        0,
+        0,
     ] {
-        bytes.extend(name);
+        bytes.extend(value.to_le_bytes());
+    }
+    for name in names.iter().chain(extra_names) {
+        bytes.extend(*name);
         bytes.extend(0_u32.to_le_bytes());
     }
     for (class, outer, name) in [
         (0_u8, 0_i32, 0_u8),
-        (u8::from(bump_move) * 10, 1, 1),
+        (u8::from(state_member) * 10, 1, 1),
         (0, 1, 2),
         (0, 0, 3),
         (0, 4, 4),
@@ -126,11 +129,17 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         (0, 1, 6),
         (0, 1, 7),
         (0, 1, 8),
-        (0, 0, 10),
     ] {
         bytes.extend([class, 0]);
         bytes.extend(outer.to_le_bytes());
         bytes.push(name);
+        bytes.extend(0_u32.to_le_bytes());
+        bytes.push(0);
+    }
+    if state_member {
+        bytes.extend([0, 0]);
+        bytes.extend(0_i32.to_le_bytes());
+        bytes.push(10);
         bytes.extend(0_u32.to_le_bytes());
         bytes.push(0);
     }
@@ -1853,8 +1862,6 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
         "TimeDilation",
         "Physics",
         "LifeSpan",
-        "Physics",
-        "LifeSpan",
         "bStatic",
         "bNoDelete",
         "bDeleteMe",
@@ -1897,10 +1904,6 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
             (
                 fields["LifeSpan"].clone(),
                 StoredValue::Value(Value::Float(0.0)),
-            ),
-            (
-                fields["Physics"].clone(),
-                StoredValue::Value(Value::Byte(0)),
             ),
         ]
         .into_iter()
@@ -6820,15 +6823,11 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     fs::create_dir_all(&system).unwrap();
     fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
     let package_path = system.join("Test.u");
-    fs::write(
-        &package_path,
-        synthetic_runtime_package_with_member("Mover", "BumpMove"),
-    )
-    .unwrap();
+    fs::write(&package_path, synthetic_mover_runtime_package()).unwrap();
     let projectile_package_path = system.join("Projectile.u");
     fs::write(
         &projectile_package_path,
-        synthetic_runtime_package_for("Projectile"),
+        synthetic_mover_projectile_package(),
     )
     .unwrap();
     let spell_package_path = system.join("spellFlip.u");
