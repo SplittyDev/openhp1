@@ -505,6 +505,26 @@ live under `crates/openhp1-game/src/app/console/commands`; the same registry
 dispatches commands and generates `help`, so adding a command in one handler
 module also documents it in the console.
 
+The registered developer commands are:
+
+- `load <level>` resolves a case-insensitive `.unr` name inside the active
+  installation's `Maps` directory and starts a fresh level runtime.
+- `reset` starts the current level again from its original state.
+- `respawn` restores the most recent authored save point reached in the current
+  level; it reports an error when no save point has been reached yet.
+- `fly` preserves the player while enabling the no-clip camera. WASD moves,
+  Q/E moves vertically, the mouse looks around, and Shift increases speed.
+  `play` returns to the normal player camera, while `here` places the player at
+  the fly camera through the runtime's normal collision-aware placement seam.
+- `report <issue>` writes a timestamped Markdown file under the writable
+  settings `Reports` directory. It records level/player/camera/runtime/renderer
+  state, current errors and capability diagnostics, and named actors within
+  2048 Unreal units of the player.
+- `help [command]` is generated from the command registry.
+
+Console scrollback and command history survive fresh and saved level loads for
+the lifetime of the game process.
+
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
 `MetaCast` returns a class object only when it is the requested class or derives
