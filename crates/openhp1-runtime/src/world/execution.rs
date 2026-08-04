@@ -209,6 +209,9 @@ impl ScriptRuntime {
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &state.package, field, instance)
                         .map(FrameResponse::Value),
+                    FrameRequest::GetDefault { receiver, field } => self
+                        .context_default_field_value(actor, receiver, &state.package, field)
+                        .map(FrameResponse::Value),
                     FrameRequest::SetInstance {
                         receiver,
                         field,
@@ -223,6 +226,13 @@ impl ScriptRuntime {
                             instance,
                             actions,
                         )
+                        .map(|()| FrameResponse::Value(Value::None)),
+                    FrameRequest::SetDefault {
+                        receiver,
+                        field,
+                        value,
+                    } => self
+                        .set_context_default_field(actor, receiver, &state.package, field, value)
                         .map(|()| FrameResponse::Value(Value::None)),
                 };
                 result
@@ -490,6 +500,9 @@ impl ScriptRuntime {
                     FrameRequest::GetInstance { receiver, field } => self
                         .context_field_value(actor, receiver, &function.package, field, instance)
                         .map(FrameResponse::Value),
+                    FrameRequest::GetDefault { receiver, field } => self
+                        .context_default_field_value(actor, receiver, &function.package, field)
+                        .map(FrameResponse::Value),
                     FrameRequest::SetInstance {
                         receiver,
                         field,
@@ -504,6 +517,13 @@ impl ScriptRuntime {
                             instance,
                             actions,
                         )
+                        .map(|()| FrameResponse::Value(Value::None)),
+                    FrameRequest::SetDefault {
+                        receiver,
+                        field,
+                        value,
+                    } => self
+                        .set_context_default_field(actor, receiver, &function.package, field, value)
                         .map(|()| FrameResponse::Value(Value::None)),
                 };
                 result.map_err(|error| error.to_string())

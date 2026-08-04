@@ -31,7 +31,9 @@ impl<'a> Frame<'a> {
             }
             FrameRequest::Call { receiver, .. }
             | FrameRequest::GetInstance { receiver, .. }
-            | FrameRequest::SetInstance { receiver, .. } => {
+            | FrameRequest::GetDefault { receiver, .. }
+            | FrameRequest::SetInstance { receiver, .. }
+            | FrameRequest::SetDefault { receiver, .. } => {
                 Err(format!("object context {receiver} has no frame host"))
             }
         })
@@ -761,7 +763,7 @@ impl<'a> Frame<'a> {
             }
             Slot::Default { receiver, field } => {
                 host(
-                    FrameRequest::SetInstance {
+                    FrameRequest::SetDefault {
                         receiver,
                         field,
                         value,
@@ -862,7 +864,7 @@ impl<'a> Frame<'a> {
             } => self.defaults.get(field).cloned(),
             Slot::Default { receiver, field } => Some(
                 host(
-                    FrameRequest::GetInstance {
+                    FrameRequest::GetDefault {
                         receiver: *receiver,
                         field: *field,
                     },

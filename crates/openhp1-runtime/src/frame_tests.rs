@@ -866,7 +866,7 @@ fn class_context_reads_the_resolved_class_default() {
                 FrameRequest::ResolveObject { reference: -149 } => {
                     Ok(FrameResponse::Value(Value::Object(23)))
                 }
-                FrameRequest::GetInstance {
+                FrameRequest::GetDefault {
                     receiver: 23,
                     field: 7,
                 } => Ok(FrameResponse::Value(Value::Int(42))),
@@ -875,6 +875,53 @@ fn class_context_reads_the_resolved_class_default() {
             .unwrap(),
         Value::Int(42)
     );
+}
+
+#[test]
+fn object_context_reads_the_receivers_class_default() {
+    let mut context = vec![0x19, 0x20];
+    context.extend(1_i32.to_le_bytes());
+    context.extend(5_u16.to_le_bytes());
+    context.push(4);
+    context.push(0x02);
+    context.extend(7_i32.to_le_bytes());
+    let mut bytes = vec![0x0f];
+    bytes.extend(&context);
+    bytes.push(0x1d);
+    bytes.extend(42_i32.to_le_bytes());
+    bytes.push(0x04);
+    bytes.extend(context);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut defaults = HashMap::new();
+    let result = Frame::new(&bytecode)
+        .execute_hosted(|request| match request {
+            FrameRequest::ResolveObject { reference: 1 } => {
+                Ok(FrameResponse::Value(Value::Object(23)))
+            }
+            FrameRequest::GetDefault {
+                receiver: 23,
+                field,
+            } => Ok(FrameResponse::Value(
+                defaults.get(&field).cloned().unwrap_or(Value::None),
+            )),
+            FrameRequest::SetDefault {
+                receiver: 23,
+                field,
+                value,
+            } => {
+                defaults.insert(field, value);
+                Ok(FrameResponse::Value(Value::None))
+            }
+            _ => unreachable!(),
+        })
+        .unwrap();
+    assert_eq!(result, Value::Int(42));
+    assert_eq!(defaults.get(&7), Some(&Value::Int(42)));
 }
 
 #[test]

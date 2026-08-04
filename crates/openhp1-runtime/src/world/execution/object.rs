@@ -433,6 +433,84 @@ impl ScriptRuntime {
         }
     }
 
+    fn context_default_class(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+    ) -> DispatchResult<ResolvedObject> {
+        let object = if receiver == -1 {
+            self.actor_classes.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?
+        } else {
+            let object = self.object_for_handle(receiver)?;
+            if let Some(actor) = self.object_actors.get(&object) {
+                self.actor_classes
+                    .get(actor)
+                    .cloned()
+                    .ok_or(DispatchError::UnregisteredActor { actor: *actor })?
+            } else {
+                let object = self.resolved_object(&object)?;
+                let class = object.package.summary().exports[object.export_index].class;
+                return Ok(self
+                    .packages
+                    .resolve(&object.package, class)?
+                    .unwrap_or(object));
+            }
+        };
+        self.resolved_object(&object)
+    }
+
+    pub(in crate::world) fn context_default_field_value(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        field: i32,
+    ) -> DispatchResult<Value> {
+        let Some(field) = self.resolve_reference(source, field)? else {
+            return Ok(Value::None);
+        };
+        let class = self.context_default_class(current_actor, receiver)?;
+        match self.load_class_defaults(&class, 0)?.get(&field).cloned() {
+            Some(value) => self.frame_value(&value),
+            None => {
+                let field = self.resolved_object(&field)?;
+                Ok(self.zero_field_value(&field)?.unwrap_or(Value::None))
+            }
+        }
+    }
+
+    pub(in crate::world) fn set_context_default_field(
+        &mut self,
+        current_actor: usize,
+        receiver: i32,
+        source: &Arc<Package>,
+        field: i32,
+        value: Value,
+    ) -> DispatchResult<()> {
+        let Some(field) = self.resolve_reference(source, field)? else {
+            return Ok(());
+        };
+        let class = self.context_default_class(current_actor, receiver)?;
+        let class_id = object_id(&class.package, class.export_index);
+        self.load_class_defaults(&class, 0)?;
+        let self_handle =
+            self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
+                DispatchError::UnregisteredActor {
+                    actor: current_actor,
+                },
+            )?)?;
+        let value = self.stored_value(source, &concrete_self_value(&value, self_handle))?;
+        self.class_defaults
+            .get_mut(&class_id)
+            .expect("class defaults were loaded")
+            .insert(field, value);
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn set_context_field(
         &mut self,

@@ -96,7 +96,16 @@ pub(crate) enum FrameRequest {
         receiver: i32,
         field: i32,
     },
+    GetDefault {
+        receiver: i32,
+        field: i32,
+    },
     SetInstance {
+        receiver: i32,
+        field: i32,
+        value: Value,
+    },
+    SetDefault {
         receiver: i32,
         field: i32,
         value: Value,
