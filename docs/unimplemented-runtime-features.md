@@ -894,9 +894,12 @@ affects the accuracy of future opcode scans, not as a currently used level gap.
   level transition to implement. `MultiSkins` is only reachable through generic
   network skin code, likewise without a proven shipped transition. See
   [`runtime-capability-provenance.md`](runtime-capability-provenance.md#runtime-render-properties).
-- Particle random texture selection, `ParentBlend`, and `ColorPalette` are
-  detected by `ParticleEmitter::capability_diagnostics`, but no initialized
-  shipped level authored an effective value requiring them.
+- Particle random texture selection and `ColorPalette` are detected by
+  `ParticleEmitter::capability_diagnostics`, but no initialized shipped level
+  authored an effective value requiring them. Dynamically authored
+  `ParentBlend` is implemented from the original native class-default blending
+  path; see
+  [`spell-learning-original-behavior.md`](spell-learning-original-behavior.md#parentblend-means-superclass-defaults-not-actor-ownership).
 - `Decal.DetachDecal`, the other reserved/unsupported VM tokens, and
   `PHYS_Spider` had no statically reachable or replay-observed shipped-level use
   in this pass. They remain broader engine coverage gaps, not entries in this

@@ -751,9 +751,7 @@ impl LoadedScene {
                 );
                 particle_is_alive(particle.age, particle.lifetime)
             });
-            let rate =
-                sample_particle_float(system.config.particles_per_second, &mut system.random)
-                    .max(0.0);
+            let rate = sample_particle_emission_rate(&system.config, &mut system.random).max(0.0);
             if system.config.emit && !owner.hidden {
                 if system.config.prime && !system.primed {
                     system.residue += rate
@@ -1793,7 +1791,17 @@ fn particle_capacity(emitter: &ParticleEmitter) -> usize {
     if emitter.particles_alive != 0 {
         return emitter.particles_alive;
     }
-    let rate = emitter.particles_per_second.base.abs() + emitter.particles_per_second.random.abs();
+    let child = emitter.particles_per_second;
+    let rate = emitter.parent_particles_per_second.map_or_else(
+        || child.base.abs() + child.random.abs(),
+        |parent| {
+            let blend = emitter.parent_blend;
+            let base = child.base + (parent.base - child.base) * blend;
+            base.abs()
+                + child.random.abs() * (1.0 - blend).abs()
+                + parent.random.abs() * blend.abs()
+        },
+    );
     let capacity = if emitter.distribution == 1 && emitter.pattern.len() > 1 {
         let spacing = (emitter.particles_per_second.base.abs()
             - emitter.particles_per_second.random.abs())
@@ -1821,6 +1829,14 @@ fn pattern_length(points: &[[f32; 3]]) -> f32 {
 
 fn sample_particle_float(value: ParticleFloat, random: &mut u32) -> f32 {
     value.base + value.random * random_unit(random)
+}
+
+fn sample_particle_emission_rate(emitter: &ParticleEmitter, random: &mut u32) -> f32 {
+    let child = sample_particle_float(emitter.particles_per_second, random);
+    emitter.parent_particles_per_second.map_or(child, |parent| {
+        let parent = sample_particle_float(parent, random);
+        child + (parent - child) * emitter.parent_blend
+    })
 }
 
 fn particle_is_alive(age: f32, lifetime: f32) -> bool {
@@ -4058,6 +4074,7 @@ mod tests {
                 base: 10.0,
                 random: 5.0,
             },
+            parent_particles_per_second: None,
             period: ParticleFloat::default(),
             lifetime: ParticleFloat {
                 base: 1.0,
@@ -4121,6 +4138,36 @@ mod tests {
     }
 
     #[test]
+    fn parent_blended_emission_rate_samples_child_and_parent_independently() {
+        let emitter = ParticleEmitter {
+            particles_per_second: ParticleFloat {
+                base: 10.0,
+                random: 4.0,
+            },
+            parent_particles_per_second: Some(ParticleFloat {
+                base: 30.0,
+                random: 8.0,
+            }),
+            parent_blend: 0.25,
+            ..Default::default()
+        };
+        let mut expected_random = 0x1234_5678;
+        let child =
+            super::sample_particle_float(emitter.particles_per_second, &mut expected_random);
+        let parent = super::sample_particle_float(
+            emitter.parent_particles_per_second.unwrap(),
+            &mut expected_random,
+        );
+        let mut actual_random = 0x1234_5678;
+
+        assert_eq!(
+            super::sample_particle_emission_rate(&emitter, &mut actual_random),
+            child + (parent - child) * 0.25
+        );
+        assert_eq!(actual_random, expected_random);
+    }
+
+    #[test]
     fn particle_patterns_interpolate_authored_gesture_points() {
         let points = [[0.0, 0.0, 0.0], [0.25, 1.0, 0.0], [1.0, 1.0, 0.0]];
         assert_eq!(
@@ -4163,6 +4210,7 @@ mod tests {
                 base: 2.0,
                 random: 0.0,
             },
+            parent_particles_per_second: None,
             lifetime: ParticleFloat {
                 base: 10.0,
                 random: 0.0,

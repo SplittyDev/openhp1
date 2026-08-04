@@ -110,6 +110,23 @@ Thus neither the white template nor the red live trace is intended to be
 reused across attempts. Every retry starts with newly spawned effects and
 fresh particle lists.
 
+## `ParentBlend` means superclass defaults, not actor ownership
+
+The judging replay switches `BadDrawPoint.ParentBlend` and
+`TemplateSparkle01.ParentBlend` between zero and one. Other shipped code uses
+fractions between those endpoints, so the value is not a Boolean. The native
+`AParticleFX::GetSysParams` implementation resolves "parent" to the immediate
+superclass's default `ParticleFX`; it does not inspect the emitter's `Owner`.
+
+At zero or below, the native returns the child system. At one or above, it
+returns the superclass default system. Between those endpoints it linearly
+blends the source dimensions, angular spreads, speed, lifetime, start/end
+colors, start/end alpha, spin rate, and drip time. Size width, length, and end
+scale remain the child's values at fractional blends, but come from the parent
+at the full-one endpoint because the complete parent system is selected then.
+Emission rate is handled separately: each emission samples the child and
+parent `ParticlesPerSec` independently and blends those two sampled rates.
+
 ## Lesson speech is an ordinary positional `PlaySound`
 
 All `SpellLearnTrigger` narration helpers, including the introduction, retry,

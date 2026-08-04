@@ -409,7 +409,7 @@ impl ScriptRuntime {
             } else {
                 Vec3::ZERO
             };
-            emitters.push(ParticleEmitter {
+            let mut emitter = ParticleEmitter {
                 actor,
                 owner,
                 emit: particle_bool(self.instance_property(&class, &instance, "bEmit")?),
@@ -441,6 +441,7 @@ impl ScriptRuntime {
                     &instance,
                     "ParticlesPerSec",
                 )?),
+                parent_particles_per_second: None,
                 period: particle_float(self.instance_property(&class, &instance, "Period")?),
                 lifetime: particle_float(self.instance_property(&class, &instance, "Lifetime")?),
                 speed: particle_float(self.instance_property(&class, &instance, "Speed")?),
@@ -557,9 +558,46 @@ impl ScriptRuntime {
                 ),
                 pattern,
                 textures,
-            });
+            };
+            if emitter.parent_blend > 0.0
+                && let Some(parent) = self.particle_parent_parameters(&class)?
+            {
+                emitter.blend_parent_parameters(&parent);
+            }
+            emitters.push(emitter);
         }
         Ok(emitters)
+    }
+
+    fn particle_parent_parameters(
+        &mut self,
+        class: &ResolvedObject,
+    ) -> DispatchResult<Option<ParticleEmitter>> {
+        let (metadata, _) = class_defaults_reader(&class.package, class.export_index)?;
+        let Some(parent) = self.packages.resolve(&class.package, metadata.base_field)? else {
+            return Ok(None);
+        };
+        let defaults = self.load_class_defaults(&parent, 0)?;
+        let property =
+            |runtime: &mut Self, name| runtime.instance_property(&parent, &defaults, name);
+        Ok(Some(ParticleEmitter {
+            particles_per_second: particle_float(property(self, "ParticlesPerSec")?),
+            source_width: particle_float(property(self, "SourceWidth")?),
+            source_height: particle_float(property(self, "SourceHeight")?),
+            source_depth: particle_float(property(self, "SourceDepth")?),
+            angular_spread_width: particle_float(property(self, "AngularSpreadWidth")?),
+            angular_spread_height: particle_float(property(self, "AngularSpreadHeight")?),
+            speed: particle_float(property(self, "Speed")?),
+            lifetime: particle_float(property(self, "Lifetime")?),
+            size_width: particle_float(property(self, "SizeWidth")?),
+            size_length: particle_float(property(self, "SizeLength")?),
+            size_end_scale: particle_float(property(self, "SizeEndScale")?),
+            color_start: particle_color(property(self, "ColorStart")?),
+            color_end: particle_color(property(self, "ColorEnd")?),
+            spin_rate: particle_float(property(self, "SpinRate")?),
+            drip_time: particle_float(property(self, "DripTime")?),
+            ..Default::default()
+        }))
     }
 
     fn particle_winds(

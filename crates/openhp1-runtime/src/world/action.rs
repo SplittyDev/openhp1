@@ -105,6 +105,7 @@ pub struct ParticleEmitter {
     pub particles_max: usize,
     pub particles_emitted: usize,
     pub particles_per_second: ParticleFloat,
+    pub parent_particles_per_second: Option<ParticleFloat>,
     pub period: ParticleFloat,
     pub lifetime: ParticleFloat,
     pub speed: ParticleFloat,
@@ -145,6 +146,50 @@ pub struct ParticleEmitter {
 }
 
 impl ParticleEmitter {
+    pub(crate) fn blend_parent_parameters(&mut self, parent: &Self) {
+        let blend = self.parent_blend;
+        if blend <= 0.0 {
+            return;
+        }
+        self.parent_particles_per_second = Some(parent.particles_per_second);
+        if blend >= 1.0 {
+            self.source_width = parent.source_width;
+            self.source_height = parent.source_height;
+            self.source_depth = parent.source_depth;
+            self.angular_spread_width = parent.angular_spread_width;
+            self.angular_spread_height = parent.angular_spread_height;
+            self.speed = parent.speed;
+            self.lifetime = parent.lifetime;
+            self.size_width = parent.size_width;
+            self.size_length = parent.size_length;
+            self.size_end_scale = parent.size_end_scale;
+            self.color_start = parent.color_start;
+            self.color_end = parent.color_end;
+            self.spin_rate = parent.spin_rate;
+            self.drip_time = parent.drip_time;
+            return;
+        }
+        self.source_width = lerp_particle_float(self.source_width, parent.source_width, blend);
+        self.source_height = lerp_particle_float(self.source_height, parent.source_height, blend);
+        self.source_depth = lerp_particle_float(self.source_depth, parent.source_depth, blend);
+        self.angular_spread_width = lerp_particle_float(
+            self.angular_spread_width,
+            parent.angular_spread_width,
+            blend,
+        );
+        self.angular_spread_height = lerp_particle_float(
+            self.angular_spread_height,
+            parent.angular_spread_height,
+            blend,
+        );
+        self.speed = lerp_particle_float(self.speed, parent.speed, blend);
+        self.lifetime = lerp_particle_float(self.lifetime, parent.lifetime, blend);
+        self.color_start = lerp_particle_color(self.color_start, parent.color_start, blend);
+        self.color_end = lerp_particle_color(self.color_end, parent.color_end, blend);
+        self.spin_rate = lerp_particle_float(self.spin_rate, parent.spin_rate, blend);
+        self.drip_time = lerp_particle_float(self.drip_time, parent.drip_time, blend);
+    }
+
     pub fn capability_diagnostics(&self) -> Vec<&'static str> {
         let mut diagnostics = Vec::new();
         if !matches!(self.render_primitive, 1 | 2) {
@@ -153,13 +198,32 @@ impl ParticleEmitter {
         if self.textures.len() > 1 {
             diagnostics.push("particle random texture selection is unsupported");
         }
-        if self.parent_blend != 0.0 {
-            diagnostics.push("particle parent parameter blending is unsupported");
-        }
         if self.color_palette {
             diagnostics.push("particle palette color cycling is unsupported");
         }
         diagnostics
+    }
+}
+
+fn lerp_particle_float(child: ParticleFloat, parent: ParticleFloat, blend: f32) -> ParticleFloat {
+    ParticleFloat {
+        base: child.base + (parent.base - child.base) * blend,
+        random: child.random + (parent.random - child.random) * blend,
+    }
+}
+
+fn lerp_particle_color(child: ParticleColor, parent: ParticleColor, blend: f32) -> ParticleColor {
+    let component = |child: u8, parent: u8| {
+        let child = (f32::from(child) * (1.0 - blend)).round().clamp(0.0, 255.0) as u8;
+        let parent = (f32::from(parent) * blend).round().clamp(0.0, 255.0) as u8;
+        child.saturating_add(parent)
+    };
+    let color = |child: [u8; 4], parent: [u8; 4]| {
+        std::array::from_fn(|index| component(child[index], parent[index]))
+    };
+    ParticleColor {
+        base: color(child.base, parent.base),
+        random: color(child.random, parent.random),
     }
 }
 
@@ -189,6 +253,103 @@ mod particle_tests {
             unsupported.capability_diagnostics(),
             ["particle render primitive is unsupported"]
         );
+    }
+
+    #[test]
+    fn blends_only_the_original_fractional_parent_parameter_set() {
+        let mut child = ParticleEmitter {
+            parent_blend: 0.25,
+            particles_per_second: ParticleFloat {
+                base: 4.0,
+                random: 8.0,
+            },
+            source_width: ParticleFloat {
+                base: 10.0,
+                random: 20.0,
+            },
+            speed: ParticleFloat {
+                base: 100.0,
+                random: 200.0,
+            },
+            size_width: ParticleFloat {
+                base: 2.0,
+                random: 3.0,
+            },
+            color_start: ParticleColor {
+                base: [20, 40, 60, 80],
+                random: [4, 8, 12, 16],
+            },
+            ..Default::default()
+        };
+        let parent = ParticleEmitter {
+            particles_per_second: ParticleFloat {
+                base: 12.0,
+                random: 16.0,
+            },
+            source_width: ParticleFloat {
+                base: 30.0,
+                random: 60.0,
+            },
+            speed: ParticleFloat {
+                base: 300.0,
+                random: 600.0,
+            },
+            size_width: ParticleFloat {
+                base: 8.0,
+                random: 9.0,
+            },
+            color_start: ParticleColor {
+                base: [100, 120, 140, 160],
+                random: [20, 24, 28, 32],
+            },
+            ..Default::default()
+        };
+
+        child.blend_parent_parameters(&parent);
+
+        assert_eq!(
+            child.parent_particles_per_second,
+            Some(parent.particles_per_second)
+        );
+        assert_eq!(
+            child.source_width,
+            ParticleFloat {
+                base: 15.0,
+                random: 30.0
+            }
+        );
+        assert_eq!(
+            child.speed,
+            ParticleFloat {
+                base: 150.0,
+                random: 300.0
+            }
+        );
+        assert_eq!(child.color_start.base, [40, 60, 80, 100]);
+        assert_eq!(child.size_width.base, 2.0);
+    }
+
+    #[test]
+    fn full_parent_blend_uses_all_parent_spawn_parameters() {
+        let mut child = ParticleEmitter {
+            parent_blend: 1.0,
+            size_width: ParticleFloat {
+                base: 2.0,
+                random: 3.0,
+            },
+            ..Default::default()
+        };
+        let parent = ParticleEmitter {
+            size_width: ParticleFloat {
+                base: 8.0,
+                random: 9.0,
+            },
+            ..Default::default()
+        };
+
+        child.blend_parent_parameters(&parent);
+
+        assert_eq!(child.size_width, parent.size_width);
     }
 }
 
