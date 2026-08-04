@@ -72,9 +72,28 @@ struct ActorRenderContext {
     class_cache: HashMap<SceneObjectId, ClassState>,
     mesh_cache: HashMap<SceneObjectId, Option<Arc<Mesh>>>,
     brush_cache: HashMap<SceneObjectId, Option<Arc<BrushPolys>>>,
-    animation_cache: HashMap<SceneObjectId, Option<Arc<SkeletalAnimation>>>,
+    animation_cache: HashMap<SceneObjectId, std::result::Result<Arc<SkeletalAnimation>, String>>,
     decoded_textures: HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: HashMap<(String, usize, bool), usize>,
+}
+
+enum ActorAnimationSource {
+    Legacy,
+    Skeletal(Arc<SkeletalAnimation>),
+    Error(String),
+}
+
+impl ActorAnimationSource {
+    fn sequences<'a>(
+        &'a self,
+        mesh: &'a Mesh,
+    ) -> std::result::Result<&'a [MeshAnimationSequence], String> {
+        match self {
+            Self::Legacy => Ok(&mesh.animation_sequences),
+            Self::Skeletal(animation) => Ok(&animation.sequences),
+            Self::Error(error) => Err(error.clone()),
+        }
+    }
 }
 
 impl LoadedScene {
@@ -1212,20 +1231,17 @@ impl LoadedScene {
         };
         let mesh = Mesh::decode(&mesh_object.package, mesh_object.export_index)
             .context("could not decode actor mesh animation metadata")?;
-        let Some(animation_object) = actor_skeletal_animation_object(
+        let animation_source = actor_animation_source(
             &mut self.actor_render.packages,
+            &mut self.actor_render.animation_cache,
             &state,
             mesh_object,
             &mesh,
-        )?
-        else {
-            return Ok(mesh.animation_sequences);
-        };
-        Ok(
-            SkeletalAnimation::decode(&animation_object.package, animation_object.export_index)
-                .context("could not decode actor skeletal animation metadata")?
-                .sequences,
-        )
+        );
+        animation_source
+            .sequences(&mesh)
+            .map(<[MeshAnimationSequence]>::to_vec)
+            .map_err(anyhow::Error::msg)
     }
 
     pub fn animation_request_exposes_capability_gap(
@@ -2628,44 +2644,20 @@ fn append_scene_actor_render(
         state.collision_height,
         mesh.origin.z,
     );
-    let animation_object =
-        match actor_skeletal_animation_object(packages, state, &mesh_object, &mesh) {
-            Ok(animation) => animation,
-            Err(error) => {
-                warn!(
-                    actor = %scene_actor.name,
-                    %error,
-                    "could not resolve actor skeletal animation"
-                );
-                None
-            }
-        };
-    let skeletal_animation = animation_object.and_then(|animation_object| {
-        let key = animation_object.id();
-        if !animation_cache.contains_key(&key) {
-            let decoded = match SkeletalAnimation::decode(
-                &animation_object.package,
-                animation_object.export_index,
-            ) {
-                Ok(animation) => Some(Arc::new(animation)),
-                Err(error) => {
-                    warn!(
-                        actor = %scene_actor.name,
-                        %error,
-                        "could not decode actor skeletal animation"
-                    );
-                    None
-                }
-            };
-            animation_cache.insert(key.clone(), decoded);
+    let animation_source =
+        actor_animation_source(packages, animation_cache, state, &mesh_object, &mesh);
+    if let ActorAnimationSource::Error(error) = &animation_source {
+        warn!(actor = %scene_actor.name, %error, "could not decode actor animation metadata");
+        let diagnostic = format!("animation metadata could not be decoded: {error}");
+        if !scene_actor.diagnostics.contains(&diagnostic) {
+            scene_actor.diagnostics.push(diagnostic);
         }
-        animation_cache.get(&key).and_then(Option::as_ref).cloned()
-    });
+    }
     match append_actor_mesh(
         packages,
         &mesh_object,
         &mesh,
-        skeletal_animation.as_ref(),
+        &animation_source,
         state,
         mesh_offset,
         actor_index,
@@ -2698,18 +2690,41 @@ fn append_scene_actor_render(
     }
 }
 
-fn actor_skeletal_animation_object(
+fn actor_animation_source(
     packages: &mut PackageStore,
+    animation_cache: &mut HashMap<
+        SceneObjectId,
+        std::result::Result<Arc<SkeletalAnimation>, String>,
+    >,
     state: &ActorState,
     mesh_object: &SceneObject,
     mesh: &Mesh,
-) -> Result<Option<SceneObject>> {
-    if let Some(animation) = state.skeletal_animation.clone() {
-        return Ok(Some(animation));
+) -> ActorAnimationSource {
+    let animation_object = state.skeletal_animation.clone().map_or_else(
+        || {
+            packages
+                .resolve(&mesh_object.package, mesh.default_animation)
+                .map(|animation| animation.map(SceneObject::from))
+                .map_err(|error| format!("could not resolve actor skeletal animation: {error}"))
+        },
+        |animation| Ok(Some(animation)),
+    );
+    let Some(animation_object) = (match animation_object {
+        Ok(animation) => animation,
+        Err(error) => return ActorAnimationSource::Error(error),
+    }) else {
+        return ActorAnimationSource::Legacy;
+    };
+    let key = animation_object.id();
+    let decoded = animation_cache.entry(key).or_insert_with(|| {
+        SkeletalAnimation::decode(&animation_object.package, animation_object.export_index)
+            .map(Arc::new)
+            .map_err(|error| format!("could not decode actor skeletal animation: {error}"))
+    });
+    match decoded {
+        Ok(animation) => ActorAnimationSource::Skeletal(Arc::clone(animation)),
+        Err(error) => ActorAnimationSource::Error(error.clone()),
     }
-    Ok(packages
-        .resolve(&mesh_object.package, mesh.default_animation)?
-        .map(SceneObject::from))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3147,7 +3162,7 @@ fn append_actor_mesh(
     packages: &mut PackageStore,
     mesh_object: &SceneObject,
     mesh: &Arc<Mesh>,
-    skeletal_animation: Option<&Arc<SkeletalAnimation>>,
+    animation_source: &ActorAnimationSource,
     actor: &ActorState,
     mesh_offset: Vec3,
     actor_index: usize,
@@ -3202,9 +3217,7 @@ fn append_actor_mesh(
     let mut actor_materials = HashMap::<(u32, i32), usize>::new();
     let first_vertex = render_mesh.positions.len();
     let first_index = render_mesh.indices.len();
-    let sequences = skeletal_animation.map_or(mesh.animation_sequences.as_slice(), |animation| {
-        animation.sequences.as_slice()
-    });
+    let sequences = animation_source.sequences(mesh).unwrap_or_default();
     let sequence = actor
         .anim_sequence
         .as_deref()
@@ -3217,7 +3230,7 @@ fn append_actor_mesh(
     let phase = actor.anim_frame.max(0.0).rem_euclid(1.0);
     let sampled;
     let triangles = if let Some(sequence) = sequence {
-        sampled = if let Some(animation) = skeletal_animation {
+        sampled = if let ActorAnimationSource::Skeletal(animation) = animation_source {
             mesh.sample_skeletal_sequence(animation, sequence, phase)?
         } else {
             mesh.sample_sequence(&sequences[sequence], phase)?
@@ -3294,7 +3307,10 @@ fn append_actor_mesh(
         animations.push(AnimatedActorMesh {
             actor_index,
             mesh: Arc::clone(mesh),
-            skeletal_animation: skeletal_animation.cloned(),
+            skeletal_animation: match animation_source {
+                ActorAnimationSource::Skeletal(animation) => Some(Arc::clone(animation)),
+                ActorAnimationSource::Legacy | ActorAnimationSource::Error(_) => None,
+            },
             sequence: sequence.unwrap_or(0),
             phase,
             rate: animation.as_ref().map_or(0.0, |animation| animation.rate),
@@ -3973,6 +3989,56 @@ mod tests {
         assert!(scene.actors[0].diagnostics.iter().any(|diagnostic| {
             diagnostic.starts_with("animation metadata could not be decoded:")
         }));
+    }
+
+    #[test]
+    fn rendered_invalid_skeletal_animation_keeps_its_metadata_diagnostic() {
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        let invalid_animation = super::SceneObject {
+            package: Arc::clone(&scene.actor_render.map),
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actor_states[0].actor.skeletal_animation = Some(invalid_animation);
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+        let state = scene.actor_states[0].actor.clone();
+        let super::LoadedScene {
+            actor_render,
+            actors,
+            render,
+            animations,
+            sprites,
+            water_animations,
+            ..
+        } = &mut scene;
+        super::append_scene_actor_render(
+            actor_render,
+            &mut actors[0],
+            &state,
+            false,
+            false,
+            0,
+            &mut render.mesh,
+            &mut render.textures,
+            &mut render.surface_materials,
+            animations,
+            sprites,
+            water_animations,
+        );
+
+        assert!(scene.actors[0].render.is_some());
+        assert!(scene.actor_animation_sequences(0).is_empty());
+        assert!(scene.actors[0].diagnostics.iter().any(|diagnostic| {
+            diagnostic.starts_with("animation metadata could not be decoded:")
+        }));
+        assert!(!scene.animation_request_exposes_capability_gap(0, "All"));
     }
 
     #[test]
