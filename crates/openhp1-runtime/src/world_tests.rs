@@ -36,14 +36,20 @@ fn synthetic_runtime_package() -> Vec<u8> {
 }
 
 fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
+    synthetic_runtime_package_with_member(class_name, "ClientTravel")
+}
+
+fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) -> Vec<u8> {
     const HEADER_SIZE: usize = 44;
     let mut class_name = class_name.as_bytes().to_vec();
     class_name.push(0);
+    let mut member_name = member_name.as_bytes().to_vec();
+    member_name.push(0);
     let name_offset = HEADER_SIZE;
     let export_offset = name_offset
         + class_name.len()
         + size_of::<u32>()
-        + b"ClientTravel\0".len()
+        + member_name.len()
         + size_of::<u32>()
         + b"GetPlayerNetworkAddress\0".len()
         + size_of::<u32>()
@@ -78,7 +84,7 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     }
     for name in [
         class_name.as_slice(),
-        b"ClientTravel\0".as_slice(),
+        member_name.as_slice(),
         b"GetPlayerNetworkAddress\0".as_slice(),
         b"Pawn\0".as_slice(),
         b"StopWaiting\0".as_slice(),
@@ -663,6 +669,38 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
             } if sequence == "Wave" && *phase == 0.375
         )
     }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn intrinsic_class_field_returns_the_runtime_actor_class() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-intrinsic-class-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(
+        &package_path,
+        synthetic_runtime_package_with_member("Object", "Class"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = object_id(&package, 3);
+    runtime.actor_classes.insert(7, class.clone());
+    let expected = runtime.object_handle(class).unwrap();
+
+    assert_eq!(
+        runtime
+            .context_field_value(7, -1, &package, 2, &InstanceState::default())
+            .unwrap(),
+        Value::Object(expected)
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

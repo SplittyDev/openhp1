@@ -32,6 +32,9 @@ Actors use stable package/export identities. Class defaults followed by actor
 tagged-property overrides initialize persistent instance state. Remote actor
 contexts must resolve registered actor handles so field reads, writes, and
 calls affect the target actor rather than a temporary copy.
+The intrinsic `Object.Class` field returns that registered runtime class
+identity, so authored class comparisons such as `spell.Class == class'spellFlip'`
+use the same object handles as class constants.
 Signed `ObjectConst` package references are resolved relative to the function
 or state package before context operations use their runtime handles.
 `ClassContext` reads instance-variable expressions from the referenced class's

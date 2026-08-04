@@ -314,7 +314,7 @@ impl ScriptRuntime {
         Err(DispatchError::CallDepth)
     }
 
-    pub(super) fn context_field_value(
+    pub(in crate::world) fn context_field_value(
         &mut self,
         current_actor: usize,
         receiver: i32,
@@ -360,6 +360,25 @@ impl ScriptRuntime {
                 }
             };
         };
+        let intrinsic_class = {
+            let field = self.resolved_object(&field)?;
+            let summary = field.package.summary();
+            let export = &summary.exports[field.export_index];
+            summary
+                .name(export.object_name)
+                .eq_ignore_ascii_case("Class")
+                && summary
+                    .object_name(export.outer)
+                    .is_some_and(|owner| owner.eq_ignore_ascii_case("Object"))
+        };
+        if intrinsic_class {
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            return self.object_handle(class).map(Value::Object);
+        }
         let intrinsic_name = {
             let field = self.resolved_object(&field)?;
             let summary = field.package.summary();
