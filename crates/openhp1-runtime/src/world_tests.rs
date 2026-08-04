@@ -12,6 +12,7 @@ use openhp1_script::{Bytecode, FunctionMetadata, ScriptExport, ScriptMetadata};
 
 use crate::{
     ConsoleCommandAction, ConsoleCommands, Frame, FrameRequest, FrameResponse, FunctionCall,
+    frame::StructMember,
 };
 
 use super::*;
@@ -64,6 +65,8 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         + b"ConsoleCommand\0".len()
         + size_of::<u32>()
         + b"CallConsoleCommand\0".len()
+        + size_of::<u32>()
+        + b"IsRelevantToMover\0".len()
         + size_of::<u32>();
     let mut bytes = Vec::new();
     bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -71,7 +74,7 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
     bytes.extend(0_u16.to_le_bytes());
     bytes.extend(0_u32.to_le_bytes());
     for value in [
-        9,
+        10,
         name_offset as i32,
         9,
         export_offset as i32,
@@ -92,6 +95,7 @@ fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) ->
         b"Head\0".as_slice(),
         b"ConsoleCommand\0".as_slice(),
         b"CallConsoleCommand\0".as_slice(),
+        b"IsRelevantToMover\0".as_slice(),
     ] {
         bytes.extend(name);
         bytes.extend(0_u32.to_le_bytes());
@@ -6800,6 +6804,20 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         synthetic_runtime_package_for("Projectile"),
     )
     .unwrap();
+    let spell_package_path = system.join("spellFlip.u");
+    fs::write(
+        &spell_package_path,
+        synthetic_runtime_package_for("spellFlip"),
+    )
+    .unwrap();
+    let other_projectile_package_path = system.join("OtherProjectile.u");
+    fs::write(
+        &other_projectile_package_path,
+        synthetic_runtime_package_for("OtherProjectile"),
+    )
+    .unwrap();
+    let actor_package_path = system.join("Actor.u");
+    fs::write(&actor_package_path, synthetic_runtime_package_for("Actor")).unwrap();
 
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     let package = runtime.packages.load_path(&package_path).unwrap();
@@ -6807,8 +6825,17 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         .packages
         .load_path(&projectile_package_path)
         .unwrap();
+    let spell_package = runtime.packages.load_path(&spell_package_path).unwrap();
+    let other_projectile_package = runtime
+        .packages
+        .load_path(&other_projectile_package_path)
+        .unwrap();
+    let actor_package = runtime.packages.load_path(&actor_package_path).unwrap();
     let mover_class_id = object_id(&package, 0);
     let projectile_class_id = object_id(&projectile_package, 0);
+    let spell_class_id = object_id(&spell_package, 0);
+    let other_projectile_class_id = object_id(&other_projectile_package, 0);
+    let actor_class_id = object_id(&actor_package, 0);
     let class_script = |export_index| {
         Arc::new(ScriptExport {
             export_index,
@@ -6851,11 +6878,39 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         .scripts
         .insert(projectile_class_id.clone(), class_script(0));
     runtime
+        .scripts
+        .insert(spell_class_id.clone(), class_script(0));
+    runtime
+        .scripts
+        .insert(other_projectile_class_id.clone(), class_script(0));
+    runtime
+        .scripts
+        .insert(actor_class_id.clone(), class_script(0));
+    runtime
         .class_defaults
         .insert(mover_class_id.clone(), InstanceState::default());
     runtime
         .class_defaults
         .insert(projectile_class_id.clone(), InstanceState::default());
+    runtime
+        .class_defaults
+        .insert(spell_class_id.clone(), InstanceState::default());
+    runtime
+        .class_defaults
+        .insert(other_projectile_class_id.clone(), InstanceState::default());
+    runtime
+        .class_defaults
+        .insert(actor_class_id.clone(), InstanceState::default());
+    runtime
+        .class_relations
+        .insert((spell_class_id.clone(), projectile_class_id.clone()), true);
+    runtime.class_relations.insert(
+        (
+            other_projectile_class_id.clone(),
+            projectile_class_id.clone(),
+        ),
+        true,
+    );
 
     let state_id = object_id(&package, 1);
     runtime.scripts.insert(
@@ -6917,29 +6972,162 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             }),
         })
     };
-    let relevant_id = object_id(&package, 2);
-    runtime
-        .scripts
-        .insert(relevant_id.clone(), function_script(2, vec![0x04, 0x27]));
+    let other_parameter = 2_i32;
+    let b_proj_target = object_id(&projectile_package, 2);
+    let relevance_checked = object_id(&projectile_package, 3);
+    let mut relevant = vec![0x14, 0x2d, 0x01];
+    relevant.extend(4_i32.to_le_bytes());
+    relevant.push(0x27);
+    relevant.extend([0xe7, 0x1f]);
+    relevant.extend(b"mover relevance\0");
+    relevant.push(0x16);
+    let projectile_branch = relevant.len();
+    relevant.extend([0x07, 0, 0, 0x2d, 0x01]);
+    relevant.extend(3_i32.to_le_bytes());
+    let cast_branch = relevant.len();
+    relevant.extend([0x07, 0, 0, 0x77, 0x2e]);
+    relevant.extend(1_i32.to_le_bytes());
+    relevant.push(0x00);
+    relevant.extend(other_parameter.to_le_bytes());
+    relevant.extend([0x2a, 0x16, 0x04, 0x19, 0x2e]);
+    relevant.extend(1_i32.to_le_bytes());
+    relevant.push(0x00);
+    relevant.extend(other_parameter.to_le_bytes());
+    relevant.extend([0x06, 0x00, 0x04, 0x1b]);
+    relevant.extend(9_i32.to_le_bytes());
+    relevant.extend([0x16, 0x04, 0x28]);
+    let any_bump = relevant.len();
+    relevant.extend([0x04, 0x27]);
+    relevant[projectile_branch + 1..projectile_branch + 3]
+        .copy_from_slice(&(any_bump as u16).to_le_bytes());
+    let rejected_projectile = any_bump - 2;
+    relevant[cast_branch + 1..cast_branch + 3]
+        .copy_from_slice(&(rejected_projectile as u16).to_le_bytes());
+
+    let relevant_id = object_id(&projectile_package, 4);
+    runtime.scripts.insert(
+        relevant_id.clone(),
+        function_script(relevant_id.export_index, relevant),
+    );
+    runtime.frame_arguments.insert(
+        relevant_id.clone(),
+        Arc::new(vec![(other_parameter, 0, false)]),
+    );
     runtime.function_lookups.insert(
         FunctionLookup::new(mover_class_id.clone(), None, "IsRelevant", 0),
         Some(relevant_id),
     );
 
+    let projectile_relevance = |marker: i32, accepted: bool, message: &[u8]| {
+        let mut bytes = vec![0x14, 0x2d, 0x01];
+        bytes.extend(marker.to_le_bytes());
+        bytes.push(0x27);
+        bytes.extend([0xe7, 0x1f]);
+        bytes.extend(message);
+        bytes.extend([0, 0x16, 0x04, if accepted { 0x27 } else { 0x28 }]);
+        bytes
+    };
+    let spell_relevance = object_id(&spell_package, 1);
+    let spell_checked = object_id(&spell_package, 2);
+    runtime.scripts.insert(
+        spell_relevance.clone(),
+        function_script(
+            spell_relevance.export_index,
+            projectile_relevance(3, true, b"spellFlip relevance"),
+        ),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(spell_class_id.clone(), None, "IsRelevantToMover", 1),
+        Some(spell_relevance),
+    );
+    let other_relevance = object_id(&other_projectile_package, 1);
+    let other_checked = object_id(&other_projectile_package, 2);
+    runtime.scripts.insert(
+        other_relevance.clone(),
+        function_script(
+            other_relevance.export_index,
+            projectile_relevance(3, false, b"other projectile relevance"),
+        ),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(
+            other_projectile_class_id.clone(),
+            None,
+            "IsRelevantToMover",
+            1,
+        ),
+        Some(other_relevance),
+    );
+
     let key_pos = object_id(&package, 4);
-    let mut bump = vec![0x0f, 0x1a, 0x26, 0x01];
-    bump.extend(5_i32.to_le_bytes());
-    bump.push(0x23);
-    bump.extend([192.0_f32, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes));
-    bump.extend([0x61, 0x0b, 0x23]);
-    bump.extend([192.0_f32, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes));
-    bump.extend([0x16, 0x71, 0x21]);
+    let location = object_id(&package, 5);
+    let base_pos = object_id(&package, 6);
+    let move_increment = object_id(&package, 7);
+    let instance_variable = |reference: i32| {
+        let mut bytes = vec![0x01];
+        bytes.extend(reference.to_le_bytes());
+        bytes
+    };
+    let key_position_x = || {
+        let mut bytes = vec![0x36];
+        bytes.extend(9_i32.to_le_bytes());
+        bytes.extend([0x1a, 0x26]);
+        bytes.extend(instance_variable(5));
+        bytes
+    };
+    let other_location_x = || {
+        let mut bytes = vec![0x36];
+        bytes.extend(9_i32.to_le_bytes());
+        bytes.extend([0x19, 0x00]);
+        bytes.extend(other_parameter.to_le_bytes());
+        bytes.extend(5_u16.to_le_bytes());
+        bytes.push(12);
+        bytes.extend(instance_variable(6));
+        bytes
+    };
+    let mut bump = vec![0x0f, 0x1a, 0x26];
+    bump.extend(instance_variable(5));
+    bump.push(0xd8);
+    bump.extend(instance_variable(6));
+    bump.extend(instance_variable(7));
+    bump.push(0x16);
+    let direction_branch = bump.len();
+    bump.extend([0x07, 0, 0, 0xb1, 0xaf]);
+    bump.extend(other_location_x());
+    bump.extend([0x36]);
+    bump.extend(9_i32.to_le_bytes());
+    bump.extend(instance_variable(6));
+    bump.extend([0x16, 0x1e]);
+    bump.extend(0.0_f32.to_le_bytes());
+    bump.push(0x16);
+    bump.push(0xb9);
+    bump.extend(key_position_x());
+    bump.extend(instance_variable(8));
+    bump.push(0x16);
+    let direction_end = bump.len();
+    bump.extend([0x06, 0, 0]);
+    let negative_direction = bump.len();
+    bump.push(0xb8);
+    bump.extend(key_position_x());
+    bump.extend(instance_variable(8));
+    bump.push(0x16);
+    let goto_state = bump.len();
+    bump[direction_branch + 1..direction_branch + 3]
+        .copy_from_slice(&(negative_direction as u16).to_le_bytes());
+    bump[direction_end + 1..direction_end + 3].copy_from_slice(&(goto_state as u16).to_le_bytes());
+    bump.extend([0x71, 0x21]);
     bump.extend(1_i32.to_le_bytes());
     bump.extend([0x16, 0x04, 0x0b]);
     let bump_id = object_id(&package, 3);
     runtime
         .scripts
         .insert(bump_id.clone(), function_script(3, bump));
+    runtime
+        .frame_arguments
+        .insert(bump_id.clone(), Arc::new(vec![(other_parameter, 0, false)]));
+    runtime
+        .struct_members
+        .insert(bump_id.clone(), Arc::new(vec![(9, StructMember::X)]));
     runtime.function_lookups.insert(
         FunctionLookup::new(mover_class_id.clone(), None, "Bump", 0),
         Some(bump_id),
@@ -6966,7 +7154,13 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     .enumerate()
     .map(|(index, name)| (name, runtime_actor_id(100 + index)))
     .collect::<HashMap<_, _>>();
-    for class in [&mover_class_id, &projectile_class_id] {
+    for class in [
+        &mover_class_id,
+        &projectile_class_id,
+        &spell_class_id,
+        &other_projectile_class_id,
+        &actor_class_id,
+    ] {
         for (name, field) in &fields {
             runtime.fields.insert(
                 (class.clone(), name.to_ascii_lowercase()),
@@ -7051,7 +7245,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     let projectile_object = runtime_actor_id(2);
     for (actor, object, class) in [
         (0, mover_object, mover_class_id.clone()),
-        (1, projectile_object, projectile_class_id),
+        (1, projectile_object.clone(), spell_class_id.clone()),
     ] {
         runtime.object_actors.insert(object.clone(), actor);
         runtime.actor_objects.insert(actor, object);
@@ -7059,29 +7253,163 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     }
     runtime.next_actor = 2;
     let mut mover_instance = instance([0.0; 3]);
+    mover_instance.insert(b_proj_target.clone(), StoredValue::Value(Value::Bool(true)));
+    mover_instance.insert(
+        relevance_checked.clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
     mover_instance.insert(
         key_pos.clone(),
         StoredValue::Array(vec![StoredValue::Value(Value::Vector([0.0; 3])); 8]),
     );
+    mover_instance.insert(
+        location.clone(),
+        StoredValue::Value(Value::Vector([64.0, 0.0, 0.0])),
+    );
+    mover_instance.insert(
+        base_pos,
+        StoredValue::Value(Value::Vector([16.0, 0.0, 0.0])),
+    );
+    mover_instance.insert(move_increment, StoredValue::Value(Value::Float(32.0)));
     runtime.instances.insert(0, mover_instance);
     let mut projectile_instance = instance([-40.0, 0.0, 0.0]);
+    projectile_instance.insert(
+        spell_checked.clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    projectile_instance.insert(
+        location.clone(),
+        StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
+    );
+    assert!(
+        runtime
+            .class_is_a(
+                ResolvedObject {
+                    package: Arc::clone(&spell_package),
+                    export_index: 0,
+                },
+                &ResolvedObject {
+                    package: Arc::clone(&projectile_package),
+                    export_index: 0,
+                },
+            )
+            .unwrap()
+    );
+    let spell_class = ResolvedObject {
+        package: Arc::clone(&spell_package),
+        export_index: 0,
+    };
+    let mover_class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let mut moving_mover = runtime.instances.remove(&0).unwrap();
+    let mut stored_projectile = projectile_instance.clone();
+    stored_projectile.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([40.0, 0.0, 0.0])),
+    );
+    runtime.instances.insert(1, stored_projectile);
+    let mover_query = runtime
+        .test_move_actor(0, &mover_class, [80.0, 0.0, 0.0], &moving_mover)
+        .unwrap();
+    assert_eq!(mover_query.actor, Some(1));
+    assert_eq!(
+        moving_mover.get(&relevance_checked),
+        Some(&StoredValue::Value(Value::Bool(false)))
+    );
+    assert_eq!(
+        runtime.instances[&1].get(&spell_checked),
+        Some(&StoredValue::Value(Value::Bool(false)))
+    );
+    let mut mover_actions = Vec::new();
+    let mover_hit = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [80.0, 0.0, 0.0],
+            &mut moving_mover,
+            &mut mover_actions,
+        )
+        .unwrap();
+    assert_eq!(mover_hit.actor, Some(1));
+    assert_eq!(
+        moving_mover.get(&relevance_checked),
+        Some(&StoredValue::Value(Value::Bool(true))),
+        "real mover movement must retain IsRelevant mutations on its active instance"
+    );
+    assert!(mover_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::Log {
+            actor: 0,
+            message,
+            tag: None,
+        } if message == "mover relevance"
+    )));
+    moving_mover.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    moving_mover.insert(
+        relevance_checked.clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime.instances.remove(&1);
+    runtime.instances.insert(0, moving_mover);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+
+    let query_hit = runtime
+        .test_move_actor(1, &spell_class, [80.0, 0.0, 0.0], &projectile_instance)
+        .unwrap();
+    assert_eq!(query_hit.actor, Some(0));
+    assert_eq!(
+        runtime.instances[&0].get(&relevance_checked),
+        Some(&StoredValue::Value(Value::Bool(false))),
+        "collision probes must discard Mover.IsRelevant instance mutations"
+    );
+    assert_eq!(
+        projectile_instance.get(&spell_checked),
+        Some(&StoredValue::Value(Value::Bool(false))),
+        "collision probes must discard virtual projectile mutations"
+    );
+    assert!(!runtime.instances.contains_key(&1));
+
     let mut actions = Vec::new();
     let hit = runtime
         .try_move_actor(
             1,
-            &ResolvedObject {
-                package: Arc::clone(&projectile_package),
-                export_index: 0,
-            },
+            &spell_class,
             [80.0, 0.0, 0.0],
             &mut projectile_instance,
             &mut actions,
         )
         .unwrap();
     assert_eq!(hit.actor, Some(0));
-    let bump = actions
-        .into_iter()
-        .find(|action| {
+    assert_eq!(
+        runtime.instances[&0].get(&relevance_checked),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    assert_eq!(
+        projectile_instance.get(&spell_checked),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    let relevance_log = actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                ActorAction::Log {
+                    actor: 0,
+                    message,
+                    tag: None,
+                } if message == "mover relevance"
+            )
+        })
+        .expect("Mover.IsRelevant action was discarded");
+    let bump_position = actions
+        .iter()
+        .position(|action| {
             matches!(
                 action,
                 ActorAction::DispatchEvent {
@@ -7092,6 +7420,21 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             )
         })
         .expect("relevant projectile did not dispatch Mover.Bump");
+    assert!(relevance_log < bump_position);
+    let bump = actions
+        .iter()
+        .find(|action| {
+            matches!(
+                action,
+                ActorAction::DispatchEvent {
+                    actor: 0,
+                    event: "Bump",
+                    ..
+                }
+            )
+        })
+        .expect("relevant projectile did not dispatch Mover.Bump")
+        .clone();
     let ActorAction::DispatchEvent { arguments, .. } = bump else {
         unreachable!()
     };
@@ -7108,7 +7451,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         runtime.instances[&0].get(&key_pos),
         Some(&StoredValue::Array(vec![
             StoredValue::Value(Value::Vector([0.0; 3])),
-            StoredValue::Value(Value::Vector([192.0, 0.0, 0.0])),
+            StoredValue::Value(Value::Vector([16.0, 0.0, 0.0])),
             StoredValue::Value(Value::Vector([0.0; 3])),
             StoredValue::Value(Value::Vector([0.0; 3])),
             StoredValue::Value(Value::Vector([0.0; 3])),
@@ -7117,14 +7460,116 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             StoredValue::Value(Value::Vector([0.0; 3])),
         ]))
     );
-    assert!(bump_actions.contains(&ActorAction::SetLocation {
-        actor: 0,
-        location: [192.0, 0.0, 0.0],
-    }));
-    assert_eq!(
-        runtime.instances[&0].get(&fields["Location"]),
-        Some(&StoredValue::Value(Value::Vector([192.0, 0.0, 0.0])))
+    assert!(bump_actions.is_empty());
+    runtime.instances.get_mut(&1).unwrap().insert(
+        location.clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),
     );
+    runtime.actor_states.insert(0, None);
+    runtime.state_frames.remove(&0);
+    runtime
+        .dispatch_event_with_arguments(0, &package_path, 0, "Bump", &arguments)
+        .unwrap();
+    let StoredValue::Array(key_positions) = &runtime.instances[&0][&key_pos] else {
+        panic!("GridMover KeyPos is not an array")
+    };
+    assert_eq!(
+        key_positions[1],
+        StoredValue::Value(Value::Vector([80.0, 0.0, 0.0])),
+        "GridMover must add MoveIncrement when the impact comes from negative X"
+    );
+    runtime.instances.remove(&1);
+
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    runtime.instances.get_mut(&0).unwrap().insert(
+        relevance_checked.clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime.object_actors.remove(&projectile_object);
+    let other_projectile_object = runtime_actor_id(3);
+    runtime
+        .object_actors
+        .insert(other_projectile_object.clone(), 1);
+    runtime
+        .actor_objects
+        .insert(1, other_projectile_object.clone());
+    runtime
+        .actor_classes
+        .insert(1, other_projectile_class_id.clone());
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let mut rejected_instance = instance([-40.0, 0.0, 0.0]);
+    rejected_instance.insert(other_checked, StoredValue::Value(Value::Bool(false)));
+    let mut rejected_actions = Vec::new();
+    let rejected_hit = runtime
+        .try_move_actor(
+            1,
+            &ResolvedObject {
+                package: Arc::clone(&other_projectile_package),
+                export_index: 0,
+            },
+            [80.0, 0.0, 0.0],
+            &mut rejected_instance,
+            &mut rejected_actions,
+        )
+        .unwrap();
+    assert_eq!(rejected_hit.actor, None);
+    assert_eq!(rejected_hit.fraction, 1.0);
+    assert_eq!(
+        rejected_instance.get(&object_id(&other_projectile_package, 2)),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    assert!(!rejected_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::DispatchEvent {
+            actor: 0,
+            event: "Bump",
+            ..
+        }
+    )));
+
+    runtime
+        .instances
+        .get_mut(&0)
+        .unwrap()
+        .insert(b_proj_target, StoredValue::Value(Value::Bool(false)));
+    runtime.object_actors.remove(&other_projectile_object);
+    let actor_object = runtime_actor_id(4);
+    runtime.object_actors.insert(actor_object.clone(), 1);
+    runtime.actor_objects.insert(1, actor_object);
+    runtime.actor_classes.insert(1, actor_class_id.clone());
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let mut actor_instance = instance([-40.0, 0.0, 0.0]);
+    let mut actor_actions = Vec::new();
+    let actor_hit = runtime
+        .try_move_actor(
+            1,
+            &ResolvedObject {
+                package: actor_package,
+                export_index: 0,
+            },
+            [80.0, 0.0, 0.0],
+            &mut actor_instance,
+            &mut actor_actions,
+        )
+        .unwrap();
+    assert_eq!(
+        actor_hit.actor,
+        Some(0),
+        "BT_AnyBump must still block actors"
+    );
+    assert!(actor_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::DispatchEvent {
+            actor: 0,
+            event: "Bump",
+            ..
+        }
+    )));
     fs::remove_dir_all(root).unwrap();
 }
 

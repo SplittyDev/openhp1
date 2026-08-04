@@ -44,6 +44,11 @@ pub(super) struct ActorSweep {
     blocking: bool,
 }
 
+enum MovementEvaluation<'a> {
+    Real(&'a mut Vec<ActorAction>),
+    Query,
+}
+
 #[derive(Clone)]
 pub(super) struct CollisionFields {
     location: ObjectId,
@@ -457,6 +462,8 @@ impl ScriptRuntime {
         }
 
         let mut current = self.collision_actor(actor, actor_class, instance)?;
+        let mut probe_instance = instance.clone();
+        let mut evaluation = MovementEvaluation::Query;
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
         let physics = self.actor_byte(actor_class, instance, "Physics")?;
         let mut reached = false;
@@ -477,12 +484,24 @@ impl ScriptRuntime {
                     .flatten()
                     .map_or(-1.0, |zone| if zone.gravity.z > 0.0 { 1.0 } else { -1.0 });
                 let step_up = Vec3::new(0.0, 0.0, -gravity_direction * step_height);
-                let (hit, _) =
-                    self.movement_hit(&current, step_up, collide_world, actor, instance)?;
+                let (hit, _) = self.movement_hit(
+                    &current,
+                    step_up,
+                    collide_world,
+                    actor,
+                    &mut probe_instance,
+                    &mut evaluation,
+                )?;
                 current.location += step_up * hit.fraction;
 
-                let (hit, _) =
-                    self.movement_hit(&current, delta, collide_world, actor, instance)?;
+                let (hit, _) = self.movement_hit(
+                    &current,
+                    delta,
+                    collide_world,
+                    actor,
+                    &mut probe_instance,
+                    &mut evaluation,
+                )?;
                 let mut moved = delta * hit.fraction;
                 current.location += moved;
                 if hit.fraction < 1.0 {
@@ -494,13 +513,25 @@ impl ScriptRuntime {
                     if aligned.length_squared() <= 0.00000001 {
                         break;
                     }
-                    let (hit, _) =
-                        self.movement_hit(&current, aligned, collide_world, actor, instance)?;
+                    let (hit, _) = self.movement_hit(
+                        &current,
+                        aligned,
+                        collide_world,
+                        actor,
+                        &mut probe_instance,
+                        &mut evaluation,
+                    )?;
                     moved = remaining * hit.fraction;
                     current.location += moved;
                 }
-                let (hit, _) =
-                    self.movement_hit(&current, -step_up, collide_world, actor, instance)?;
+                let (hit, _) = self.movement_hit(
+                    &current,
+                    -step_up,
+                    collide_world,
+                    actor,
+                    &mut probe_instance,
+                    &mut evaluation,
+                )?;
                 current.location -= step_up * hit.fraction;
                 if moved.length_squared() <= 1.0 {
                     break;
@@ -510,8 +541,14 @@ impl ScriptRuntime {
                     reached = true;
                     break;
                 }
-                let (hit, _) =
-                    self.movement_hit(&current, delta, collide_world, actor, instance)?;
+                let (hit, _) = self.movement_hit(
+                    &current,
+                    delta,
+                    collide_world,
+                    actor,
+                    &mut probe_instance,
+                    &mut evaluation,
+                )?;
                 let mut moved = delta * hit.fraction;
                 current.location += moved;
                 if hit.fraction < 1.0 {
@@ -523,8 +560,14 @@ impl ScriptRuntime {
                     if aligned.length_squared() <= 0.00000001 {
                         break;
                     }
-                    let (hit, _) =
-                        self.movement_hit(&current, aligned, collide_world, actor, instance)?;
+                    let (hit, _) = self.movement_hit(
+                        &current,
+                        aligned,
+                        collide_world,
+                        actor,
+                        &mut probe_instance,
+                        &mut evaluation,
+                    )?;
                     moved = remaining * hit.fraction;
                     current.location += moved;
                 }
@@ -552,7 +595,8 @@ impl ScriptRuntime {
                     Vec3::new(0.0, 0.0, vertical),
                     collide_world,
                     actor,
-                    instance,
+                    &mut probe_instance,
+                    &mut evaluation,
                 )?;
                 current.location.z += vertical * hit.fraction;
             }
@@ -813,8 +857,20 @@ impl ScriptRuntime {
             );
         }
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let (blocking_hit, hits) =
-            self.movement_hit(&current, delta, collide_world, actor, instance)?;
+        let (blocking_hit, hits) = {
+            let mut evaluation = match actions.as_deref_mut() {
+                Some(actions) => MovementEvaluation::Real(actions),
+                None => MovementEvaluation::Query,
+            };
+            self.movement_hit(
+                &current,
+                delta,
+                collide_world,
+                actor,
+                instance,
+                &mut evaluation,
+            )?
+        };
         let blocking_actor = blocking_hit.actor;
 
         let Some(actions) = actions.as_mut() else {
@@ -1002,7 +1058,8 @@ impl ScriptRuntime {
         delta: Vec3,
         collide_world: bool,
         current_actor: usize,
-        current_instance: &InstanceState,
+        current_instance: &mut InstanceState,
+        evaluation: &mut MovementEvaluation<'_>,
     ) -> std::result::Result<(MovementHit, Vec<ActorSweep>), String> {
         let world_hit = if collide_world && current.brush.is_none() {
             let collision = self
@@ -1049,6 +1106,7 @@ impl ScriptRuntime {
                 collide_world,
                 current_actor,
                 current_instance,
+                evaluation,
             )?;
             hits.sort_by(|left, right| {
                 left.fraction
@@ -1324,7 +1382,8 @@ impl ScriptRuntime {
         delta: Vec3,
         collide_world: bool,
         current_actor: usize,
-        current_instance: &InstanceState,
+        current_instance: &mut InstanceState,
+        evaluation: &mut MovementEvaluation<'_>,
     ) -> std::result::Result<Vec<ActorSweep>, String> {
         self.ensure_collision_actors(current_actor, current_instance)?;
         let end = current.location + delta;
@@ -1387,6 +1446,7 @@ impl ScriptRuntime {
                     &other,
                     current_actor,
                     current_instance,
+                    evaluation,
                 )?,
             });
         }
@@ -1398,30 +1458,24 @@ impl ScriptRuntime {
         first: &CollisionActor,
         second: &CollisionActor,
         current_actor: usize,
-        current_instance: &InstanceState,
+        current_instance: &mut InstanceState,
+        evaluation: &mut MovementEvaluation<'_>,
     ) -> std::result::Result<bool, String> {
-        let second_is_mover = self
-            .actor_classes
-            .get(&second.actor)
-            .cloned()
-            .map(|class| self.resolved_object(&class))
-            .transpose()
-            .map_err(|error| error.to_string())?
-            .map(|class| self.class_has_name(&class, "Mover"))
-            .transpose()
-            .map_err(|error| error.to_string())?
-            .unwrap_or(false);
-        let first_is_mover = self
-            .actor_classes
-            .get(&first.actor)
-            .cloned()
-            .map(|class| self.resolved_object(&class))
-            .transpose()
-            .map_err(|error| error.to_string())?
-            .map(|class| self.class_has_name(&class, "Mover"))
-            .transpose()
-            .map_err(|error| error.to_string())?
-            .unwrap_or(false);
+        let is_mover = |runtime: &mut Self, actor| {
+            runtime
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .map(|class| runtime.resolved_object(&class))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .map(|class| runtime.class_has_name(&class, "Mover"))
+                .transpose()
+                .map_err(|error| error.to_string())
+                .map(Option::unwrap_or_default)
+        };
+        let second_is_mover = is_mover(self, second.actor)?;
+        let first_is_mover = is_mover(self, first.actor)?;
         let mover = if second_is_mover {
             Some((second.actor, first.actor))
         } else if first_is_mover {
@@ -1462,34 +1516,58 @@ impl ScriptRuntime {
             .object_handle(other_object)
             .map_err(|error| error.to_string())?;
 
+        let query_instances =
+            matches!(evaluation, MovementEvaluation::Query).then(|| self.instances.clone());
+        if mover != current_actor && !self.instances.contains_key(&mover) {
+            return Err(format!("mover {mover} instance is active"));
+        }
         let inserted_current =
             mover != current_actor && !self.instances.contains_key(&current_actor);
         if inserted_current {
             self.instances
                 .insert(current_actor, current_instance.clone());
         }
-        let mut mover_instance = if mover == current_actor {
-            current_instance.clone()
-        } else {
-            self.instances
-                .remove(&mover)
-                .ok_or_else(|| format!("mover {mover} instance is active"))?
+        let mut disposable_actions = Vec::new();
+        let actions = match evaluation {
+            MovementEvaluation::Real(actions) => &mut **actions,
+            MovementEvaluation::Query => &mut disposable_actions,
         };
-        let mut actions = Vec::new();
-        let result = self.execute_function(
-            mover,
-            &mover_class,
-            &function,
-            &[Value::Object(other_handle)],
-            &mut mover_instance,
-            &mut actions,
-            0,
-        );
-        if mover != current_actor {
-            self.instances.insert(mover, mover_instance);
-        }
-        if inserted_current {
-            self.instances.remove(&current_actor);
+        let result = if mover == current_actor {
+            self.execute_function(
+                mover,
+                &mover_class,
+                &function,
+                &[Value::Object(other_handle)],
+                current_instance,
+                actions,
+                0,
+            )
+        } else {
+            let mut mover_instance = self
+                .instances
+                .remove(&mover)
+                .expect("mover instance was checked before relevance evaluation");
+            let result = self.execute_function(
+                mover,
+                &mover_class,
+                &function,
+                &[Value::Object(other_handle)],
+                &mut mover_instance,
+                actions,
+                0,
+            );
+            if query_instances.is_none() {
+                self.instances.insert(mover, mover_instance);
+            }
+            result
+        };
+        if let Some(instances) = query_instances {
+            self.instances = instances;
+        } else if inserted_current {
+            *current_instance = self
+                .instances
+                .remove(&current_actor)
+                .ok_or_else(|| format!("moving actor {current_actor} instance was removed"))?;
         }
         match result.map_err(|error| error.to_string())? {
             Value::Bool(relevant) => Ok(relevant),

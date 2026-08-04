@@ -296,6 +296,24 @@ through its mesh and current actor transforms; the default form returns the
 actor's collision bounds instead.
 Movers participate in world collision through their transformed brush-model
 hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
+Mover contacts evaluate the mover's virtual `IsRelevant` callback before
+deciding whether the sweep blocks. This preserves the authored
+`bProjTarget` path: projectile subclasses dispatch their virtual
+`IsRelevantToMover` implementation, so `spellFlip` can activate a GridMover
+while another projectile passes through. Ordinary `BumpType` behavior remains
+in `Mover.IsRelevant` for non-projectiles. During real movement, callback
+instance mutations and emitted actions are retained in call order before the
+movement and `Bump` actions. Collision-only probes such as `test_move_actor`
+and `actorReachable` evaluate the same virtual chain against disposable state
+and discard its actions.
+
+The shipped `GridMover.Bump` derives `KeyPos[1]` from `Location - BasePos`,
+then applies `MoveIncrement` on the dominant impact axis, subtracting for a
+positive offset and adding for a negative offset. It enters the `BumpMove`
+`Move` label; that state calls `DoOpen`, waits in `FinishInterpolation`, and
+only then completes the opening sequence. OpenHP1 therefore treats relevance
+evaluation, the key-position update, state entry, and latent interpolation as
+one ordered authored path rather than replacing it with a fixed destination.
 Pawn mounting follows HP1's native `APawn::Mount` path: only BSP surfaces with
 the authored `bHighLedge` flag qualify, and the original raised, diagonal, and
 destination cylinder probes must all pass before the pawn's `Mount` event runs.
