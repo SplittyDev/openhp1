@@ -8213,6 +8213,147 @@ fn missing_loop_animation_is_a_no_op_through_extended_native_dispatch() {
 }
 
 #[test]
+fn spawned_animation_command_waits_until_sequence_metadata_is_known() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-pending-spawn-animation-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(
+        &package_path,
+        synthetic_runtime_package_with_member("PlayerPawn", "Breathe"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let fields = [
+        ("AnimSequence", runtime_actor_id(800)),
+        ("bAnimLoop", runtime_actor_id(801)),
+        ("bAnimNotify", runtime_actor_id(802)),
+        ("bAnimFinished", runtime_actor_id(803)),
+        ("AnimFrame", runtime_actor_id(804)),
+        ("AnimLast", runtime_actor_id(805)),
+        ("AnimRate", runtime_actor_id(806)),
+        ("AnimMinRate", runtime_actor_id(807)),
+        ("TweenRate", runtime_actor_id(808)),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    let instance = || {
+        fields
+            .iter()
+            .map(|(name, field)| {
+                let value = if *name == "AnimSequence" {
+                    StoredValue::Name("None".to_owned())
+                } else if name.starts_with('b') {
+                    StoredValue::Value(Value::Bool(false))
+                } else {
+                    StoredValue::Value(Value::Float(0.0))
+                };
+                (field.clone(), value)
+            })
+            .collect::<InstanceState>()
+    };
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: 9,
+        // LoopAnim(Name'Breathe') through the extended-native frame path.
+        bytes: vec![0x04, 0x61, 0x04, 0x21, 1, 0, 0, 0, 0x16],
+        tokens: Vec::new(),
+    };
+
+    let mut pending_instance = instance();
+    let mut actions = Vec::new();
+    Frame::new(&bytecode)
+        .execute(|call, arguments| {
+            let FunctionCall::Native(index) = call else {
+                unreachable!()
+            };
+            runtime.native(
+                0,
+                &class,
+                &package,
+                index,
+                arguments,
+                &mut pending_instance,
+                &mut actions,
+                0,
+            )
+        })
+        .unwrap();
+    assert!(runtime.animation_commands.contains_key(&0));
+    assert!(runtime.animating.contains(&0));
+    assert_eq!(
+        pending_instance.get(&fields["AnimSequence"]),
+        Some(&StoredValue::Name("None".to_owned()))
+    );
+    runtime.actor_classes.insert(0, class_id.clone());
+    runtime.instances.insert(0, pending_instance);
+    runtime
+        .set_actor_animation_sequences(
+            0,
+            [("breathe".to_owned(), String::new(), 2.0, 2, Vec::new())],
+        )
+        .unwrap();
+    assert!(runtime.animation_commands.contains_key(&0));
+    assert_eq!(
+        runtime.instances[&0].get(&fields["AnimSequence"]),
+        Some(&StoredValue::Name("Breathe".to_owned()))
+    );
+
+    let mut missing_instance = instance();
+    let mut missing_actions = Vec::new();
+    Frame::new(&bytecode)
+        .execute(|call, arguments| {
+            let FunctionCall::Native(index) = call else {
+                unreachable!()
+            };
+            runtime.native(
+                1,
+                &class,
+                &package,
+                index,
+                arguments,
+                &mut missing_instance,
+                &mut missing_actions,
+                0,
+            )
+        })
+        .unwrap();
+    assert!(runtime.animation_commands.contains_key(&1));
+    assert!(runtime.animating.contains(&1));
+    runtime.actor_classes.insert(1, class_id);
+    runtime.instances.insert(1, missing_instance);
+    runtime
+        .set_actor_animation_sequences(1, [("All".to_owned(), String::new(), 1.0, 1, Vec::new())])
+        .unwrap();
+    assert!(!runtime.animation_commands.contains_key(&1));
+    assert!(!runtime.animating.contains(&1));
+    assert_eq!(
+        runtime.instances[&1].get(&fields["AnimSequence"]),
+        Some(&StoredValue::Name("None".to_owned()))
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn function_lookups_are_case_insensitive_and_state_scoped() {
     let class = ObjectId {
         package: Arc::from("Test.u"),

@@ -124,6 +124,10 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
   it does not change the persistent animation fields or report a renderer
   capability gap. Sequence metadata is retained for non-rendered actor meshes
   so this decision follows the authored asset rather than draw visibility.
+  Metadata uses the same source as rendering: an explicit `SkelAnim`, otherwise
+  the skeletal mesh's default animation, and otherwise legacy mesh sequences.
+  Decode failures remain actor capability diagnostics instead of becoming an
+  empty sequence list silently.
 - Their native calls also update the persistent UE animation fields before the
   actor's next script tick. `AnimFrame` advances before `Tick`, including
   tweening and velocity-scaled rates, so authored transition guards observe

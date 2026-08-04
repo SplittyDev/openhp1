@@ -1157,21 +1157,21 @@ impl LoadedScene {
     }
 
     pub fn actor_animation_sequences(
-        &self,
+        &mut self,
         actor: usize,
     ) -> Vec<(String, String, f32, usize, Vec<(f32, String)>)> {
-        let sequences = self
-            .animations
-            .iter()
-            .find(|animation| animation.actor_index == actor)
-            .map(|animation| animation.sequences().to_vec())
-            .or_else(|| {
-                let mesh = self.actor_states.get(actor)?.actor.mesh.as_ref()?;
-                Mesh::decode(&mesh.package, mesh.export_index)
-                    .ok()
-                    .map(|mesh| mesh.animation_sequences)
-            })
-            .unwrap_or_default();
+        let sequences = match self.resolve_actor_animation_sequences(actor) {
+            Ok(sequences) => sequences,
+            Err(error) => {
+                if let Some(target) = self.actors.get_mut(actor) {
+                    let diagnostic = format!("animation metadata could not be decoded: {error:#}");
+                    if !target.diagnostics.contains(&diagnostic) {
+                        target.diagnostics.push(diagnostic);
+                    }
+                }
+                Vec::new()
+            }
+        };
         sequences
             .into_iter()
             .map(|sequence| {
@@ -1190,15 +1190,58 @@ impl LoadedScene {
             .collect()
     }
 
-    pub fn animation_request_exposes_capability_gap(&self, actor: usize, sequence: &str) -> bool {
-        self.actors.get(actor).is_some_and(|target| {
-            target.draw_type == 2
-                && target.mesh.is_some()
-                && self
-                    .actor_animation_sequences(actor)
-                    .iter()
-                    .any(|(name, ..)| name.eq_ignore_ascii_case(sequence))
-        })
+    fn resolve_actor_animation_sequences(
+        &mut self,
+        actor: usize,
+    ) -> Result<Vec<MeshAnimationSequence>> {
+        if let Some(animation) = self
+            .animations
+            .iter()
+            .find(|animation| animation.actor_index == actor)
+        {
+            return Ok(animation.sequences().to_vec());
+        }
+        let state = self
+            .actor_states
+            .get(actor)
+            .context("runtime refers to a missing scene actor")?
+            .actor
+            .clone();
+        let Some(mesh_object) = state.mesh.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mesh = Mesh::decode(&mesh_object.package, mesh_object.export_index)
+            .context("could not decode actor mesh animation metadata")?;
+        let Some(animation_object) = actor_skeletal_animation_object(
+            &mut self.actor_render.packages,
+            &state,
+            mesh_object,
+            &mesh,
+        )?
+        else {
+            return Ok(mesh.animation_sequences);
+        };
+        Ok(
+            SkeletalAnimation::decode(&animation_object.package, animation_object.export_index)
+                .context("could not decode actor skeletal animation metadata")?
+                .sequences,
+        )
+    }
+
+    pub fn animation_request_exposes_capability_gap(
+        &mut self,
+        actor: usize,
+        sequence: &str,
+    ) -> bool {
+        let rendered_mesh = self
+            .actors
+            .get(actor)
+            .is_some_and(|target| target.draw_type == 2 && target.mesh.is_some());
+        rendered_mesh
+            && self
+                .actor_animation_sequences(actor)
+                .iter()
+                .any(|(name, ..)| name.eq_ignore_ascii_case(sequence))
     }
 
     pub fn actor_bone_names(&self, actor: usize) -> Vec<String> {
@@ -2585,9 +2628,9 @@ fn append_scene_actor_render(
         state.collision_height,
         mesh.origin.z,
     );
-    let animation_object = state.skeletal_animation.clone().or_else(|| {
-        match packages.resolve(&mesh_object.package, mesh.default_animation) {
-            Ok(animation) => animation.map(SceneObject::from),
+    let animation_object =
+        match actor_skeletal_animation_object(packages, state, &mesh_object, &mesh) {
+            Ok(animation) => animation,
             Err(error) => {
                 warn!(
                     actor = %scene_actor.name,
@@ -2596,8 +2639,7 @@ fn append_scene_actor_render(
                 );
                 None
             }
-        }
-    });
+        };
     let skeletal_animation = animation_object.and_then(|animation_object| {
         let key = animation_object.id();
         if !animation_cache.contains_key(&key) {
@@ -2654,6 +2696,20 @@ fn append_scene_actor_render(
                 .push(format!("mesh assembly failed: {error}"));
         }
     }
+}
+
+fn actor_skeletal_animation_object(
+    packages: &mut PackageStore,
+    state: &ActorState,
+    mesh_object: &SceneObject,
+    mesh: &Mesh,
+) -> Result<Option<SceneObject>> {
+    if let Some(animation) = state.skeletal_animation.clone() {
+        return Ok(Some(animation));
+    }
+    Ok(packages
+        .resolve(&mesh_object.package, mesh.default_animation)?
+        .map(SceneObject::from))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3827,6 +3883,99 @@ mod tests {
     }
 
     #[test]
+    fn non_rendered_skeletal_sequence_failure_is_diagnostic_case_insensitively() {
+        let (root, mut runtime) = animation_test_runtime();
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let animation = Arc::new(synthetic_animation_package("Breathe"));
+        let mesh_object = super::SceneObject {
+            package: Arc::clone(&mesh),
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actor_states[0].actor.skeletal_animation = Some(super::SceneObject {
+            package: animation,
+            export_index: 0,
+        });
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+
+        assert_eq!(scene.actor_animation_sequences(0)[0].0, "Breathe");
+        assert_eq!(
+            crate::apply_runtime_actions(
+                &mut scene,
+                &mut runtime,
+                vec![ActorAction::LoopAnimation {
+                    actor: 0,
+                    sequence: "breathE".to_owned(),
+                    rate: 1.0,
+                    tween_time: 0.0,
+                    root_motion: false,
+                }],
+            )
+            .unwrap(),
+            (0, 0, false)
+        );
+        assert!(
+            scene.actors[0]
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic == "runtime could not play animation breathE")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invisible_legacy_all_mesh_does_not_claim_missing_breathe() {
+        let (root, mut runtime) = animation_test_runtime();
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].hidden = true;
+        scene.actors[0].mesh = Some(mesh_object.id());
+
+        assert_eq!(scene.actor_animation_sequences(0)[0].0, "All");
+        crate::apply_runtime_actions(
+            &mut scene,
+            &mut runtime,
+            vec![ActorAction::LoopAnimation {
+                actor: 0,
+                sequence: "Breathe".to_owned(),
+                rate: 1.0,
+                tween_time: 0.0,
+                root_motion: false,
+            }],
+        )
+        .unwrap();
+        assert!(scene.actors[0].diagnostics.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn animation_metadata_decode_failure_is_recorded() {
+        let mut scene = particle_test_scene();
+        let invalid_mesh = super::SceneObject {
+            package: Arc::clone(&scene.actor_render.map),
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.mesh = Some(invalid_mesh);
+
+        assert!(scene.actor_animation_sequences(0).is_empty());
+        assert!(scene.actors[0].diagnostics.iter().any(|diagnostic| {
+            diagnostic.starts_with("animation metadata could not be decoded:")
+        }));
+    }
+
+    #[test]
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
         let mut emitter = ParticleEmitter {
             actor: 0,
@@ -4200,6 +4349,208 @@ mod tests {
                 images: Default::default(),
             },
         }
+    }
+
+    fn animation_test_runtime() -> (PathBuf, ScriptRuntime) {
+        let root = std::env::temp_dir().join(format!(
+            "openhp1-scene-animation-action-{}-{}",
+            std::process::id(),
+            PARTICLE_TEST_ROOT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let system = root.join("System");
+        fs::create_dir_all(&system).unwrap();
+        fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+        let runtime = ScriptRuntime::new(&root).unwrap();
+        (root, runtime)
+    }
+
+    fn synthetic_mesh_package(sequence: &str) -> openhp1_package::Package {
+        let names = [
+            "None", "Core", "Class", "Mesh", "TestMesh", sequence, "Movement", "Step",
+        ];
+        let mut payload = vec![0];
+        for value in [-1.0, -2.0, -3.0, 4.0, 5.0, 6.0] {
+            push_f32(&mut payload, value);
+        }
+        payload.push(1);
+        payload.extend([0; 12]);
+        payload.push(6);
+        for (x, y, z) in [
+            (0, 0, 0),
+            (1, 0, 0),
+            (0, 1, 0),
+            (0, 0, 1),
+            (1, 0, 1),
+            (0, 1, 1),
+        ] {
+            push_i32(
+                &mut payload,
+                ((z & 0x3ff) << 22) | ((y & 0x7ff) << 11) | (x & 0x7ff),
+            );
+        }
+        payload.push(1);
+        for index in [0_u16, 1, 2] {
+            payload.extend(index.to_le_bytes());
+        }
+        payload.extend([0; 6]);
+        push_u32(&mut payload, 0);
+        push_i32(&mut payload, 0);
+        payload.extend([1, 5, 6]);
+        push_i32(&mut payload, 0);
+        push_i32(&mut payload, 2);
+        payload.push(1);
+        push_f32(&mut payload, 0.25);
+        payload.push(7);
+        push_f32(&mut payload, 10.0);
+        payload.push(0);
+        payload.extend([0; 25 + 12]);
+        payload.extend([0; 4]);
+        push_i32(&mut payload, 3);
+        push_i32(&mut payload, 2);
+        payload.extend([0; 8]);
+        for value in [1.0, 1.0, 1.0, 0.0, 0.0, 0.0] {
+            push_f32(&mut payload, value);
+        }
+        payload.extend([0; 20]);
+        synthetic_object_package("synthetic mesh", &names, 3, 4, payload)
+    }
+
+    fn synthetic_animation_package(sequence: &str) -> openhp1_package::Package {
+        let names = [
+            "None",
+            "Core",
+            "Class",
+            "Animation",
+            "TestAnimation",
+            "Root",
+            sequence,
+            "Movement",
+            "Notify",
+        ];
+        let mut payload = vec![0, 1, 5];
+        push_u32(&mut payload, 0);
+        push_u32(&mut payload, 0);
+        payload.push(1);
+        for value in [0.0, 0.0, 0.0, 1.0] {
+            push_f32(&mut payload, value);
+        }
+        push_u32(&mut payload, 0);
+        push_u32(&mut payload, 0);
+        payload.push(1);
+        push_u32(&mut payload, 0);
+        payload.push(1);
+        push_u32(&mut payload, 0);
+        payload.extend([2, 1, 2]);
+        push_f32(&mut payload, 2.0);
+        push_f32(&mut payload, 0.5);
+        payload.extend([1, 6, 7]);
+        push_i32(&mut payload, 0);
+        push_i32(&mut payload, 2);
+        payload.push(1);
+        push_f32(&mut payload, 0.25);
+        payload.push(8);
+        push_f32(&mut payload, 2.0);
+        payload.push(2);
+        for value in [0_i16, 0, 0, 0, 0, 16_384] {
+            payload.extend(value.to_le_bytes());
+        }
+        payload.push(1);
+        for value in [16_384_i16, 0, 0] {
+            payload.extend(value.to_le_bytes());
+        }
+        payload.extend([2, 0, 2]);
+        synthetic_object_package("synthetic animation", &names, 3, 4, payload)
+    }
+
+    fn synthetic_object_package(
+        source: &str,
+        names: &[&str],
+        class_name: usize,
+        object_name: usize,
+        payload: Vec<u8>,
+    ) -> openhp1_package::Package {
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            push_u32(&mut name_table, 0);
+        }
+        let mut import_table = vec![1, 2];
+        push_i32(&mut import_table, 0);
+        import_table.extend(compact_signed_index(class_name as i32));
+        const HEADER_SIZE: usize = 44;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        push_i32(&mut export, 0);
+        export.extend(compact_signed_index(object_name as i32));
+        push_u32(&mut export, 0);
+        export.extend(compact_signed_index(payload.len() as i32));
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let encoded = compact_signed_index(payload_offset as i32);
+            let next = export_offset + export.len() + encoded.len();
+            if next == payload_offset {
+                export.extend(encoded);
+                break;
+            }
+            payload_offset = next;
+        }
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, openhp1_package::PACKAGE_MAGIC);
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        push_u32(&mut bytes, 0);
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+        ] {
+            push_i32(&mut bytes, value as i32);
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        assert_eq!(bytes.len(), payload_offset);
+        bytes.extend(payload);
+        openhp1_package::Package::parse(source, Arc::from(bytes)).unwrap()
+    }
+
+    fn compact_signed_index(value: i32) -> Vec<u8> {
+        let negative = value < 0;
+        let mut value = value.unsigned_abs();
+        let mut bytes = vec![(value as u8 & 0x3f) | if negative { 0x80 } else { 0 }];
+        value >>= 6;
+        if value != 0 {
+            bytes[0] |= 0x40;
+        }
+        while value != 0 {
+            let mut byte = value as u8 & 0x7f;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+        }
+        bytes
+    }
+
+    fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+        bytes.extend(value.to_le_bytes());
+    }
+
+    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend(value.to_le_bytes());
+    }
+
+    fn push_f32(bytes: &mut Vec<u8>, value: f32) {
+        bytes.extend(value.to_le_bytes());
     }
 
     fn particle_collision_model() -> Model {
