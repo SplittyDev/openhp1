@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{SurfaceMaterial, SurfaceMode, TextureImage};
 
-use super::{CoronaInstance, DEPTH_FORMAT, Vertex};
+use super::{DEPTH_FORMAT, Vertex};
 
 pub(super) fn create_pipeline(
     device: &wgpu::Device,
@@ -125,51 +125,6 @@ pub(super) fn create_backdrop_pipeline(
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-pub(super) fn create_corona_pipeline(
-    device: &wgpu::Device,
-    target_format: wgpu::TextureFormat,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("OpenHP1 corona pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_corona"),
-            compilation_options: Default::default(),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: size_of::<CoronaInstance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-            }],
-        },
-        primitive: Default::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            // ponytail: depth testing approximates UE1's center-point BSP trace;
-            // add a visibility query only if partial edge occlusion becomes visible.
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: Default::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("fragment_corona"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: blend_state(SurfaceMode::Translucent),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),

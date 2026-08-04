@@ -68,10 +68,14 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhp1_render::{RendererMode, ToneMapper};
+    use openhp1_render::{RendererMode, RendererSettings, ToneMapper};
 
     #[test]
     fn parses_map_and_modern_renderer_options() {
+        let defaults = options_from([]).unwrap();
+        assert_eq!(defaults.path, PathBuf::from("res/Maps/Quid_RavenA.unr"));
+        assert_eq!(defaults.renderer, RendererSettings::default());
+
         let options = options_from([
             OsString::from("res/Maps/Lev5_Chess.unr"),
             OsString::from("--renderer=modern"),

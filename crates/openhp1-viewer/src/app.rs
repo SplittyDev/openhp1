@@ -64,6 +64,8 @@ impl ViewerApp {
         let bounds = renderer.bounds();
         let radius = bounds.radius().max(100.0);
         let center = bounds.center();
+        let classic_display = DisplaySettings::for_mode(RendererMode::Classic);
+        let modern_display = DisplaySettings::for_mode(RendererMode::Modern);
         // UE1 levels are commonly subtractive: the playable space is carved
         // inside solid BSP, so an exterior overview only sees the outer hull.
         let camera = Camera::looking_at(center, center - Vec3::Z, (radius * 10.0).max(10_000.0));
@@ -73,9 +75,9 @@ impl ViewerApp {
             target,
             camera,
             movement_speed: (radius * 0.35).max(200.0),
-            classic_brightness: 0.625,
-            modern_brightness: 0.33,
-            modern_contrast: 1.24,
+            classic_brightness: classic_display.brightness,
+            modern_brightness: modern_display.brightness,
+            modern_contrast: modern_display.contrast,
             animations_playing: true,
             animation_speed: 1.0,
             actor_filter: String::new(),
@@ -88,6 +90,19 @@ impl ViewerApp {
             load_error: None,
             renderer_settings,
         })
+    }
+
+    fn display_settings(&self) -> DisplaySettings {
+        match self.renderer_settings.mode {
+            RendererMode::Classic => DisplaySettings {
+                brightness: self.classic_brightness,
+                ..DisplaySettings::for_mode(RendererMode::Classic)
+            },
+            RendererMode::Modern => DisplaySettings {
+                brightness: self.modern_brightness,
+                contrast: self.modern_contrast,
+            },
+        }
     }
 
     fn load_level(&mut self, path: PathBuf, viewport_size: [u32; 2]) {
@@ -670,10 +685,6 @@ impl eframe::App for ViewerApp {
             self.update_animations(delta_time);
             self.update_runtime(delta_time);
 
-            let brightness = match self.renderer_settings.mode {
-                RendererMode::Classic => self.classic_brightness,
-                RendererMode::Modern => self.modern_brightness,
-            };
             let mut encoder =
                 self.state
                     .device
@@ -686,10 +697,7 @@ impl eframe::App for ViewerApp {
                 &self.target.view,
                 &self.camera,
                 size,
-                DisplaySettings {
-                    brightness,
-                    contrast: self.modern_contrast,
-                },
+                self.display_settings(),
             );
             self.state.queue.submit([encoder.finish()]);
         });

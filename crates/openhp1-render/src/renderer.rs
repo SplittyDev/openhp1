@@ -1,4 +1,4 @@
-use std::{mem::size_of, ops::Range};
+use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -20,12 +20,10 @@ use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
     sorted_blended_batches, texture_batches, update_blended_centers,
 };
-use modern::{HDR_FORMAT, ModernPostProcess};
+use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
-use pipeline::{
-    create_backdrop_pipeline, create_corona_pipeline, create_pipeline, texture, texture_bind_group,
-};
+use pipeline::{create_backdrop_pipeline, create_pipeline, texture, texture_bind_group};
 use target::{DepthTarget, SkyTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -61,27 +59,6 @@ struct CameraUniform {
     camera_position: [f32; 4],
     display_gamma: [f32; 4],
     auto_uv: [f32; 4],
-    viewport: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct CoronaInstance {
-    position: [f32; 3],
-    color_and_scale: [f32; 4],
-}
-
-#[derive(Eq, PartialEq)]
-struct CoronaBatch {
-    texture: usize,
-    instances: Range<u32>,
-}
-
-struct CoronaRenderer {
-    pipeline: wgpu::RenderPipeline,
-    instance_buffer: wgpu::Buffer,
-    instance_count: usize,
-    batches: Vec<CoronaBatch>,
 }
 
 pub struct Renderer {
@@ -103,8 +80,7 @@ pub struct Renderer {
     sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
-    modern: Option<ModernPostProcess>,
-    coronas: Option<CoronaRenderer>,
+    modern: Option<ModernRenderer>,
     sky_target: Option<SkyTarget>,
     bounds: SceneBounds,
     sky_zone: Option<openhp1_scene::SkyZone>,
@@ -453,8 +429,6 @@ impl Renderer {
         let backdrop_pipelines = std::array::from_fn(|index| {
             create_backdrop_pipeline(device, scene_format, &pipeline_layout, &shader, index != 0)
         });
-        let coronas = (modern_enabled && !scene.coronas.is_empty())
-            .then(|| CoronaRenderer::new(device, scene, &pipeline_layout, &shader, scene_format));
         let sky_target = scene.sky_zone.map(|_| {
             SkyTarget::new(
                 device,
@@ -468,7 +442,15 @@ impl Renderer {
         });
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
         let modern = modern_enabled.then(|| {
-            ModernPostProcess::new(device, target_format, viewport_size, settings, &depth.view)
+            ModernRenderer::new(
+                device,
+                target_format,
+                viewport_size,
+                settings,
+                &depth.view,
+                scene,
+                &texture_layout,
+            )
         });
 
         Self {
@@ -491,7 +473,6 @@ impl Renderer {
             blended_surfaces,
             depth,
             modern,
-            coronas,
             sky_target,
             bounds,
             sky_zone: scene.sky_zone,
@@ -544,12 +525,9 @@ impl Renderer {
         if scene.textures.len() + 1 != self.textures.len() || !self.update_vertices(queue, scene) {
             return false;
         }
-        if self.modern.is_none() {
-            return true;
-        }
-        match self.coronas.as_mut() {
-            Some(coronas) => coronas.update(queue, scene),
-            None => scene.coronas.is_empty(),
+        match self.modern.as_mut() {
+            Some(modern) => modern.update_scene(queue, scene),
+            None => true,
         }
     }
 
@@ -701,9 +679,10 @@ impl Renderer {
         let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
         let display_gamma = [
-            match self.settings.mode {
-                RendererMode::Classic => display_gamma(display.brightness),
-                RendererMode::Modern => 1.0,
+            if self.modern.is_some() {
+                1.0
+            } else {
+                display_gamma(display.brightness)
             },
             0.0,
             0.0,
@@ -718,9 +697,11 @@ impl Renderer {
                 camera_position: camera.position.extend(1.0).to_array(),
                 display_gamma,
                 auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
-                viewport: [viewport_size[0] as f32, viewport_size[1] as f32, 0.0, 0.0],
             }),
         );
+        if let Some(modern) = &self.modern {
+            modern.prepare_frame(queue, camera, viewport_size);
+        }
         let (blended_indices, blended_batches) =
             sorted_blended_batches(&self.blended_surfaces, camera.position);
         if !blended_indices.is_empty() {
@@ -754,7 +735,6 @@ impl Renderer {
                     camera_position: sky_camera.position.extend(1.0).to_array(),
                     display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
-                    viewport: [viewport_size[0] as f32, viewport_size[1] as f32, 0.0, 0.0],
                 }),
             );
             let (sky_indices, sky_batches) =
@@ -801,7 +781,7 @@ impl Renderer {
         let scene_target = self
             .modern
             .as_ref()
-            .map_or(target, ModernPostProcess::scene_view);
+            .map_or(target, ModernRenderer::scene_view);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 BSP render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -832,12 +812,8 @@ impl Renderer {
             &blended_batches,
             self.sky_target.as_ref().map(|target| &target.bind_group),
         );
-        if let Some(coronas) = &self.coronas {
-            draw_calls += coronas.draw(
-                &mut pass,
-                &self.camera_bind_group,
-                &self.texture_bind_groups,
-            );
+        if let Some(modern) = &self.modern {
+            draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups);
         }
         drop(pass);
         if let Some(modern) = &self.modern {
@@ -911,106 +887,6 @@ impl Renderer {
     }
 }
 
-impl CoronaRenderer {
-    fn new(
-        device: &wgpu::Device,
-        scene: &RenderScene,
-        layout: &wgpu::PipelineLayout,
-        shader: &wgpu::ShaderModule,
-        target_format: wgpu::TextureFormat,
-    ) -> Self {
-        let (instances, batches) = corona_instances(scene);
-        let instance_buffer = if instances.is_empty() {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("OpenHP1 corona instances"),
-                size: size_of::<CoronaInstance>() as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        } else {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("OpenHP1 corona instances"),
-                contents: bytemuck::cast_slice(&instances),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            })
-        };
-        Self {
-            pipeline: create_corona_pipeline(device, target_format, layout, shader),
-            instance_buffer,
-            instance_count: instances.len(),
-            batches,
-        }
-    }
-
-    fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        let (instances, batches) = corona_instances(scene);
-        if instances.len() != self.instance_count || batches != self.batches {
-            return false;
-        }
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        true
-    }
-
-    fn draw<'pass>(
-        &'pass self,
-        pass: &mut wgpu::RenderPass<'pass>,
-        camera_bind_group: &'pass wgpu::BindGroup,
-        texture_bind_groups: &'pass [wgpu::BindGroup],
-    ) -> usize {
-        if self.batches.is_empty() {
-            return 0;
-        }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        for batch in &self.batches {
-            pass.set_bind_group(1, &texture_bind_groups[batch.texture], &[]);
-            pass.draw(0..6, batch.instances.clone());
-        }
-        self.batches.len()
-    }
-}
-
-fn corona_instances(scene: &RenderScene) -> (Vec<CoronaInstance>, Vec<CoronaBatch>) {
-    let mut entries = scene
-        .coronas
-        .iter()
-        .map(|corona| {
-            (
-                corona.texture.min(scene.textures.len()),
-                CoronaInstance {
-                    position: unreal_to_render(corona.location).to_array(),
-                    color_and_scale: [
-                        corona.color.x,
-                        corona.color.y,
-                        corona.color.z,
-                        corona.draw_scale,
-                    ],
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    entries.sort_unstable_by_key(|(texture, _)| *texture);
-
-    let mut batches: Vec<CoronaBatch> = Vec::new();
-    for (index, (texture, _)) in entries.iter().enumerate() {
-        if let Some(batch) = batches.last_mut()
-            && batch.texture == *texture
-        {
-            batch.instances.end += 1;
-        } else {
-            batches.push(CoronaBatch {
-                texture: *texture,
-                instances: index as u32..index as u32 + 1,
-            });
-        }
-    }
-    (
-        entries.into_iter().map(|(_, instance)| instance).collect(),
-        batches,
-    )
-}
-
 fn display_gamma(brightness: f32) -> f32 {
     1.0 / (brightness * 2.0).clamp(0.05, 2.99)
 }
@@ -1066,13 +942,17 @@ fn scene_bounds(vertices: &[Vertex]) -> SceneBounds {
 
 #[cfg(test)]
 mod tests {
-    use openhp1_scene::{Corona, TriangleMesh};
+    use openhp1_scene::TriangleMesh;
 
     use super::*;
 
     #[test]
     fn shaders_are_valid_wgsl() {
-        for shader in [include_str!("shader.wgsl"), include_str!("modern.wgsl")] {
+        for shader in [
+            include_str!("shader.wgsl"),
+            include_str!("modern.wgsl"),
+            include_str!("corona.wgsl"),
+        ] {
             let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
             wgpu::naga::valid::Validator::new(
                 wgpu::naga::valid::ValidationFlags::all(),
@@ -1128,56 +1008,6 @@ mod tests {
         let bounds = scene_bounds(&vertices);
         assert_eq!(bounds.minimum, Vec3::new(-2.0, -1.0, 1.0));
         assert_eq!(bounds.maximum, Vec3::new(4.0, 3.0, 7.0));
-    }
-
-    #[test]
-    fn batches_coronas_by_skin_texture() {
-        let scene = RenderScene {
-            mesh: TriangleMesh::default(),
-            textures: vec![checkerboard(), checkerboard()],
-            lightmaps: vec![],
-            coronas: vec![
-                Corona {
-                    actor_index: 1,
-                    location: Vec3::new(1.0, 2.0, 3.0),
-                    texture: 1,
-                    draw_scale: 0.2,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 2,
-                    location: Vec3::new(4.0, 5.0, 6.0),
-                    texture: 0,
-                    draw_scale: 0.3,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 3,
-                    location: Vec3::new(7.0, 8.0, 9.0),
-                    texture: 1,
-                    draw_scale: 0.4,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 4,
-                    location: Vec3::ZERO,
-                    texture: 99,
-                    draw_scale: 0.1,
-                    color: Vec3::ONE,
-                },
-            ],
-            surface_materials: vec![],
-            sky_zone: None,
-        };
-        let (instances, batches) = corona_instances(&scene);
-        assert_eq!(instances[0].position, [5.0, 6.0, -4.0]);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| (batch.texture, batch.instances.clone()))
-                .collect::<Vec<_>>(),
-            [(0, 0..1), (1, 1..3), (2, 3..4)]
-        );
     }
 
     #[test]

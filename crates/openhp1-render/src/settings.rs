@@ -79,9 +79,21 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self {
-            brightness: 0.625,
-            contrast: 1.0,
+        Self::for_mode(RendererMode::Classic)
+    }
+}
+
+impl DisplaySettings {
+    pub const fn for_mode(mode: RendererMode) -> Self {
+        match mode {
+            RendererMode::Classic => Self {
+                brightness: 0.625,
+                contrast: 1.0,
+            },
+            RendererMode::Modern => Self {
+                brightness: 0.33,
+                contrast: 1.24,
+            },
         }
     }
 }
@@ -147,5 +159,20 @@ mod tests {
         assert_eq!("aces".parse(), Ok(ToneMapper::Aces));
         assert_eq!("off".parse(), Ok(AmbientOcclusion::Off));
         assert!("filmic".parse::<ToneMapper>().is_err());
+    }
+
+    #[test]
+    fn keeps_independent_display_defaults_for_each_mode() {
+        assert_eq!(
+            DisplaySettings::for_mode(RendererMode::Classic),
+            DisplaySettings::default()
+        );
+        assert_eq!(
+            DisplaySettings::for_mode(RendererMode::Modern),
+            DisplaySettings {
+                brightness: 0.33,
+                contrast: 1.24,
+            }
+        );
     }
 }

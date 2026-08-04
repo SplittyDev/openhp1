@@ -80,10 +80,16 @@ Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
 display-space 2x modulation does not change. The modern HDR target preserves
 values above one produced by that modulation for tone mapping and bloom.
 
+Modern-only HDR, sampleable-depth, post-processing, bloom, SSAO, and corona
+resources are created only for `RendererMode::Modern`. Coronas use their own
+shader and camera uniform; the classic scene shader, uniform layout, target
+format, depth usage, draw order, and display-gamma path remain unchanged.
+
 The viewer exposes these choices in its sidebar, keeps independent Classic and
-Modern brightness values, and provides a Modern-only contrast control.
-Reinhard is the default tone mapper; the viewer starts Modern at brightness
-`0.33` and contrast `1.24` while retaining the Classic `0.625` brightness.
+Modern brightness values, and provides a Modern-only contrast control. The game
+and viewer share the same per-mode display defaults: Modern starts at brightness
+`0.33` and contrast `1.24`, while Classic retains brightness `0.625` and neutral
+contrast. Reinhard is the default tone mapper.
 Renderer mode, tone mapper, and ambient occlusion are also available on the
 command line:
 

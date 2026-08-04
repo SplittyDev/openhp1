@@ -335,6 +335,7 @@ struct Graphics {
     screenshot_dir: PathBuf,
     save_dir: PathBuf,
     pending_screenshots: Vec<Option<u32>>,
+    display_settings: DisplaySettings,
 }
 
 impl Graphics {
@@ -361,6 +362,7 @@ impl Graphics {
         saved: Option<&[u8]>,
         renderer_settings: RendererSettings,
     ) -> Result<Self> {
+        let display_settings = DisplaySettings::for_mode(renderer_settings.mode);
         let mut last_error = None;
         let game_root = scene
             .path
@@ -536,6 +538,7 @@ impl Graphics {
             screenshot_dir,
             save_dir,
             pending_screenshots: Vec::new(),
+            display_settings,
         })
     }
 
@@ -652,7 +655,7 @@ impl Graphics {
             &view,
             &self.camera,
             [self.config.width, self.config.height],
-            DisplaySettings::default(),
+            self.display_settings,
         );
         let screenshots = match prepare_screenshots(
             &self.device,
