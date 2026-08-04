@@ -97,6 +97,10 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    pub fn settings(&self) -> RendererSettings {
+        self.settings
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
