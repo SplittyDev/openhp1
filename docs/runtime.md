@@ -493,11 +493,13 @@ parameter as the surface and texture polyflags combined; a miss returns `None`
 and writes zero. `bTraceDecals` falls back to that base texture when no decal is
 attached. The runtime
 tracks non-transient actor sound channels until their WAV or MP2 duration
-expires. `ModifySound(parameter, value, optional sound, optional slot)` returns
-true only for a live actor/slot channel, optionally filters by sound (`None` is
-a wildcard), and changes volume, radius, or pitch for parameter values 0, 1,
-or 2. Slot zero uses an allocated transient channel and is not selectable by
-`ModifySound`.
+expires. Authored sound volumes use UE1's compressed playback curve rather than
+becoming literal linear gain; for example, `1.0` remains `1.0` while `3.2`
+becomes `1.55`. An explicit zero remains silent. `ModifySound(parameter, value,
+optional sound, optional slot)` returns true only for a live actor/slot channel,
+optionally filters by sound (`None` is a wildcard), and changes volume, radius,
+or pitch for parameter values 0, 1, or 2. Slot zero uses an allocated transient
+channel and is not selectable by `ModifySound`.
 
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick

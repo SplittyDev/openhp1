@@ -94,7 +94,7 @@ impl AudioPlayer {
         track.set_volume(
             linear_volume(
                 attenuated_volume(self.listener_position, position, radius)
-                    * volume
+                    * ue1_sound_volume(volume)
                     * self.sound_volume,
             ),
             Tween::default(),
@@ -170,7 +170,7 @@ impl AudioPlayer {
                 sound.track.set_volume(
                     linear_volume(
                         attenuated_volume(listener_position, position, sound.radius)
-                            * sound.volume
+                            * ue1_sound_volume(sound.volume)
                             * self.sound_volume,
                     ),
                     Tween::default(),
@@ -224,6 +224,16 @@ fn linear_volume(volume: f32) -> Decibels {
     }
 }
 
+fn ue1_sound_volume(volume: f32) -> f32 {
+    if volume <= 0.0 {
+        0.0
+    } else if volume >= 8.0 {
+        0.8
+    } else {
+        (volume - 1.0) * 0.25 + 1.0
+    }
+}
+
 fn attenuated_volume(listener: [f32; 3], source: [f32; 3], radius: f32) -> f32 {
     let distance = listener
         .into_iter()
@@ -255,6 +265,14 @@ mod tests {
         assert_eq!(linear_volume(0.0), Decibels::SILENCE);
         assert_eq!(linear_volume(1.0), Decibels::IDENTITY);
         assert!((linear_volume(0.5).0 - -6.0206).abs() < 0.0001);
+    }
+
+    #[test]
+    fn compresses_authored_ue1_sound_volumes() {
+        assert_eq!(ue1_sound_volume(0.0), 0.0);
+        assert_eq!(ue1_sound_volume(1.0), 1.0);
+        assert!((ue1_sound_volume(3.2) - 1.55).abs() < 1.0e-6);
+        assert_eq!(ue1_sound_volume(8.0), 0.8);
     }
 
     #[test]
