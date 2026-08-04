@@ -132,6 +132,13 @@ Keep the focused notes in
   of the repository.
 - Use UE Viewer and SurrealEngine for differential inspection where useful,
   while keeping OpenHP1 independent of them.
+- For original-game behavior, inspect the shipped packages first: embedded
+  UnrealScript, compiled bytecode and class defaults, configuration, and native
+  binaries. Use reference engines only after that evidence is exhausted.
+- Treat embedded source comments and property dumps as leads, not active
+  behavior; verify them against compiled defaults or bytecode before changing
+  compatibility behavior. Do not tune guessed heuristics before tracing the
+  authored and native path end to end.
 - Prefer Semble's `search` tool for code searches. Query by symbol or behavior,
   follow the returned file and line, and fall back to `rg` or another
   alternative only when Semble does not find the intended code.
