@@ -31,6 +31,10 @@ use winit::{
     window::{CursorGrabMode, Window, WindowAttributes, WindowId},
 };
 
+use self::console::DeveloperConsole;
+
+mod console;
+
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
 const DEBUG_FAST_FORWARD_TICKS: usize = 16;
 
@@ -116,6 +120,22 @@ impl ApplicationHandler for GameApp {
                         }
                     }
                 }
+                RenderOutcome::LoadLevel(path) => {
+                    let window = Arc::clone(&graphics.window);
+                    match LoadedScene::load(path.clone())
+                        .and_then(|scene| Graphics::new(window, scene, self.renderer_settings))
+                    {
+                        Ok(graphics) => {
+                            graphics.window.request_redraw();
+                            self.graphics = Some(graphics);
+                        }
+                        Err(error) => {
+                            graphics.last_error =
+                                Some(format!("could not load {}: {error:#}", path.display()));
+                            self.graphics = Some(graphics);
+                        }
+                    }
+                }
             }
             return;
         }
@@ -125,7 +145,25 @@ impl ApplicationHandler for GameApp {
         if graphics.window.id() != window_id {
             return;
         }
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.physical_key == PhysicalKey::Code(KeyCode::Backquote)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            graphics.debug_console.toggle();
+            graphics.release_input();
+            return;
+        }
         let egui_response = graphics.egui.on_window_event(&graphics.window, &event);
+        if graphics.debug_console.is_open() {
+            match event {
+                WindowEvent::CloseRequested => event_loop.exit(),
+                WindowEvent::Resized(size) => graphics.resize(size),
+                WindowEvent::Focused(false) => graphics.release_input(),
+                _ => {}
+            }
+            return;
+        }
         if let WindowEvent::MouseInput { state, button, .. } = &event
             && graphics.input.captured
         {
@@ -194,6 +232,7 @@ enum RenderOutcome {
     Continue,
     Exit,
     Load(SavedGame),
+    LoadLevel(PathBuf),
 }
 
 struct SavedGame {
@@ -330,6 +369,9 @@ struct Graphics {
     frame_time_ms: f32,
     vertices_dirty: bool,
     overlay_visible: bool,
+    debug_console: DeveloperConsole,
+    pending_level_load: Option<PathBuf>,
+    fly_camera_active: bool,
     egui: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
     screenshot_dir: PathBuf,
@@ -533,6 +575,9 @@ impl Graphics {
             frame_time_ms: 0.0,
             vertices_dirty: false,
             overlay_visible: true,
+            debug_console: DeveloperConsole::new(),
+            pending_level_load: None,
+            fly_camera_active: false,
             egui,
             egui_renderer,
             screenshot_dir,
@@ -586,6 +631,9 @@ impl Graphics {
     }
 
     fn render(&mut self) -> RenderOutcome {
+        if let Some(path) = self.pending_level_load.take() {
+            return RenderOutcome::LoadLevel(path);
+        }
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -632,7 +680,11 @@ impl Graphics {
         let view = frame.texture.create_view(&Default::default());
         let egui_context = self.egui.egui_ctx().clone();
         let egui_input = self.egui.take_egui_input(&self.window);
-        let egui_output = egui_context.run_ui(egui_input, |ui| self.debug_overlay(ui.ctx()));
+        let egui_output = egui_context.run_ui(egui_input, |ui| {
+            self.debug_overlay(ui.ctx());
+            self.debug_console.ui(ui);
+        });
+        self.run_debug_console_commands();
         self.egui
             .handle_platform_output(&self.window, egui_output.platform_output);
         for (id, delta) in &egui_output.textures_delta.set {
@@ -712,6 +764,13 @@ impl Graphics {
             }
         }
         RenderOutcome::Continue
+    }
+
+    fn run_debug_console_commands(&mut self) {
+        for input in self.debug_console.take_submitted() {
+            let result = console::commands::execute(self, &input);
+            self.debug_console.record_result(result);
+        }
     }
 
     fn apply_console_commands(&mut self) -> RenderOutcome {
@@ -839,6 +898,11 @@ impl Graphics {
                     rotation[0], rotation[1], rotation[2]
                 ));
                 ui.monospace(format!("camera actor: #{}", self.view_actor));
+                ui.monospace(if self.fly_camera_active {
+                    "camera mode: fly"
+                } else {
+                    "camera mode: play"
+                });
                 ui.monospace(format!(
                     "camera location: {:.1}, {:.1}, {:.1}",
                     camera_location.x, camera_location.y, camera_location.z

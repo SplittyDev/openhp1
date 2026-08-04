@@ -59,6 +59,11 @@ Hold + (main keyboard or numpad) or F to run the normal game simulation at 16x s
 fast-forward still processes scripts, animation completions, triggers, and
 other runtime events in order.
 
+Press the `` ` `` key to open the bottom developer console, enter commands, and
+press it again to return to the game. The console keeps command/output history
+for the current session; use up/down to revisit commands and `help` to list
+registered commands.
+
 ### Docs
 
 See [`docs/`](docs/) for the reverse-engineered package, map, texture, and

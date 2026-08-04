@@ -497,6 +497,14 @@ frame. This debug fast-forward preserves event ordering and latent callbacks
 rather than jumping runtime state; held movement/casting input repeats while
 one-shot jump and mouse input do not.
 
+The `` ` `` key toggles a resizable developer console pinned to the bottom of
+the game window. While it is open, egui receives keyboard and mouse input and
+game input remains released. Its vertically scrollable, wrapping output and
+command history last for the current process. Command metadata and handlers
+live under `crates/openhp1-game/src/app/console/commands`; the same registry
+dispatches commands and generates `help`, so adding a command in one handler
+module also documents it in the console.
+
 Script `Name` comparisons treat a missing object/name value as UE's canonical
 `None` name.
 `MetaCast` returns a class object only when it is the requested class or derives
