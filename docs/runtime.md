@@ -311,15 +311,15 @@ Movers participate in world collision through their transformed brush-model
 hulls, including `PrePivot`, rotation, and non-uniform `MainScale`.
 Normal movement continues to collide with an actor's own base so walking floor
 probes stay supported; only movement imparted by that base ignores it.
-Mover contacts evaluate the mover's virtual `IsRelevant` callback before
-deciding whether the sweep blocks. This preserves the authored
-`bProjTarget` path: projectile subclasses dispatch their virtual
-`IsRelevantToMover` implementation, so `spellFlip` can activate a GridMover
-while another projectile passes through. Ordinary `BumpType` behavior remains
-in `Mover.IsRelevant` for non-projectiles. During real movement, callback
-instance mutations and emitted actions are retained in call order before the
-movement and `Bump` actions. Collision-only probes such as `test_move_actor`
-and `actorReachable` deliberately retain the pure baseline actor-blocking
+Mover solidity comes only from the mutual `bBlockActors` or `bBlockPlayers`
+flags. A real mover contact separately evaluates the mover's virtual
+`IsRelevant` callback to decide whether to send `Bump`. This preserves the
+authored `bProjTarget` path: `spellFlip` can pass through and activate a
+GridMover once, while the same mover remains solid to Harry through its block
+flags. Ordinary `BumpType` behavior remains in `Mover.IsRelevant` for
+non-projectiles. Callback instance mutations and emitted actions are retained
+in call order before the movement and `Bump` actions. Collision-only probes
+such as `test_move_actor` and `actorReachable` use only the physical blocking
 predicate and do not execute `Mover.IsRelevant`; arbitrary virtual script can
 mutate more than instance fields and therefore cannot be made observational by
 discarding only its returned actions.

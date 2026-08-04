@@ -42,6 +42,7 @@ pub(super) struct ActorSweep {
     pub(super) fraction: f32,
     pub(super) normal: Vec3,
     blocking: bool,
+    bumping: bool,
 }
 
 enum MovementEvaluation<'a> {
@@ -148,6 +149,7 @@ impl ScriptRuntime {
                 fraction: hit.fraction,
                 normal: hit.normal,
                 blocking: false,
+                bumping: false,
             });
         }
         hits.sort_by(|left, right| {
@@ -955,7 +957,15 @@ impl ScriptRuntime {
         for hit in hits
             .iter()
             .take_while(|hit| hit.fraction < blocking_hit.fraction)
-            .filter(|hit| !hit.blocking)
+            .filter(|hit| hit.bumping)
+        {
+            self.queue_pair_event(actions, hit.actor, actor, "Bump")?;
+            self.queue_pair_event(actions, actor, hit.actor, "Bump")?;
+        }
+        for hit in hits
+            .iter()
+            .take_while(|hit| hit.fraction < blocking_hit.fraction)
+            .filter(|hit| !hit.blocking && !hit.bumping)
         {
             let pair = actor_pair(actor, hit.actor);
             if self.touching.insert(pair) {
@@ -1471,17 +1481,19 @@ impl ScriptRuntime {
             let Some(hit) = hit else {
                 continue;
             };
+            let (blocking, bumping) = self.actors_block_for_movement(
+                current,
+                &other,
+                current_actor,
+                current_instance,
+                evaluation,
+            )?;
             hits.push(ActorSweep {
                 actor,
                 fraction: hit.fraction,
                 normal: hit.normal,
-                blocking: self.actors_block_for_movement(
-                    current,
-                    &other,
-                    current_actor,
-                    current_instance,
-                    evaluation,
-                )?,
+                blocking,
+                bumping,
             });
         }
         Ok(hits)
@@ -1494,7 +1506,8 @@ impl ScriptRuntime {
         current_actor: usize,
         current_instance: &mut InstanceState,
         evaluation: &mut MovementEvaluation<'_>,
-    ) -> std::result::Result<bool, String> {
+    ) -> std::result::Result<(bool, bool), String> {
+        let blocking = actors_block(first, second);
         let is_mover = |runtime: &mut Self, actor| {
             runtime
                 .actor_classes
@@ -1518,10 +1531,10 @@ impl ScriptRuntime {
             None
         };
         let Some((mover, other)) = mover else {
-            return Ok(actors_block(first, second));
+            return Ok((blocking, blocking));
         };
         let MovementEvaluation::Real { actions, .. } = evaluation else {
-            return Ok(actors_block(first, second));
+            return Ok((blocking, blocking));
         };
 
         let mover_class = self
@@ -1596,7 +1609,7 @@ impl ScriptRuntime {
                 .ok_or_else(|| format!("moving actor {current_actor} instance was removed"))?;
         }
         match result.map_err(|error| error.to_string())? {
-            Value::Bool(relevant) => Ok(relevant),
+            Value::Bool(relevant) => Ok((blocking, blocking || relevant)),
             value => Err(format!("Mover.IsRelevant returned {}", value.kind())),
         }
     }

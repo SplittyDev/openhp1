@@ -7907,7 +7907,8 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             &mut mover_actions,
         )
         .unwrap();
-    assert_eq!(mover_hit.actor, Some(1));
+    assert_eq!(mover_hit.actor, None);
+    assert_eq!(mover_hit.fraction, 1.0);
     assert_eq!(
         moving_mover.get(&relevance_checked),
         Some(&StoredValue::Value(Value::Bool(true))),
@@ -7960,7 +7961,13 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             &mut actions,
         )
         .unwrap();
-    assert_eq!(hit.actor, Some(0));
+    assert_eq!(hit.actor, None);
+    assert_eq!(hit.fraction, 1.0);
+    assert_eq!(
+        projectile_instance.get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([40.0, 0.0, 0.0]))),
+        "a relevant non-blocking projectile must cross the mover after sending Bump"
+    );
     assert_eq!(
         runtime.instances[&0].get(&relevance_checked),
         Some(&StoredValue::Value(Value::Bool(true)))
@@ -8015,9 +8022,8 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         )
         .unwrap();
     assert_eq!(
-        based_hit.actor,
-        Some(0),
-        "an actor's own base must still block its normal movement"
+        based_hit.actor, None,
+        "mover relevance must not turn a non-blocking contact into a collision"
     );
     runtime.actor_bases.remove(&1);
     runtime.collision_actors.clear();
@@ -8193,6 +8199,40 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         }
     )));
 
+    for property in ["bBlockActors", "bBlockPlayers"] {
+        runtime.instances.get_mut(&0).unwrap().insert(
+            fields[property].clone(),
+            StoredValue::Value(Value::Bool(true)),
+        );
+        rejected_instance.insert(
+            fields[property].clone(),
+            StoredValue::Value(Value::Bool(true)),
+        );
+    }
+    rejected_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([-40.0, 0.0, 0.0])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let physically_blocked = runtime
+        .try_move_actor(
+            1,
+            &ResolvedObject {
+                package: Arc::clone(&other_projectile_package),
+                export_index: 0,
+            },
+            [80.0, 0.0, 0.0],
+            &mut rejected_instance,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        physically_blocked.actor,
+        Some(0),
+        "mover relevance must not override authored physical blocking flags"
+    );
+
     runtime
         .instances
         .get_mut(&0)
@@ -8220,9 +8260,8 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         )
         .unwrap();
     assert_eq!(
-        actor_hit.actor,
-        Some(0),
-        "BT_AnyBump must still block actors"
+        actor_hit.actor, None,
+        "BT_AnyBump must notify without making non-blocking actors solid"
     );
     assert!(actor_actions.iter().any(|action| matches!(
         action,
