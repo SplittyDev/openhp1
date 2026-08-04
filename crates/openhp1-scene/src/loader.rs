@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
     Actor, ActorProperties, ActorVertexLighting, BrushPolys, BspNode, Level, Model, PolyFlags,
-    VertexLighting, bsp_zone_at,
+    TriangleMesh, VertexLighting, bsp_zone_at,
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
@@ -571,12 +571,29 @@ impl LoadedScene {
                 continue;
             }
             if let Some(system) = self.particles.get_mut(&emitter.actor) {
+                if let Some(capacity) = particle_capacity_growth(system, &emitter) {
+                    let old_vertices = system.vertices.clone();
+                    let texture_coordinates = self.render.mesh.texture_coordinates
+                        [old_vertices.start..old_vertices.start + 4]
+                        .try_into()
+                        .expect("particle quad has four texture coordinates");
+                    let surface = self.render.mesh.vertex_surfaces[old_vertices.start];
+                    self.render.mesh.positions[old_vertices].fill(Vec3::ZERO);
+                    system.vertices = append_particle_slots(
+                        &mut self.render.mesh,
+                        capacity,
+                        surface,
+                        texture_coordinates,
+                    );
+                    system.capacity = capacity;
+                    changed = true;
+                }
                 system.config = emitter;
                 continue;
             }
             let capacity = particle_capacity(&emitter);
             ensure!(
-                capacity <= 100_000,
+                capacity <= MAX_PARTICLE_CAPACITY,
                 "particle emitter requests {capacity} particles"
             );
             if capacity == 0 || emitter.actor >= self.actors.len() {
@@ -616,36 +633,17 @@ impl LoadedScene {
                 unlit: emitter.unlit,
                 ..material
             });
-            let vertices =
-                self.render.mesh.positions.len()..self.render.mesh.positions.len() + capacity * 4;
-            for slot in 0..capacity {
-                let base = self.render.mesh.positions.len() as u32;
-                self.render.mesh.positions.extend([Vec3::ZERO; 4]);
-                self.render.mesh.normals.extend([Vec3::ZERO; 4]);
-                self.render.mesh.texture_coordinates.extend([
+            let vertices = append_particle_slots(
+                &mut self.render.mesh,
+                capacity,
+                surface,
+                [
                     Vec2::ZERO,
                     Vec2::new(dimensions.x, 0.0),
                     dimensions,
                     Vec2::new(0.0, dimensions.y),
-                ]);
-                self.render
-                    .mesh
-                    .lightmap_coordinates
-                    .extend([Vec2::ZERO; 4]);
-                self.render.mesh.vertex_lightmaps.extend([None; 4]);
-                self.render.mesh.vertex_colors.extend([Vec3::ONE; 4]);
-                self.render.mesh.vertex_surfaces.extend([surface; 4]);
-                self.render.mesh.indices.extend_from_slice(&[
-                    base,
-                    base + 2,
-                    base + 1,
-                    base,
-                    base + 3,
-                    base + 2,
-                ]);
-                self.render.mesh.triangle_surfaces.extend([surface; 2]);
-                debug_assert_eq!(vertices.start + slot * 4, base as usize);
-            }
+                ],
+            );
             let actor = emitter.actor;
             let emitted = emitter.particles_emitted;
             self.particles.insert(
@@ -1653,6 +1651,43 @@ struct Particle {
     spin_rate: f32,
     chaos_timer: f32,
     drip_time: f32,
+}
+
+const MAX_PARTICLE_CAPACITY: usize = 100_000;
+
+fn particle_capacity_growth(system: &ParticleSystem, emitter: &ParticleEmitter) -> Option<usize> {
+    (emitter.emit
+        && emitter.particles_alive == 0
+        && emitter.particles_max == 0
+        && emitter.lifetime.base <= 0.0
+        && emitter.lifetime.random <= 0.0
+        && system.particles.len() == system.capacity
+        && system.capacity < MAX_PARTICLE_CAPACITY)
+        .then(|| (system.capacity * 2).min(MAX_PARTICLE_CAPACITY))
+}
+
+fn append_particle_slots(
+    mesh: &mut TriangleMesh,
+    capacity: usize,
+    surface: usize,
+    texture_coordinates: [Vec2; 4],
+) -> Range<usize> {
+    let vertices = mesh.positions.len()..mesh.positions.len() + capacity * 4;
+    for slot in 0..capacity {
+        let base = mesh.positions.len() as u32;
+        mesh.positions.extend([Vec3::ZERO; 4]);
+        mesh.normals.extend([Vec3::ZERO; 4]);
+        mesh.texture_coordinates.extend(texture_coordinates);
+        mesh.lightmap_coordinates.extend([Vec2::ZERO; 4]);
+        mesh.vertex_lightmaps.extend([None; 4]);
+        mesh.vertex_colors.extend([Vec3::ONE; 4]);
+        mesh.vertex_surfaces.extend([surface; 4]);
+        mesh.indices
+            .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        mesh.triangle_surfaces.extend([surface; 2]);
+        debug_assert_eq!(vertices.start + slot * 4, base as usize);
+    }
+    vertices
 }
 
 fn particle_capacity(emitter: &ParticleEmitter) -> usize {
@@ -3770,6 +3805,23 @@ mod tests {
         assert!(super::particle_is_alive(10_000.0, 0.0));
         assert!(super::particle_is_alive(0.5, 1.0));
         assert!(!super::particle_is_alive(1.0, 1.0));
+    }
+
+    #[test]
+    fn unlimited_zero_lifetime_emitter_grows_when_full() {
+        let mut scene = particle_test_scene();
+        let system = scene.particles.get_mut(&0).unwrap();
+        let emitter = ParticleEmitter {
+            emit: true,
+            particles_alive: 0,
+            particles_max: 0,
+            lifetime: ParticleFloat::default(),
+            ..Default::default()
+        };
+
+        assert_eq!(super::particle_capacity_growth(system, &emitter), Some(2));
+        system.particles.clear();
+        assert_eq!(super::particle_capacity_growth(system, &emitter), None);
     }
 
     #[test]
