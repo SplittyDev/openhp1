@@ -2,12 +2,10 @@ use std::{io::Cursor, sync::Arc};
 
 use kira::{
     AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween,
-    listener::ListenerHandle,
     sound::{
         PlaybackState,
         static_sound::{StaticSoundData, StaticSoundHandle},
     },
-    track::{SpatialTrackBuilder, SpatialTrackHandle},
 };
 
 use crate::{AudioClip, Error, Result};
@@ -18,14 +16,13 @@ struct ActiveSound {
     slot: u8,
     volume: f32,
     radius: f32,
-    track: SpatialTrackHandle,
     sound: StaticSoundHandle,
 }
 
 pub struct AudioPlayer {
     manager: AudioManager,
-    listener: ListenerHandle,
     listener_position: [f32; 3],
+    listener_orientation: [f32; 4],
     music_volume: f32,
     sound_volume: f32,
     sounds: Vec<ActiveSound>,
@@ -34,15 +31,12 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new(music_volume: f32, sound_volume: f32) -> Result<Self> {
-        let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
-            .map_err(|error| Error::Playback(error.to_string()))?;
-        let listener = manager
-            .add_listener([0.0; 3], mint::Quaternion::from([0.0, 0.0, 0.0, 1.0]))
+        let manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
             .map_err(|error| Error::Playback(error.to_string()))?;
         Ok(Self {
             manager,
-            listener,
             listener_position: [0.0; 3],
+            listener_orientation: [0.0, 0.0, 0.0, 1.0],
             music_volume,
             sound_volume,
             sounds: Vec::new(),
@@ -78,34 +72,31 @@ impl AudioPlayer {
         }
 
         let radius = if radius > 0.0 { radius } else { 1500.0 };
-        let mut track = self
+        let sound = self
             .manager
-            .add_spatial_sub_track(
-                &self.listener,
-                position,
-                SpatialTrackBuilder::new()
-                    .attenuation_function(None)
-                    .spatialization_strength(1.0),
+            .play(
+                decoder(clip)?
+                    .playback_rate(f64::from(pitch))
+                    .volume(linear_volume(sound_gain(
+                        self.listener_position,
+                        position,
+                        radius,
+                        volume,
+                        self.sound_volume,
+                    )))
+                    .panning(source_panning(
+                        self.listener_position,
+                        self.listener_orientation,
+                        position,
+                    )),
             )
             .map_err(|error| Error::Playback(error.to_string()))?;
-        let sound = track
-            .play(decoder(clip)?.playback_rate(f64::from(pitch)))
-            .map_err(|error| Error::Playback(error.to_string()))?;
-        track.set_volume(
-            linear_volume(
-                attenuated_volume(self.listener_position, position, radius)
-                    * ue1_sound_volume(volume)
-                    * self.sound_volume,
-            ),
-            Tween::default(),
-        );
         self.sounds.push(ActiveSound {
             actor,
             clip: clip.clone(),
             slot,
             volume,
             radius,
-            track,
             sound,
         });
         Ok(())
@@ -156,23 +147,23 @@ impl AudioPlayer {
         actor_positions: &[[f32; 3]],
     ) {
         self.listener_position = listener_position;
-        self.listener
-            .set_position(listener_position, Tween::default());
-        self.listener.set_orientation(
-            mint::Quaternion::from(listener_orientation),
-            Tween::default(),
-        );
+        self.listener_orientation = listener_orientation;
         self.sounds
             .retain(|sound| sound.sound.state() != PlaybackState::Stopped);
         for sound in &mut self.sounds {
             if let Some(position) = actor_positions.get(sound.actor).copied() {
-                sound.track.set_position(position, Tween::default());
-                sound.track.set_volume(
-                    linear_volume(
-                        attenuated_volume(listener_position, position, sound.radius)
-                            * ue1_sound_volume(sound.volume)
-                            * self.sound_volume,
-                    ),
+                sound.sound.set_volume(
+                    linear_volume(sound_gain(
+                        listener_position,
+                        position,
+                        sound.radius,
+                        sound.volume,
+                        self.sound_volume,
+                    )),
+                    Tween::default(),
+                );
+                sound.sound.set_panning(
+                    source_panning(listener_position, listener_orientation, position),
                     Tween::default(),
                 );
             }
@@ -224,14 +215,42 @@ fn linear_volume(volume: f32) -> Decibels {
     }
 }
 
-fn ue1_sound_volume(volume: f32) -> f32 {
-    if volume <= 0.0 {
-        0.0
-    } else if volume >= 8.0 {
-        0.8
-    } else {
-        ((volume - 1.0) * 0.25 + 1.0).min(1.0)
+fn sound_gain(
+    listener: [f32; 3],
+    source: [f32; 3],
+    radius: f32,
+    volume: f32,
+    master_volume: f32,
+) -> f32 {
+    (attenuated_volume(listener, source, radius) * volume).clamp(0.0, 1.0) * master_volume
+}
+
+fn source_panning(listener: [f32; 3], orientation: [f32; 4], source: [f32; 3]) -> f32 {
+    let direction = [
+        source[0] - listener[0],
+        source[1] - listener[1],
+        source[2] - listener[2],
+    ];
+    let length = direction
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    if length <= f32::EPSILON {
+        return 0.0;
     }
+    let [x, y, z, w] = orientation;
+    let right = [
+        1.0 - 2.0 * (y * y + z * z),
+        2.0 * (x * y + z * w),
+        2.0 * (x * z - y * w),
+    ];
+    direction
+        .into_iter()
+        .zip(right)
+        .map(|(direction, right)| direction / length * right)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0)
 }
 
 fn attenuated_volume(listener: [f32; 3], source: [f32; 3], radius: f32) -> f32 {
@@ -268,11 +287,23 @@ mod tests {
     }
 
     #[test]
-    fn compresses_authored_ue1_sound_volumes() {
-        assert_eq!(ue1_sound_volume(0.0), 0.0);
-        assert_eq!(ue1_sound_volume(1.0), 1.0);
-        assert_eq!(ue1_sound_volume(3.2), 1.0);
-        assert_eq!(ue1_sound_volume(8.0), 0.8);
+    fn galaxy_clamps_each_attenuated_voice_before_master_volume() {
+        assert_eq!(sound_gain([0.0; 3], [0.0; 3], 1_500.0, 3.2, 0.5), 0.5);
+        assert_eq!(
+            sound_gain([0.0; 3], [0.0, 0.0, 20.0], 1_500.0, 1.0, 0.5),
+            0.49333334
+        );
+    }
+
+    #[test]
+    fn rear_sources_stay_centered_instead_of_losing_both_channels() {
+        let orientation = [0.0, 0.0, 0.0, 1.0];
+        assert_eq!(source_panning([0.0; 3], orientation, [0.0, 0.0, 20.0]), 0.0);
+        assert_eq!(source_panning([0.0; 3], orientation, [20.0, 0.0, 0.0]), 1.0);
+        assert_eq!(
+            source_panning([0.0; 3], orientation, [-20.0, 0.0, 0.0]),
+            -1.0
+        );
     }
 
     #[test]

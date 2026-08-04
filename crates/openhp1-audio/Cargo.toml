@@ -6,10 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-playback = ["dep:kira", "dep:mint"]
+playback = ["dep:kira"]
 
 [dependencies]
 kira = { workspace = true, optional = true }
-mint = { workspace = true, optional = true }
 openhp1-package = { path = "../openhp1-package" }
 thiserror.workspace = true

@@ -2056,7 +2056,6 @@ name = "openhp1-audio"
 version = "0.1.0"
 dependencies = [
  "kira",
- "mint",
  "openhp1-package",
  "thiserror 2.0.19",
 ]
