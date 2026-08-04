@@ -76,8 +76,12 @@ fn help(arguments: &str) -> Result<String> {
             .collect::<Vec<_>>()
             .join("\n"));
     }
-    let Some(command) = find(arguments) else {
-        bail!("unknown command `{arguments}`");
+    let (name, extra) = parse_invocation(arguments);
+    if !extra.is_empty() {
+        bail!("unexpected extra input `{extra}`; usage: help [command]");
+    }
+    let Some(command) = find(name) else {
+        bail!("unknown command `{name}`");
     };
     Ok(format!("{:<16} {}", command.usage, command.summary))
 }
@@ -98,12 +102,18 @@ mod tests {
         );
         assert!(find("LOAD").is_some());
         let text = help("").unwrap();
+        assert_eq!(text.lines().count(), COMMANDS.len());
         for command in COMMANDS {
             assert!(text.contains(command.usage));
+            assert!(text.contains(command.summary));
         }
         assert_eq!(
-            help("fly").unwrap(),
+            help("FLY").unwrap(),
             "fly              Enter no-clip fly camera mode."
+        );
+        assert_eq!(
+            help("fly now").unwrap_err().to_string(),
+            "unexpected extra input `now`; usage: help [command]"
         );
     }
 }
