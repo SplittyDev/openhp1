@@ -757,8 +757,13 @@ impl LoadedScene {
                 };
                 let count = (system.residue.floor() as usize)
                     .min(remaining)
-                    .min(system.capacity.saturating_sub(system.particles.len()));
+                    .min(system.capacity);
                 system.residue -= count as f32;
+                let recycle =
+                    count.saturating_sub(system.capacity.saturating_sub(system.particles.len()));
+                if recycle != 0 {
+                    system.particles.drain(..recycle);
+                }
                 for index in 0..count {
                     let fraction = (index as f32 + 0.5) / count.max(1) as f32;
                     let owner_mesh_position = (system.config.distribution == 2)
@@ -3898,7 +3903,7 @@ mod tests {
     }
 
     #[test]
-    fn velocity_relative_particles_inherit_owner_velocity_on_emission_only() {
+    fn finite_particle_limit_recycles_the_oldest_particle() {
         let mut scene = particle_test_scene();
         let system = scene.particles.get_mut(&0).unwrap();
         system.config = ParticleEmitter {
@@ -3909,7 +3914,7 @@ mod tests {
                 random: 0.0,
             },
             lifetime: ParticleFloat {
-                base: 2.0,
+                base: 10.0,
                 random: 0.0,
             },
             render_primitive: 1,
@@ -3923,10 +3928,11 @@ mod tests {
         let particle = &scene.particles[&0].particles[0];
         assert_eq!(particle.velocity, glam::Vec3::new(3.0, -4.0, 5.0));
 
+        scene.particles.get_mut(&0).unwrap().config.owner_velocity = [6.0, -8.0, 10.0];
         assert!(scene.tick_particles(1.0));
         let particle = &scene.particles[&0].particles[0];
-        assert_eq!(particle.velocity, glam::Vec3::new(3.0, -4.0, 5.0));
-        assert_eq!(particle.location, glam::Vec3::new(3.0, -4.0, 5.0));
+        assert_eq!(particle.velocity, glam::Vec3::new(6.0, -8.0, 10.0));
+        assert_eq!(particle.location, glam::Vec3::ZERO);
     }
 
     fn particle_test_scene() -> super::LoadedScene {
