@@ -1342,13 +1342,13 @@ impl ScriptRuntime {
             if actor == current.actor || self.destroyed.contains(&actor) {
                 continue;
             }
-            let other = &self.collision_actors[actor].as_ref().unwrap().actor;
+            let other = self.collision_actors[actor].as_ref().unwrap().actor.clone();
             if (other.brush.is_some() && !collide_world)
                 || (other.brush.is_none() && !current.collide_actors)
             {
                 continue;
             }
-            let Some((other_location, other_extents)) = collision_actor_world_bounds(other) else {
+            let Some((other_location, other_extents)) = collision_actor_world_bounds(&other) else {
                 continue;
             };
             if other_location.x + other_extents.x < query_minimum.x
@@ -1366,14 +1366,14 @@ impl ScriptRuntime {
                 continue;
             }
             let hit = if delta.length_squared() < 0.00000001 {
-                collision_actors_overlap(current, other).then_some(
+                collision_actors_overlap(current, &other).then_some(
                     openhp1_physics::ActorCollisionHit {
                         fraction: 0.0,
                         normal: Vec3::ZERO,
                     },
                 )
             } else {
-                sweep_collision_actors(current, other, delta)
+                sweep_collision_actors(current, &other, delta)
             };
             let Some(hit) = hit else {
                 continue;
@@ -1382,10 +1382,119 @@ impl ScriptRuntime {
                 actor,
                 fraction: hit.fraction,
                 normal: hit.normal,
-                blocking: actors_block(current, other),
+                blocking: self.actors_block_for_movement(
+                    current,
+                    &other,
+                    current_actor,
+                    current_instance,
+                )?,
             });
         }
         Ok(hits)
+    }
+
+    fn actors_block_for_movement(
+        &mut self,
+        first: &CollisionActor,
+        second: &CollisionActor,
+        current_actor: usize,
+        current_instance: &InstanceState,
+    ) -> std::result::Result<bool, String> {
+        let second_is_mover = self
+            .actor_classes
+            .get(&second.actor)
+            .cloned()
+            .map(|class| self.resolved_object(&class))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .map(|class| self.class_has_name(&class, "Mover"))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(false);
+        let first_is_mover = self
+            .actor_classes
+            .get(&first.actor)
+            .cloned()
+            .map(|class| self.resolved_object(&class))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .map(|class| self.class_has_name(&class, "Mover"))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(false);
+        let mover = if second_is_mover {
+            Some((second.actor, first.actor))
+        } else if first_is_mover {
+            Some((first.actor, second.actor))
+        } else {
+            None
+        };
+        let Some((mover, other)) = mover else {
+            return Ok(actors_block(first, second));
+        };
+
+        let mover_class = self
+            .actor_classes
+            .get(&mover)
+            .cloned()
+            .ok_or_else(|| format!("mover {mover} has no class"))?;
+        let mover_class = self
+            .resolved_object(&mover_class)
+            .map_err(|error| error.to_string())?;
+        let function = self
+            .find_actor_function(
+                mover,
+                ResolvedObject {
+                    package: Arc::clone(&mover_class.package),
+                    export_index: mover_class.export_index,
+                },
+                "IsRelevant",
+                0,
+            )
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("mover {mover} has no IsRelevant function"))?;
+        let other_object = self
+            .actor_objects
+            .get(&other)
+            .cloned()
+            .ok_or_else(|| format!("actor {other} has no object identity"))?;
+        let other_handle = self
+            .object_handle(other_object)
+            .map_err(|error| error.to_string())?;
+
+        let inserted_current =
+            mover != current_actor && !self.instances.contains_key(&current_actor);
+        if inserted_current {
+            self.instances
+                .insert(current_actor, current_instance.clone());
+        }
+        let mut mover_instance = if mover == current_actor {
+            current_instance.clone()
+        } else {
+            self.instances
+                .remove(&mover)
+                .ok_or_else(|| format!("mover {mover} instance is active"))?
+        };
+        let mut actions = Vec::new();
+        let result = self.execute_function(
+            mover,
+            &mover_class,
+            &function,
+            &[Value::Object(other_handle)],
+            &mut mover_instance,
+            &mut actions,
+            0,
+        );
+        if mover != current_actor {
+            self.instances.insert(mover, mover_instance);
+        }
+        if inserted_current {
+            self.instances.remove(&current_actor);
+        }
+        match result.map_err(|error| error.to_string())? {
+            Value::Bool(relevant) => Ok(relevant),
+            value => Err(format!("Mover.IsRelevant returned {}", value.kind())),
+        }
     }
 
     fn queue_ended_touches(

@@ -2744,6 +2744,10 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
             }),
         }),
     );
+    runtime.scripts.insert(
+        pawn_class_id.clone(),
+        Arc::clone(&runtime.scripts[&navigation_class_id]),
+    );
     let function = ResolvedObject {
         package: Arc::clone(&pawn_package),
         export_index: 1,
@@ -6771,6 +6775,356 @@ fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
         actor: 1,
         rotation: [0, 16_384, 0],
     }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-mover-projectile-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(
+        &package_path,
+        synthetic_runtime_package_with_member("Mover", "BumpMove"),
+    )
+    .unwrap();
+    let projectile_package_path = system.join("Projectile.u");
+    fs::write(
+        &projectile_package_path,
+        synthetic_runtime_package_for("Projectile"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let projectile_package = runtime
+        .packages
+        .load_path(&projectile_package_path)
+        .unwrap();
+    let mover_class_id = object_id(&package, 0);
+    let projectile_class_id = object_id(&projectile_package, 0);
+    let class_script = |export_index| {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Class".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+                state: openhp1_script::StateMetadata {
+                    probe_mask: 0,
+                    ignore_mask: 0,
+                    label_table_offset: 0,
+                    flags: 0,
+                },
+                old_record_size: None,
+                flags: 0,
+                guid: [0; 16],
+                dependencies: Vec::new(),
+                package_imports: Vec::new(),
+                within: None,
+                config_name: None,
+                defaults_offset: 0,
+            }),
+        })
+    };
+    runtime
+        .scripts
+        .insert(mover_class_id.clone(), class_script(0));
+    runtime
+        .scripts
+        .insert(projectile_class_id.clone(), class_script(0));
+    runtime
+        .class_defaults
+        .insert(mover_class_id.clone(), InstanceState::default());
+    runtime
+        .class_defaults
+        .insert(projectile_class_id.clone(), InstanceState::default());
+
+    let state_id = object_id(&package, 1);
+    runtime.scripts.insert(
+        state_id.clone(),
+        Arc::new(ScriptExport {
+            export_index: 1,
+            class_name: "State".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 1,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::State(openhp1_script::StateMetadata {
+                probe_mask: 0,
+                ignore_mask: 0,
+                label_table_offset: 0,
+                flags: 0,
+            }),
+        }),
+    );
+    runtime.state_lookups.insert(
+        StateLookup::new(mover_class_id.clone(), "BumpMove"),
+        Some(state_id),
+    );
+
+    let function_script = |export_index, bytes: Vec<u8>| {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        })
+    };
+    let relevant_id = object_id(&package, 2);
+    runtime
+        .scripts
+        .insert(relevant_id.clone(), function_script(2, vec![0x04, 0x27]));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(mover_class_id.clone(), None, "IsRelevant", 0),
+        Some(relevant_id),
+    );
+
+    let key_pos = object_id(&package, 4);
+    let mut bump = vec![0x0f, 0x1a, 0x26, 0x01];
+    bump.extend(5_i32.to_le_bytes());
+    bump.push(0x23);
+    bump.extend([192.0_f32, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes));
+    bump.extend([0x61, 0x0b, 0x23]);
+    bump.extend([192.0_f32, 0.0, 0.0].into_iter().flat_map(f32::to_le_bytes));
+    bump.extend([0x16, 0x71, 0x21]);
+    bump.extend(1_i32.to_le_bytes());
+    bump.extend([0x16, 0x04, 0x0b]);
+    let bump_id = object_id(&package, 3);
+    runtime
+        .scripts
+        .insert(bump_id.clone(), function_script(3, bump));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(mover_class_id.clone(), None, "Bump", 0),
+        Some(bump_id),
+    );
+
+    let fields = [
+        "Location",
+        "Rotation",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "bStatic",
+        "bMovable",
+        "Brush",
+        "PrePivot",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for class in [&mover_class_id, &projectile_class_id] {
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+        }
+        runtime
+            .fields
+            .insert((class.clone(), "mainscale".to_owned()), None);
+        runtime
+            .fields
+            .insert((class.clone(), "standingcount".to_owned()), None);
+    }
+    runtime.fields.insert(
+        (mover_class_id.clone(), "keypos".to_owned()),
+        Some(key_pos.clone()),
+    );
+    let instance = |location| {
+        [
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector(location)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["CollisionHeight"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["CollisionRadius"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["CollisionWidth"].clone(),
+                StoredValue::Value(Value::Float(10.0)),
+            ),
+            (
+                fields["CollideType"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["bCollideActors"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bBlockActors"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bBlockPlayers"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bCollideWorld"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bCollideWhenPlacing"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bStatic"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bMovable"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (fields["Brush"].clone(), StoredValue::Object(None)),
+            (
+                fields["PrePivot"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    let mover_object = runtime_actor_id(1);
+    let projectile_object = runtime_actor_id(2);
+    for (actor, object, class) in [
+        (0, mover_object, mover_class_id.clone()),
+        (1, projectile_object, projectile_class_id),
+    ] {
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object);
+        runtime.actor_classes.insert(actor, class);
+    }
+    runtime.next_actor = 2;
+    let mut mover_instance = instance([0.0; 3]);
+    mover_instance.insert(
+        key_pos.clone(),
+        StoredValue::Array(vec![StoredValue::Value(Value::Vector([0.0; 3])); 8]),
+    );
+    runtime.instances.insert(0, mover_instance);
+    let mut projectile_instance = instance([-40.0, 0.0, 0.0]);
+    let mut actions = Vec::new();
+    let hit = runtime
+        .try_move_actor(
+            1,
+            &ResolvedObject {
+                package: Arc::clone(&projectile_package),
+                export_index: 0,
+            },
+            [80.0, 0.0, 0.0],
+            &mut projectile_instance,
+            &mut actions,
+        )
+        .unwrap();
+    assert_eq!(hit.actor, Some(0));
+    let bump = actions
+        .into_iter()
+        .find(|action| {
+            matches!(
+                action,
+                ActorAction::DispatchEvent {
+                    actor: 0,
+                    event: "Bump",
+                    ..
+                }
+            )
+        })
+        .expect("relevant projectile did not dispatch Mover.Bump");
+    let ActorAction::DispatchEvent { arguments, .. } = bump else {
+        unreachable!()
+    };
+    runtime.instances.insert(1, projectile_instance);
+    let bump_actions = runtime
+        .dispatch_event_with_arguments(0, &package_path, 0, "Bump", &arguments)
+        .unwrap();
+
+    assert_eq!(
+        runtime.actor_states.get(&0),
+        Some(&Some("BumpMove".to_owned()))
+    );
+    assert_eq!(
+        runtime.instances[&0].get(&key_pos),
+        Some(&StoredValue::Array(vec![
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([192.0, 0.0, 0.0])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+        ]))
+    );
+    assert!(bump_actions.contains(&ActorAction::SetLocation {
+        actor: 0,
+        location: [192.0, 0.0, 0.0],
+    }));
+    assert_eq!(
+        runtime.instances[&0].get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([192.0, 0.0, 0.0])))
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
