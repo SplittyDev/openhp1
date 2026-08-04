@@ -86,10 +86,6 @@ fn help(arguments: &str) -> Result<String> {
     Ok(format!("{:<16} {}", command.usage, command.summary))
 }
 
-fn unavailable(name: &str) -> Result<String> {
-    bail!("`{name}` is not implemented yet")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
