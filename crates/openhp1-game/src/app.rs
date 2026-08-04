@@ -651,7 +651,18 @@ impl Graphics {
         } else {
             1
         };
-        let mut input = self.input.player_input(delta_time);
+        let mut input = if self.fly_camera_active {
+            update_fly_camera(
+                &mut self.camera,
+                &self.input,
+                delta_time,
+                (self.renderer.bounds().radius() * 0.35).max(200.0),
+            );
+            let _ = self.input.player_input(delta_time);
+            PlayerInput::default()
+        } else {
+            self.input.player_input(delta_time)
+        };
         for _ in 0..ticks {
             self.renderer.advance_time(delta_time);
             self.update_animations(delta_time);
@@ -1064,17 +1075,19 @@ impl Graphics {
             Ok((view, actions)) => {
                 self.apply_actions(actions);
                 self.view_actor = view.actor;
-                self.camera = camera_from_player_view(
-                    view,
-                    PhysicalSize::new(self.config.width, self.config.height),
-                    self.camera.far,
-                );
-                if self.scene.update_sprite_billboards(Rotator {
-                    pitch: view.rotation[0],
-                    yaw: view.rotation[1],
-                    roll: view.rotation[2],
-                }) {
-                    self.vertices_dirty = true;
+                if !self.fly_camera_active {
+                    self.camera = camera_from_player_view(
+                        view,
+                        PhysicalSize::new(self.config.width, self.config.height),
+                        self.camera.far,
+                    );
+                    if self.scene.update_sprite_billboards(Rotator {
+                        pitch: view.rotation[0],
+                        yaw: view.rotation[1],
+                        roll: view.rotation[2],
+                    }) {
+                        self.vertices_dirty = true;
+                    }
                 }
             }
             Err(error) => self.last_error = Some(format!("player camera failed: {error}")),
@@ -1128,6 +1141,30 @@ impl Graphics {
                 .reload_scene(&self.device, &self.queue, &self.scene.render);
         }
     }
+}
+
+fn update_fly_camera(
+    camera: &mut Camera,
+    input: &InputState,
+    delta_time: f32,
+    movement_speed: f32,
+) {
+    camera.yaw += input.mouse_delta.0 as f32 * 0.004;
+    camera.pitch = (camera.pitch - input.mouse_delta.1 as f32 * 0.004).clamp(-1.55, 1.55);
+
+    let pressed = |key| input.keys.contains(&key) as u8 as f32;
+    let movement = Vec3::new(
+        pressed(KeyCode::KeyD) - pressed(KeyCode::KeyA),
+        pressed(KeyCode::KeyE) - pressed(KeyCode::KeyQ),
+        pressed(KeyCode::KeyW) - pressed(KeyCode::KeyS),
+    )
+    .normalize_or_zero();
+    let fast = pressed(KeyCode::ShiftLeft).max(pressed(KeyCode::ShiftRight));
+    let speed = movement_speed * (1.0 + fast * 3.0);
+    camera.position +=
+        (camera.forward() * movement.z + camera.right() * movement.x + Vec3::Y * movement.y)
+            * speed
+            * delta_time;
 }
 
 fn repeated_player_input(input: PlayerInput) -> PlayerInput {
@@ -1525,6 +1562,23 @@ mod tests {
         let player = input.player_input(1.0 / 60.0);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
+    }
+
+    #[test]
+    fn fly_camera_uses_viewer_controls() {
+        let mut camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 10_000.0);
+        let mut input = InputState::default();
+        input.set_key(KeyCode::KeyW, ElementState::Pressed);
+        input.set_key(KeyCode::KeyE, ElementState::Pressed);
+        input.set_key(KeyCode::ShiftLeft, ElementState::Pressed);
+        input.mouse_delta = (2.0, -1.0);
+
+        update_fly_camera(&mut camera, &input, 0.5, 200.0);
+
+        assert!((camera.yaw - 0.008).abs() < 0.000_001);
+        assert!((camera.pitch - 0.004).abs() < 0.000_001);
+        let expected = (camera.forward() + Vec3::Y) * (400.0 / 2.0_f32.sqrt());
+        assert!((camera.position - expected).length() < 0.001);
     }
 
     #[test]
