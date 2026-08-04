@@ -107,9 +107,13 @@ impl ApplicationHandler for GameApp {
                     match path.and_then(LoadedScene::load).and_then(|scene| {
                         Graphics::new_with_save(window, scene, &saved.bytes, self.renderer_settings)
                     }) {
-                        Ok(graphics) => {
-                            graphics.window.request_redraw();
-                            self.graphics = Some(graphics);
+                        Ok(mut replacement) => {
+                            std::mem::swap(
+                                &mut replacement.debug_console,
+                                &mut graphics.debug_console,
+                            );
+                            replacement.window.request_redraw();
+                            self.graphics = Some(replacement);
                         }
                         Err(error) => {
                             graphics.last_error = Some(format!(
@@ -125,9 +129,13 @@ impl ApplicationHandler for GameApp {
                     match LoadedScene::load(path.clone())
                         .and_then(|scene| Graphics::new(window, scene, self.renderer_settings))
                     {
-                        Ok(graphics) => {
-                            graphics.window.request_redraw();
-                            self.graphics = Some(graphics);
+                        Ok(mut replacement) => {
+                            std::mem::swap(
+                                &mut replacement.debug_console,
+                                &mut graphics.debug_console,
+                            );
+                            replacement.window.request_redraw();
+                            self.graphics = Some(replacement);
                         }
                         Err(error) => {
                             graphics.last_error =
