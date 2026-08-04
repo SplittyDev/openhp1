@@ -60,6 +60,7 @@ impl DeveloperConsole {
             .min_size(120.0)
             .resizable(true)
             .show(ui, |ui| {
+                ui.take_available_height();
                 ui.visuals_mut().override_text_color = Some(Color32::LIGHT_GRAY);
                 let output_height = (ui.available_height() - 32.0).max(40.0);
                 egui::ScrollArea::vertical()
@@ -96,20 +97,20 @@ impl DeveloperConsole {
                     response.request_focus();
                     self.focus_input = false;
                 }
-                if response.has_focus() {
-                    let (older, newer, submit) = ui.input(|input| {
-                        (
-                            input.key_pressed(Key::ArrowUp),
-                            input.key_pressed(Key::ArrowDown),
-                            input.key_pressed(Key::Enter),
-                        )
-                    });
+                let (older, newer, submit) = ui.input(|input| {
+                    (
+                        input.key_pressed(Key::ArrowUp),
+                        input.key_pressed(Key::ArrowDown),
+                        input.key_pressed(Key::Enter),
+                    )
+                });
+                if submit && (response.has_focus() || response.lost_focus()) {
+                    self.submit();
+                } else if response.has_focus() {
                     if older {
                         self.older_history();
                     } else if newer {
                         self.newer_history();
-                    } else if submit {
-                        self.submit();
                     }
                 }
             });

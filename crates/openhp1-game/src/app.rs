@@ -27,7 +27,7 @@ use winit::{
     dpi::{LogicalSize, PhysicalSize, Size},
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{Key, KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowAttributes, WindowId},
 };
 
@@ -156,7 +156,7 @@ impl ApplicationHandler for GameApp {
             return;
         }
         if let WindowEvent::KeyboardInput { event, .. } = &event
-            && event.physical_key == PhysicalKey::Code(KeyCode::Backquote)
+            && is_console_toggle_key(event.physical_key, &event.logical_key)
             && event.state == ElementState::Pressed
             && !event.repeat
         {
@@ -356,6 +356,11 @@ fn mouse_axis(delta: f64, delta_time: f32, speed: f32) -> f32 {
     }
     const DESKTOP_MOUSE_SCALE: f32 = 2.5;
     delta as f32 * 16.0 * speed * DESKTOP_MOUSE_SCALE / (delta_time * 150.0)
+}
+
+fn is_console_toggle_key(physical: PhysicalKey, logical: &Key) -> bool {
+    physical == PhysicalKey::Code(KeyCode::Backquote)
+        || matches!(logical, Key::Character(character) if matches!(character.as_str(), "`" | "~"))
 }
 
 struct Graphics {
@@ -1569,6 +1574,26 @@ mod tests {
         let player = input.player_input(1.0 / 60.0);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
+    }
+
+    #[test]
+    fn console_toggle_accepts_physical_and_logical_backquote_keys() {
+        assert!(is_console_toggle_key(
+            PhysicalKey::Code(KeyCode::Backquote),
+            &Key::Character("x".into()),
+        ));
+        assert!(is_console_toggle_key(
+            PhysicalKey::Code(KeyCode::KeyA),
+            &Key::Character("`".into()),
+        ));
+        assert!(is_console_toggle_key(
+            PhysicalKey::Code(KeyCode::KeyA),
+            &Key::Character("~".into()),
+        ));
+        assert!(!is_console_toggle_key(
+            PhysicalKey::Code(KeyCode::KeyA),
+            &Key::Character("a".into()),
+        ));
     }
 
     #[test]
