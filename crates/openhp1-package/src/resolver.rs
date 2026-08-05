@@ -30,7 +30,9 @@ pub struct ConfigEntry {
 /// case-insensitive Unreal package name.
 pub struct PackageStore {
     paths: HashMap<String, PathBuf>,
+    localized_paths: HashMap<String, PathBuf>,
     loaded: HashMap<String, Arc<Package>>,
+    localized_loaded: HashMap<String, Arc<Package>>,
     system_dir: PathBuf,
     settings_dir: PathBuf,
     default_ini: PathBuf,
@@ -65,12 +67,25 @@ impl PackageStore {
         }
 
         let mut paths = HashMap::new();
+        let mut localized_paths = HashMap::new();
+        let language_directory = ini_path
+            .parent()
+            .filter(|parent| *parent != system_dir)
+            .and_then(Path::file_name);
         for pattern in patterns {
-            scan_pattern(&system_dir, &pattern, &mut paths)?;
+            scan_pattern(
+                &system_dir,
+                &pattern,
+                language_directory,
+                &mut paths,
+                &mut localized_paths,
+            )?;
         }
         Ok(Self {
             paths,
+            localized_paths,
             loaded: HashMap::new(),
+            localized_loaded: HashMap::new(),
             system_dir,
             settings_dir: settings_dir.as_ref().to_path_buf(),
             default_ini: ini_path,
@@ -165,6 +180,19 @@ impl PackageStore {
         self.find_object_matching(qualified_name, Some(class))
     }
 
+    /// Resolves an object from the selected-language overlay, falling back to
+    /// the base package when the overlay does not replace that object.
+    pub fn find_localized_object(
+        &mut self,
+        qualified_name: &str,
+        class: &str,
+    ) -> ResolveResult<Option<ResolvedObject>> {
+        if let Some(object) = self.find_object_matching_source(qualified_name, Some(class), true)? {
+            return Ok(Some(object));
+        }
+        self.find_object_matching(qualified_name, Some(class))
+    }
+
     /// Resolves a package object by its case-insensitive qualified path.
     /// Callers that require a particular object class should use [`Self::find_object`].
     pub fn find_object_any(
@@ -207,6 +235,15 @@ impl PackageStore {
         qualified_name: &str,
         class: Option<&str>,
     ) -> ResolveResult<Option<ResolvedObject>> {
+        self.find_object_matching_source(qualified_name, class, false)
+    }
+
+    fn find_object_matching_source(
+        &mut self,
+        qualified_name: &str,
+        class: Option<&str>,
+        localized: bool,
+    ) -> ResolveResult<Option<ResolvedObject>> {
         let mut parts = qualified_name.split('.');
         let Some(package_name) = parts.next().filter(|part| !part.is_empty()) else {
             return Ok(None);
@@ -216,7 +253,14 @@ impl PackageStore {
             return Ok(None);
         };
         path.reverse();
-        let package = self.load(package_name)?;
+        let package = if localized {
+            let Some(package) = self.load_localized(package_name)? else {
+                return Ok(None);
+            };
+            package
+        } else {
+            self.load(package_name)?
+        };
         Ok((match class {
             Some(class) => find_export(package.summary(), class, &object, &path),
             None => find_export_any(package.summary(), &object, &path),
@@ -241,6 +285,19 @@ impl PackageStore {
         let package = Arc::new(Package::open(path)?);
         self.loaded.insert(key, Arc::clone(&package));
         Ok(package)
+    }
+
+    fn load_localized(&mut self, name: &str) -> ResolveResult<Option<Arc<Package>>> {
+        let key = name.to_ascii_lowercase();
+        if let Some(package) = self.localized_loaded.get(&key) {
+            return Ok(Some(Arc::clone(package)));
+        }
+        let Some(path) = self.localized_paths.get(&key) else {
+            return Ok(None);
+        };
+        let package = Arc::new(Package::open(path)?);
+        self.localized_loaded.insert(key, Arc::clone(&package));
+        Ok(Some(package))
     }
 
     pub fn load_path(&mut self, path: impl AsRef<Path>) -> ResolveResult<Arc<Package>> {
@@ -832,18 +889,31 @@ fn rename_atomically(temporary: &Path, path: &Path) -> std::io::Result<()> {
 fn scan_pattern(
     system_dir: &Path,
     pattern: &str,
+    language_directory: Option<&std::ffi::OsStr>,
     paths: &mut HashMap<String, PathBuf>,
+    localized_paths: &mut HashMap<String, PathBuf>,
 ) -> ResolveResult<()> {
     let pattern_path = Path::new(pattern);
     let directory = pattern_path
         .parent()
         .map_or_else(|| system_dir.to_path_buf(), |path| system_dir.join(path));
-    let entries = match fs::read_dir(&directory) {
+    scan_package_directory(&directory, paths)?;
+    if let Some(language_directory) = language_directory {
+        scan_package_directory(&directory.join(language_directory), localized_paths)?;
+    }
+    Ok(())
+}
+
+fn scan_package_directory(
+    directory: &Path,
+    paths: &mut HashMap<String, PathBuf>,
+) -> ResolveResult<()> {
+    let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(source) => {
             return Err(ResolveError::Io {
-                path: directory,
+                path: directory.to_path_buf(),
                 source,
             });
         }
@@ -1168,7 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn discovers_packages_by_magic_despite_localized_suffix() {
+    fn keeps_base_packages_and_selected_language_overlays() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1176,15 +1246,21 @@ mod tests {
         let root = std::env::temp_dir().join(format!("openhp1-resolver-{unique}"));
         let system = root.join("System");
         let textures = root.join("Textures");
-        fs::create_dir_all(&system).unwrap();
+        fs::create_dir_all(system.join("0")).unwrap();
         fs::create_dir_all(&textures).unwrap();
+        fs::create_dir_all(textures.join("0")).unwrap();
         fs::write(
-            system.join("Default.ini"),
+            system.join("0/Default.ini"),
             "[Core.System]\nPaths=../Textures/*.utx\n",
         )
         .unwrap();
         fs::write(
-            textures.join("Localized.hun_utx"),
+            textures.join("Localized.utx"),
+            crate::PACKAGE_MAGIC.to_le_bytes(),
+        )
+        .unwrap();
+        fs::write(
+            textures.join("0/Localized.int_utx"),
             crate::PACKAGE_MAGIC.to_le_bytes(),
         )
         .unwrap();
@@ -1195,7 +1271,15 @@ mod tests {
                 .package_path("localized")
                 .and_then(std::path::Path::file_name)
                 .and_then(|name| name.to_str()),
-            Some("Localized.hun_utx")
+            Some("Localized.utx")
+        );
+        assert_eq!(
+            store
+                .localized_paths
+                .get("localized")
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str()),
+            Some("Localized.int_utx")
         );
         fs::remove_dir_all(root).unwrap();
     }

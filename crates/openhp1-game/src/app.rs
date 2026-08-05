@@ -31,9 +31,10 @@ use winit::{
     window::{CursorGrabMode, Window, WindowAttributes, WindowId},
 };
 
-use self::console::DeveloperConsole;
+use self::{console::DeveloperConsole, ui::GameUi};
 
 mod console;
+mod ui;
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
 const DEBUG_FAST_FORWARD_TICKS: usize = 16;
@@ -165,7 +166,7 @@ impl ApplicationHandler for GameApp {
             return;
         }
         let egui_response = graphics.egui.on_window_event(&graphics.window, &event);
-        if graphics.debug_console.is_open() {
+        if graphics.debug_console.is_open() || graphics.game_ui.is_open() {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => graphics.resize(size),
@@ -409,6 +410,7 @@ struct Graphics {
     vertices_dirty: bool,
     overlay_visible: bool,
     debug_console: DeveloperConsole,
+    game_ui: GameUi,
     pending_level_load: Option<PathBuf>,
     pending_level_travel: Option<String>,
     fly_camera_active: bool,
@@ -586,7 +588,7 @@ impl Graphics {
         let camera = camera_from_player_view(player_view, size, far);
         let egui_context = egui::Context::default();
         let egui = egui_winit::State::new(
-            egui_context,
+            egui_context.clone(),
             egui::ViewportId::ROOT,
             window.as_ref(),
             Some(window.scale_factor() as f32),
@@ -594,6 +596,7 @@ impl Graphics {
             Some(device.limits().max_texture_dimension_2d as usize),
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, config.format, Default::default());
+        let game_ui = GameUi::load(&egui_context, &game_root, &scene.path, &save_dir)?;
         Ok(Self {
             window,
             surface,
@@ -615,8 +618,9 @@ impl Graphics {
             render_stats: RenderStats::default(),
             frame_time_ms: 0.0,
             vertices_dirty: false,
-            overlay_visible: true,
+            overlay_visible: false,
             debug_console: DeveloperConsole::new(),
+            game_ui,
             pending_level_load: None,
             pending_level_travel: None,
             fly_camera_active: false,
@@ -743,6 +747,7 @@ impl Graphics {
         let egui_context = self.egui.egui_ctx().clone();
         let egui_input = self.egui.take_egui_input(&self.window);
         let egui_output = egui_context.run_ui(egui_input, |ui| {
+            self.game_ui.ui(ui.ctx());
             self.debug_overlay(ui.ctx());
             self.debug_console.ui(ui);
         });
@@ -825,7 +830,24 @@ impl Graphics {
                 self.last_error = Some(format!("could not save screenshot: {error}"));
             }
         }
-        RenderOutcome::Continue
+        match self.game_ui.take_action() {
+            Some(ui::Action::Exit) => RenderOutcome::Exit,
+            Some(ui::Action::LoadSave(slot)) => match self.open_save(slot) {
+                Ok(saved) => RenderOutcome::Load(saved),
+                Err(error) => {
+                    self.last_error = Some(format!("could not open saved game: {error:#}"));
+                    RenderOutcome::Continue
+                }
+            },
+            Some(ui::Action::NewGame) => RenderOutcome::LoadLevel(
+                self.scene
+                    .path
+                    .parent()
+                    .expect("loaded map has a parent directory")
+                    .join("Lev_Tut1.unr"),
+            ),
+            None => RenderOutcome::Continue,
+        }
     }
 
     fn run_debug_console_commands(&mut self) {
