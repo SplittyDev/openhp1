@@ -162,7 +162,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    pub(super) fn try_mount(
+    pub(in crate::world) fn try_mount(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -170,23 +170,20 @@ impl ScriptRuntime {
         hit: MovementHit,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<bool, String> {
-        let Some(node) = hit.node else {
-            return Ok(false);
-        };
         let max_height = self.actor_float(class, instance, "MaxMountHeight")?;
         if max_height <= 0.0 || !(-0.1..0.7).contains(&hit.normal.z) {
             return Ok(false);
         }
-        let collision = self
-            .collision
-            .clone()
-            .ok_or_else(|| "Mount requires a configured BSP collision model".to_owned())?;
         let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
         let radius = self.actor_float(class, instance, "CollisionRadius")?;
-        let surface = collision
-            .line_trace(location, location - hit.normal * (radius * 2.0 + 1.0))
-            .map_or(node, |surface| surface.node);
-        if !collision.node_has_poly_flag(surface, PolyFlags::HIGH_LEDGE) {
+        if !self.movement_hit_has_poly_flag(
+            actor,
+            instance,
+            hit,
+            location,
+            radius * 2.0 + 1.0,
+            PolyFlags::HIGH_LEDGE,
+        )? {
             return Ok(false);
         }
         let rotation = self.actor_rotator(class, instance, "Rotation")?;
@@ -195,15 +192,15 @@ impl ScriptRuntime {
             return Ok(false);
         }
 
-        let height = self.actor_float(class, instance, "CollisionHeight")?;
         let up = Vec3::Z;
         let inward = Vec3::new(-hit.normal.x, -hit.normal.y, 0.0).normalize_or_zero();
         let raised = location + up * max_height;
         let far = raised + inward * (radius * 2.0 + max_height * hit.normal.z);
         let diagonal_end = far - (up + hit.normal) * max_height;
-        let Some(ledge) = collision.sweep_cylinder(far, diagonal_end, radius, height) else {
+        let ledge = self.test_move_actor_between(actor, class, instance, far, diagonal_end)?;
+        if ledge.fraction == 1.0 {
             return Ok(false);
-        };
+        }
         let ledge_location = far + (diagonal_end - far) * ledge.fraction;
         let minimum_rise = if self.actor_byte(class, instance, "Physics")? == PHYS_FALLING {
             0.0
@@ -214,19 +211,25 @@ impl ScriptRuntime {
             return Ok(false);
         }
         let destination = ledge_location + Vec3::Z * 0.51;
-        if collision
-            .sweep_cylinder(location, raised, radius, height)
-            .is_some()
-            || collision
-                .sweep_cylinder(raised, destination, radius, height)
-                .is_some()
+        if self
+            .test_move_actor_between(actor, class, instance, location, raised)?
+            .fraction
+            < 1.0
+            || self
+                .test_move_actor_between(actor, class, instance, raised, destination)?
+                .fraction
+                < 1.0
         {
             return Ok(false);
         }
 
-        let base = self
-            .level_info
-            .and_then(|level| self.actor_objects.get(&level).cloned());
+        let base = hit
+            .actor
+            .and_then(|actor| self.actor_objects.get(&actor).cloned())
+            .or_else(|| {
+                self.level_info
+                    .and_then(|level| self.actor_objects.get(&level).cloned())
+            });
         self.set_actor_base(actor, class, instance, base, actions)?;
         self.call_actor_event(
             actor,
@@ -754,7 +757,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    pub(super) fn tick_moving_brush(
+    pub(in crate::world) fn tick_moving_brush(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -771,6 +774,64 @@ impl ScriptRuntime {
             return Ok(());
         }
 
+        if elapsed > 0.0 && self.actor_bool(class, instance, "bCollideWorld")? {
+            let location = Vec3::from_array(old_location);
+            if let Some(zone) = self.zone_physics(location, actor, instance)?
+                && zone.gravity.length_squared() > 0.0
+            {
+                let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
+                let parallel_velocity =
+                    zone.gravity * velocity.dot(zone.gravity) / zone.gravity.length_squared();
+                let gravity_delta =
+                    parallel_velocity * elapsed + zone.gravity * (0.5 * elapsed * elapsed);
+                self.set_actor_value(
+                    class,
+                    instance,
+                    "Velocity",
+                    Value::Vector((velocity + zone.gravity * elapsed).to_array()),
+                )?;
+
+                let hit =
+                    self.try_move_actor(actor, class, gravity_delta.to_array(), instance, actions)?;
+                let moved =
+                    Vec3::from_array(self.actor_vector(class, instance, "Location")?) - location;
+                if hit.fraction > 0.0 && moved.length_squared() > 0.0 {
+                    let key = usize::from(self.actor_byte(class, instance, "KeyNum")?).min(7);
+                    let mut key_positions =
+                        self.required_actor_property(class, instance, "KeyPos")?;
+                    let StoredValue::Array(values) = &mut key_positions else {
+                        return Err(format!("actor property KeyPos is {key_positions:?}"));
+                    };
+                    let Some(StoredValue::Value(Value::Vector(key_position))) = values.get_mut(key)
+                    else {
+                        return Err(format!(
+                            "actor property KeyPos[{key}] is missing or invalid"
+                        ));
+                    };
+                    *key_position = (Vec3::from_array(*key_position) + moved).to_array();
+                    self.set_actor_stored(class, instance, "KeyPos", key_positions)?;
+
+                    let old_position =
+                        Vec3::from_array(self.actor_vector(class, instance, "OldPos")?);
+                    self.set_actor_value(
+                        class,
+                        instance,
+                        "OldPos",
+                        Value::Vector((old_position + moved).to_array()),
+                    )?;
+                } else if hit.fraction == 0.0 && hit.normal.length_squared() > 0.0 {
+                    let base = hit
+                        .actor
+                        .and_then(|actor| self.actor_objects.get(&actor).cloned())
+                        .or_else(|| {
+                            self.level_info
+                                .and_then(|level| self.actor_objects.get(&level).cloned())
+                        });
+                    self.set_actor_base(actor, class, instance, base, actions)?;
+                }
+            }
+        }
+
         let mut time_left = elapsed;
         while time_left > 0.0 {
             if !self.actor_bool(class, instance, "bInterpolating")? {
@@ -781,7 +842,8 @@ impl ScriptRuntime {
                 break;
             }
 
-            let mut alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
+            let previous_alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
+            let mut alpha = previous_alpha;
             alpha += rate * time_left;
             if alpha > 1.0 {
                 time_left = (alpha - 1.0) / rate;
@@ -831,6 +893,15 @@ impl ScriptRuntime {
                         actions,
                     )?;
                 }
+            } else {
+                self.set_actor_value(
+                    class,
+                    instance,
+                    "PhysAlpha",
+                    Value::Float(previous_alpha + (alpha - previous_alpha) * hit.fraction),
+                )?;
+                self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;
+                break;
             }
         }
         if elapsed > 0.0 {

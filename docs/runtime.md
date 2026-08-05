@@ -318,8 +318,10 @@ authored `bProjTarget` path: `spellFlip` can pass through and activate a
 GridMover once, while the same mover remains solid to Harry through its block
 flags. Ordinary `BumpType` behavior remains in `Mover.IsRelevant` for
 non-projectiles. Callback instance mutations and emitted actions are retained
-in call order before the movement and `Bump` actions. Collision-only probes
-such as `test_move_actor` and `actorReachable` use only the physical blocking
+in call order. A relevant non-blocking mover receives `Bump` at the swept
+contact location before the other actor finishes crossing it, so scripts such
+as `GridMover.Bump` observe the actual impact side. Collision-only probes such
+as `test_move_actor` and `actorReachable` use only the physical blocking
 predicate and do not execute `Mover.IsRelevant`; arbitrary virtual script can
 mutate more than instance fields and therefore cannot be made observational by
 discarding only its returned actions.
@@ -331,11 +333,27 @@ positive offset and adding for a negative offset. It enters the `BumpMove`
 only then completes the opening sequence. OpenHP1 therefore treats relevance
 evaluation, the key-position update, state entry, and latent interpolation as
 one ordered authored path rather than replacing it with a fixed destination.
-Pawn mounting follows HP1's native `APawn::Mount` path: only BSP surfaces with
-the authored `bHighLedge` flag qualify, and the original raised, diagonal, and
-destination cylinder probes must all pass before the pawn's `Mount` event runs.
-The flag comes from a polygon trace because convex-hull clipping planes do not
-necessarily carry the visible BSP surface's flags.
+Moving brushes with `bCollideWorld` are swept against static BSP using their
+transformed primitive bounds with each extent reduced by 0.51 units, matching
+the original `ULevel::MoveActor` path. This lets authored movers fit flush
+against level geometry while a subsequent move into the wall stops immediately.
+Before keyframe interpolation, the original `physMovingBrush` also integrates
+the mover's velocity along `ZoneGravity` and moves it by that velocity plus
+half the gravity acceleration for the tick. Any actual gravity displacement is
+added to both `OldPos` and the active `KeyPos`, so the interpolation path follows
+the falling brush. Supported movers remain fixed; a mover over an opening falls
+until its transformed brush bounds reach the BSP below.
+After a brush moves, blocking actor overlaps run the mover's synchronous
+`EncroachingOn` event and restore its previous transform when the event returns
+true; accepted overlaps receive `EncroachedBy`.
+Pawn mounting follows HP1's native `APawn::Mount` path: the surface must have
+the authored `bHighLedge` flag, whether it belongs to the level BSP or an
+actor-owned brush such as a mover. The original raised, diagonal, and
+destination cylinder probes query the whole collision scene before the pawn's
+`Mount` event runs, and a successful mover mount bases the pawn on that mover.
+The flag comes from a polygon trace through the primitive that produced the hit
+because convex-hull clipping planes do not necessarily carry the visible
+surface's flags.
 The horizontal probe offset uses the pawn's collision diameter, not its height.
 Aligned cylinders sweep BSP box corners as rounded corners so the resulting
 contact normal can slide a pawn through an adjacent opening.

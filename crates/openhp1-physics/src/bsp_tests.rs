@@ -107,6 +107,14 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
         collision.transformed_bounds(Vec3::new(100.0, 0.0, 0.0), rotation, Vec3::ZERO, Vec3::ONE,),
         Some((Vec3::new(100.0, 0.0, 0.0), Vec3::splat(10.1)))
     );
+    assert!(collision.overlaps_transformed_aabb(
+        Vec3::new(100.0, 0.0, 0.0),
+        Vec3::splat(0.2),
+        Vec3::new(100.0, 0.0, 0.0),
+        rotation,
+        Vec3::ZERO,
+        Vec3::ONE,
+    ));
 }
 
 #[test]

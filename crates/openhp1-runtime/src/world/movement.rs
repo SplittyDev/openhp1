@@ -1,7 +1,9 @@
 use glam::{Mat3, Vec3};
+use openhp1_map::PolyFlags;
 use openhp1_physics::{boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder};
 
 use super::physics::{PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING};
+use super::state::event_disabled;
 use super::*;
 
 mod collision;
@@ -41,6 +43,7 @@ pub(super) struct ActorSweep {
     pub(super) actor: usize,
     pub(super) fraction: f32,
     pub(super) normal: Vec3,
+    pub(super) node: Option<usize>,
     blocking: bool,
     bumping: bool,
 }
@@ -148,6 +151,7 @@ impl ScriptRuntime {
                 actor,
                 fraction: hit.fraction,
                 normal: hit.normal,
+                node: hit.node,
                 blocking: false,
                 bumping: false,
             });
@@ -192,6 +196,71 @@ impl ScriptRuntime {
             (None, None) => None,
         };
         Ok(fraction.map(|fraction| start.lerp(end, fraction).z))
+    }
+
+    pub(in crate::world) fn test_move_actor_between(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        start: Vec3,
+        end: Vec3,
+    ) -> std::result::Result<MovementHit, String> {
+        let mut probe = instance.clone();
+        self.set_actor_value(
+            class,
+            &mut probe,
+            "Location",
+            Value::Vector(start.to_array()),
+        )?;
+        self.test_move_actor(actor, class, (end - start).to_array(), &probe)
+    }
+
+    pub(in crate::world) fn movement_hit_has_poly_flag(
+        &mut self,
+        actor: usize,
+        instance: &InstanceState,
+        hit: MovementHit,
+        start: Vec3,
+        distance: f32,
+        flag: PolyFlags,
+    ) -> std::result::Result<bool, String> {
+        let Some(fallback_node) = hit.node else {
+            return Ok(false);
+        };
+        let end = start - hit.normal * distance;
+        if let Some(other) = hit.actor {
+            self.ensure_collision_actors(actor, instance)?;
+            let Some(other) = self.collision_actors[other]
+                .as_ref()
+                .map(|cached| cached.actor.clone())
+            else {
+                return Ok(false);
+            };
+            let Some(brush) = other.brush else {
+                return Ok(false);
+            };
+            let node = brush
+                .sweep_transformed_aabb(
+                    start,
+                    end,
+                    Vec3::ZERO,
+                    other.location,
+                    other.rotation,
+                    other.pre_pivot,
+                    other.main_scale,
+                )
+                .map_or(fallback_node, |surface| surface.node);
+            return Ok(brush.node_has_poly_flag(node, flag));
+        }
+        let collision = self
+            .collision
+            .as_ref()
+            .ok_or_else(|| "surface lookup requires a configured BSP collision model".to_owned())?;
+        let node = collision
+            .line_trace(start, end)
+            .map_or(fallback_node, |surface| surface.node);
+        Ok(collision.node_has_poly_flag(node, flag))
     }
 
     pub(super) fn colliding_actors(
@@ -930,6 +999,24 @@ impl ScriptRuntime {
         let Some(actions) = actions.as_mut() else {
             return Ok(blocking_hit);
         };
+        let mut contact_bumps = Vec::new();
+        for hit in hits
+            .iter()
+            .take_while(|hit| hit.fraction < blocking_hit.fraction)
+            .filter(|hit| hit.bumping && !hit.blocking)
+        {
+            if self.actor_is_mover(hit.actor)? {
+                self.dispatch_contact_bump(
+                    hit.actor,
+                    actor,
+                    actor_class,
+                    instance,
+                    current.location + delta * hit.fraction,
+                    actions,
+                )?;
+                contact_bumps.push(hit.actor);
+            }
+        }
         let location = current.location + delta * blocking_hit.fraction;
         if delta.length_squared() >= 0.00000001 {
             self.set_actor_location(actor, actor_class, instance, location, actions)?;
@@ -981,6 +1068,24 @@ impl ScriptRuntime {
             )?;
         }
 
+        let mut moved = current.clone();
+        moved.location = location;
+        if blocking_hit.fraction == 1.0
+            && moved.brush.is_some()
+            && self.moving_brush_encroached(actor, actor_class, instance, &moved, actions)?
+        {
+            self.set_actor_location(actor, actor_class, instance, current.location, actions)?;
+            if let Some(previous_rotation) = previous_rotation {
+                self.set_actor_rotation(actor, actor_class, instance, previous_rotation, actions)?;
+            }
+            return Ok(MovementHit {
+                fraction: 0.0,
+                normal: Vec3::ZERO,
+                actor: None,
+                node: None,
+            });
+        }
+
         if let Some(other) = blocking_actor
             && !self
                 .actors_share_base_chain(actor, other)
@@ -994,7 +1099,9 @@ impl ScriptRuntime {
             .take_while(|hit| hit.fraction < blocking_hit.fraction)
             .filter(|hit| hit.bumping)
         {
-            self.queue_pair_event(actions, hit.actor, actor, "Bump")?;
+            if !contact_bumps.contains(&hit.actor) {
+                self.queue_pair_event(actions, hit.actor, actor, "Bump")?;
+            }
             self.queue_pair_event(actions, actor, hit.actor, "Bump")?;
         }
         for hit in hits
@@ -1011,6 +1118,158 @@ impl ScriptRuntime {
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
 
         Ok(blocking_hit)
+    }
+
+    fn moving_brush_encroached(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        mover: &CollisionActor,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        if !mover.block_players && !mover.block_actors && !mover.collide_actors {
+            return Ok(false);
+        }
+        self.ensure_collision_actors(actor, instance)?;
+        let Some((center, extents)) = collision_actor_world_bounds(mover) else {
+            return Ok(false);
+        };
+        let minimum = center - extents;
+        let maximum = center + extents;
+        let candidate_count = self
+            .collision_actors_by_min_x
+            .partition_point(|&candidate| {
+                collision_actor_min_x(&self.collision_actors, candidate) <= maximum.x
+            });
+        let candidates = self.collision_actors_by_min_x[..candidate_count].to_vec();
+        let brush = mover.brush.as_ref().expect("moving brush was checked");
+        let mut overlaps = Vec::new();
+        for candidate in candidates {
+            if candidate == actor || self.destroyed.contains(&candidate) {
+                continue;
+            }
+            let other = &self.collision_actors[candidate]
+                .as_ref()
+                .expect("indexed collision actor is missing")
+                .actor;
+            if other.brush.is_some() || !actors_block(mover, other) {
+                continue;
+            }
+            let Some((other_center, other_extents)) = collision_actor_world_bounds(other) else {
+                continue;
+            };
+            if other_center.x + other_extents.x < minimum.x
+                || other_center.y + other_extents.y < minimum.y
+                || other_center.y - other_extents.y > maximum.y
+                || other_center.z + other_extents.z < minimum.z
+                || other_center.z - other_extents.z > maximum.z
+                || !brush.overlaps_transformed_aabb(
+                    other_center,
+                    other_extents,
+                    mover.location,
+                    mover.rotation,
+                    mover.pre_pivot,
+                    mover.main_scale,
+                )
+            {
+                continue;
+            }
+            overlaps.push(candidate);
+        }
+
+        for &other in &overlaps {
+            if self.mover_encroaching_on(actor, actor_class, instance, other, actions)? {
+                return Ok(true);
+            }
+        }
+        if overlaps.is_empty() {
+            return Ok(false);
+        }
+        let mover_handle = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("mover {actor} has no object identity"))
+            .and_then(|object| {
+                self.object_handle(object)
+                    .map_err(|error| error.to_string())
+            })?;
+        for other in overlaps {
+            self.call_other_actor_event(
+                other,
+                "EncroachedBy",
+                vec![Value::Object(mover_handle)],
+                actions,
+            )?;
+        }
+        Ok(false)
+    }
+
+    fn mover_encroaching_on(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        other: usize,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        if event_disabled(
+            &self.disabled_events,
+            actor,
+            self.actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref()),
+            "EncroachingOn",
+        ) || self
+            .state_ignores_event(actor, actor_class, "EncroachingOn")
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+        let Some(function) = self
+            .find_actor_function(
+                actor,
+                ResolvedObject {
+                    package: Arc::clone(&actor_class.package),
+                    export_index: actor_class.export_index,
+                },
+                "EncroachingOn",
+                0,
+            )
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(false);
+        };
+        let handle = self
+            .actor_objects
+            .get(&other)
+            .cloned()
+            .ok_or_else(|| format!("actor {other} has no object identity"))
+            .and_then(|object| {
+                self.object_handle(object)
+                    .map_err(|error| error.to_string())
+            })?;
+        let revision = self.state_revision(actor);
+        let result = self
+            .execute_function(
+                actor,
+                actor_class,
+                &function,
+                &[Value::Object(handle)],
+                instance,
+                actions,
+                0,
+            )
+            .map_err(|error| error.to_string())?;
+        if self.state_revision(actor) != revision {
+            self.execute_ready_state(actor, actor_class, instance, actions)
+                .map_err(|error| error.to_string())?;
+        }
+        match result {
+            Value::Bool(stop) => Ok(stop),
+            value => Err(format!("Mover.EncroachingOn returned {}", value.kind())),
+        }
     }
 
     fn set_actor_rotation(
@@ -1129,12 +1388,20 @@ impl ScriptRuntime {
         current_instance: &mut InstanceState,
         evaluation: &mut MovementEvaluation<'_>,
     ) -> std::result::Result<(MovementHit, Vec<ActorSweep>), String> {
-        let world_hit = if collide_world && current.brush.is_none() {
+        let world_hit = if collide_world {
             let collision = self
                 .collision
                 .as_ref()
                 .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?;
-            if current.collide_type == COLLIDE_BOX {
+            if current.brush.is_some() {
+                collision_actor_world_bounds(current).and_then(|(center, extents)| {
+                    collision.sweep_aabb(
+                        center,
+                        center + delta,
+                        (extents - Vec3::splat(0.51)).max(Vec3::ZERO),
+                    )
+                })
+            } else if current.collide_type == COLLIDE_BOX {
                 collision.sweep_aabb(
                     current.location,
                     current.location + delta,
@@ -1189,7 +1456,7 @@ impl ScriptRuntime {
                     fraction: hit.fraction,
                     normal: hit.normal,
                     actor: Some(hit.actor),
-                    node: None,
+                    node: hit.node,
                 };
             }
         }
@@ -1504,12 +1771,11 @@ impl ScriptRuntime {
                 continue;
             }
             let hit = if delta.length_squared() < 0.00000001 {
-                collision_actors_overlap(current, &other).then_some(
-                    openhp1_physics::ActorCollisionHit {
-                        fraction: 0.0,
-                        normal: Vec3::ZERO,
-                    },
-                )
+                collision_actors_overlap(current, &other).then_some(CollisionSweep {
+                    fraction: 0.0,
+                    normal: Vec3::ZERO,
+                    node: None,
+                })
             } else {
                 sweep_collision_actors(current, &other, delta)
             };
@@ -1527,6 +1793,7 @@ impl ScriptRuntime {
                 actor,
                 fraction: hit.fraction,
                 normal: hit.normal,
+                node: hit.node,
                 blocking,
                 bumping,
             });
@@ -1543,21 +1810,8 @@ impl ScriptRuntime {
         evaluation: &mut MovementEvaluation<'_>,
     ) -> std::result::Result<(bool, bool), String> {
         let blocking = actors_block(first, second);
-        let is_mover = |runtime: &mut Self, actor| {
-            runtime
-                .actor_classes
-                .get(&actor)
-                .cloned()
-                .map(|class| runtime.resolved_object(&class))
-                .transpose()
-                .map_err(|error| error.to_string())?
-                .map(|class| runtime.class_has_name(&class, "Mover"))
-                .transpose()
-                .map_err(|error| error.to_string())
-                .map(Option::unwrap_or_default)
-        };
-        let second_is_mover = is_mover(self, second.actor)?;
-        let first_is_mover = is_mover(self, first.actor)?;
+        let second_is_mover = self.actor_is_mover(second.actor)?;
+        let first_is_mover = self.actor_is_mover(first.actor)?;
         let mover = if second_is_mover {
             Some((second.actor, first.actor))
         } else if first_is_mover {
@@ -1647,6 +1901,77 @@ impl ScriptRuntime {
             Value::Bool(relevant) => Ok((blocking, blocking || relevant)),
             value => Err(format!("Mover.IsRelevant returned {}", value.kind())),
         }
+    }
+
+    fn actor_is_mover(&mut self, actor: usize) -> std::result::Result<bool, String> {
+        self.actor_classes
+            .get(&actor)
+            .cloned()
+            .map(|class| self.resolved_object(&class))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .map(|class| self.class_has_name(&class, "Mover"))
+            .transpose()
+            .map_err(|error| error.to_string())
+            .map(Option::unwrap_or_default)
+    }
+
+    fn dispatch_contact_bump(
+        &mut self,
+        mover: usize,
+        other: usize,
+        other_class: &ResolvedObject,
+        other_instance: &mut InstanceState,
+        contact_location: Vec3,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let mover_class = self
+            .actor_classes
+            .get(&mover)
+            .cloned()
+            .ok_or_else(|| format!("mover {mover} has no class"))?;
+        let other_object = self
+            .actor_objects
+            .get(&other)
+            .cloned()
+            .ok_or_else(|| format!("actor {other} has no object identity"))?;
+        let other_handle = self
+            .object_handle(other_object)
+            .map_err(|error| error.to_string())?;
+        let location = self
+            .find_property(other_class, "Location", 0)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("actor {other} has no Location property"))?;
+        if self.instances.contains_key(&other) {
+            return Err(format!("moving actor {other} instance is already stored"));
+        }
+        let previous_location = other_instance.insert(
+            location.clone(),
+            StoredValue::Value(Value::Vector(contact_location.to_array())),
+        );
+        self.instances.insert(other, other_instance.clone());
+        let result = self.dispatch_event_with_arguments(
+            mover,
+            mover_class.package.as_ref(),
+            mover_class.export_index,
+            "Bump",
+            &[Value::Object(other_handle)],
+        );
+
+        *other_instance = self
+            .instances
+            .remove(&other)
+            .ok_or_else(|| format!("moving actor {other} instance was removed"))?;
+        match previous_location {
+            Some(value) => {
+                other_instance.insert(location, value);
+            }
+            None => {
+                other_instance.remove(&location);
+            }
+        }
+        actions.extend(result.map_err(|error| error.to_string())?);
+        Ok(())
     }
 
     fn queue_ended_touches(

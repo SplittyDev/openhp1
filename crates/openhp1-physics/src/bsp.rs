@@ -321,6 +321,30 @@ impl BspCollision {
             })
     }
 
+    pub fn overlaps_transformed_aabb(
+        &self,
+        center: Vec3,
+        extents: Vec3,
+        location: Vec3,
+        rotation: Mat3,
+        pre_pivot: Vec3,
+        scale: Vec3,
+    ) -> bool {
+        if !center.is_finite()
+            || !extents.is_finite()
+            || !location.is_finite()
+            || !rotation.is_finite()
+            || !pre_pivot.is_finite()
+            || !scale.is_finite()
+            || extents.cmplt(Vec3::ZERO).any()
+            || scale.abs().cmple(Vec3::splat(f32::EPSILON)).any()
+        {
+            return false;
+        }
+        let local_center = rotation.transpose() * (center - location) / scale + pre_pivot;
+        self.overlaps_aabb(local_center, extents / scale.abs())
+    }
+
     pub fn transformed_bounds(
         &self,
         location: Vec3,

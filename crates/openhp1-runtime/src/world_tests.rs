@@ -7698,6 +7698,8 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
 
     let fields = [
         "Location",
+        "OldLocation",
+        "Velocity",
         "Rotation",
         "CollisionHeight",
         "CollisionRadius",
@@ -7717,10 +7719,37 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         "TimeDilation",
         "Physics",
         "LifeSpan",
+        "OldPos",
+        "OldRot",
+        "BaseRot",
+        "PhysAlpha",
+        "PhysRate",
+        "KeyNum",
+        "MoverGlideType",
+        "KeyRot",
+        "ZoneGravity",
+        "ZoneVelocity",
+        "ZoneGroundFriction",
+        "ZoneFluidFriction",
+        "ZoneTerminalVelocity",
+        "bWaterZone",
+        "Base",
+        "Level",
+        "MaxMountHeight",
+        "MaxStepHeight",
     ]
     .into_iter()
     .enumerate()
-    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .map(|(index, name)| {
+        (
+            name,
+            if name == "Location" {
+                location.clone()
+            } else {
+                runtime_actor_id(100 + index)
+            },
+        )
+    })
     .collect::<HashMap<_, _>>();
     for class in [
         &mover_class_id,
@@ -7741,10 +7770,20 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         runtime
             .fields
             .insert((class.clone(), "standingcount".to_owned()), None);
+        runtime
+            .fields
+            .insert((class.clone(), "bpainzone".to_owned()), None);
+        runtime
+            .fields
+            .insert((class.clone(), "damagetype".to_owned()), None);
     }
     runtime.fields.insert(
         (mover_class_id.clone(), "keypos".to_owned()),
         Some(key_pos.clone()),
+    );
+    runtime.fields.insert(
+        (mover_class_id.clone(), "basepos".to_owned()),
+        Some(base_pos.clone()),
     );
     let instance = |location| {
         [
@@ -7825,6 +7864,40 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
                 fields["LifeSpan"].clone(),
                 StoredValue::Value(Value::Float(0.0)),
             ),
+            (
+                fields["ZoneGravity"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["ZoneVelocity"].clone(),
+                StoredValue::Value(Value::Vector([0.0; 3])),
+            ),
+            (
+                fields["ZoneGroundFriction"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["ZoneFluidFriction"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["ZoneTerminalVelocity"].clone(),
+                StoredValue::Value(Value::Float(1_000.0)),
+            ),
+            (
+                fields["bWaterZone"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (fields["Base"].clone(), StoredValue::Object(None)),
+            (fields["Level"].clone(), StoredValue::Object(None)),
+            (
+                fields["MaxMountHeight"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["MaxStepHeight"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
         ]
         .into_iter()
         .collect::<InstanceState>()
@@ -7859,15 +7932,15 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         StoredValue::Value(Value::Vector([16.0, 0.0, 0.0])),
     );
     mover_instance.insert(move_increment, StoredValue::Value(Value::Float(32.0)));
+    mover_instance.insert(
+        fields["bInterpolating"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
     runtime.instances.insert(0, mover_instance);
     let mut projectile_instance = instance([-40.0, 0.0, 0.0]);
     projectile_instance.insert(
         spell_checked.clone(),
         StoredValue::Value(Value::Bool(false)),
-    );
-    projectile_instance.insert(
-        location.clone(),
-        StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
     );
     assert!(
         runtime
@@ -7895,7 +7968,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     let mut stored_projectile = projectile_instance.clone();
     stored_projectile.insert(
         fields["Location"].clone(),
-        StoredValue::Value(Value::Vector([40.0, 0.0, 0.0])),
+        StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
     );
     runtime.instances.insert(1, stored_projectile);
     let mover_query = runtime
@@ -7964,6 +8037,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     );
     assert!(!runtime.instances.contains_key(&1));
 
+    runtime.level_info = Some(1);
     let mut actions = Vec::new();
     let hit = runtime
         .try_move_actor(
@@ -8002,20 +8076,28 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             )
         })
         .expect("Mover.IsRelevant action was discarded");
-    let bump_position = actions
+    let do_open_position = actions
         .iter()
         .position(|action| {
             matches!(
                 action,
-                ActorAction::DispatchEvent {
+                ActorAction::Log {
                     actor: 0,
-                    event: "Bump",
-                    ..
-                }
+                    message,
+                    tag: None,
+                } if message == "DoOpen"
             )
         })
-        .expect("relevant projectile did not dispatch Mover.Bump");
-    assert!(relevance_log < bump_position);
+        .expect("relevant projectile did not run Mover.Bump at contact");
+    assert!(relevance_log < do_open_position);
+    assert!(!actions.iter().any(|action| matches!(
+        action,
+        ActorAction::DispatchEvent {
+            actor: 0,
+            event: "Bump",
+            ..
+        }
+    )));
     runtime
         .actor_bases
         .insert(1, Some(runtime.actor_objects[&0].clone()));
@@ -8041,32 +8123,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     runtime.actor_bases.remove(&1);
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
-    let bump = actions
-        .iter()
-        .find(|action| {
-            matches!(
-                action,
-                ActorAction::DispatchEvent {
-                    actor: 0,
-                    event: "Bump",
-                    ..
-                }
-            )
-        })
-        .expect("relevant projectile did not dispatch Mover.Bump")
-        .clone();
-    let ActorAction::DispatchEvent { arguments, .. } = bump else {
-        unreachable!()
-    };
     runtime.instances.insert(1, projectile_instance);
-    runtime.level_info = Some(1);
-    runtime.instances.get_mut(&0).unwrap().insert(
-        fields["bInterpolating"].clone(),
-        StoredValue::Value(Value::Bool(true)),
-    );
-    let bump_actions = runtime
-        .dispatch_event_with_arguments(0, &package_path, 0, "Bump", &arguments)
-        .unwrap();
 
     assert_eq!(
         runtime.actor_states.get(&0),
@@ -8085,7 +8142,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             StoredValue::Value(Value::Vector([0.0; 3])),
         ]))
     );
-    assert!(bump_actions.iter().any(|action| matches!(
+    assert!(actions.iter().any(|action| matches!(
         action,
         ActorAction::Log {
             actor: 0,
@@ -8093,7 +8150,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             tag: None,
         } if message == "DoOpen"
     )));
-    assert!(!bump_actions.iter().any(|action| matches!(
+    assert!(!actions.iter().any(|action| matches!(
         action,
         ActorAction::Log { message, .. } if message == "FinishedOpening"
     )));
@@ -8141,23 +8198,6 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     assert_eq!(
         runtime.instances[&0].get(&fields["Location"]),
         Some(&StoredValue::Value(Value::Vector([96.0, 0.0, 0.0])))
-    );
-    runtime.instances.get_mut(&1).unwrap().insert(
-        location.clone(),
-        StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),
-    );
-    runtime.actor_states.insert(0, None);
-    runtime.state_frames.remove(&0);
-    runtime
-        .dispatch_event_with_arguments(0, &package_path, 0, "Bump", &arguments)
-        .unwrap();
-    let StoredValue::Array(key_positions) = &runtime.instances[&0][&key_pos] else {
-        panic!("GridMover KeyPos is not an array")
-    };
-    assert_eq!(
-        key_positions[1],
-        StoredValue::Value(Value::Vector([80.0, 0.0, 0.0])),
-        "GridMover must add MoveIncrement when the impact comes from negative X"
     );
     runtime.instances.remove(&1);
 
@@ -8246,11 +8286,320 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         "mover relevance must not override authored physical blocking flags"
     );
 
+    let mover_brush = runtime_actor_id(999);
+    runtime
+        .brush_collisions
+        .insert(mover_brush.clone(), solid_box_collision());
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Brush"].clone(),
+        StoredValue::Object(Some(mover_brush.clone())),
+    );
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
+    );
+    rejected_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([140.0, 0.0, 0.0])),
+    );
+    rejected_instance.insert(
+        fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    runtime.collision = Some(solid_box_collision());
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let brush_hit = runtime
+        .try_move_actor(
+            1,
+            &ResolvedObject {
+                package: Arc::clone(&other_projectile_package),
+                export_index: 0,
+            },
+            [-80.0, 0.0, 0.0],
+            &mut rejected_instance,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(brush_hit.actor, Some(0));
+    assert_eq!(
+        brush_hit.node,
+        Some(0),
+        "mover brush hits must retain the surface node used by mounting"
+    );
+    let rejected_class = ResolvedObject {
+        package: Arc::clone(&other_projectile_package),
+        export_index: 0,
+    };
+    let mount_location = Vec3::from_array(
+        runtime
+            .actor_vector(&rejected_class, &rejected_instance, "Location")
+            .unwrap(),
+    );
+    assert!(
+        runtime
+            .movement_hit_has_poly_flag(
+                1,
+                &rejected_instance,
+                brush_hit,
+                mount_location,
+                21.0,
+                PolyFlags::HIGH_LEDGE,
+            )
+            .unwrap(),
+        "mount surface flags must come from the hit mover brush"
+    );
+    let mut mount_instance = rejected_instance.clone();
+    for (name, value) in [
+        ("Rotation", Value::Rotator([0, 32_768, 0])),
+        ("MaxMountHeight", Value::Float(40.0)),
+        ("MaxStepHeight", Value::Float(4.0)),
+        ("Physics", Value::Byte(1)),
+    ] {
+        runtime
+            .set_actor_value(&rejected_class, &mut mount_instance, name, value)
+            .unwrap();
+    }
+    let mut mount_actions = Vec::new();
+    assert!(
+        runtime
+            .try_mount(
+                1,
+                &rejected_class,
+                &mut mount_instance,
+                brush_hit,
+                &mut mount_actions,
+            )
+            .unwrap(),
+        "a reachable high-ledge mover top must mount through actor-aware traces"
+    );
+    assert_eq!(
+        runtime.actor_bases.get(&1),
+        Some(&Some(runtime.actor_objects[&0].clone())),
+        "mounting a mover must base the pawn on that mover"
+    );
+    runtime
+        .set_actor_base(
+            1,
+            &rejected_class,
+            &mut mount_instance,
+            None,
+            &mut mount_actions,
+        )
+        .unwrap();
+
+    let mut moving_brush = runtime.instances.remove(&0).unwrap();
+    moving_brush.insert(
+        fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "OldPos",
+            Value::Vector([100.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    for (name, value) in [
+        ("BasePos", Value::Vector([0.0; 3])),
+        ("OldRot", Value::Rotator([0; 3])),
+        ("BaseRot", Value::Rotator([0; 3])),
+        ("PhysAlpha", Value::Float(0.0)),
+        ("PhysRate", Value::Float(1.0)),
+        ("KeyNum", Value::Byte(1)),
+        ("MoverGlideType", Value::Byte(0)),
+        ("bInterpolating", Value::Bool(true)),
+    ] {
+        runtime
+            .set_actor_value(&mover_class, &mut moving_brush, name, value)
+            .unwrap();
+    }
+    moving_brush.insert(
+        key_pos.clone(),
+        StoredValue::Array(vec![StoredValue::Value(Value::Vector([0.0; 3])); 8]),
+    );
+    let key_rot = runtime
+        .find_property(&mover_class, "KeyRot", 0)
+        .unwrap()
+        .unwrap();
+    moving_brush.insert(
+        key_rot,
+        StoredValue::Array(vec![StoredValue::Value(Value::Rotator([0; 3])); 8]),
+    );
+    runtime.instances.insert(1, rejected_instance.clone());
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    runtime
+        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .unwrap();
+    assert_eq!(
+        runtime
+            .actor_bool(&mover_class, &moving_brush, "bInterpolating")
+            .unwrap(),
+        false
+    );
+    assert_eq!(
+        runtime
+            .actor_float_any(&mover_class, &moving_brush, "PhysAlpha")
+            .unwrap(),
+        0.7941,
+        "moving brushes use UE1's 0.51-unit-shrunken world collision bounds"
+    );
+    assert!(
+        Vec3::from_array(
+            runtime
+                .actor_vector(&mover_class, &moving_brush, "Location")
+                .unwrap()
+        )
+        .abs_diff_eq(Vec3::new(20.59, 0.0, 0.0), 1.0e-5)
+    );
+
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["ZoneGravity"].clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, -200.0])),
+    );
+    runtime.collision = Some(placement_test_collision(100.0));
+    for (name, value) in [
+        ("Location", Value::Vector([0.0, 0.0, 200.0])),
+        ("Velocity", Value::Vector([0.0; 3])),
+        ("OldPos", Value::Vector([0.0, 0.0, 200.0])),
+        ("BasePos", Value::Vector([0.0, 0.0, 200.0])),
+        ("bInterpolating", Value::Bool(false)),
+    ] {
+        runtime
+            .set_actor_value(&mover_class, &mut moving_brush, name, value)
+            .unwrap();
+    }
+    moving_brush.insert(
+        key_pos.clone(),
+        StoredValue::Array(vec![StoredValue::Value(Value::Vector([0.0; 3])); 8]),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    runtime
+        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .unwrap();
+    let gravity_location = Vec3::from_array(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+    );
+    assert!(
+        gravity_location.abs_diff_eq(Vec3::new(0.0, 0.0, 110.59), 1.0e-4),
+        "gravity location is {gravity_location:?}"
+    );
+    assert!(
+        Vec3::from_array(
+            runtime
+                .actor_vector(&mover_class, &moving_brush, "OldPos")
+                .unwrap()
+        )
+        .abs_diff_eq(Vec3::new(0.0, 0.0, 110.59), 1.0e-4)
+    );
+    let Some(StoredValue::Array(key_positions)) = moving_brush.get(&key_pos) else {
+        panic!("KeyPos is not an array");
+    };
+    let StoredValue::Value(Value::Vector(key_position)) = key_positions[1] else {
+        panic!("KeyPos[1] is not a vector");
+    };
+    assert!(Vec3::from_array(key_position).abs_diff_eq(Vec3::new(0.0, 0.0, -89.41), 1.0e-4));
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["ZoneGravity"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    runtime.collision = Some(solid_box_collision());
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "OldPos",
+            Value::Vector([100.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "BasePos",
+            Value::Vector([0.0; 3]),
+        )
+        .unwrap();
+    moving_brush.insert(
+        key_pos.clone(),
+        StoredValue::Array(vec![StoredValue::Value(Value::Vector([0.0; 3])); 8]),
+    );
+
+    let encroaching_on = object_id(&package, 7);
+    runtime.scripts.insert(
+        encroaching_on.clone(),
+        function_script(encroaching_on.export_index, vec![0x04, 0x27]),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(mover_class_id.clone(), None, "EncroachingOn", 0),
+        Some(encroaching_on.clone()),
+    );
+    runtime.actor_states.insert(0, None);
+    runtime.state_frames.remove(&0);
+    for name in ["bBlockActors", "bBlockPlayers"] {
+        moving_brush.insert(fields[name].clone(), StoredValue::Value(Value::Bool(true)));
+    }
+    moving_brush.insert(
+        fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    for (name, value) in [
+        ("Location", Value::Vector([100.0, 0.0, 0.0])),
+        ("PhysAlpha", Value::Float(0.0)),
+        ("bInterpolating", Value::Bool(true)),
+    ] {
+        runtime
+            .set_actor_value(&mover_class, &mut moving_brush, name, value)
+            .unwrap();
+    }
+    let mut blocker = instance([0.0; 3]);
+    for name in ["bBlockActors", "bBlockPlayers"] {
+        blocker.insert(fields[name].clone(), StoredValue::Value(Value::Bool(true)));
+    }
+    runtime.instances.insert(1, blocker);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    runtime
+        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .unwrap();
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+        [100.0, 0.0, 0.0],
+        "a blocking EncroachingOn result restores the moving brush"
+    );
+    assert_eq!(
+        runtime
+            .actor_float_any(&mover_class, &moving_brush, "PhysAlpha")
+            .unwrap(),
+        0.0
+    );
+    runtime.instances.remove(&1);
+    runtime.instances.insert(0, moving_brush);
+
+    runtime
+        .instances
+        .get_mut(&0)
+        .unwrap()
+        .insert(fields["Brush"].clone(), StoredValue::Object(None));
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+
     runtime
         .instances
         .get_mut(&0)
         .unwrap()
         .insert(b_proj_target, StoredValue::Value(Value::Bool(false)));
+    runtime.actor_states.insert(0, None);
+    runtime.state_frames.remove(&0);
     runtime.object_actors.remove(&other_projectile_object);
     let actor_object = runtime_actor_id(4);
     runtime.object_actors.insert(actor_object.clone(), 1);
@@ -8278,11 +8627,11 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     );
     assert!(actor_actions.iter().any(|action| matches!(
         action,
-        ActorAction::DispatchEvent {
+        ActorAction::Log {
             actor: 0,
-            event: "Bump",
-            ..
-        }
+            message,
+            tag: None,
+        } if message == "DoOpen"
     )));
     fs::remove_dir_all(root).unwrap();
 }

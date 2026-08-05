@@ -1,5 +1,11 @@
 use super::*;
 
+pub(super) struct CollisionSweep {
+    pub(super) fraction: f32,
+    pub(super) normal: Vec3,
+    pub(super) node: Option<usize>,
+}
+
 pub(super) fn collision_actor_brush(
     instance: &InstanceState,
     fields: &CollisionFields,
@@ -154,7 +160,7 @@ pub(super) fn sweep_collision_actors(
     current: &CollisionActor,
     other: &CollisionActor,
     delta: Vec3,
-) -> Option<openhp1_physics::ActorCollisionHit> {
+) -> Option<CollisionSweep> {
     let current_location = collision_actor_center(current);
     if let Some(brush) = &other.brush {
         brush
@@ -167,9 +173,10 @@ pub(super) fn sweep_collision_actors(
                 other.pre_pivot,
                 other.main_scale,
             )
-            .map(|hit| openhp1_physics::ActorCollisionHit {
+            .map(|hit| CollisionSweep {
                 fraction: hit.fraction,
                 normal: hit.normal,
+                node: Some(hit.node),
             })
     } else if other.collide_type == COLLIDE_BOX
         || other.collide_type == COLLIDE_SHAPE && other.shape_bounds.is_some()
@@ -182,6 +189,7 @@ pub(super) fn sweep_collision_actors(
             collision_actor_local_extents(other),
             other.rotation,
         )
+        .map(actor_collision_sweep)
     } else if current.collide_type == COLLIDE_BOX
         || current.collide_type == COLLIDE_SHAPE && current.shape_bounds.is_some()
     {
@@ -193,6 +201,7 @@ pub(super) fn sweep_collision_actors(
             collision_actor_local_extents(other),
             Mat3::IDENTITY,
         )
+        .map(actor_collision_sweep)
     } else {
         sweep_cylinder(
             current_location,
@@ -203,6 +212,15 @@ pub(super) fn sweep_collision_actors(
             other.height,
             other.radius,
         )
+        .map(actor_collision_sweep)
+    }
+}
+
+fn actor_collision_sweep(hit: openhp1_physics::ActorCollisionHit) -> CollisionSweep {
+    CollisionSweep {
+        fraction: hit.fraction,
+        normal: hit.normal,
+        node: None,
     }
 }
 

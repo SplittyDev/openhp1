@@ -143,6 +143,11 @@ Keep the focused notes in
   behavior; verify them against compiled defaults or bytecode before changing
   compatibility behavior. Do not tune guessed heuristics before tracing the
   authored and native path end to end.
+- Never add map-, actor-, asset-, coordinate-, or property-pattern workarounds
+  for gameplay behavior. Model the shared engine or UnrealScript semantics that
+  make the original game behave correctly; if that behavior cannot yet be
+  established from original-game evidence or a licensed reference engine,
+  leave the issue unresolved rather than guessing.
 - Prefer Semble's `search` tool for code searches. Query by symbol or behavior,
   follow the returned file and line, and fall back to `rg` or another
   alternative only when Semble does not find the intended code.
