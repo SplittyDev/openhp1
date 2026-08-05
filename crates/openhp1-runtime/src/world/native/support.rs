@@ -4,8 +4,6 @@ pub(in crate::world) fn next_navigation_step(
     specs: &[NavigationReachSpec],
     start: &ObjectId,
     target: &ObjectId,
-    radius: i32,
-    height: i32,
 ) -> Option<ObjectId> {
     if start == target {
         return Some(target.clone());
@@ -25,12 +23,10 @@ pub(in crate::world) fn next_navigation_step(
         if current == *target {
             break;
         }
-        for spec in specs.iter().filter(|spec| {
-            spec.start == current
-                && !spec.pruned
-                && spec.collision_radius >= radius
-                && spec.collision_height >= height
-        }) {
+        for spec in specs
+            .iter()
+            .filter(|spec| spec.start == current && !spec.pruned)
+        {
             let candidate = distance.saturating_add(spec.distance.max(0));
             if distances
                 .get(&spec.end)

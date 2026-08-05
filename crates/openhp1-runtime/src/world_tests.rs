@@ -5995,7 +5995,7 @@ fn basic_vector_arithmetic_matches_unreal_natives() {
 }
 
 #[test]
-fn navigation_uses_the_shortest_unpruned_reachable_step() {
+fn navigation_uses_the_shortest_unpruned_step() {
     let start = runtime_actor_id(1);
     let short = runtime_actor_id(2);
     let long = runtime_actor_id(3);
@@ -6015,11 +6015,95 @@ fn navigation_uses_the_shortest_unpruned_reachable_step() {
         spec(2, start.clone(), short.clone(), 3),
         spec(3, short.clone(), target.clone(), 3),
     ];
-    assert_eq!(
-        next_navigation_step(&specs, &start, &target, 20, 20),
-        Some(short)
+    assert_eq!(next_navigation_step(&specs, &start, &target), Some(short));
+}
+
+#[test]
+fn hp1_find_path_ignores_pawn_collision_size() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-hp1-find-path-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let collision_radius = runtime_actor_id(100);
+    let collision_height = runtime_actor_id(101);
+    runtime.fields.insert(
+        (class_id.clone(), "collisionradius".to_owned()),
+        Some(collision_radius.clone()),
     );
-    assert_eq!(next_navigation_step(&specs, &start, &target, 50, 20), None);
+    runtime.fields.insert(
+        (class_id, "collisionheight".to_owned()),
+        Some(collision_height.clone()),
+    );
+    let mut instance = [
+        (
+            collision_radius,
+            StoredValue::Value(Value::Float(73.009_04)),
+        ),
+        (
+            collision_height,
+            StoredValue::Value(Value::Float(74.292_564)),
+        ),
+    ]
+    .into_iter()
+    .collect::<InstanceState>();
+    let start = object_id(&package, 0);
+    let target = object_id(&package, 1);
+    runtime.reach_specs.push(NavigationReachSpec {
+        index: 0,
+        distance: 1,
+        start: start.clone(),
+        end: target.clone(),
+        collision_radius: 60,
+        collision_height: 60,
+        pruned: false,
+    });
+    let start_handle = runtime.object_handle(start).unwrap();
+    let target_handle = runtime.object_handle(target).unwrap();
+
+    let mut bytes = vec![0x04, 0x62, 0x29, 0x00];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.push(0x00);
+    bytes.extend(8_i32.to_le_bytes());
+    bytes.push(0x16);
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    frame.set_local(7, Value::Object(start_handle));
+    frame.set_local(8, Value::NameText("ClientTravel".to_owned()));
+    let result = frame.execute(|call, arguments| {
+        assert_eq!(call, FunctionCall::Native(0x229));
+        runtime.native(
+            1,
+            &class,
+            &package,
+            0x229,
+            arguments,
+            &mut instance,
+            &mut Vec::new(),
+            0,
+        )
+    });
+
+    assert_eq!(result.unwrap(), Value::Object(target_handle));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

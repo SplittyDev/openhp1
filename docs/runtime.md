@@ -149,8 +149,9 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
 - HP1's numeric `BonePos` native uses the current sampled skeletal bone origin
   after the mesh and actor transforms, in Unreal coordinates. Pose updates run
   before script ticks and preserve the displayed tween interpolation.
-- HP1's native `FindPath` follows the level's serialized reach specifications,
-  respecting pruned links and the pawn's collision size.
+- HP1's native `FindPath` follows the level's serialized reach specifications
+  while respecting pruned links. Unlike Pawn `FindPathTo`, this HP1-specific
+  native does not reject authored links based on the pawn's collision size.
 - Pawn `FindPathTo` clears authored navigation endpoint/cost state unless its
   optional `bClearPaths` is false. It sorts player-eligible navigation points
   within 500 units, checks only the nearest four with `FastTrace` from the

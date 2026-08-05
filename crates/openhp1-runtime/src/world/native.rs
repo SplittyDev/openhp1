@@ -1388,11 +1388,7 @@ impl ScriptRuntime {
             let Some(target) = target else {
                 return Ok(Value::Object(0));
             };
-            let radius = self.actor_float(actor_class, instance, "CollisionRadius")? as i32;
-            let height = self.actor_float(actor_class, instance, "CollisionHeight")? as i32;
-            let Some(next) =
-                next_navigation_step(&self.reach_specs, &start, &target, radius, height)
-            else {
+            let Some(next) = next_navigation_step(&self.reach_specs, &start, &target) else {
                 return Ok(Value::Object(0));
             };
             return self
