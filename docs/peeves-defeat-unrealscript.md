@@ -33,3 +33,36 @@ modified or copied into the repository.
 An immediate hide or destroy on the final spell would not match the authored
 state machine. If Peeves remains visible, execution failed to complete the
 exit patrol and therefore never reached the existing `Destroy` branch.
+
+## Retail navigation discrepancy
+
+The local retail corpus does not provide a route from the configured first
+exit node to the configured station:
+
+- `HPath_F1` leads to `HPath_F2`, which leads to the terminal `HPath_F3`.
+- `HPath_F3` has no serialized `Paths`, forced path, or pruned path property.
+- `baseStation1` is linked to `HPath_A3` and `CutCameraPos18`, neither of which
+  is connected to the `HPath_F` component.
+
+The matching retail `Engine.dll` implementation of
+`APawn::findPath(ANavigationPoint *&, AActor *, FName)` performs a bounded
+depth-first traversal through each current navigation point's authored
+`Paths`. It leaves the output null unless that traversal encounters an actor
+whose object name is the requested destination. It does not synthesize a
+spatial link or fall back to the closest reachable node. Consequently, this
+exact `Lev_Tut3b.unr` and `Engine.dll` pair cannot drive Peeves into
+`baseStation1` through `FindPath` either.
+
+For reproducibility, the inspected files have these SHA-256 hashes:
+
+- `Lev_Tut3b.unr`: `5b0f16ee99ffb8d88a1dc1dd1da5d3acf631a01409bf685e12b73850a3e905d7`
+- `Engine.dll`: `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc`
+- `Tut3.u`: `9b7b777ec75acd8935f94b08fef68baa1956ef5f3c5c2ddadf7071a1a74dcff6`
+
+Independent retail gameplay recordings
+([HAFanForever](https://www.youtube.com/watch?v=QmgU2quJ8gA),
+[Global Gaming](https://www.youtube.com/watch?v=PJI3BIm7t_g)) show Peeves
+disappearing during the post-defeat camera sequence, but do not establish that
+this dead `atStation` branch caused the disappearance. A forced navigation
+edge, nearest-node fallback, or Peeves-specific destroy would therefore be a
+compatibility workaround rather than a demonstrated engine semantic.
