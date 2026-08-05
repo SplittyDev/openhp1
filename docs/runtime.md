@@ -499,7 +499,7 @@ so authored follow cameras do not lose their subjects above or below the frame.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.
-Positive pitch points toward negative Unreal Z, matching the actor transform;
+Positive pitch points toward positive Unreal Z, matching the actor transform;
 `rotator()` and `vector()` preserve that inverse relationship. Broom acceleration
 and spell-target rays both consume this shared direction conversion.
 `WarpZoneInfo.Warp` and `UnWarp` apply the corresponding inverse coordinate
@@ -517,10 +517,11 @@ A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
 `bBroomPitchUp`/`bBroomPitchDown`; its `bInvertBroomPitch` default is false.
 OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
-pitch down and S to pitch up. A/D and left/right feed broom yaw. Right click or
+pitch up and S to pitch down. A/D and left/right feed broom yaw. Right click or
 Shift boosts, left click or Z brakes, and ordinary jump activates broom action.
-This is the original flight-stick behavior when `bInvertBroomPitch` is false;
-setting it true reverses both button and mouse broom pitch.
+This is the original non-inverted behavior when `bInvertBroomPitch` is false;
+setting it true gives flight-stick controls (W/down and S/up) and reverses mouse
+broom pitch too.
 The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 `aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
 `PHYS_Flying` retains all three measured velocity components after movement;

@@ -306,15 +306,15 @@ fn converts_unreal_rotators_to_direction_vectors() {
 
     assert!(close(direction([0, 0, 0]), [1.0, 0.0, 0.0]));
     assert!(close(direction([0, 16_384, 0]), [0.0, 1.0, 0.0]));
-    assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, -1.0]));
-    assert!(close(rotator_axes([16_384, 0, 0])[0], [0.0, 0.0, -1.0]));
+    assert!(close(direction([16_384, 0, 0]), [0.0, 0.0, 1.0]));
+    assert!(close(rotator_axes([16_384, 0, 0])[0], [0.0, 0.0, 1.0]));
     assert_eq!(
         convert(
             ConversionOpcode::VectorToRotator,
             Value::Vector([0.0, 0.0, 1.0])
         )
         .unwrap(),
-        Value::Rotator([-16_384, 0, 0])
+        Value::Rotator([16_384, 0, 0])
     );
 }
 

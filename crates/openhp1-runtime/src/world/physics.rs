@@ -26,8 +26,7 @@ const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
 
 fn direction_pitch(direction: Vec3) -> i32 {
-    ((-direction.z).atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
-        as i32
+    (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU)) as i32
 }
 
 fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
@@ -497,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn upward_targets_use_negative_ue1_pitch() {
-        assert_eq!(direction_pitch(Vec3::Z), -16_384);
+    fn upward_targets_use_positive_ue1_pitch() {
+        assert_eq!(direction_pitch(Vec3::Z), 16_384);
     }
 
     #[test]

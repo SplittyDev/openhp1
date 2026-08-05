@@ -1296,7 +1296,7 @@ fn camera_from_player_view(view: PlayerView, viewport: PhysicalSize<u32>, far: f
     Camera {
         position: unreal_to_render(Vec3::from_array(view.location)),
         yaw: rotation[1],
-        pitch: -rotation[0],
+        pitch: rotation[0],
         roll: -rotation[2],
         vertical_fov: horizontal_to_vertical_fov(
             view.fov_degrees.to_radians(),
@@ -1546,7 +1546,7 @@ mod tests {
         );
         assert_eq!(camera.position, Vec3::new(20.0, 30.0, -10.0));
         assert!((camera.yaw - TAU * 0.25).abs() < 0.000_001);
-        assert!((camera.pitch + TAU * 0.125).abs() < 0.000_001);
+        assert!((camera.pitch - TAU * 0.125).abs() < 0.000_001);
         assert!((camera.roll - TAU * 0.125).abs() < 0.000_001);
         assert!((camera.vertical_fov - 2.0 * (1.0_f32 / (4.0 / 3.0)).atan()).abs() < 0.000_001);
     }

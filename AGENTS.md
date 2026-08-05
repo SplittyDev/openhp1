@@ -116,7 +116,7 @@ Keep the focused notes in
 - Base textures and UE1 lightmaps modulate directly in display space using
   UE1's 2x modulation. Do not insert an sRGB-to-linear conversion.
 - Zone zero is valid and inherits ambient settings from the active `LevelInfo`.
-- Actor transforms use positive yaw, downward-positive pitch, and negative roll
+- Actor transforms use positive yaw, upward-positive pitch, and negative roll
   in yaw/pitch/roll composition order; this is not the inverse view rotation.
 - UE1 skeletal meshes use a mirrored ActorX local Y axis. Mirror Y, reverse
   triangle winding, negate `RotationOrigin.Yaw`, and conjugate ActorX bone

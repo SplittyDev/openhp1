@@ -3476,7 +3476,7 @@ fn actor_surface_material(
 fn rotation_matrix(rotation: Rotator) -> Mat4 {
     let radians = rotation.radians();
     Mat4::from_rotation_z(radians.y)
-        * Mat4::from_rotation_y(radians.x)
+        * Mat4::from_rotation_y(-radians.x)
         * Mat4::from_rotation_x(-radians.z)
 }
 
@@ -3485,15 +3485,15 @@ fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
     let (pitch_sin, pitch_cos) = radians.x.sin_cos();
     let (yaw_sin, yaw_cos) = radians.y.sin_cos();
     let (roll_sin, roll_cos) = radians.z.sin_cos();
-    let forward = Vec3::new(pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin);
+    let forward = Vec3::new(pitch_cos * yaw_cos, pitch_cos * yaw_sin, pitch_sin);
     let right = Vec3::new(
-        -roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
-        -roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
+        roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
+        roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
         -roll_sin * pitch_cos,
     );
     let up = Vec3::new(
-        roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
-        roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
+        -roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
+        -roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
         roll_cos * pitch_cos,
     );
     forward * vector.x + right * vector.y + up * vector.z
@@ -5283,7 +5283,7 @@ mod tests {
         assert!(
             pitch
                 .transform_vector3(glam::Vec3::X)
-                .abs_diff_eq(-glam::Vec3::Z, 1.0e-6)
+                .abs_diff_eq(glam::Vec3::Z, 1.0e-6)
         );
         assert!(pitch.transform_vector3(glam::Vec3::X).abs_diff_eq(
             super::rotate_unreal(

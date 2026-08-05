@@ -26,7 +26,7 @@ compiled calls. Do not commit extracted source or generated dumps.
 the held `bAltFire` button and invokes the `AltFire` exec, so the press enters
 aiming and the state later observes release as `bAltFire == 0`.
 Its `MouseY` binding feeds `aMouseY` with positive speed. HP1's UE1 rotator
-convention maps positive pitch toward negative Z.
+convention maps positive pitch toward positive Z.
 
 `Harry.AltFire` rejects the press when Harry is frozen or falling, the HUD is
 in cutscene mode, a boss encounter has disabled casting, Harry has no weapon,
