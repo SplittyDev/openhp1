@@ -104,7 +104,15 @@ pub(super) fn collision_actor_local_extents(actor: &CollisionActor) -> Vec3 {
     {
         (maximum - minimum) * 0.5
     } else if actor.collide_type == COLLIDE_BOX {
-        Vec3::new(actor.radius, actor.width, actor.height)
+        Vec3::new(
+            actor.radius,
+            if actor.width == 0.0 {
+                actor.radius
+            } else {
+                actor.width
+            },
+            actor.height,
+        )
     } else {
         Vec3::new(actor.radius, actor.radius, actor.height)
     }
@@ -404,6 +412,16 @@ mod tests {
         let mut pawn = pawn;
         pawn.location.x = 0.0;
         assert!(sweep_collision_actors(&pawn, &wall, Vec3::Y * 60.0).is_some());
+    }
+
+    #[test]
+    fn hp1_box_collision_uses_radius_when_width_is_zero() {
+        let pawn = collision_actor(0, Vec3::new(-30.0, 15.0, 0.0), true);
+        let mut wall = collision_actor(1, Vec3::ZERO, true);
+        wall.width = 0.0;
+        wall.collide_type = COLLIDE_BOX;
+
+        assert!(sweep_collision_actors(&pawn, &wall, Vec3::X * 60.0).is_some());
     }
 
     #[test]

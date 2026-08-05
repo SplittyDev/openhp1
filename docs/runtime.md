@@ -297,9 +297,10 @@ overlapping collidable non-based actors, and sends `UnTouch` for ended
 contacts. Unlike swept `Move`, `SetLocation` does not carry based actors.
 Actor collision honors HP1's `CollideType`: `CT_Box` uses the rotated
 `CollisionRadius`, `CollisionWidth`, and `CollisionHeight` extents rather than
-the default aligned cylinder, while `CT_Shape` uses the mesh's offset, rotated
-primitive bounds. A sweep that starts inside an existing overlap may move out
-instead of treating the exit surface as a new impact.
+the default aligned cylinder. As in the original `Engine.dll`, a zero
+`CollisionWidth` falls back to `CollisionRadius`. `CT_Shape` uses the mesh's
+offset, rotated primitive bounds. A sweep that starts inside an existing
+overlap may move out instead of treating the exit surface as a new impact.
 In the original `res/System/Engine.dll`, `execSetRotation` calls
 `ULevel::MoveActor` through vtable slot `0x8c` with a zero vector and proposed
 rotator; `execSetLocation` uses FarMove slot `0x90`. OpenHP1 follows that
