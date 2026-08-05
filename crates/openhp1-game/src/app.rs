@@ -725,7 +725,7 @@ impl Graphics {
         }
         if let Some(url) = self.pending_level_travel.take() {
             match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
-                Ok(path) => return RenderOutcome::LoadLevel(path),
+                Ok(path) => return RenderOutcome::LoadLevel(path, None),
                 Err(error) => {
                     self.last_error = Some(format!("could not travel to {url}: {error:#}"))
                 }
