@@ -569,11 +569,9 @@ impl ViewerApp {
         if !self.animations_playing {
             return;
         }
-        if let Err(error) =
-            openhp1_scene::sync_runtime_bone_positions(&self.scene, &mut self.runtime)
-        {
+        if let Err(error) = openhp1_scene::sync_runtime_pose(&self.scene, &mut self.runtime) {
             self.animations_playing = false;
-            self.load_error = Some(format!("bone pose sync failed: {error:#}"));
+            self.load_error = Some(format!("animation pose sync failed: {error:#}"));
             return;
         }
         match self.scene.tick_water(delta_time) {

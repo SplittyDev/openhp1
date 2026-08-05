@@ -237,8 +237,33 @@ impl ScriptRuntime {
         self.instances.insert(actor, instance);
         if result.is_ok() {
             self.player_alt_fire_pressed |= input.alt_fire_pressed;
+            if input.space_pressed {
+                self.player_space_pressed = true;
+            }
+            if input.space_released {
+                self.player_space_pressed = false;
+            }
         }
         result
+    }
+
+    pub(super) fn player_is_carrying_actor(&mut self) -> DispatchResult<bool> {
+        let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        Ok(matches!(
+            self.instance_property(&class, &instance, "CarryingActor")?,
+            Some(StoredValue::Object(Some(_)))
+        ))
     }
 
     pub fn dispatch_player_event(

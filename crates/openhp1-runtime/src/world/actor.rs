@@ -72,6 +72,7 @@ impl ScriptRuntime {
             level_info: None,
             player_actor: None,
             player_alt_fire_pressed: false,
+            player_space_pressed: false,
             animation_sequences: HashMap::default(),
             actor_bone_names: HashMap::default(),
             actor_bone_positions: HashMap::default(),
@@ -175,6 +176,45 @@ impl ScriptRuntime {
     ) {
         self.actor_bone_positions
             .insert(actor, positions.into_iter().collect());
+    }
+
+    pub fn set_actor_weapon_pose(
+        &mut self,
+        actor: usize,
+        location: [f32; 3],
+        rotation: [i32; 3],
+    ) -> DispatchResult<()> {
+        if !location.into_iter().all(f32::is_finite) {
+            return Err(DispatchError::UnresolvedObject {
+                message: format!("actor {actor} weapon location is not finite"),
+            });
+        }
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let location_field = self
+            .find_property(&class, "WeaponLoc", 0)
+            .map_err(|error| DispatchError::UnresolvedObject {
+                message: error.to_string(),
+            })?;
+        let rotation_field = self
+            .find_property(&class, "WeaponRot", 0)
+            .map_err(|error| DispatchError::UnresolvedObject {
+                message: error.to_string(),
+            })?;
+        let Some(instance) = self.instances.get_mut(&actor) else {
+            return Err(DispatchError::ActiveActorContext { actor });
+        };
+        if let Some(field) = location_field {
+            instance.insert(field, StoredValue::Value(Value::Vector(location)));
+        }
+        if let Some(field) = rotation_field {
+            instance.insert(field, StoredValue::Value(Value::Rotator(rotation)));
+        }
+        Ok(())
     }
 
     pub fn set_actor_visual_bounds(

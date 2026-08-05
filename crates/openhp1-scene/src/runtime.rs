@@ -106,7 +106,7 @@ fn initialize_runtime_after_creation(
             runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
         }
     }
-    sync_runtime_bone_positions(scene, runtime)?;
+    sync_runtime_pose(scene, runtime)?;
     if !start {
         return Ok(());
     }
@@ -450,14 +450,17 @@ pub fn apply_runtime_actions_with(
         }
     }
     if bone_positions_changed {
-        sync_runtime_bone_positions(scene, runtime)?;
+        sync_runtime_pose(scene, runtime)?;
     }
     Ok((animations, deferred, transformed))
 }
 
-pub fn sync_runtime_bone_positions(scene: &LoadedScene, runtime: &mut ScriptRuntime) -> Result<()> {
+pub fn sync_runtime_pose(scene: &LoadedScene, runtime: &mut ScriptRuntime) -> Result<()> {
     for (actor, positions) in scene.runtime_bone_positions()? {
         runtime.set_actor_bone_positions(actor, positions);
+    }
+    for (actor, location, rotation) in scene.runtime_weapon_poses()? {
+        runtime.set_actor_weapon_pose(actor, location, rotation)?;
     }
     Ok(())
 }

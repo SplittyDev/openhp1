@@ -1287,6 +1287,24 @@ impl LoadedScene {
             .collect()
     }
 
+    pub(crate) fn runtime_weapon_poses(&self) -> Result<Vec<(usize, [f32; 3], [i32; 3])>> {
+        let mut poses = Vec::new();
+        for animation in &self.animations {
+            let Some(transform) = animation.attachment()? else {
+                continue;
+            };
+            let Some(rotation) = ortho_rotation(transform) else {
+                continue;
+            };
+            poses.push((
+                animation.actor_index,
+                transform.w_axis.truncate().to_array(),
+                rotation,
+            ));
+        }
+        Ok(poses)
+    }
+
     pub fn actor_visual_bounds(&self, actor: usize) -> Option<([f32; 3], [f32; 3])> {
         self.actors
             .get(actor)
@@ -1666,6 +1684,27 @@ fn triangle_attachment_transform(points: [Vec3; 3]) -> Option<Mat4> {
             ((points[0] + points[2]) * 0.5).extend(1.0),
         )
     })
+}
+
+fn ortho_rotation(transform: Mat4) -> Option<[i32; 3]> {
+    let x = transform.x_axis.truncate().normalize_or_zero();
+    let y = transform.y_axis.truncate().normalize_or_zero();
+    let z = transform.z_axis.truncate().normalize_or_zero();
+    if !x.is_finite()
+        || !y.is_finite()
+        || !z.is_finite()
+        || x == Vec3::ZERO
+        || y == Vec3::ZERO
+        || z == Vec3::ZERO
+    {
+        return None;
+    }
+    let units = 65_536.0 / std::f32::consts::TAU;
+    Some([
+        (x.z.atan2(x.x.hypot(x.y)) * units) as i32,
+        (x.y.atan2(x.x) * units) as i32,
+        ((-y.z).atan2(z.z) * units) as i32,
+    ])
 }
 
 fn interpolate_transform(from: Mat4, to: Mat4, amount: f32) -> Mat4 {
@@ -5057,6 +5096,23 @@ mod tests {
             transform.transform_vector3(glam::Vec3::Y),
             glam::Vec3::Z * 2.0
         );
+    }
+
+    #[test]
+    fn weapon_attachment_rotation_matches_unreal_ortho_rotation() {
+        let expected = openhp1_map::Rotator {
+            pitch: 4_096,
+            yaw: 12_288,
+            roll: -8_192,
+        };
+        let actual = super::ortho_rotation(super::rotation_matrix(expected)).unwrap();
+        for (actual, expected) in
+            actual
+                .into_iter()
+                .zip([expected.pitch, expected.yaw, expected.roll])
+        {
+            assert!((actual - expected).abs() <= 1, "{actual} != {expected}");
+        }
     }
 
     #[test]

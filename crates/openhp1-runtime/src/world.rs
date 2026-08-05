@@ -241,6 +241,7 @@ pub struct ScriptRuntime {
     level_info: Option<usize>,
     player_actor: Option<usize>,
     player_alt_fire_pressed: bool,
+    player_space_pressed: bool,
     animation_sequences: HashMap<usize, HashMap<String, AnimationSequence>>,
     actor_bone_names: HashMap<usize, Vec<String>>,
     actor_bone_positions: HashMap<usize, Vec<[f32; 3]>>,

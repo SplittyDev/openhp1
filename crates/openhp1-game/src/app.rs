@@ -278,6 +278,8 @@ struct InputState {
     cast_mouse: bool,
     boost_mouse: bool,
     cast_requested: bool,
+    space_requested: bool,
+    space_release_requested: bool,
     jump_requested: bool,
     captured: bool,
 }
@@ -288,10 +290,9 @@ impl InputState {
             ElementState::Pressed => {
                 let first_press = self.keys.insert(key);
                 if first_press {
-                    if matches!(
-                        key,
-                        KeyCode::Space | KeyCode::ControlLeft | KeyCode::ControlRight
-                    ) {
+                    if key == KeyCode::Space {
+                        self.space_requested = true;
+                    } else if matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight) {
                         self.jump_requested = true;
                     } else if matches!(key, KeyCode::AltLeft | KeyCode::AltRight) {
                         self.cast_requested = true;
@@ -300,6 +301,9 @@ impl InputState {
             }
             ElementState::Released => {
                 self.keys.remove(&key);
+                if key == KeyCode::Space {
+                    self.space_release_requested = true;
+                }
             }
         }
     }
@@ -340,6 +344,8 @@ impl InputState {
             mouse_y: mouse_axis(-self.mouse_delta.1, delta_time, 6.0),
             alt_fire: casting,
             alt_fire_pressed: self.cast_requested,
+            space_pressed: self.space_requested,
+            space_released: self.space_release_requested,
             jump: self.jump_requested,
             broom_pitch_up,
             broom_pitch_down,
@@ -349,6 +355,8 @@ impl InputState {
         };
         self.mouse_delta = (0.0, 0.0);
         self.cast_requested = false;
+        self.space_requested = false;
+        self.space_release_requested = false;
         self.jump_requested = false;
         input
     }
@@ -359,6 +367,8 @@ impl InputState {
         self.cast_mouse = false;
         self.boost_mouse = false;
         self.cast_requested = false;
+        self.space_requested = false;
+        self.space_release_requested = false;
         self.jump_requested = false;
     }
 }
@@ -1004,10 +1014,8 @@ impl Graphics {
             }
             Err(error) => self.last_error = Some(format!("animation failed: {error:#}")),
         }
-        if let Err(error) =
-            openhp1_scene::sync_runtime_bone_positions(&self.scene, &mut self.runtime)
-        {
-            self.last_error = Some(format!("bone pose sync failed: {error:#}"));
+        if let Err(error) = openhp1_scene::sync_runtime_pose(&self.scene, &mut self.runtime) {
+            self.last_error = Some(format!("animation pose sync failed: {error:#}"));
         }
         match self.scene.tick_water(delta_time) {
             Ok(changed)
@@ -1197,6 +1205,8 @@ fn repeated_player_input(input: PlayerInput) -> PlayerInput {
         mouse_x: 0.0,
         mouse_y: 0.0,
         alt_fire_pressed: false,
+        space_pressed: false,
+        space_released: false,
         jump: false,
         ..input
     }
@@ -1566,12 +1576,17 @@ mod tests {
         assert!((player.mouse_y - 96.0).abs() < 1e-4);
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
-        assert!(player.jump);
+        assert!(player.space_pressed);
+        assert!(!player.jump);
         assert!(player.broom_pitch_up);
         assert!(!player.broom_pitch_down);
         assert!(!player.broom_boost);
         assert!(!player.broom_brake);
-        assert!(!input.player_input(1.0 / 60.0).jump);
+        assert!(!input.player_input(1.0 / 60.0).space_pressed);
+        input.set_key(KeyCode::Space, ElementState::Released);
+        let player = input.player_input(1.0 / 60.0);
+        assert!(player.space_released);
+        assert!(!input.player_input(1.0 / 60.0).space_released);
 
         input.set_key(KeyCode::KeyW, ElementState::Released);
         input.set_key(KeyCode::KeyS, ElementState::Pressed);
@@ -1668,6 +1683,8 @@ mod tests {
             mouse_x: 76.8,
             alt_fire: true,
             alt_fire_pressed: true,
+            space_pressed: true,
+            space_released: true,
             jump: true,
             broom_boost: true,
             broom_brake: true,
@@ -1678,6 +1695,8 @@ mod tests {
         assert!(repeated.broom_boost);
         assert!(repeated.broom_brake);
         assert!(!repeated.alt_fire_pressed);
+        assert!(!repeated.space_pressed);
+        assert!(!repeated.space_released);
         assert_eq!(repeated.mouse_x, 0.0);
         assert!(!repeated.jump);
 

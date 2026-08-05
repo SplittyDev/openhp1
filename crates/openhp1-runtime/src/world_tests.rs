@@ -1382,6 +1382,189 @@ fn player_input_populates_broom_channels() {
 }
 
 #[test]
+fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-carried-actor-input-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+    runtime
+        .scripts
+        .insert(object_id(&package, 1), named_native_script(1));
+    let mut bytes = vec![0x04, 0x1c];
+    bytes.extend(2_i32.to_le_bytes());
+    bytes.push(0x1f);
+    bytes.extend(b"Thrown\0");
+    bytes.extend([0x24, 0x00, 0x28, 0x16]);
+    runtime.scripts.insert(
+        object_id(&package, 2),
+        Arc::new(ScriptExport {
+            export_index: 2,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: 2,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: bytes.len(),
+                bytes,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "AltFire", 0),
+        Some(object_id(&package, 2)),
+    );
+
+    let fields = [
+        "aBaseX",
+        "aBaseY",
+        "aStrafe",
+        "aMouseX",
+        "aMouseY",
+        "aBroomYaw",
+        "aBroomPitch",
+        "bAltFire",
+        "bBroomYawLeft",
+        "bBroomYawRight",
+        "bBroomPitchUp",
+        "bBroomPitchDown",
+        "bBroomBoost",
+        "bBroomBrake",
+        "bBroomAction",
+        "bPressedJump",
+        "aForward",
+        "aTurn",
+        "aLookUp",
+        "CarryingActor",
+        "WeaponLoc",
+        "WeaponRot",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+
+    let player = 7;
+    let player_object = runtime_actor_id(player);
+    runtime.actor_classes.insert(player, class_id);
+    runtime.object_actors.insert(player_object.clone(), player);
+    runtime.actor_objects.insert(player, player_object);
+    runtime.player_actor = Some(player);
+    runtime.instances.insert(
+        player,
+        [(fields["CarryingActor"].clone(), StoredValue::Object(None))]
+            .into_iter()
+            .collect(),
+    );
+
+    runtime
+        .set_actor_weapon_pose(player, [10.0, 20.0, 30.0], [4_096, 8_192, -2_048])
+        .unwrap();
+    assert!(
+        runtime
+            .tick_player(
+                PlayerInput {
+                    space_pressed: true,
+                    ..PlayerInput::default()
+                },
+                1.0 / 60.0,
+            )
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        runtime
+            .tick_player(
+                PlayerInput {
+                    space_released: true,
+                    ..PlayerInput::default()
+                },
+                1.0 / 60.0,
+            )
+            .unwrap()
+            .is_empty()
+    );
+    runtime.instances.get_mut(&player).unwrap().insert(
+        fields["CarryingActor"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(99))),
+    );
+    assert!(
+        runtime
+            .tick_player(PlayerInput::default(), 1.0 / 60.0)
+            .unwrap()
+            .is_empty()
+    );
+    let actions = runtime
+        .tick_player(
+            PlayerInput {
+                space_pressed: true,
+                ..PlayerInput::default()
+            },
+            1.0 / 60.0,
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            actions.as_slice(),
+            [ActorAction::ClientTravel { url, .. }] if url == "Thrown"
+        ),
+        "{actions:?}"
+    );
+    let instance = &runtime.instances[&player];
+    assert_eq!(
+        instance.get(&fields["WeaponLoc"]),
+        Some(&StoredValue::Value(Value::Vector([10.0, 20.0, 30.0])))
+    );
+    assert_eq!(
+        instance.get(&fields["WeaponRot"]),
+        Some(&StoredValue::Value(Value::Rotator([4_096, 8_192, -2_048])))
+    );
+    assert!(
+        runtime
+            .tick_player(PlayerInput::default(), 1.0 / 60.0)
+            .unwrap()
+            .is_empty()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-hud-{}-{}",

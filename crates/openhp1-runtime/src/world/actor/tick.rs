@@ -297,6 +297,10 @@ impl ScriptRuntime {
             actions.extend(self.dispatch_player_event("AltFire", &[Value::Float(0.0)])?);
         }
         actions.extend(self.dispatch_player_event("PlayerInput", &arguments)?);
+        if self.player_space_pressed && self.player_is_carrying_actor()? {
+            self.player_space_pressed = false;
+            actions.extend(self.dispatch_player_event("AltFire", &[Value::Float(0.0)])?);
+        }
         actions.extend(self.dispatch_player_event("PlayerTick", &arguments)?);
         self.clear_player_motion_input()
     }

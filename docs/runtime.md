@@ -537,9 +537,16 @@ its downward-positive window Y is inverted to the original upward-positive
 `aMouseY` axis before the separate negative `aBroomPitch` binding is applied.
 The held cast button is exposed through the player input properties, while its
 press dispatches the original `AltFire` exec so the active state owns sound,
-animation, and spell logic. `PlayerInput`
-and `PlayerTick` run at the player's position in the actor tick order, so later
-actors observe the current frame's processed mouse values as they do in UE1.
+animation, and spell logic. Space remains separate from jump, matching
+`HPConsole.KeyEvent`: its press/release state persists until Harry's shipped
+`PlayerInput` consumes the press while `CarryingActor` is set, after updating
+that actor from `WeaponLoc` and `WeaponRot`, and then dispatches `AltFire`.
+The original renderer derives those pawn fields every frame from the authored
+mesh attachment triangle's coordinate frame (`FCoords::OrthoRotation`), so
+OpenHP1 synchronizes the same attachment origin and rotation after animation
+sampling and before script input. `PlayerInput` and `PlayerTick` run at the
+player's position in the actor tick order, so later actors observe the current
+frame's processed mouse values as they do in UE1.
 Captured mouse-button events always reach gameplay after egui observes them, so
 releasing cast cannot leave the held `bAltFire` input stuck.
 Holding + (main keyboard or numpad) or F in `openhp1-game` runs 16 ordinary

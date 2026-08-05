@@ -438,6 +438,7 @@ impl ScriptRuntime {
         }
         self.random_state = snapshot.random_state;
         self.player_alt_fire_pressed = snapshot.player_alt_fire_pressed;
+        self.player_space_pressed = false;
         self.animation_commands.clear();
         for command in &snapshot.animation_commands {
             let actor = saved_actor_target(&targets, command.actor)?;
