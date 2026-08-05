@@ -515,6 +515,10 @@ pitch down and S to pitch up. A/D and left/right feed broom yaw. Right click or
 Shift boosts, left click or Z brakes, and ordinary jump activates broom action.
 The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 `aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
+`PHYS_Flying` retains all three measured velocity components after movement;
+only walking flattens velocity to the ground plane. This lets BroomHarry's
+authored `Acceleration = 200000 * vector(Rotation)` sustain its full vertical
+speed at the configured 60-degree pitch limits.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. Desktop raw motion receives an additional

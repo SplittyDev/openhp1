@@ -395,8 +395,6 @@ impl ScriptRuntime {
                     self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
                 }
             }
-        } else {
-            velocity.z = 0.0;
         }
         self.set_actor_value(
             class,
