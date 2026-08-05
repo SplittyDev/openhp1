@@ -519,6 +519,8 @@ The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
 OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
 pitch down and S to pitch up. A/D and left/right feed broom yaw. Right click or
 Shift boosts, left click or Z brakes, and ordinary jump activates broom action.
+This is the original flight-stick behavior when `bInvertBroomPitch` is false;
+setting it true reverses both button and mouse broom pitch.
 The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 `aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
 `PHYS_Flying` retains all three measured velocity components after movement;
