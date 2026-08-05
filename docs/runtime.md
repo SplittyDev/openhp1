@@ -528,7 +528,9 @@ speed at the configured 60-degree pitch limits.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. Desktop raw motion receives an additional
-2.5x scale so a full-height spell gesture fits within a modern trackpad stroke.
+2.5x scale so a full-height spell gesture fits within a modern trackpad stroke;
+its downward-positive window Y is inverted to the original upward-positive
+`aMouseY` axis before the separate negative `aBroomPitch` binding is applied.
 The held cast button is exposed through the player input properties, while its
 press dispatches the original `AltFire` exec so the active state owns sound,
 animation, and spell logic. `PlayerInput`
