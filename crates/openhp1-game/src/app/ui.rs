@@ -42,6 +42,10 @@ struct UiTextures {
     back_hover: TextureHandle,
     options_background: Vec<TextureHandle>,
     option_bar: TextureHandle,
+    option_bar_open: TextureHandle,
+    combo_list_small: TextureHandle,
+    combo_list_large: TextureHandle,
+    combo_list_selection: TextureHandle,
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -72,6 +76,7 @@ pub(super) struct GameUi {
     labels: Labels,
     option_labels: OptionLabels,
     options: OptionValues,
+    open_combo: Option<usize>,
     textures: UiTextures,
 }
 
@@ -85,8 +90,7 @@ struct OptionLabels {
     object_detail: String,
     brightness: String,
     mouse_speed: String,
-    low: String,
-    high: String,
+    detail: [String; 5],
     audio: String,
     music_volume: String,
     sound_volume: String,
@@ -172,7 +176,31 @@ impl GameUi {
             option_bar: load_texture(
                 context,
                 &mut packages,
+                "HPMenu.Icons.FEOverOption3Texture",
+                true,
+            )?,
+            option_bar_open: load_texture(
+                context,
+                &mut packages,
                 "HPMenu.Icons.FEOverOptionTexture",
+                true,
+            )?,
+            combo_list_small: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FEComboListSmall",
+                true,
+            )?,
+            combo_list_large: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FEComboListLarge",
+                true,
+            )?,
+            combo_list_selection: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FEComboListBox",
                 true,
             )?,
             slider_track: load_texture(
@@ -249,8 +277,13 @@ impl GameUi {
             object_detail: localized("options_12")?,
             brightness: localized("options_04")?,
             mouse_speed: localized("options_17")?,
-            low: localized("options_10")?,
-            high: localized("options_07")?,
+            detail: [
+                localized("options_06")?,
+                localized("options_07")?,
+                localized("options_08")?,
+                localized("options_10")?,
+                localized("options_11")?,
+            ],
             audio: localized("options_13")?,
             music_volume: localized("options_14")?,
             sound_volume: localized("options_15")?,
@@ -304,6 +337,7 @@ impl GameUi {
             labels,
             option_labels,
             options,
+            open_combo: None,
             textures,
         })
     }
@@ -452,8 +486,6 @@ impl GameUi {
         option_text(ui, scale, 212.0, 59.0, &self.option_labels.video, BLUE);
         option_text(ui, scale, 374.0, 59.0, &self.option_labels.controls, BLUE);
 
-        let detail = ["High", "Medium", "Low"];
-        let object_detail = ["Very High", "High", "Medium", "Low", "Very Low"];
         let left_rows = [87.0, 118.0, 149.0, 180.0];
         let left_labels = [
             &self.option_labels.resolution,
@@ -474,28 +506,27 @@ impl GameUi {
             &self.textures.option_bar,
             &format!("{}x{}", resolution.0, resolution.1),
         ) {
-            self.options.resolution =
-                (self.options.resolution + 1) % self.options.resolutions.len();
-            let resolution = self.options.resolutions[self.options.resolution];
-            self.action = Some(Action::SetResolution(resolution.0, resolution.1));
+            self.open_combo = (self.open_combo != Some(0)).then_some(0);
         }
-        let _ = option_button(
+        if option_button(
             ui,
             scale,
             159.0,
             left_rows[1],
             &self.textures.option_bar,
             "32 Bit",
-        );
+        ) {
+            self.open_combo = (self.open_combo != Some(1)).then_some(1);
+        }
         if option_button(
             ui,
             scale,
             159.0,
             left_rows[2],
             &self.textures.option_bar,
-            detail[self.options.texture_detail],
+            &self.option_labels.detail[self.options.texture_detail + 1],
         ) {
-            self.options.texture_detail = (self.options.texture_detail + 1) % detail.len();
+            self.open_combo = (self.open_combo != Some(2)).then_some(2);
         }
         if option_button(
             ui,
@@ -503,9 +534,9 @@ impl GameUi {
             159.0,
             left_rows[3],
             &self.textures.option_bar,
-            object_detail[self.options.object_detail],
+            &self.option_labels.detail[self.options.object_detail],
         ) {
-            self.options.object_detail = (self.options.object_detail + 1) % object_detail.len();
+            self.open_combo = (self.open_combo != Some(3)).then_some(3);
         }
 
         option_label(
@@ -544,8 +575,22 @@ impl GameUi {
             &self.textures.slider_knob,
             &mut self.options.mouse_speed,
         );
-        option_text(ui, scale, 159.0, 268.0, &self.option_labels.low, PURPLE);
-        option_text(ui, scale, 293.0, 268.0, &self.option_labels.high, PURPLE);
+        option_text(
+            ui,
+            scale,
+            159.0,
+            268.0,
+            &self.option_labels.detail[3],
+            PURPLE,
+        );
+        option_text(
+            ui,
+            scale,
+            293.0,
+            268.0,
+            &self.option_labels.detail[1],
+            PURPLE,
+        );
         option_text(ui, scale, 212.0, 294.0, &self.option_labels.audio, BLUE);
         option_label(
             ui,
@@ -639,6 +684,52 @@ impl GameUi {
             "",
         ) {
             self.page = Page::Main;
+            self.open_combo = None;
+        }
+
+        if let Some(combo) = self.open_combo {
+            let (items, selected) = match combo {
+                0 => (
+                    self.options
+                        .resolutions
+                        .iter()
+                        .map(|(width, height)| format!("{width}x{height}"))
+                        .collect::<Vec<_>>(),
+                    self.options.resolution,
+                ),
+                1 => (vec!["32 Bit".to_owned()], 0),
+                2 => (
+                    self.option_labels.detail[1..=3].to_vec(),
+                    self.options.texture_detail,
+                ),
+                3 => (
+                    self.option_labels.detail.to_vec(),
+                    self.options.object_detail,
+                ),
+                _ => unreachable!(),
+            };
+            if let Some(selection) = option_combo_list(
+                ui,
+                scale,
+                159.0,
+                left_rows[combo] + 18.0,
+                &self.textures,
+                &items,
+                selected,
+            ) {
+                match combo {
+                    0 => {
+                        self.options.resolution = selection;
+                        let (width, height) = self.options.resolutions[selection];
+                        self.action = Some(Action::SetResolution(width, height));
+                    }
+                    1 => {}
+                    2 => self.options.texture_detail = selection,
+                    3 => self.options.object_detail = selection,
+                    _ => unreachable!(),
+                }
+                self.open_combo = None;
+            }
         }
     }
 
@@ -815,6 +906,98 @@ fn option_button(
     response.clicked()
 }
 
+fn option_combo_list(
+    ui: &mut egui::Ui,
+    scale: f32,
+    x: f32,
+    y: f32,
+    textures: &UiTextures,
+    items: &[String],
+    selected: usize,
+) -> Option<usize> {
+    let origin = ui.min_rect().min;
+    let bar = scaled_rect(origin, scale, x, y - 18.0, 134.0, 18.0);
+    ui.painter().image(
+        textures.option_bar_open.id(),
+        bar,
+        texture_uv(&textures.option_bar_open, Vec2::new(134.0, 18.0)),
+        Color32::WHITE,
+    );
+    ui.painter().text(
+        bar.center(),
+        Align2::CENTER_CENTER,
+        &items[selected],
+        FontId::proportional(10.0 * scale),
+        Color32::BLACK,
+    );
+
+    let height = combo_list_height(items.len());
+    let background = if items.len() > 3 {
+        &textures.combo_list_large
+    } else {
+        &textures.combo_list_small
+    };
+    let popup = scaled_rect(origin, scale, x, y, 147.0, height);
+    ui.painter().image(
+        background.id(),
+        popup,
+        texture_uv(background, Vec2::new(147.0, height)),
+        Color32::WHITE,
+    );
+    let item_height = (height - 7.0) / items.len() as f32;
+    let responses = items
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let rect = scaled_rect(
+                origin,
+                scale,
+                x,
+                y + 3.0 + item_height * index as f32,
+                147.0,
+                item_height,
+            );
+            ui.interact(
+                rect,
+                Id::new(("option combo", x.to_bits(), y.to_bits(), index)),
+                Sense::click(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let hovered = responses.iter().position(egui::Response::hovered);
+    for (index, (item, response)) in items.iter().zip(&responses).enumerate() {
+        if hovered == Some(index) || (hovered.is_none() && selected == index) {
+            ui.painter().image(
+                textures.combo_list_selection.id(),
+                response.rect,
+                texture_uv(
+                    &textures.combo_list_selection,
+                    textures.combo_list_selection.size_vec2(),
+                ),
+                Color32::WHITE,
+            );
+        }
+        ui.painter().text(
+            response.rect.min + Vec2::new(12.0, item_height * 0.5) * scale,
+            Align2::LEFT_CENTER,
+            item,
+            FontId::proportional(10.0 * scale),
+            Color32::BLACK,
+        );
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn combo_list_height(item_count: usize) -> f32 {
+    if item_count > 3 { 89.0 } else { 54.0 }
+}
+
 fn option_slider(
     ui: &mut egui::Ui,
     scale: f32,
@@ -980,5 +1163,11 @@ mod tests {
         assert!(is_startup_map(Path::new("game/Maps/STARTUP.unr")));
         assert!(!is_startup_map(Path::new("game/Maps/Entry.unr")));
         assert!(!is_startup_map(Path::new("game/Maps/Lev_Tut1.unr")));
+    }
+
+    #[test]
+    fn combo_lists_use_the_two_authored_popup_sizes() {
+        assert_eq!(combo_list_height(3), 54.0);
+        assert_eq!(combo_list_height(4), 89.0);
     }
 }

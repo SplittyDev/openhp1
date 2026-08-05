@@ -29,3 +29,11 @@ UI presentation stays in `openhp1-game`, the sole window/input owner. Runtime
 state and console actions stay in `openhp1-runtime`; original package texture
 decoding stays in `openhp1-texture`. A separate UI crate is not warranted
 unless a second executable needs the complete game UI.
+
+`FEOptionsPage` uses `HPMenuOptionCombo`, not cycling buttons, for resolution,
+colour depth, texture detail, and object detail. Its shipped combo list uses
+`FEComboListSmall` for at most three entries, `FEComboListLarge` otherwise,
+and stretches `FEComboListBox` across the hovered row. OpenHP1 obtains modern
+resolution entries from winit's display modes and exposes only the 32-bit
+colour format supported by the wgpu renderer; the detail lists and localized
+display names come directly from `HPMenu`.
