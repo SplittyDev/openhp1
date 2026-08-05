@@ -127,12 +127,13 @@ impl ApplicationHandler for GameApp {
                         }
                     }
                 }
-                RenderOutcome::LoadLevel(path) => {
+                RenderOutcome::LoadLevel(path, save_slot) => {
                     let window = Arc::clone(&graphics.window);
                     match LoadedScene::load(path.clone())
                         .and_then(|scene| Graphics::new(window, scene, self.renderer_settings))
                     {
                         Ok(mut replacement) => {
+                            replacement.last_save_slot = save_slot;
                             std::mem::swap(
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
@@ -243,7 +244,7 @@ enum RenderOutcome {
     Continue,
     Exit,
     Load(SavedGame),
-    LoadLevel(PathBuf),
+    LoadLevel(PathBuf, Option<u32>),
 }
 
 struct SavedGame {
@@ -679,7 +680,7 @@ impl Graphics {
 
     fn render(&mut self) -> RenderOutcome {
         if let Some(path) = self.pending_level_load.take() {
-            return RenderOutcome::LoadLevel(path);
+            return RenderOutcome::LoadLevel(path, None);
         }
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
@@ -839,12 +840,13 @@ impl Graphics {
                     RenderOutcome::Continue
                 }
             },
-            Some(ui::Action::NewGame) => RenderOutcome::LoadLevel(
+            Some(ui::Action::NewGame(slot)) => RenderOutcome::LoadLevel(
                 self.scene
                     .path
                     .parent()
                     .expect("loaded map has a parent directory")
                     .join("Lev_Tut1.unr"),
+                Some(slot),
             ),
             None => RenderOutcome::Continue,
         }

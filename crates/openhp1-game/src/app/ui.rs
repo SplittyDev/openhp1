@@ -10,7 +10,7 @@ const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
 pub(super) enum Action {
     Exit,
     LoadSave(u32),
-    NewGame,
+    NewGame(u32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,19 +21,25 @@ enum Page {
     Quidditch,
 }
 
-struct MainMenuTextures {
-    background: Vec<TextureHandle>,
+struct UiTextures {
+    main_background: Vec<TextureHandle>,
     logo: Vec<TextureHandle>,
+    save_background: Vec<TextureHandle>,
+    empty_slot: TextureHandle,
+    back: TextureHandle,
+    back_hover: TextureHandle,
 }
 
 pub(super) struct GameUi {
     open: bool,
     page: Page,
     confirm_exit: bool,
+    confirm_replace: bool,
+    selected_slot: Option<usize>,
     action: Option<Action>,
     save_slots: [bool; 6],
     labels: Labels,
-    textures: MainMenuTextures,
+    textures: UiTextures,
 }
 
 struct Labels {
@@ -44,6 +50,8 @@ struct Labels {
     select_game: String,
     new_game: String,
     load_game: String,
+    replace_game: String,
+    confirm_replace: String,
     back: String,
     confirm_exit: String,
     yes: String,
@@ -58,8 +66,8 @@ impl GameUi {
         save_dir: &Path,
     ) -> Result<Self> {
         let mut packages = PackageStore::scan_game_root(game_root)?;
-        let textures = MainMenuTextures {
-            background: (1..=6)
+        let textures = UiTextures {
+            main_background: (1..=6)
                 .map(|index| {
                     load_texture(
                         context,
@@ -69,6 +77,34 @@ impl GameUi {
                     )
                 })
                 .collect::<Result<_>>()?,
+            save_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.FESaveBackTexture{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            empty_slot: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.SaveSlotEmptyTexture",
+                true,
+            )?,
+            back: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FELeftReturnUpIcon",
+                true,
+            )?,
+            back_hover: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FELeftReturnOverIcon",
+                true,
+            )?,
             logo: (1..=2)
                 .map(|index| {
                     load_texture(
@@ -95,6 +131,8 @@ impl GameUi {
             select_game: localized("select_game_01")?,
             new_game: localized("select_game_02")?,
             load_game: localized("select_game_03")?,
+            replace_game: localized("select_game_04")?,
+            confirm_replace: localized("select_game_05")?,
             back: localized("back_button")?,
             confirm_exit: localized("main_menu_08")?,
             yes: localized("main_menu_09")?,
@@ -108,6 +146,8 @@ impl GameUi {
             open: is_startup_map(map),
             page: Page::Main,
             confirm_exit: false,
+            confirm_replace: false,
+            selected_slot: None,
             action: None,
             save_slots,
             labels,
@@ -135,19 +175,26 @@ impl GameUi {
         let painter = context.layer_painter(LayerId::new(Order::Background, Id::new("game ui")));
         painter.rect_filled(screen, 0.0, Color32::BLACK);
         let painter = painter.with_clip_rect(canvas);
-        for (index, texture) in self.textures.background.iter().enumerate() {
+        let background = if self.page == Page::Slots {
+            &self.textures.save_background
+        } else {
+            &self.textures.main_background
+        };
+        for (index, texture) in background.iter().enumerate() {
             let x = (index % 3) as f32 * 256.0;
             let y = (index / 3) as f32 * 256.0;
             draw_texture(&painter, canvas.min, scale, texture, Pos2::new(x, y));
         }
-        for (index, texture) in self.textures.logo.iter().enumerate() {
-            draw_texture(
-                &painter,
-                canvas.min,
-                scale,
-                texture,
-                Pos2::new(74.0 + index as f32 * 256.0, 243.0),
-            );
+        if self.page == Page::Main {
+            for (index, texture) in self.textures.logo.iter().enumerate() {
+                draw_texture(
+                    &painter,
+                    canvas.min,
+                    scale,
+                    texture,
+                    Pos2::new(74.0 + index as f32 * 256.0, 243.0),
+                );
+            }
         }
 
         egui::Area::new(Id::new("game ui controls"))
@@ -165,6 +212,9 @@ impl GameUi {
                 }
                 if self.confirm_exit {
                     self.exit_confirmation(ui, scale);
+                }
+                if self.confirm_replace {
+                    self.replace_confirmation(ui, scale);
                 }
             });
     }
@@ -186,7 +236,7 @@ impl GameUi {
     }
 
     fn slot_page(&mut self, ui: &mut egui::Ui, scale: f32) {
-        title(ui, scale, &self.labels.select_game);
+        page_title(ui, scale, 30.0, &self.labels.select_game, Color32::MAGENTA);
         for slot in 0..6 {
             let row = slot / 3;
             let column = slot % 3;
@@ -195,45 +245,62 @@ impl GameUi {
             } else {
                 &self.labels.new_game
             };
-            let label = format!("{kind} {}", slot + 1);
-            if menu_button(
+            let x = 78.0 + column as f32 * 174.0;
+            let y = 90.0 + row as f32 * 174.0;
+            ui.painter().text(
+                ui.min_rect().min + Vec2::new(x, y - 24.0) * scale,
+                Align2::LEFT_TOP,
+                (slot + 1).to_string(),
+                FontId::proportional(16.0 * scale),
+                Color32::WHITE,
+            );
+            if textured_button(
                 ui,
                 scale,
-                95.0 + column as f32 * 160.0,
-                190.0 + row as f32 * 70.0,
-                &label,
+                x,
+                y,
+                &self.textures.empty_slot,
+                &self.textures.empty_slot,
+                kind,
             ) {
-                self.action = Some(if self.save_slots[slot] {
-                    Action::LoadSave(slot as u32)
+                if self.save_slots[slot] {
+                    self.selected_slot = Some(slot);
                 } else {
-                    Action::NewGame
-                });
+                    self.action = Some(Action::NewGame(slot as u32));
+                }
             }
         }
-        if menu_button(ui, scale, 265.0, 410.0, &self.labels.back) {
+        if let Some(slot) = self.selected_slot {
+            if menu_button(ui, scale, 170.0, 408.0, &self.labels.load_game) {
+                self.action = Some(Action::LoadSave(slot as u32));
+            }
+            if menu_button(ui, scale, 300.0, 408.0, &self.labels.replace_game) {
+                self.confirm_replace = true;
+            }
+        }
+        if textured_button(
+            ui,
+            scale,
+            565.0,
+            431.0,
+            &self.textures.back,
+            &self.textures.back_hover,
+            "",
+        ) {
             self.page = Page::Main;
+            self.selected_slot = None;
         }
     }
 
     fn placeholder_page(&mut self, ui: &mut egui::Ui, scale: f32, heading: String) {
-        title(ui, scale, &heading);
+        page_title(ui, scale, 120.0, &heading, Color32::WHITE);
         if menu_button(ui, scale, 265.0, 410.0, &self.labels.back) {
             self.page = Page::Main;
         }
     }
 
     fn exit_confirmation(&mut self, ui: &mut egui::Ui, scale: f32) {
-        let painter = ui.painter();
-        let origin = ui.min_rect().min;
-        let rect = scaled_rect(origin, scale, 140.0, 170.0, 360.0, 130.0);
-        painter.rect_filled(rect, 6.0 * scale, Color32::from_black_alpha(225));
-        painter.text(
-            origin + Vec2::new(320.0, 205.0) * scale,
-            Align2::CENTER_CENTER,
-            &self.labels.confirm_exit,
-            FontId::proportional(18.0 * scale),
-            Color32::WHITE,
-        );
+        confirmation_panel(ui, scale, &self.labels.confirm_exit);
         if menu_button(ui, scale, 205.0, 245.0, &self.labels.yes) {
             self.action = Some(Action::Exit);
         }
@@ -241,6 +308,33 @@ impl GameUi {
             self.confirm_exit = false;
         }
     }
+
+    fn replace_confirmation(&mut self, ui: &mut egui::Ui, scale: f32) {
+        confirmation_panel(ui, scale, &self.labels.confirm_replace);
+        if menu_button(ui, scale, 205.0, 245.0, &self.labels.yes) {
+            if let Some(slot) = self.selected_slot {
+                self.action = Some(Action::NewGame(slot as u32));
+            }
+            self.confirm_replace = false;
+        }
+        if menu_button(ui, scale, 335.0, 245.0, &self.labels.no) {
+            self.confirm_replace = false;
+        }
+    }
+}
+
+fn confirmation_panel(ui: &egui::Ui, scale: f32, text: &str) {
+    let origin = ui.min_rect().min;
+    let rect = scaled_rect(origin, scale, 140.0, 170.0, 360.0, 130.0);
+    ui.painter()
+        .rect_filled(rect, 6.0 * scale, Color32::from_black_alpha(225));
+    ui.painter().text(
+        origin + Vec2::new(320.0, 205.0) * scale,
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(18.0 * scale),
+        Color32::WHITE,
+    );
 }
 
 fn load_texture(
@@ -287,13 +381,13 @@ fn draw_texture(
     );
 }
 
-fn title(ui: &egui::Ui, scale: f32, text: &str) {
+fn page_title(ui: &egui::Ui, scale: f32, y: f32, text: &str, color: Color32) {
     ui.painter().text(
-        ui.min_rect().min + Vec2::new(320.0, 120.0) * scale,
+        ui.min_rect().min + Vec2::new(320.0, y) * scale,
         Align2::CENTER_CENTER,
         text,
-        FontId::proportional(30.0 * scale),
-        Color32::WHITE,
+        FontId::proportional(18.0 * scale),
+        color,
     );
 }
 
@@ -311,13 +405,63 @@ fn menu_button(ui: &mut egui::Ui, scale: f32, x: f32, y: f32, text: &str) -> boo
         rect.center(),
         Align2::CENTER_CENTER,
         text,
-        FontId::proportional(20.0 * scale),
+        FontId::proportional(16.0 * scale),
         if response.hovered() {
             Color32::RED
         } else {
             Color32::WHITE
         },
     );
+    response.clicked()
+}
+
+fn textured_button(
+    ui: &mut egui::Ui,
+    scale: f32,
+    x: f32,
+    y: f32,
+    texture: &TextureHandle,
+    hover_texture: &TextureHandle,
+    text: &str,
+) -> bool {
+    let rect = scaled_rect(
+        ui.min_rect().min,
+        scale,
+        x,
+        y,
+        texture.size_vec2().x,
+        texture.size_vec2().y,
+    );
+    let response = ui.interact(
+        rect,
+        Id::new(("texture button", x.to_bits(), y.to_bits())),
+        Sense::click(),
+    );
+    let texture = if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        hover_texture
+    } else {
+        texture
+    };
+    ui.painter().image(
+        texture.id(),
+        rect,
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    if !text.is_empty() {
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(16.0 * scale),
+            if response.hovered() {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(250, 4, 30)
+            },
+        );
+    }
     response.clicked()
 }
 
