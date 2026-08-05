@@ -36,6 +36,7 @@ pub struct PackageStore {
     system_dir: PathBuf,
     settings_dir: PathBuf,
     default_ini: PathBuf,
+    language: String,
 }
 
 impl PackageStore {
@@ -68,6 +69,8 @@ impl PackageStore {
 
         let mut paths = HashMap::new();
         let mut localized_paths = HashMap::new();
+        let language = localization_value(&ini, "Engine.Engine", "Language")
+            .unwrap_or_else(|| "int".to_owned());
         let language_directory = ini_path
             .parent()
             .filter(|parent| *parent != system_dir)
@@ -89,6 +92,7 @@ impl PackageStore {
             system_dir,
             settings_dir: settings_dir.as_ref().to_path_buf(),
             default_ini: ini_path,
+            language,
         })
     }
 
@@ -160,16 +164,18 @@ impl PackageStore {
     }
 
     pub fn localize(&self, package: &str, section: &str, key: &str) -> String {
-        let Some(system_dir) = self.package_path(package).and_then(Path::parent) else {
-            return String::new();
-        };
-        let Some(path) = find_file(system_dir, &format!("{package}.int")) else {
-            return String::new();
-        };
-        let Ok(bytes) = fs::read(path) else {
-            return String::new();
-        };
-        localization_value(&String::from_utf8_lossy(&bytes), section, key).unwrap_or_default()
+        let language_file = format!("{package}.{}", self.language);
+        let selected_directory = self
+            .default_ini
+            .parent()
+            .filter(|directory| *directory != self.system_dir);
+        selected_directory
+            .into_iter()
+            .chain(std::iter::once(self.system_dir.as_path()))
+            .find_map(|directory| find_file(directory, &language_file))
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|bytes| localization_value(&String::from_utf8_lossy(&bytes), section, key))
+            .unwrap_or_default()
     }
 
     pub fn find_object(
@@ -1251,7 +1257,7 @@ mod tests {
         fs::create_dir_all(textures.join("0")).unwrap();
         fs::write(
             system.join("0/Default.ini"),
-            "[Core.System]\nPaths=../Textures/*.utx\n",
+            "[Engine.Engine]\nLanguage=int\n[Core.System]\nPaths=../Textures/*.utx\n",
         )
         .unwrap();
         fs::write(
@@ -1264,6 +1270,7 @@ mod tests {
             crate::PACKAGE_MAGIC.to_le_bytes(),
         )
         .unwrap();
+        fs::write(system.join("0/Pickup.int"), "[all]\nGreeting=Welcome\n").unwrap();
 
         let store = super::PackageStore::scan_game_root(&root).unwrap();
         assert_eq!(
@@ -1281,6 +1288,7 @@ mod tests {
                 .and_then(|name| name.to_str()),
             Some("Localized.int_utx")
         );
+        assert_eq!(store.localize("Pickup", "all", "Greeting"), "Welcome");
         fs::remove_dir_all(root).unwrap();
     }
 

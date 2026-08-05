@@ -14,7 +14,8 @@ use glam::{Mat3, Quat, Vec3};
 use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, DisplaySettings, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::{
-    ActorAction, ConsoleCommandAction, ConsoleCommands, PlayerInput, PlayerView, ScriptRuntime,
+    ActorAction, ConsoleCommandAction, ConsoleCommandHost, ConsoleCommands, PlayerInput,
+    PlayerView, ScriptRuntime,
 };
 use openhp1_scene::{
     LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
@@ -457,10 +458,11 @@ impl Graphics {
             .context("map path must be inside the game's Maps directory")?
             .to_path_buf();
         let initial_size = window.inner_size();
+        let resolutions = display_resolutions(&window);
         let console = ConsoleCommands::production(
             &game_root,
             (initial_size.width, initial_size.height),
-            display_resolutions(&window),
+            resolutions.clone(),
         )
         .context("could not configure game console commands")?;
         let screenshot_dir = console.settings_dir().join("Screenshots");
@@ -597,7 +599,19 @@ impl Graphics {
             Some(device.limits().max_texture_dimension_2d as usize),
         );
         let egui_renderer = egui_wgpu::Renderer::new(&device, config.format, Default::default());
-        let game_ui = GameUi::load(&egui_context, &game_root, &scene.path, &save_dir)?;
+        let game_ui = GameUi::load(
+            &egui_context,
+            &game_root,
+            &scene.path,
+            &save_dir,
+            ui::OptionsState {
+                resolution: (initial_size.width, initial_size.height),
+                resolutions,
+                brightness: display_settings.brightness,
+                music_volume,
+                sound_volume,
+            },
+        )?;
         Ok(Self {
             window,
             surface,
@@ -848,6 +862,48 @@ impl Graphics {
                     .join("Lev_Tut1.unr"),
                 Some(slot),
             ),
+            Some(ui::Action::SetResolution(width, height)) => {
+                self.console.console_command(
+                    self.player,
+                    "PlayerPawn",
+                    &format!("SetRes {width}x{height}"),
+                );
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetBrightness(brightness)) => {
+                self.display_settings.brightness = brightness.clamp(0.2, 1.0);
+                self.console.console_command(
+                    self.player,
+                    "PlayerPawn",
+                    &format!(
+                        "set ini:Engine.Engine.ViewportManager Brightness {}",
+                        self.display_settings.brightness
+                    ),
+                );
+                self.console
+                    .console_command(self.player, "PlayerPawn", "FLUSH");
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetMusicVolume(volume)) => {
+                self.console.console_command(
+                    self.player,
+                    "PlayerPawn",
+                    &format!("set ini:Engine.Engine.AudioDevice MusicVolume {volume}"),
+                );
+                self.console
+                    .console_command(self.player, "PlayerPawn", "FLUSH");
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetSoundVolume(volume)) => {
+                self.console.console_command(
+                    self.player,
+                    "PlayerPawn",
+                    &format!("set ini:Engine.Engine.AudioDevice SoundVolume {volume}"),
+                );
+                self.console
+                    .console_command(self.player, "PlayerPawn", "FLUSH");
+                RenderOutcome::Continue
+            }
             None => RenderOutcome::Continue,
         }
     }
