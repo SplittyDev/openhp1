@@ -517,7 +517,7 @@ A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
 `bBroomPitchUp`/`bBroomPitchDown`; its `bInvertBroomPitch` default is false.
 OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
-pitch down and S to pitch up. A/D and left/right feed broom yaw. Right click or
+pitch up and S to pitch down. A/D and left/right feed broom yaw. Right click or
 Shift boosts, left click or Z brakes, and ordinary jump activates broom action.
 The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 `aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
