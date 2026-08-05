@@ -45,7 +45,7 @@ impl ScriptRuntime {
         })
     }
 
-    pub(super) fn dynamic_cast(
+    pub(in crate::world) fn dynamic_cast(
         &mut self,
         actor_class: &ResolvedObject,
         source: &Arc<Package>,
@@ -97,6 +97,15 @@ impl ScriptRuntime {
             }
             Err(error) => return Err(error.into()),
         };
+        if value != -1 && self.object_for_handle(value)? == host_console_id() {
+            let summary = target.package.summary();
+            let name = summary.name(summary.exports[target.export_index].object_name);
+            return Ok(if name.to_ascii_lowercase().ends_with("console") {
+                Value::Object(value)
+            } else {
+                Value::Object(0)
+            });
+        }
         let (value, class) = if value == -1 {
             (
                 Value::Object(-1),
@@ -331,6 +340,21 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(Value::None);
         };
+        let field_name = {
+            let field = self.resolved_object(&field)?;
+            let summary = field.package.summary();
+            summary
+                .name(summary.exports[field.export_index].object_name)
+                .to_owned()
+        };
+        if actor == self.player_actor && field_name.eq_ignore_ascii_case("Player") {
+            return self.object_handle(host_player_id()).map(Value::Object);
+        }
+        if context_object.as_ref() == Some(&host_player_id())
+            && field_name.eq_ignore_ascii_case("Console")
+        {
+            return self.object_handle(host_console_id()).map(Value::Object);
+        }
         let Some(actor) = actor else {
             let Some(context_object) = context_object.as_ref() else {
                 return Err(DispatchError::InvalidActorHandle { handle: receiver });

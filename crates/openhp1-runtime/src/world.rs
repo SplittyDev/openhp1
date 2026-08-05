@@ -400,6 +400,20 @@ fn runtime_actor_id(actor: usize) -> ObjectId {
     }
 }
 
+fn host_player_id() -> ObjectId {
+    ObjectId {
+        package: Arc::from("<host-player>"),
+        export_index: 0,
+    }
+}
+
+fn host_console_id() -> ObjectId {
+    ObjectId {
+        package: Arc::from("<host-console>"),
+        export_index: 0,
+    }
+}
+
 fn particle_acceleration(gravity: Vec3, zone_gravity: Vec3, modifier: f32) -> Vec3 {
     gravity + zone_gravity * modifier
 }

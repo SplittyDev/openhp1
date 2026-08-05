@@ -6,7 +6,7 @@ use glam::Vec3;
 mod dispatch;
 pub(super) mod object;
 
-struct CallOutput {
+pub(in crate::world) struct CallOutput {
     value: Value,
     outputs: Vec<(usize, Value)>,
 }

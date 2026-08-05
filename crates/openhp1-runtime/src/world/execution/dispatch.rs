@@ -421,7 +421,7 @@ impl ScriptRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn dispatch_context_call(
+    pub(in crate::world) fn dispatch_context_call(
         &mut self,
         current_actor: usize,
         current_class: &ResolvedObject,
@@ -446,6 +446,29 @@ impl ScriptRuntime {
             );
         }
         let object = self.object_for_handle(receiver)?;
+        if object == host_console_id() {
+            let name = match call {
+                FunctionCall::Virtual(name) | FunctionCall::Global(name) => usize::try_from(name)
+                    .ok()
+                    .filter(|name| *name < source.summary().names.len())
+                    .map(|name| source.summary().name(name)),
+                _ => None,
+            };
+            match (name, arguments) {
+                (Some(name), []) if name.eq_ignore_ascii_case("SaveSelectedSlot") => {
+                    if let Some(host) = self.console_command_host.as_deref_mut() {
+                        host.console_command(current_actor, "HPConsole", "SaveGame 99");
+                    }
+                }
+                (Some(name), []) if name.eq_ignore_ascii_case("LoadSelectedSlot") => {
+                    if let Some(host) = self.console_command_host.as_deref_mut() {
+                        host.console_command(current_actor, "HPConsole", "open save99.usa");
+                    }
+                }
+                _ => {}
+            }
+            return Ok(CallOutput::value(Value::None));
+        }
         let Some(actor) = self.object_actors.get(&object).copied() else {
             let resolved = self.resolved_object(&object)?;
             let export = &resolved.package.summary().exports[resolved.export_index];

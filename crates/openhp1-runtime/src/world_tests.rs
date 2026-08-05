@@ -852,6 +852,86 @@ fn intrinsic_class_field_returns_the_runtime_actor_class() {
 }
 
 #[test]
+fn player_console_bridge_queues_selected_slot_save_and_load() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-player-console-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    for (file, class, member) in [
+        ("Player.u", "PlayerPawn", "Player"),
+        ("Console.u", "baseConsole", "Console"),
+        ("Save.u", "HPConsole", "SaveSelectedSlot"),
+        ("Load.u", "HPConsole", "LoadSelectedSlot"),
+    ] {
+        fs::write(
+            system.join(file),
+            synthetic_runtime_package_with_member(class, member),
+        )
+        .unwrap();
+    }
+
+    let console = ConsoleCommands::headless(&root).unwrap();
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    runtime.set_console_command_host(console.clone());
+    runtime.player_actor = Some(7);
+    let player_package = runtime.packages.load_path(system.join("Player.u")).unwrap();
+    let console_package = runtime
+        .packages
+        .load_path(system.join("Console.u"))
+        .unwrap();
+    let player_class = ResolvedObject {
+        package: Arc::clone(&player_package),
+        export_index: 0,
+    };
+    let instance = InstanceState::default();
+
+    let player = runtime
+        .context_field_value(7, -1, &player_package, 2, &instance)
+        .unwrap();
+    let Value::Object(player) = player else {
+        panic!("Player did not resolve to the host bridge");
+    };
+    let console_handle = runtime
+        .context_field_value(7, player, &console_package, 2, &instance)
+        .unwrap();
+    let Value::Object(console_handle) = runtime
+        .dynamic_cast(&player_class, &console_package, 1, console_handle)
+        .unwrap()
+    else {
+        panic!("baseConsole cast rejected the host bridge");
+    };
+
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    for (file, expected) in [
+        ("Save.u", ConsoleCommandAction::SaveGame { slot: 99 }),
+        ("Load.u", ConsoleCommandAction::OpenSave { slot: 99 }),
+    ] {
+        let source = runtime.packages.load_path(system.join(file)).unwrap();
+        runtime
+            .dispatch_context_call(
+                7,
+                &player_class,
+                console_handle,
+                &source,
+                FunctionCall::Virtual(1),
+                &[],
+                &mut instance,
+                &mut actions,
+                0,
+            )
+            .unwrap();
+        assert_eq!(console.take_actions(), [expected]);
+    }
+    assert!(actions.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn save_snapshot_rejects_truncated_and_unknown_versions() {
     assert!(matches!(
         ScriptRuntime::saved_game_map(b"OHPS"),
