@@ -70,6 +70,18 @@ fn resolve_level(current: &Path, levels: &[PathBuf], argument: &str) -> Result<P
         .with_context(|| format!("level `{argument}` was not found in {}", maps.display()))
 }
 
+pub(in crate::app) fn resolve_travel(
+    current: &Path,
+    levels: &[PathBuf],
+    url: &str,
+) -> Result<PathBuf> {
+    resolve_level(
+        current,
+        levels,
+        url.split_once('?').map_or(url, |(map, _)| map),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +101,10 @@ mod tests {
         );
         assert_eq!(
             resolve_level(current, &levels, "LEV_TUT1B.UNR").unwrap(),
+            levels[0]
+        );
+        assert_eq!(
+            resolve_travel(current, &levels, "Lev_Tut1b?peer").unwrap(),
             levels[0]
         );
         for invalid in ["", "../Lev_Tut1b", "..\\Lev_Tut1b", "Readme.txt", "Outside"] {

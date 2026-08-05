@@ -410,6 +410,7 @@ struct Graphics {
     overlay_visible: bool,
     debug_console: DeveloperConsole,
     pending_level_load: Option<PathBuf>,
+    pending_level_travel: Option<String>,
     fly_camera_active: bool,
     egui: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
@@ -617,6 +618,7 @@ impl Graphics {
             overlay_visible: true,
             debug_console: DeveloperConsole::new(),
             pending_level_load: None,
+            pending_level_travel: None,
             fly_camera_active: false,
             egui,
             egui_renderer,
@@ -701,6 +703,14 @@ impl Graphics {
             self.update_animations(delta_time);
             self.update_runtime(delta_time, input);
             input = repeated_player_input(input);
+        }
+        if let Some(url) = self.pending_level_travel.take() {
+            match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
+                Ok(path) => return RenderOutcome::LoadLevel(path),
+                Err(error) => {
+                    self.last_error = Some(format!("could not travel to {url}: {error:#}"))
+                }
+            }
         }
         self.update_audio();
         if self.vertices_dirty {
@@ -1146,8 +1156,14 @@ impl Graphics {
 
     fn apply_actions(&mut self, actions: Vec<ActorAction>) {
         let audio = &mut self.audio;
+        let pending_level_travel = &mut self.pending_level_travel;
         match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
-            play_audio_action(audio.as_mut(), action)
+            if let ActorAction::ClientTravel { url, .. } = action {
+                *pending_level_travel = Some(url);
+                Ok(())
+            } else {
+                play_audio_action(audio.as_mut(), action)
+            }
         }) {
             Ok((_, deferred, transformed)) => {
                 self.deferred_calls += deferred;

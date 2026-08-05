@@ -465,6 +465,16 @@ impl ScriptRuntime {
                         host.console_command(current_actor, "HPConsole", "open save99.usa");
                     }
                 }
+                (Some(name), [Value::String(url), Value::Bool(transfer_items)])
+                    if name.eq_ignore_ascii_case("ChangeLevel") =>
+                {
+                    actions.push(ActorAction::ClientTravel {
+                        actor: current_actor,
+                        url: url.clone(),
+                        travel_type: 0,
+                        transfer_items: *transfer_items,
+                    });
+                }
                 _ => {}
             }
             return Ok(CallOutput::value(Value::None));

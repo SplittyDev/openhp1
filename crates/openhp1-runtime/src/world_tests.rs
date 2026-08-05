@@ -866,6 +866,7 @@ fn player_console_bridge_queues_selected_slot_save_and_load() {
         ("Console.u", "baseConsole", "Console"),
         ("Save.u", "HPConsole", "SaveSelectedSlot"),
         ("Load.u", "HPConsole", "LoadSelectedSlot"),
+        ("Travel.u", "HPConsole", "ChangeLevel"),
     ] {
         fs::write(
             system.join(file),
@@ -928,6 +929,30 @@ fn player_console_bridge_queues_selected_slot_save_and_load() {
         assert_eq!(console.take_actions(), [expected]);
     }
     assert!(actions.is_empty());
+
+    let source = runtime.packages.load_path(system.join("Travel.u")).unwrap();
+    runtime
+        .dispatch_context_call(
+            7,
+            &player_class,
+            console_handle,
+            &source,
+            FunctionCall::Virtual(1),
+            &[Value::String("Lev_Tut2?peer".to_owned()), Value::Bool(true)],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        actions,
+        [ActorAction::ClientTravel {
+            actor: 7,
+            url: "Lev_Tut2?peer".to_owned(),
+            travel_type: 0,
+            transfer_items: true,
+        }]
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
