@@ -538,6 +538,10 @@ pub enum ActorAction {
         travel_type: u8,
         transfer_items: bool,
     },
+    UnlockQuidditch {
+        actor: usize,
+        level: u8,
+    },
     UpdateUrl {
         actor: usize,
         option: String,
@@ -643,6 +647,7 @@ impl ActorAction {
             | Self::ModifySound { actor, .. }
             | Self::StopSound { actor, .. }
             | Self::ClientTravel { actor, .. }
+            | Self::UnlockQuidditch { actor, .. }
             | Self::UpdateUrl { actor, .. }
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }

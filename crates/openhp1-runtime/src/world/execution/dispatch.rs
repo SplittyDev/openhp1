@@ -479,6 +479,33 @@ impl ScriptRuntime {
             }
             return Ok(CallOutput::value(Value::None));
         }
+        if object == host_quidditch_page_id() {
+            let name = match call {
+                FunctionCall::Virtual(name) | FunctionCall::Global(name) => usize::try_from(name)
+                    .ok()
+                    .filter(|name| *name < source.summary().names.len())
+                    .map(|name| source.summary().name(name)),
+                _ => None,
+            };
+            if let (Some(name), [Value::String(unlock)]) = (name, arguments)
+                && name.eq_ignore_ascii_case("UnlockQuidditch")
+            {
+                let level = if unlock.eq_ignore_ascii_case("Broom") {
+                    Some(1)
+                } else if unlock.eq_ignore_ascii_case("League") {
+                    Some(2)
+                } else {
+                    None
+                };
+                if let Some(level) = level {
+                    actions.push(ActorAction::UnlockQuidditch {
+                        actor: current_actor,
+                        level,
+                    });
+                }
+            }
+            return Ok(CallOutput::value(Value::None));
+        }
         let Some(actor) = self.object_actors.get(&object).copied() else {
             let resolved = self.resolved_object(&object)?;
             let export = &resolved.package.summary().exports[resolved.export_index];

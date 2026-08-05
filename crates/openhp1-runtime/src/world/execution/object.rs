@@ -97,14 +97,25 @@ impl ScriptRuntime {
             }
             Err(error) => return Err(error.into()),
         };
-        if value != -1 && self.object_for_handle(value)? == host_console_id() {
+        if value != -1 {
+            let host = self.object_for_handle(value)?;
             let summary = target.package.summary();
             let name = summary.name(summary.exports[target.export_index].object_name);
-            return Ok(if name.to_ascii_lowercase().ends_with("console") {
-                Value::Object(value)
-            } else {
-                Value::Object(0)
-            });
+            let accepted = (host == host_console_id()
+                && name.to_ascii_lowercase().ends_with("console"))
+                || (host == host_menu_book_id() && name.eq_ignore_ascii_case("FEBook"))
+                || (host == host_quidditch_page_id()
+                    && name.eq_ignore_ascii_case("FEQuidMatchPage"));
+            if host == host_console_id()
+                || host == host_menu_book_id()
+                || host == host_quidditch_page_id()
+            {
+                return Ok(if accepted {
+                    Value::Object(value)
+                } else {
+                    Value::Object(0)
+                });
+            }
         }
         let (value, class) = if value == -1 {
             (
@@ -354,6 +365,18 @@ impl ScriptRuntime {
             && field_name.eq_ignore_ascii_case("Console")
         {
             return self.object_handle(host_console_id()).map(Value::Object);
+        }
+        if context_object.as_ref() == Some(&host_console_id())
+            && field_name.eq_ignore_ascii_case("menuBook")
+        {
+            return self.object_handle(host_menu_book_id()).map(Value::Object);
+        }
+        if context_object.as_ref() == Some(&host_menu_book_id())
+            && field_name.eq_ignore_ascii_case("QuidMatchPage")
+        {
+            return self
+                .object_handle(host_quidditch_page_id())
+                .map(Value::Object);
         }
         let Some(actor) = actor else {
             let Some(context_object) = context_object.as_ref() else {

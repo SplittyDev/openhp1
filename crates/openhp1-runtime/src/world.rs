@@ -414,6 +414,20 @@ fn host_console_id() -> ObjectId {
     }
 }
 
+fn host_menu_book_id() -> ObjectId {
+    ObjectId {
+        package: Arc::from("<host-menu-book>"),
+        export_index: 0,
+    }
+}
+
+fn host_quidditch_page_id() -> ObjectId {
+    ObjectId {
+        package: Arc::from("<host-quidditch-page>"),
+        export_index: 0,
+    }
+}
+
 fn particle_acceleration(gravity: Vec3, zone_gravity: Vec3, modifier: f32) -> Vec3 {
     gravity + zone_gravity * modifier
 }

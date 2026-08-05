@@ -262,6 +262,7 @@ pub fn apply_runtime_actions_with(
             | ActorAction::ModifySound { .. }
             | ActorAction::StopSound { .. }
             | ActorAction::ClientTravel { .. }
+            | ActorAction::UnlockQuidditch { .. }
             | ActorAction::UpdateUrl { .. }) => external(action)?,
             ActorAction::SpawnActor {
                 actor,

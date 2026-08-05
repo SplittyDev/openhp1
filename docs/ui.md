@@ -37,3 +37,11 @@ and stretches `FEComboListBox` across the hovered row. OpenHP1 obtains modern
 resolution entries from winit's display modes and exposes only the 32-bit
 colour format supported by the wgpu renderer; the detail lists and localized
 display names come directly from `HPMenu`.
+
+The Quidditch page's `globalconfig unlocked` value is a three-state progression
+stored under `HPMenu.FEQuidMatchPage` in `HP.ini`: `0` locks both choices, `1`
+unlocks broomstick practice, and `2` unlocks the league. The authored `Tut2`
+`GamePass` state calls `UnlockQuidditch("Broom")` after the first non-replay
+lesson pass. The non-league `Hub2` `GameWinning` path calls
+`UnlockQuidditch("League")`. These calls cross the host UI bridge and persist
+the same value; map names and save-slot progress are not used as proxies.

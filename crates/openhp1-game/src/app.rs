@@ -854,6 +854,14 @@ impl Graphics {
                     RenderOutcome::Continue
                 }
             },
+            Some(ui::Action::LoadLevel(level)) => RenderOutcome::LoadLevel(
+                self.scene
+                    .path
+                    .parent()
+                    .expect("loaded map has a parent directory")
+                    .join(level),
+                None,
+            ),
             Some(ui::Action::NewGame(slot)) => RenderOutcome::LoadLevel(
                 self.scene
                     .path
@@ -1236,13 +1244,16 @@ impl Graphics {
 
     fn apply_actions(&mut self, actions: Vec<ActorAction>) {
         let audio = &mut self.audio;
+        let game_ui = &mut self.game_ui;
         let pending_level_travel = &mut self.pending_level_travel;
         match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
-            if let ActorAction::ClientTravel { url, .. } = action {
-                *pending_level_travel = Some(url);
-                Ok(())
-            } else {
-                play_audio_action(audio.as_mut(), action)
+            match action {
+                ActorAction::ClientTravel { url, .. } => {
+                    *pending_level_travel = Some(url);
+                    Ok(())
+                }
+                ActorAction::UnlockQuidditch { level, .. } => game_ui.unlock_quidditch(level),
+                action => play_audio_action(audio.as_mut(), action),
             }
         }) {
             Ok((_, deferred, transformed)) => {

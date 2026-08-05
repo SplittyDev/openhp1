@@ -852,7 +852,7 @@ fn intrinsic_class_field_returns_the_runtime_actor_class() {
 }
 
 #[test]
-fn player_console_bridge_queues_selected_slot_save_and_load() {
+fn player_console_and_menu_bridges_emit_authored_host_actions() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-console-{}-{}",
         std::process::id(),
@@ -867,6 +867,9 @@ fn player_console_bridge_queues_selected_slot_save_and_load() {
         ("Save.u", "HPConsole", "SaveSelectedSlot"),
         ("Load.u", "HPConsole", "LoadSelectedSlot"),
         ("Travel.u", "HPConsole", "ChangeLevel"),
+        ("Book.u", "HPConsole", "menuBook"),
+        ("Page.u", "FEBook", "QuidMatchPage"),
+        ("Unlock.u", "FEQuidMatchPage", "UnlockQuidditch"),
     ] {
         fs::write(
             system.join(file),
@@ -952,6 +955,46 @@ fn player_console_bridge_queues_selected_slot_save_and_load() {
             travel_type: 0,
             transfer_items: true,
         }]
+    );
+    actions.clear();
+
+    let book_source = runtime.packages.load_path(system.join("Book.u")).unwrap();
+    let book = runtime
+        .context_field_value(7, console_handle, &book_source, 2, &instance)
+        .unwrap();
+    let page_source = runtime.packages.load_path(system.join("Page.u")).unwrap();
+    let Value::Object(book) = runtime
+        .dynamic_cast(&player_class, &page_source, 1, book)
+        .unwrap()
+    else {
+        panic!("FEBook cast rejected the host bridge");
+    };
+    let page = runtime
+        .context_field_value(7, book, &page_source, 2, &instance)
+        .unwrap();
+    let unlock_source = runtime.packages.load_path(system.join("Unlock.u")).unwrap();
+    let Value::Object(page) = runtime
+        .dynamic_cast(&player_class, &unlock_source, 1, page)
+        .unwrap()
+    else {
+        panic!("FEQuidMatchPage cast rejected the host bridge");
+    };
+    runtime
+        .dispatch_context_call(
+            7,
+            &player_class,
+            page,
+            &unlock_source,
+            FunctionCall::Virtual(1),
+            &[Value::String("Broom".to_owned())],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        actions,
+        [ActorAction::UnlockQuidditch { actor: 7, level: 1 }]
     );
     fs::remove_dir_all(root).unwrap();
 }

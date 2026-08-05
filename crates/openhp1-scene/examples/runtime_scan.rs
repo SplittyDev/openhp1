@@ -387,6 +387,7 @@ fn apply_actions(
             ActorAction::ModifySound { .. } => {}
             ActorAction::StopSound { .. } => {}
             ActorAction::ClientTravel { .. } => {}
+            ActorAction::UnlockQuidditch { .. } => {}
             ActorAction::UpdateUrl { .. } => {}
             ActorAction::SpawnActor {
                 actor,

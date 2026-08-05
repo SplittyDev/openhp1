@@ -1,8 +1,11 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
-use openhp1_package::{ObjectReference, PackageStore, ResolvedObject};
+use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
@@ -10,6 +13,7 @@ const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
 pub(super) enum Action {
     Exit,
     LoadSave(u32),
+    LoadLevel(String),
     NewGame(u32),
     SetBrightness(f32),
     SetMusicVolume(u8),
@@ -46,6 +50,13 @@ struct UiTextures {
     combo_list_small: TextureHandle,
     combo_list_large: TextureHandle,
     combo_list_selection: TextureHandle,
+    quidditch_background: Vec<TextureHandle>,
+    broomstick_practice_locked: TextureHandle,
+    broomstick_practice: TextureHandle,
+    quidditch_league_locked: TextureHandle,
+    quidditch_league: TextureHandle,
+    quidditch_back: TextureHandle,
+    quidditch_back_hover: TextureHandle,
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -77,6 +88,9 @@ pub(super) struct GameUi {
     option_labels: OptionLabels,
     options: OptionValues,
     open_combo: Option<usize>,
+    game_root: PathBuf,
+    settings_dir: PathBuf,
+    quidditch_unlocked: u8,
     textures: UiTextures,
 }
 
@@ -97,6 +111,8 @@ struct OptionLabels {
     keys: [String; 8],
     auto_jump: String,
     invert_broom: String,
+    broomstick_practice: String,
+    quidditch_league: String,
 }
 
 struct Labels {
@@ -109,7 +125,6 @@ struct Labels {
     load_game: String,
     replace_game: String,
     confirm_replace: String,
-    back: String,
     confirm_exit: String,
     yes: String,
     no: String,
@@ -123,7 +138,7 @@ impl GameUi {
         save_dir: &Path,
         options: OptionsState,
     ) -> Result<Self> {
-        let mut packages = PackageStore::scan_game_root(game_root)?;
+        let mut packages = PackageStore::scan_game_root_with_settings_dir(game_root, save_dir)?;
         let textures = UiTextures {
             main_background: (1..=6)
                 .map(|index| {
@@ -203,6 +218,52 @@ impl GameUi {
                 "HPMenu.Icons.FEComboListBox",
                 true,
             )?,
+            quidditch_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.FEQuidBackTexture{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            broomstick_practice_locked: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.BroomstickPracticeLockedTexture",
+                true,
+            )?,
+            broomstick_practice: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.BroomstickPracticeTexture",
+                true,
+            )?,
+            quidditch_league_locked: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.QuidLeagueLockedTexture",
+                true,
+            )?,
+            quidditch_league: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.QuidLeagueTexture",
+                true,
+            )?,
+            quidditch_back: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FELeftArrowUpIcon",
+                true,
+            )?,
+            quidditch_back_hover: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FELeftArrowOverIcon",
+                true,
+            )?,
             slider_track: load_texture(
                 context,
                 &mut packages,
@@ -255,7 +316,6 @@ impl GameUi {
             load_game: localized("select_game_03")?,
             replace_game: localized("select_game_04")?,
             confirm_replace: localized("select_game_05")?,
-            back: localized("back_button")?,
             confirm_exit: localized("main_menu_08")?,
             yes: localized("main_menu_09")?,
             no: localized("main_menu_10")?,
@@ -299,6 +359,8 @@ impl GameUi {
             ],
             auto_jump: pickup("AutoJumpText")?,
             invert_broom: localized("flying_04")?,
+            broomstick_practice: localized("quidditch_02")?,
+            quidditch_league: localized("quidditch_03")?,
         };
         let mut resolutions = options.resolutions;
         if !resolutions.contains(&options.resolution) {
@@ -326,6 +388,12 @@ impl GameUi {
             fs::metadata(save_dir.join(format!("save{slot}.usa")))
                 .is_ok_and(|metadata| metadata.is_file())
         });
+        let quidditch_unlocked = packages
+            .config_values("HP", "HPMenu.FEQuidMatchPage", "unlocked")
+            .first()
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or_default()
+            .min(2);
         Ok(Self {
             open: is_startup_map(map),
             page: Page::Main,
@@ -338,6 +406,9 @@ impl GameUi {
             option_labels,
             options,
             open_combo: None,
+            game_root: game_root.to_path_buf(),
+            settings_dir: save_dir.to_path_buf(),
+            quidditch_unlocked,
             textures,
         })
     }
@@ -348,6 +419,24 @@ impl GameUi {
 
     pub(super) fn take_action(&mut self) -> Option<Action> {
         self.action.take()
+    }
+
+    pub(super) fn unlock_quidditch(&mut self, level: u8) -> Result<()> {
+        let level = level.min(2);
+        if level <= self.quidditch_unlocked {
+            return Ok(());
+        }
+        PackageStore::scan_game_root_with_settings_dir(&self.game_root, &self.settings_dir)?
+            .save_config(
+                "HP",
+                &[ConfigEntry {
+                    section: "HPMenu.FEQuidMatchPage".to_owned(),
+                    key: "unlocked".to_owned(),
+                    values: vec![level.to_string()],
+                }],
+            )?;
+        self.quidditch_unlocked = level;
+        Ok(())
     }
 
     pub(super) fn ui(&mut self, context: &egui::Context) {
@@ -365,7 +454,8 @@ impl GameUi {
         let background = match self.page {
             Page::Slots => &self.textures.save_background,
             Page::Options => &self.textures.options_background,
-            Page::Main | Page::Quidditch => &self.textures.main_background,
+            Page::Quidditch => &self.textures.quidditch_background,
+            Page::Main => &self.textures.main_background,
         };
         for (index, texture) in background.iter().enumerate() {
             let x = (index % 3) as f32 * 256.0;
@@ -393,9 +483,7 @@ impl GameUi {
                     Page::Main => self.main_page(ui, scale),
                     Page::Slots => self.slot_page(ui, scale),
                     Page::Options => self.options_page(ui, scale),
-                    Page::Quidditch => {
-                        self.placeholder_page(ui, scale, self.labels.quidditch.clone())
-                    }
+                    Page::Quidditch => self.quidditch_page(ui, scale),
                 }
                 if self.confirm_exit {
                     self.exit_confirmation(ui, scale);
@@ -733,9 +821,61 @@ impl GameUi {
         }
     }
 
-    fn placeholder_page(&mut self, ui: &mut egui::Ui, scale: f32, heading: String) {
-        page_title(ui, scale, 120.0, &heading, Color32::WHITE);
-        if menu_button(ui, scale, 265.0, 410.0, &self.labels.back) {
+    fn quidditch_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        let practice = if self.quidditch_unlocked >= 1 {
+            &self.textures.broomstick_practice
+        } else {
+            &self.textures.broomstick_practice_locked
+        };
+        let practice_size = practice.size_vec2();
+        if textured_button(
+            ui,
+            scale,
+            192.0 - practice_size.x * 0.5,
+            160.0,
+            practice,
+            practice,
+            "",
+        ) && self.quidditch_unlocked >= 1
+        {
+            self.action = Some(Action::LoadLevel("Lev_Tut2.unr".to_owned()));
+        }
+        let league = if self.quidditch_unlocked >= 2 {
+            &self.textures.quidditch_league
+        } else {
+            &self.textures.quidditch_league_locked
+        };
+        let league_size = league.size_vec2();
+        let _ = textured_button(
+            ui,
+            scale,
+            448.0 - league_size.x * 0.5,
+            160.0,
+            league,
+            league,
+            "",
+        );
+        for (x, label) in [
+            (192.0, &self.option_labels.broomstick_practice),
+            (448.0, &self.option_labels.quidditch_league),
+        ] {
+            ui.painter().text(
+                ui.min_rect().min + Vec2::new(x, 290.0) * scale,
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(18.0 * scale),
+                Color32::WHITE,
+            );
+        }
+        if textured_button(
+            ui,
+            scale,
+            4.0,
+            436.0,
+            &self.textures.quidditch_back,
+            &self.textures.quidditch_back_hover,
+            "",
+        ) {
             self.page = Page::Main;
         }
     }
