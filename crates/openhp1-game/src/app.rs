@@ -173,6 +173,15 @@ impl ApplicationHandler for GameApp {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => graphics.resize(size),
                 WindowEvent::Focused(false) => graphics.release_input(),
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                        && event.state == ElementState::Pressed
+                        && !event.repeat =>
+                {
+                    if graphics.game_ui.escape() {
+                        graphics.capture_input();
+                    }
+                }
                 _ => {}
             }
             return;
@@ -212,6 +221,7 @@ impl ApplicationHandler for GameApp {
                 };
                 if code == KeyCode::Escape && event.state == ElementState::Pressed {
                     graphics.release_input();
+                    graphics.game_ui.open_pause();
                 } else {
                     graphics.input.set_key(code, event.state);
                 }
@@ -717,11 +727,13 @@ impl Graphics {
         } else {
             self.input.player_input(delta_time)
         };
-        for _ in 0..ticks {
-            self.renderer.advance_time(delta_time);
-            self.update_animations(delta_time);
-            self.update_runtime(delta_time, input);
-            input = repeated_player_input(input);
+        if !self.game_ui.pauses_game() {
+            for _ in 0..ticks {
+                self.renderer.advance_time(delta_time);
+                self.update_animations(delta_time);
+                self.update_runtime(delta_time, input);
+                input = repeated_player_input(input);
+            }
         }
         if let Some(url) = self.pending_level_travel.take() {
             match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
@@ -732,6 +744,9 @@ impl Graphics {
             }
         }
         self.update_audio();
+        if let Ok(player) = self.runtime.player_ui_state() {
+            self.game_ui.set_player_state(player);
+        }
         if self.vertices_dirty {
             self.update_vertices();
         }
@@ -870,6 +885,10 @@ impl Graphics {
                     .join("Lev_Tut1.unr"),
                 Some(slot),
             ),
+            Some(ui::Action::Resume) => {
+                self.capture_input();
+                RenderOutcome::Continue
+            }
             Some(ui::Action::SetResolution(width, height)) => {
                 self.console.console_command(
                     self.player,

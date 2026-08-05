@@ -45,3 +45,11 @@ unlocks broomstick practice, and `2` unlocks the league. The authored `Tut2`
 lesson pass. The non-league `Hub2` `GameWinning` path calls
 `UnlockQuidditch("League")`. These calls cross the host UI bridge and persist
 the same value; map names and save-slot progress are not used as proxies.
+
+During gameplay, Escape opens the authored `FEReportPage` rather than merely
+releasing the cursor. The page reads Harry's live `lifePotions`, beans, wizard
+cards, personal points, and four house totals from the runtime instance used by
+UnrealScript and save games. Its `FEReportBackTexture*`, badge,
+sand, and coloured button textures and their coordinates come from the shipped
+`HPMenu.u` class. Resume closes the book, Options returns to the report page,
+and Quit Game returns to `startup.unr` after the localized confirmation.

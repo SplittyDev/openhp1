@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
+use openhp1_runtime::PlayerUiState;
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
@@ -15,6 +16,7 @@ pub(super) enum Action {
     LoadSave(u32),
     LoadLevel(String),
     NewGame(u32),
+    Resume,
     SetBrightness(f32),
     SetMusicVolume(u8),
     SetResolution(u32, u32),
@@ -35,6 +37,7 @@ enum Page {
     Slots,
     Options,
     Quidditch,
+    Report,
 }
 
 struct UiTextures {
@@ -57,6 +60,10 @@ struct UiTextures {
     quidditch_league: TextureHandle,
     quidditch_back: TextureHandle,
     quidditch_back_hover: TextureHandle,
+    report_background: Vec<TextureHandle>,
+    report_badges: [TextureHandle; 3],
+    report_sand: [TextureHandle; 4],
+    report_buttons: [[TextureHandle; 2]; 3],
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -78,8 +85,11 @@ struct OptionValues {
 
 pub(super) struct GameUi {
     open: bool,
+    startup: bool,
     page: Page,
+    options_return: Page,
     confirm_exit: bool,
+    confirm_quit_game: bool,
     confirm_replace: bool,
     selected_slot: Option<usize>,
     action: Option<Action>,
@@ -91,6 +101,7 @@ pub(super) struct GameUi {
     game_root: PathBuf,
     settings_dir: PathBuf,
     quidditch_unlocked: u8,
+    player: PlayerUiState,
     textures: UiTextures,
 }
 
@@ -128,6 +139,10 @@ struct Labels {
     confirm_exit: String,
     yes: String,
     no: String,
+    quit_game: String,
+    resume_game: String,
+    folio: String,
+    confirm_quit_game: String,
 }
 
 impl GameUi {
@@ -264,6 +279,86 @@ impl GameUi {
                 "HPMenu.Icons.FELeftArrowOverIcon",
                 true,
             )?,
+            report_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.FEReportBackTexture{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            report_badges: [
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.BeanBadgeTexture",
+                    true,
+                )?,
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.CardBadgeTexture",
+                    true,
+                )?,
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.PointBadgeTexture",
+                    true,
+                )?,
+            ],
+            report_sand: [
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.BookReportBlueSand",
+                    true,
+                )?,
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.BookReportYellowSand",
+                    true,
+                )?,
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.BookReportGreenSand",
+                    true,
+                )?,
+                load_texture(
+                    context,
+                    &mut packages,
+                    "HPMenu.Icons.BookReportRedSand",
+                    true,
+                )?,
+            ],
+            report_buttons: [
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.BlueUpTexture", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.BlueOverTexture", true)?,
+                ],
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.GreenUpTexture", true)?,
+                    load_texture(
+                        context,
+                        &mut packages,
+                        "HPMenu.Icons.GreenOverTexture",
+                        true,
+                    )?,
+                ],
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.PurpleUpTexture", true)?,
+                    load_texture(
+                        context,
+                        &mut packages,
+                        "HPMenu.Icons.PurpleOverTexture",
+                        true,
+                    )?,
+                ],
+            ],
             slider_track: load_texture(
                 context,
                 &mut packages,
@@ -319,6 +414,10 @@ impl GameUi {
             confirm_exit: localized("main_menu_08")?,
             yes: localized("main_menu_09")?,
             no: localized("main_menu_10")?,
+            quit_game: localized("report_buttons_04")?,
+            resume_game: localized("report_buttons_03")?,
+            folio: localized("report_buttons_01")?,
+            confirm_quit_game: localized("report_buttons_05")?,
         };
         let pickup = |key: &str| -> Result<String> {
             let value = packages.localize("Pickup", "all", key);
@@ -394,10 +493,14 @@ impl GameUi {
             .and_then(|value| value.parse::<u8>().ok())
             .unwrap_or_default()
             .min(2);
+        let startup = is_startup_map(map);
         Ok(Self {
-            open: is_startup_map(map),
+            open: startup,
+            startup,
             page: Page::Main,
+            options_return: Page::Main,
             confirm_exit: false,
+            confirm_quit_game: false,
             confirm_replace: false,
             selected_slot: None,
             action: None,
@@ -409,6 +512,7 @@ impl GameUi {
             game_root: game_root.to_path_buf(),
             settings_dir: save_dir.to_path_buf(),
             quidditch_unlocked,
+            player: PlayerUiState::default(),
             textures,
         })
     }
@@ -419,6 +523,34 @@ impl GameUi {
 
     pub(super) fn take_action(&mut self) -> Option<Action> {
         self.action.take()
+    }
+
+    pub(super) fn open_pause(&mut self) {
+        if !self.startup {
+            self.open = true;
+            self.page = Page::Report;
+            self.options_return = Page::Report;
+        }
+    }
+
+    pub(super) fn escape(&mut self) -> bool {
+        self.confirm_exit = false;
+        self.confirm_quit_game = false;
+        if !self.startup {
+            self.open = false;
+            return true;
+        }
+        self.page = Page::Main;
+        self.open_combo = None;
+        false
+    }
+
+    pub(super) fn pauses_game(&self) -> bool {
+        self.open && !self.startup
+    }
+
+    pub(super) fn set_player_state(&mut self, player: PlayerUiState) {
+        self.player = player;
     }
 
     pub(super) fn unlock_quidditch(&mut self, level: u8) -> Result<()> {
@@ -455,6 +587,7 @@ impl GameUi {
             Page::Slots => &self.textures.save_background,
             Page::Options => &self.textures.options_background,
             Page::Quidditch => &self.textures.quidditch_background,
+            Page::Report => &self.textures.report_background,
             Page::Main => &self.textures.main_background,
         };
         for (index, texture) in background.iter().enumerate() {
@@ -484,12 +617,16 @@ impl GameUi {
                     Page::Slots => self.slot_page(ui, scale),
                     Page::Options => self.options_page(ui, scale),
                     Page::Quidditch => self.quidditch_page(ui, scale),
+                    Page::Report => self.report_page(ui, scale),
                 }
                 if self.confirm_exit {
                     self.exit_confirmation(ui, scale);
                 }
                 if self.confirm_replace {
                     self.replace_confirmation(ui, scale);
+                }
+                if self.confirm_quit_game {
+                    self.quit_game_confirmation(ui, scale);
                 }
             });
     }
@@ -502,6 +639,9 @@ impl GameUi {
         ];
         for (index, (label, page)) in choices.into_iter().enumerate() {
             if menu_button(ui, scale, 265.0, 360.0 + index as f32 * 22.0, &label) {
+                if page == Page::Options {
+                    self.options_return = Page::Main;
+                }
                 self.page = page;
             }
         }
@@ -771,7 +911,7 @@ impl GameUi {
             &self.textures.back_hover,
             "",
         ) {
-            self.page = Page::Main;
+            self.page = self.options_return;
             self.open_combo = None;
         }
 
@@ -880,6 +1020,115 @@ impl GameUi {
         }
     }
 
+    fn report_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        let origin = ui.min_rect().min;
+        let points = [
+            self.player.house_points_ravenclaw,
+            self.player.house_points_hufflepuff,
+            self.player.house_points_slytherin,
+            self.player.house_points_gryffindor,
+        ];
+        for (index, points) in points.into_iter().enumerate() {
+            let fraction = if self.player.max_points_per_house > 0 {
+                (points as f32 / self.player.max_points_per_house as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            draw_report_sand(
+                ui.painter(),
+                origin,
+                scale,
+                &self.textures.report_sand[index],
+                [87.0, 151.0, 215.0, 280.0][index],
+                125.0,
+                fraction,
+            );
+            ui.painter().text(
+                origin + Vec2::new([206.0, 270.0, 334.0, 399.0][index], 227.0) * scale,
+                Align2::LEFT_TOP,
+                points.to_string(),
+                FontId::proportional(10.0 * scale),
+                Color32::BLACK,
+            );
+        }
+        for (texture, x, text) in [
+            (
+                &self.textures.report_badges[0],
+                31.0,
+                self.player.beans.to_string(),
+            ),
+            (
+                &self.textures.report_badges[1],
+                246.0,
+                format!("{}/25", self.player.cards),
+            ),
+            (
+                &self.textures.report_badges[2],
+                466.0,
+                self.player.house_points_harry.to_string(),
+            ),
+        ] {
+            draw_texture(ui.painter(), origin, scale, texture, Pos2::new(x, 62.0));
+            ui.painter().text(
+                origin + Vec2::new(x + 65.0, 141.0) * scale,
+                Align2::CENTER_CENTER,
+                text,
+                FontId::proportional(18.0 * scale),
+                Color32::BLACK,
+            );
+        }
+        let buttons = [
+            (107.0, 0, self.labels.quit_game.clone()),
+            (286.0, 1, self.labels.options.clone()),
+            (450.0, 2, self.labels.folio.clone()),
+        ];
+        for (x, kind, label) in buttons {
+            if textured_button(
+                ui,
+                scale,
+                x,
+                354.0,
+                &self.textures.report_buttons[kind][0],
+                &self.textures.report_buttons[kind][1],
+                "",
+            ) {
+                match kind {
+                    0 => self.confirm_quit_game = true,
+                    1 => {
+                        self.options_return = Page::Report;
+                        self.page = Page::Options;
+                    }
+                    2 => {}
+                    _ => unreachable!(),
+                }
+            }
+            ui.painter().text(
+                origin + Vec2::new(x + 32.0, 426.0) * scale,
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(16.0 * scale),
+                Color32::from_rgb(215, 0, 215),
+            );
+        }
+        let resume = scaled_rect(origin, scale, 485.0, 0.0, 100.0, 120.0);
+        let response = ui.interact(resume, Id::new("resume game"), Sense::click());
+        ui.painter().text(
+            resume.center(),
+            Align2::CENTER_CENTER,
+            &self.labels.resume_game,
+            FontId::proportional(16.0 * scale),
+            if response.hovered() {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(215, 0, 215)
+            },
+        );
+        if response.clicked() {
+            self.open = false;
+            self.action = Some(Action::Resume);
+        }
+    }
+
     fn exit_confirmation(&mut self, ui: &mut egui::Ui, scale: f32) {
         confirmation_panel(ui, scale, &self.labels.confirm_exit);
         if menu_button(ui, scale, 205.0, 245.0, &self.labels.yes) {
@@ -900,6 +1149,17 @@ impl GameUi {
         }
         if menu_button(ui, scale, 335.0, 245.0, &self.labels.no) {
             self.confirm_replace = false;
+        }
+    }
+
+    fn quit_game_confirmation(&mut self, ui: &mut egui::Ui, scale: f32) {
+        confirmation_panel(ui, scale, &self.labels.confirm_quit_game);
+        if menu_button(ui, scale, 205.0, 245.0, &self.labels.yes) {
+            self.action = Some(Action::LoadLevel("startup.unr".to_owned()));
+            self.confirm_quit_game = false;
+        }
+        if menu_button(ui, scale, 335.0, 245.0, &self.labels.no) {
+            self.confirm_quit_game = false;
         }
     }
 }
@@ -958,6 +1218,30 @@ fn draw_texture(
         texture.id(),
         Rect::from_min_size(position, size),
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+}
+
+fn draw_report_sand(
+    painter: &egui::Painter,
+    origin: Pos2,
+    scale: f32,
+    texture: &TextureHandle,
+    x: f32,
+    y: f32,
+    fraction: f32,
+) {
+    let height = 256.0 * fraction;
+    if height <= 0.0 {
+        return;
+    }
+    painter.image(
+        texture.id(),
+        Rect::from_min_size(
+            origin + Vec2::new(x, y + 256.0 - height) * scale,
+            Vec2::new(256.0, height) * scale,
+        ),
+        Rect::from_min_max(Pos2::new(0.0, 1.0 - fraction), Pos2::new(1.0, 1.0)),
         Color32::WHITE,
     );
 }
