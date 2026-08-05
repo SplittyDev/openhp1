@@ -181,7 +181,7 @@ pub(in crate::world) fn scalar_native(
 ) -> std::result::Result<Value, String> {
     let native = ScalarNative::try_from(index)
         .map_err(|()| format!("native {index:#05x} is not implemented"))?;
-    let normalized = null_numeric_value(native).and_then(|zero| {
+    let normalized = null_scalar_value(native).and_then(|zero| {
         arguments
             .iter()
             .any(|value| matches!(value, Value::None))
@@ -527,7 +527,7 @@ pub(in crate::world) fn scalar_native(
     })
 }
 
-fn null_numeric_value(native: ScalarNative) -> Option<Value> {
+fn null_scalar_value(native: ScalarNative) -> Option<Value> {
     Some(match native {
         ScalarNative::Subtract_PreInt
         | ScalarNative::Multiply_IntInt
@@ -563,6 +563,7 @@ fn null_numeric_value(native: ScalarNative) -> Option<Value> {
         | ScalarNative::FMin
         | ScalarNative::FMax
         | ScalarNative::FClamp => Value::Float(0.0),
+        ScalarNative::Caps => Value::String(String::new()),
         _ => return None,
     })
 }

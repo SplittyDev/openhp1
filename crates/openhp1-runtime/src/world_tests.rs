@@ -5495,6 +5495,29 @@ fn scalar_comparisons_cover_bool_int_and_float_families() {
 }
 
 #[test]
+fn null_context_string_defaults_before_caps() {
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: 28,
+        bytes: vec![
+            0x0f, 0x00, 1, 0, 0, 0, 0xeb, 0x19, 0x2a, 9, 0, 4, 0x1f, b'i', b'g', b'n', b'o', b'r',
+            b'e', b'd', 0, 0x16, 0x04, 0x00, 1, 0, 0, 0,
+        ],
+        tokens: Vec::new(),
+    };
+
+    assert_eq!(
+        Frame::new(&bytecode).execute(|call, arguments| {
+            let FunctionCall::Native(index) = call else {
+                unreachable!()
+            };
+            scalar_native(index, arguments)
+        }),
+        Ok(Value::String(String::new()))
+    );
+}
+
+#[test]
 fn pick_target_score_rejects_targets_behind_or_beyond_range() {
     assert_eq!(
         target_score(
