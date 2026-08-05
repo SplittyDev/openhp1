@@ -411,9 +411,12 @@ fn zone_actor_at(
     object_actors: &HashMap<ObjectId, usize>,
     level_info: Option<usize>,
 ) -> Option<usize> {
+    let zone = collision.zone_at(location)?;
+    if zone == 0 {
+        return None;
+    }
     collision
-        .zone_at(location)
-        .and_then(|zone| collision.zone_actor_export(zone))
+        .zone_actor_export(zone)
         .and_then(|export_index| {
             level_package.and_then(|package| {
                 object_actors

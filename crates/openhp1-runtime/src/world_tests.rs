@@ -2462,7 +2462,7 @@ fn positive_lifespans_expire_once_at_zero() {
 }
 
 #[test]
-fn particle_acceleration_uses_negative_zone_modifier_and_level_fallback() {
+fn zone_zero_is_out_of_world() {
     let collision = BspCollision::from_model(&Model {
         bounds: PrimitiveBounds {
             minimum: Vec3::ZERO,
@@ -2490,10 +2490,15 @@ fn particle_acceleration_uses_negative_zone_modifier_and_level_fallback() {
     .unwrap();
     assert_eq!(
         zone_actor_at(&collision, Vec3::ZERO, None, &HashMap::default(), Some(4),),
-        Some(4),
+        None,
+        "UE1 zone zero is outside the world, not LevelInfo fallback",
     );
+}
+
+#[test]
+fn particle_acceleration_uses_negative_zone_modifier() {
     assert_eq!(
-        particle_acceleration(Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, -100.0), -0.5,),
+        particle_acceleration(Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, -100.0), -0.5),
         Vec3::new(1.0, 2.0, 53.0),
     );
 }
