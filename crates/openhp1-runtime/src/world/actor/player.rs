@@ -219,8 +219,11 @@ impl ScriptRuntime {
                 ("bAltFire", Value::Byte(u8::from(input.alt_fire))),
                 ("bBroomYawLeft", Value::Byte(u8::from(input.base_x < 0.0))),
                 ("bBroomYawRight", Value::Byte(u8::from(input.base_x > 0.0))),
-                ("bBroomPitchUp", Value::Byte(u8::from(input.base_y > 0.0))),
-                ("bBroomPitchDown", Value::Byte(u8::from(input.base_y < 0.0))),
+                ("bBroomPitchUp", Value::Byte(u8::from(input.broom_pitch_up))),
+                (
+                    "bBroomPitchDown",
+                    Value::Byte(u8::from(input.broom_pitch_down)),
+                ),
                 ("bBroomBoost", Value::Byte(u8::from(input.broom_boost))),
                 ("bBroomBrake", Value::Byte(u8::from(input.broom_brake))),
                 ("bBroomAction", Value::Byte(u8::from(input.jump))),

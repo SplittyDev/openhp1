@@ -8,6 +8,8 @@ pub struct PlayerInput {
     pub alt_fire: bool,
     pub alt_fire_pressed: bool,
     pub jump: bool,
+    pub broom_pitch_up: bool,
+    pub broom_pitch_down: bool,
     pub broom_boost: bool,
     pub broom_brake: bool,
 }

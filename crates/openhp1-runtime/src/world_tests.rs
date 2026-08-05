@@ -1355,6 +1355,7 @@ fn player_input_populates_broom_channels() {
             mouse_x: 192.0,
             mouse_y: -96.0,
             jump: true,
+            broom_pitch_up: true,
             broom_boost: true,
             broom_brake: true,
             ..PlayerInput::default()

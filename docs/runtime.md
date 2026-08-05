@@ -508,9 +508,11 @@ pawn's `Possess` calls `BroomPracticeReferee.OnPlayerPossessed`, which triggers
 the `Intro` cutscene and transfers the view to its `BaseCam`.
 Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, right click/Control jump, and left click/Alt cast.
-Those movement and mouse axes also feed HP1's separate broom pitch/yaw input
-channels. Right click or Shift boosts, left click or Z brakes, and the ordinary
-jump input activates the broom action.
+The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
+`bBroomPitchUp`/`bBroomPitchDown`; its `bInvertBroomPitch` default is false.
+OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
+pitch down and S to pitch up. A/D and left/right feed broom yaw. Right click or
+Shift boosts, left click or Z brakes, and ordinary jump activates broom action.
 The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 `aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta

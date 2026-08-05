@@ -328,6 +328,8 @@ impl InputState {
         let backward = pressed(&self.keys, &[KeyCode::KeyS, KeyCode::ArrowDown]);
         let left = pressed(&self.keys, &[KeyCode::KeyA, KeyCode::ArrowLeft]);
         let right = pressed(&self.keys, &[KeyCode::KeyD, KeyCode::ArrowRight]);
+        let broom_pitch_up = pressed(&self.keys, &[KeyCode::KeyS, KeyCode::ArrowUp]) != 0.0;
+        let broom_pitch_down = pressed(&self.keys, &[KeyCode::KeyW, KeyCode::ArrowDown]) != 0.0;
         let casting =
             self.cast_mouse || pressed(&self.keys, &[KeyCode::AltLeft, KeyCode::AltRight]) != 0.0;
         let input = PlayerInput {
@@ -339,6 +341,8 @@ impl InputState {
             alt_fire: casting,
             alt_fire_pressed: self.cast_requested,
             jump: self.jump_requested,
+            broom_pitch_up,
+            broom_pitch_down,
             broom_boost: self.boost_mouse
                 || pressed(&self.keys, &[KeyCode::ShiftLeft, KeyCode::ShiftRight]) != 0.0,
             broom_brake: self.cast_mouse || pressed(&self.keys, &[KeyCode::KeyZ]) != 0.0,
@@ -1562,9 +1566,23 @@ mod tests {
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
         assert!(player.jump);
+        assert!(!player.broom_pitch_up);
+        assert!(player.broom_pitch_down);
         assert!(!player.broom_boost);
         assert!(!player.broom_brake);
         assert!(!input.player_input(1.0 / 60.0).jump);
+
+        input.set_key(KeyCode::KeyW, ElementState::Released);
+        input.set_key(KeyCode::KeyS, ElementState::Pressed);
+        let player = input.player_input(1.0 / 60.0);
+        assert!(player.broom_pitch_up);
+        assert!(!player.broom_pitch_down);
+        input.set_key(KeyCode::ArrowDown, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).broom_pitch_down);
+        input.set_key(KeyCode::KeyS, ElementState::Released);
+        input.set_key(KeyCode::ArrowDown, ElementState::Released);
+        input.set_key(KeyCode::ArrowUp, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).broom_pitch_up);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Pressed);
         input.mouse_delta = (2.0, -1.0);
