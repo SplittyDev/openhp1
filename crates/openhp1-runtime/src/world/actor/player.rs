@@ -214,8 +214,16 @@ impl ScriptRuntime {
                 ("aStrafe", Value::Float(input.strafe)),
                 ("aMouseX", Value::Float(input.mouse_x)),
                 ("aMouseY", Value::Float(input.mouse_y)),
+                ("aBroomYaw", Value::Float(input.mouse_x)),
+                ("aBroomPitch", Value::Float(input.mouse_y)),
                 ("bAltFire", Value::Byte(u8::from(input.alt_fire))),
-                ("bBroomAction", Value::Bool(input.jump)),
+                ("bBroomYawLeft", Value::Byte(u8::from(input.base_x < 0.0))),
+                ("bBroomYawRight", Value::Byte(u8::from(input.base_x > 0.0))),
+                ("bBroomPitchUp", Value::Byte(u8::from(input.base_y > 0.0))),
+                ("bBroomPitchDown", Value::Byte(u8::from(input.base_y < 0.0))),
+                ("bBroomBoost", Value::Byte(u8::from(input.broom_boost))),
+                ("bBroomBrake", Value::Byte(u8::from(input.broom_brake))),
+                ("bBroomAction", Value::Byte(u8::from(input.jump))),
                 ("bPressedJump", Value::Bool(input.jump)),
             ] {
                 self.set_actor_value(&class, &mut instance, name, value)

@@ -496,8 +496,15 @@ Harry's authored `PostBeginPlay` selects `BaseCam`; the game does not override
 that view target. Returning Harry to `PlayerWalking` is not the end of the
 cutscene camera sequence: its later `ExitCutState` action restores the saved
 third-person camera state and position.
+Lev_Tut2 intentionally possesses its authored `BroomHarry0`; `CutHarry0` and
+`CutPotionHarry0` inherit `baseChar` and exist only for cutscenes. The broom
+pawn's `Possess` calls `BroomPracticeReferee.OnPlayerPossessed`, which triggers
+the `Intro` cutscene and transfers the view to its `BaseCam`.
 Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, right click/Control jump, and left click/Alt cast.
+Those movement and mouse axes also feed HP1's separate broom pitch/yaw input
+channels. Right click or Shift boosts, left click or Z brakes, and the ordinary
+jump input activates the broom action.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. Desktop raw motion receives an additional

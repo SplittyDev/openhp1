@@ -36,6 +36,42 @@ fn synthetic_runtime_package() -> Vec<u8> {
     synthetic_runtime_package_for("PlayerPawn")
 }
 
+fn synthetic_class_script(export_index: usize) -> Arc<ScriptExport> {
+    Arc::new(ScriptExport {
+        export_index,
+        class_name: "Class".to_owned(),
+        base_field: ObjectReference::None,
+        next_field: ObjectReference::None,
+        script_text: ObjectReference::None,
+        children: ObjectReference::None,
+        friendly_name: export_index,
+        line: 0,
+        text_position: 0,
+        bytecode: Bytecode {
+            version: 61,
+            bytes: Vec::new(),
+            raw_len: 0,
+            tokens: Vec::new(),
+        },
+        metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
+            state: openhp1_script::StateMetadata {
+                probe_mask: 0,
+                ignore_mask: 0,
+                label_table_offset: 0,
+                flags: 0,
+            },
+            old_record_size: None,
+            flags: 0,
+            guid: [0; 16],
+            dependencies: Vec::new(),
+            package_imports: Vec::new(),
+            within: None,
+            config_name: None,
+            defaults_offset: 0,
+        }),
+    })
+}
+
 fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     synthetic_runtime_package_with_member(class_name, "ClientTravel")
 }
@@ -1230,6 +1266,98 @@ fn final_function_calls_run_prebound_natives_and_propagate_failures() {
 }
 
 #[test]
+fn player_input_populates_broom_channels() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-broom-input-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(class.export_index));
+    let fields = [
+        "aBaseX",
+        "aBaseY",
+        "aStrafe",
+        "aMouseX",
+        "aMouseY",
+        "aBroomYaw",
+        "aBroomPitch",
+        "bAltFire",
+        "bBroomYawLeft",
+        "bBroomYawRight",
+        "bBroomPitchUp",
+        "bBroomPitchDown",
+        "bBroomBoost",
+        "bBroomBrake",
+        "bBroomAction",
+        "bPressedJump",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+
+    let player = 7;
+    let player_object = runtime_actor_id(player);
+    runtime.actor_classes.insert(player, class_id);
+    runtime.object_actors.insert(player_object.clone(), player);
+    runtime.actor_objects.insert(player, player_object);
+    runtime.player_actor = Some(player);
+    runtime.instances.insert(player, InstanceState::default());
+
+    runtime
+        .set_player_input(PlayerInput {
+            base_x: -3_000.0,
+            base_y: 6_000.0,
+            mouse_x: 192.0,
+            mouse_y: -96.0,
+            jump: true,
+            broom_boost: true,
+            broom_brake: true,
+            ..PlayerInput::default()
+        })
+        .unwrap();
+    let instance = &runtime.instances[&player];
+    for (name, value) in [
+        ("aBroomYaw", Value::Float(192.0)),
+        ("aBroomPitch", Value::Float(-96.0)),
+        ("bBroomYawLeft", Value::Byte(1)),
+        ("bBroomYawRight", Value::Byte(0)),
+        ("bBroomPitchUp", Value::Byte(1)),
+        ("bBroomPitchDown", Value::Byte(0)),
+        ("bBroomBoost", Value::Byte(1)),
+        ("bBroomBrake", Value::Byte(1)),
+        ("bBroomAction", Value::Byte(1)),
+    ] {
+        assert_eq!(
+            instance.get(&fields[name]),
+            Some(&StoredValue::Value(value))
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-hud-{}-{}",
@@ -1252,50 +1380,16 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
         package: Arc::clone(&package),
         export_index: 5,
     };
-    let class_script = |export_index| {
-        Arc::new(ScriptExport {
-            export_index,
-            class_name: "Class".to_owned(),
-            base_field: ObjectReference::None,
-            next_field: ObjectReference::None,
-            script_text: ObjectReference::None,
-            children: ObjectReference::None,
-            friendly_name: export_index,
-            line: 0,
-            text_position: 0,
-            bytecode: Bytecode {
-                version: 61,
-                bytes: Vec::new(),
-                raw_len: 0,
-                tokens: Vec::new(),
-            },
-            metadata: ScriptMetadata::Class(openhp1_script::ClassMetadata {
-                state: openhp1_script::StateMetadata {
-                    probe_mask: 0,
-                    ignore_mask: 0,
-                    label_table_offset: 0,
-                    flags: 0,
-                },
-                old_record_size: None,
-                flags: 0,
-                guid: [0; 16],
-                dependencies: Vec::new(),
-                package_imports: Vec::new(),
-                within: None,
-                config_name: None,
-                defaults_offset: 0,
-            }),
-        })
-    };
     let player_class_id = object_id(&package, player_class.export_index);
     let hud_class_id = object_id(&package, hud_class.export_index);
     runtime.scripts.insert(
         player_class_id.clone(),
-        class_script(player_class.export_index),
+        synthetic_class_script(player_class.export_index),
     );
-    runtime
-        .scripts
-        .insert(hud_class_id.clone(), class_script(hud_class.export_index));
+    runtime.scripts.insert(
+        hud_class_id.clone(),
+        synthetic_class_script(hud_class.export_index),
+    );
     for event in [
         "Tick",
         "Spawned",

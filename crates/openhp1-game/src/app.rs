@@ -276,6 +276,7 @@ struct InputState {
     keys: HashSet<KeyCode>,
     mouse_delta: (f64, f64),
     cast_mouse: bool,
+    boost_mouse: bool,
     cast_requested: bool,
     jump_requested: bool,
     captured: bool,
@@ -310,7 +311,11 @@ impl InputState {
                 self.cast_requested |= pressed && !self.cast_mouse;
                 self.cast_mouse = pressed;
             }
-            MouseButton::Right if state == ElementState::Pressed => self.jump_requested = true,
+            MouseButton::Right => {
+                let pressed = state == ElementState::Pressed;
+                self.jump_requested |= pressed && !self.boost_mouse;
+                self.boost_mouse = pressed;
+            }
             _ => {}
         }
     }
@@ -334,6 +339,9 @@ impl InputState {
             alt_fire: casting,
             alt_fire_pressed: self.cast_requested,
             jump: self.jump_requested,
+            broom_boost: self.boost_mouse
+                || pressed(&self.keys, &[KeyCode::ShiftLeft, KeyCode::ShiftRight]) != 0.0,
+            broom_brake: self.cast_mouse || pressed(&self.keys, &[KeyCode::KeyZ]) != 0.0,
         };
         self.mouse_delta = (0.0, 0.0);
         self.cast_requested = false;
@@ -345,6 +353,7 @@ impl InputState {
         self.keys.clear();
         self.mouse_delta = (0.0, 0.0);
         self.cast_mouse = false;
+        self.boost_mouse = false;
         self.cast_requested = false;
         self.jump_requested = false;
     }
@@ -1553,6 +1562,8 @@ mod tests {
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
         assert!(player.jump);
+        assert!(!player.broom_boost);
+        assert!(!player.broom_brake);
         assert!(!input.player_input(1.0 / 60.0).jump);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Pressed);
@@ -1564,16 +1575,29 @@ mod tests {
         assert!((player.mouse_y - 96.0).abs() < 1e-4);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
+        assert!(player.broom_brake);
         assert!(!input.player_input(1.0 / 60.0).alt_fire_pressed);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Released);
-        assert!(!input.player_input(1.0 / 60.0).alt_fire);
+        let player = input.player_input(1.0 / 60.0);
+        assert!(!player.alt_fire);
+        assert!(!player.broom_brake);
         input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
-        assert!(input.player_input(1.0 / 60.0).jump);
+        let player = input.player_input(1.0 / 60.0);
+        assert!(player.jump);
+        assert!(player.broom_boost);
+        let player = input.player_input(1.0 / 60.0);
+        assert!(!player.jump);
+        assert!(player.broom_boost);
+        input.set_mouse_button(MouseButton::Right, ElementState::Released);
+        assert!(!input.player_input(1.0 / 60.0).broom_boost);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);
         let player = input.player_input(1.0 / 60.0);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
+        assert!(!player.broom_brake);
+        input.set_key(KeyCode::ShiftLeft, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).broom_boost);
     }
 
     #[test]
@@ -1626,10 +1650,14 @@ mod tests {
             alt_fire: true,
             alt_fire_pressed: true,
             jump: true,
+            broom_boost: true,
+            broom_brake: true,
             ..PlayerInput::default()
         });
         assert_eq!(repeated.base_y, 6_000.0);
         assert!(repeated.alt_fire);
+        assert!(repeated.broom_boost);
+        assert!(repeated.broom_brake);
         assert!(!repeated.alt_fire_pressed);
         assert_eq!(repeated.mouse_x, 0.0);
         assert!(!repeated.jump);
