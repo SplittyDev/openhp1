@@ -1437,6 +1437,111 @@ fn final_function_calls_run_prebound_natives_and_propagate_failures() {
 }
 
 #[test]
+fn player_ui_state_reads_the_authored_harry_counters() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-player-ui-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    let names = [
+        "lifePotions",
+        "MaxLifePotions",
+        "numBeans",
+        "numStars",
+        "iFireSeedCount",
+        "WizardCards",
+        "maxPointsPerHouse",
+        "numHousePointsHarry",
+        "numHousePointsGryffindor",
+        "numHousePointsSlytherin",
+        "numHousePointsHufflepuff",
+        "numHousePointsRavenclaw",
+    ];
+    let fields = names
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+        .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+
+    let player = 7;
+    runtime.actor_classes.insert(player, class_id);
+    runtime.player_actor = Some(player);
+    let mut instance = InstanceState::default();
+    for (name, value) in [
+        ("lifePotions", Value::Float(3.0)),
+        ("MaxLifePotions", Value::Float(4.0)),
+        ("numBeans", Value::Int(17)),
+        ("numStars", Value::Int(4)),
+        ("iFireSeedCount", Value::Int(6)),
+        ("maxPointsPerHouse", Value::Int(500)),
+        ("numHousePointsHarry", Value::Int(25)),
+        ("numHousePointsGryffindor", Value::Int(42)),
+        ("numHousePointsSlytherin", Value::Int(18)),
+        ("numHousePointsHufflepuff", Value::Int(12)),
+        ("numHousePointsRavenclaw", Value::Int(15)),
+    ] {
+        instance.insert(fields[name].clone(), StoredValue::Value(value));
+    }
+    let card = |id, has_card| {
+        StoredValue::Value(Value::Struct(
+            [
+                ("ID".to_owned(), Value::Int(id)),
+                ("bHasCard".to_owned(), Value::Bool(has_card)),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    };
+    instance.insert(
+        fields["WizardCards"].clone(),
+        StoredValue::Array(vec![card(101, true), card(2, false), card(69, true)]),
+    );
+    runtime.instances.insert(player, instance);
+
+    assert_eq!(
+        runtime.player_ui_state().unwrap(),
+        PlayerUiState {
+            health: 0.75,
+            beans: 17,
+            stars: 4,
+            fire_seeds: 6,
+            cards: 2,
+            wizard_cards: {
+                let mut cards = [None; 25];
+                cards[0] = Some(101);
+                cards[2] = Some(69);
+                cards
+            },
+            max_points_per_house: 500,
+            house_points_harry: 25,
+            house_points_gryffindor: 42,
+            house_points_slytherin: 18,
+            house_points_hufflepuff: 12,
+            house_points_ravenclaw: 15,
+        }
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_input_populates_broom_channels() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-broom-input-{}-{}",

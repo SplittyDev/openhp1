@@ -33,6 +33,7 @@ pub use action::{
     ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind,
     PlayerMusic, RuntimeObject, WeaponAttachment,
 };
+pub use actor::PlayerUiState;
 pub use error::{DispatchError, DispatchResult};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

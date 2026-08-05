@@ -1,6 +1,111 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerUiState {
+    pub health: f32,
+    pub beans: i32,
+    pub stars: i32,
+    pub fire_seeds: i32,
+    pub cards: u8,
+    pub wizard_cards: [Option<i32>; 25],
+    pub max_points_per_house: i32,
+    pub house_points_harry: i32,
+    pub house_points_gryffindor: i32,
+    pub house_points_slytherin: i32,
+    pub house_points_hufflepuff: i32,
+    pub house_points_ravenclaw: i32,
+}
+
 impl ScriptRuntime {
+    pub fn player_ui_state(&mut self) -> DispatchResult<PlayerUiState> {
+        let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mut property = |name: &str| {
+            self.instance_property(&class, &instance, name)?
+                .ok_or_else(|| DispatchError::UnresolvedObject {
+                    message: format!("player has no {name} property"),
+                })
+        };
+        let life = match property("lifePotions")? {
+            StoredValue::Value(Value::Float(value)) => value,
+            value => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("player lifePotions is {value:?}"),
+                });
+            }
+        };
+        let max_life = match property("MaxLifePotions")? {
+            StoredValue::Value(Value::Float(value)) => value,
+            value => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("player MaxLifePotions is {value:?}"),
+                });
+            }
+        };
+        let mut wizard_cards = [None; 25];
+        match property("WizardCards")? {
+            StoredValue::Array(cards) => {
+                for (slot, card) in wizard_cards.iter_mut().zip(cards) {
+                    let StoredValue::Value(Value::Struct(fields)) = card else {
+                        continue;
+                    };
+                    let has_card = fields.iter().any(|(name, value)| {
+                        name.eq_ignore_ascii_case("bHasCard") && matches!(value, Value::Bool(true))
+                    });
+                    if has_card {
+                        *slot = fields.iter().find_map(|(name, value)| {
+                            (name.eq_ignore_ascii_case("ID"))
+                                .then_some(value)
+                                .and_then(|value| match value {
+                                    Value::Int(id) => Some(*id),
+                                    _ => None,
+                                })
+                        });
+                    }
+                }
+            }
+            value => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("player WizardCards is {value:?}"),
+                });
+            }
+        };
+        let mut integer = |name: &str| match property(name)? {
+            StoredValue::Value(Value::Int(value)) => Ok(value),
+            value => Err(DispatchError::UnresolvedObject {
+                message: format!("player {name} is {value:?}"),
+            }),
+        };
+        Ok(PlayerUiState {
+            health: if max_life > 0.0 {
+                (life / max_life).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            beans: integer("numBeans")?,
+            stars: integer("numStars")?,
+            fire_seeds: integer("iFireSeedCount")?,
+            cards: wizard_cards.iter().flatten().count() as u8,
+            wizard_cards,
+            max_points_per_house: integer("maxPointsPerHouse")?,
+            house_points_harry: integer("numHousePointsHarry")?,
+            house_points_gryffindor: integer("numHousePointsGryffindor")?,
+            house_points_slytherin: integer("numHousePointsSlytherin")?,
+            house_points_hufflepuff: integer("numHousePointsHufflepuff")?,
+            house_points_ravenclaw: integer("numHousePointsRavenclaw")?,
+        })
+    }
+
     pub fn initialize_player_hud(&mut self) -> DispatchResult<Vec<ActorAction>> {
         let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self
