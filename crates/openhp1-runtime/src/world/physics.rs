@@ -25,6 +25,11 @@ const PHYS_TRAILER: u8 = 11;
 const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
 
+fn direction_pitch(direction: Vec3) -> i32 {
+    ((-direction.z).atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
+        as i32
+}
+
 fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
     !pushable && normal.z.abs() < 0.2
 }
@@ -69,8 +74,7 @@ impl ScriptRuntime {
         let pitch = if physics == PHYS_WALKING {
             0
         } else {
-            (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
-                as i32
+            direction_pitch(direction)
         };
         self.set_actor_value(
             class,
@@ -126,8 +130,7 @@ impl ScriptRuntime {
         let pitch = if physics == PHYS_WALKING {
             0
         } else {
-            (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
-                as i32
+            direction_pitch(direction)
         };
         self.set_actor_value(
             class,
@@ -491,6 +494,11 @@ mod tests {
         assert!(should_slide_walking_collision(false, Vec3::X));
         assert!(!should_slide_walking_collision(true, Vec3::X));
         assert!(!should_slide_walking_collision(false, Vec3::Z));
+    }
+
+    #[test]
+    fn upward_targets_use_negative_ue1_pitch() {
+        assert_eq!(direction_pitch(Vec3::Z), -16_384);
     }
 
     #[test]

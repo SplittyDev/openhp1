@@ -499,7 +499,7 @@ so authored follow cameras do not lose their subjects above or below the frame.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.
-Positive pitch points toward positive Unreal Z, matching the actor transform;
+Positive pitch points toward negative Unreal Z, matching the actor transform;
 `rotator()` and `vector()` preserve that inverse relationship. Broom acceleration
 and spell-target rays both consume this shared direction conversion.
 `WarpZoneInfo.Warp` and `UnWarp` apply the corresponding inverse coordinate

@@ -376,7 +376,7 @@ pub(super) fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
             let units_to_radians = std::f32::consts::TAU / 65_536.0;
             let (pitch_sin, pitch_cos) = ((pitch as f32) * units_to_radians).sin_cos();
             let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
-            Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, pitch_sin])
+            Value::Vector([pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin])
         }
         (ConversionOpcode::ByteToInt, Value::Byte(value)) => Value::Int(i32::from(value)),
         (ConversionOpcode::ByteToInt, Value::Bool(value)) => Value::Int(i32::from(value)),
@@ -420,7 +420,7 @@ pub(super) fn convert(opcode: ConversionOpcode, value: Value) -> Result<Value> {
         (ConversionOpcode::VectorToRotator, Value::Vector([x, y, z])) => {
             let units = 65_536.0 / std::f32::consts::TAU;
             Value::Rotator([
-                (z.atan2((x * x + y * y).sqrt()) * units) as i32,
+                ((-z).atan2((x * x + y * y).sqrt()) * units) as i32,
                 (y.atan2(x) * units) as i32,
                 0,
             ])
@@ -464,15 +464,15 @@ pub(crate) fn rotator_axes([pitch, yaw, roll]: [i32; 3]) -> [[f32; 3]; 3] {
     let (yaw_sin, yaw_cos) = ((yaw as f32) * units_to_radians).sin_cos();
     let (roll_sin, roll_cos) = ((roll as f32) * units_to_radians).sin_cos();
     [
-        [pitch_cos * yaw_cos, pitch_cos * yaw_sin, pitch_sin],
+        [pitch_cos * yaw_cos, pitch_cos * yaw_sin, -pitch_sin],
         [
-            roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
-            roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
+            -roll_sin * pitch_sin * yaw_cos - roll_cos * yaw_sin,
+            -roll_sin * pitch_sin * yaw_sin + roll_cos * yaw_cos,
             -roll_sin * pitch_cos,
         ],
         [
-            -roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
-            -roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
+            roll_cos * pitch_sin * yaw_cos - roll_sin * yaw_sin,
+            roll_cos * pitch_sin * yaw_sin + roll_sin * yaw_cos,
             roll_cos * pitch_cos,
         ],
     ]
