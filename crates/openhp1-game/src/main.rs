@@ -86,7 +86,7 @@ fn options() -> Result<Options> {
 
 fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options> {
     let mut options = Options {
-        level: PathBuf::from("res/Maps/Lev_Tut1.unr"),
+        level: PathBuf::from("res/Maps/startup.unr"),
         renderer: RendererSettings::default(),
     };
     let mut arguments = arguments.into_iter();
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn parses_renderer_and_level_options() {
         let defaults = options_from([]).unwrap();
-        assert_eq!(defaults.level, PathBuf::from("res/Maps/Lev_Tut1.unr"));
+        assert_eq!(defaults.level, PathBuf::from("res/Maps/startup.unr"));
         assert_eq!(defaults.renderer, RendererSettings::default());
 
         let options = options_from([
