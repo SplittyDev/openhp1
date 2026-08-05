@@ -492,6 +492,9 @@ tests. BSP trace hits return the active `LevelInfo`, as UE1 UnrealScript
 expects; when `bTraceActors` is true, the closest actor or BSP hit wins.
 `TraceActors` returns actor and BSP hits with their output locations and
 normals.
+The shipped game authors its horizontal `FOVAngle` for a 640x480 viewport.
+Wider viewports preserve that 4:3 vertical span and extend the horizontal view,
+so authored follow cameras do not lose their subjects above or below the frame.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.

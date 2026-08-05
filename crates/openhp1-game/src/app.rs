@@ -1298,7 +1298,10 @@ fn camera_from_player_view(view: PlayerView, viewport: PhysicalSize<u32>, far: f
         yaw: rotation[1],
         pitch: -rotation[0],
         roll: -rotation[2],
-        vertical_fov: horizontal_to_vertical_fov(view.fov_degrees.to_radians(), aspect),
+        vertical_fov: horizontal_to_vertical_fov(
+            view.fov_degrees.to_radians(),
+            aspect.min(4.0 / 3.0),
+        ),
         near: 1.0,
         far,
     }
@@ -1530,7 +1533,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn converts_the_ue1_player_view_once() {
+    fn preserves_the_authored_vertical_view_on_widescreen() {
         let camera = camera_from_player_view(
             PlayerView {
                 actor: 7,
@@ -1545,9 +1548,7 @@ mod tests {
         assert!((camera.yaw - TAU * 0.25).abs() < 0.000_001);
         assert!((camera.pitch + TAU * 0.125).abs() < 0.000_001);
         assert!((camera.roll - TAU * 0.125).abs() < 0.000_001);
-        assert!(
-            (camera.vertical_fov - 2.0 * (1.0_f32 / (1600.0 / 900.0)).atan()).abs() < 0.000_001
-        );
+        assert!((camera.vertical_fov - 2.0 * (1.0_f32 / (4.0 / 3.0)).atan()).abs() < 0.000_001);
     }
 
     #[test]
