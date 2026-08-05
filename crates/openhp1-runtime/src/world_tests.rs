@@ -1826,7 +1826,18 @@ fn solid_box_collision() -> Arc<BspCollision> {
         surfaces: Vec::new(),
         vertices: Vec::new(),
         shared_side_count: 0,
-        zones: Vec::new(),
+        zones: vec![
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+        ],
         polys: ObjectReference::None,
         light_maps: Vec::new(),
         light_bits: Vec::new(),
@@ -1882,7 +1893,7 @@ fn solid_box_collision() -> Arc<BspCollision> {
         coplanar: -1,
         collision_bound: if index == 0 { 0 } else { -1 },
         render_bound: -1,
-        zones: [0; 2],
+        zones: [1; 2],
         vertex_count: if index == 0 { 4 } else { 0 },
         leaves: [0; 2],
     })
@@ -3904,7 +3915,18 @@ fn placement_test_collision(half_extent: f32) -> Arc<BspCollision> {
         surfaces: Vec::new(),
         vertices: Vec::new(),
         shared_side_count: 0,
-        zones: Vec::new(),
+        zones: vec![
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+        ],
         polys: ObjectReference::None,
         light_maps: Vec::new(),
         light_bits: Vec::new(),
@@ -3936,7 +3958,7 @@ fn placement_test_collision(half_extent: f32) -> Arc<BspCollision> {
         coplanar: -1,
         collision_bound: if index == 0 { 0 } else { -1 },
         render_bound: -1,
-        zones: [0; 2],
+        zones: [1; 2],
         vertex_count: 0,
         leaves: [0; 2],
     })
@@ -6588,6 +6610,7 @@ fn find_path_to_dispatches_numeric_native_through_navigation_graph() {
         "ZoneFluidFriction",
         "ZoneTerminalVelocity",
         "bWaterZone",
+        "bKillZone",
         "bPainZone",
         "DamageType",
         "ReducedDamageType",
@@ -6859,6 +6882,7 @@ fn find_path_to_dispatches_numeric_native_through_navigation_graph() {
                 Value::Float(2_500.0),
             ),
             (fields["bWaterZone"].clone(), Value::Bool(false)),
+            (fields["bKillZone"].clone(), Value::Bool(false)),
             (fields["bPainZone"].clone(), Value::Bool(false)),
             (
                 fields["DamageType"].clone(),
@@ -8438,6 +8462,9 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         runtime
             .fields
             .insert((class.clone(), "bpainzone".to_owned()), None);
+        runtime
+            .fields
+            .insert((class.clone(), "bkillzone".to_owned()), None);
         runtime
             .fields
             .insert((class.clone(), "damagetype".to_owned()), None);
