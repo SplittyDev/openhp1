@@ -118,7 +118,17 @@ impl ScriptRuntime {
         else {
             return Ok(true);
         };
-        let acceleration = direction * self.actor_float(class, instance, "AccelRate")?;
+        let acceleration_direction = if matches!(physics, PHYS_SWIMMING | PHYS_FLYING)
+            && !self.actor_bool(class, instance, "bCanStrafe")?
+        {
+            Vec3::from_array(
+                crate::rotator_axes(self.actor_rotator(class, instance, "Rotation")?)[0],
+            )
+        } else {
+            direction
+        };
+        let acceleration =
+            acceleration_direction * self.actor_float(class, instance, "AccelRate")?;
         self.set_actor_value(
             class,
             instance,

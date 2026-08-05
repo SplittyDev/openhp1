@@ -81,8 +81,9 @@ re-entering a state must not inherit an event disabled during an earlier visit.
 Context latent calls suspend the caller's state while movement and animation
 completion are polled on the actor that received the call.
 Completing latent `MoveTo` and `MoveToward` clears the movement receiver's
-acceleration before the caller resumes, except under `PHYS_Swimming` and
-`PHYS_Flying`; the shipped native preserves acceleration for those modes.
+acceleration before the caller resumes. The exception is a `PHYS_Swimming` or
+`PHYS_Flying` pawn with `bCanStrafe=false`; the shipped native preserves that
+pawn's acceleration.
 Cancelling latent movement during state replacement still clears acceleration.
 Context calls retain caller-owned state frames while the latent action identifies
 the receiver, so a controller's own acceleration is not changed when it drives
@@ -270,6 +271,11 @@ targeting reticle to destroy their child emitters.
 
 Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
+During latent movement, a swimming or flying pawn with `bCanStrafe=false`
+accelerates along its current `Rotation` while `DesiredRotation` turns toward
+the destination. Other pawns accelerate directly toward the destination. This
+lets non-strafing flyers follow the curved approach and retain the final tangent
+implemented by the shipped movement native.
 Zone `DamageType` and pawn `ReducedDamageType` accept serialized NameProperty
 values, including `Name("None")`, so zone physics remains runnable.
 `Actor.AutonomousPhysics` uses that same per-actor physics update and suppresses

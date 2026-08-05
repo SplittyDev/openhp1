@@ -2,8 +2,9 @@
 
 The shipped bytecode moves Peeves to `HPath_F1` after the encounter and then
 leaves him in an idle loop under `PHYS_Flying`. The retail movement native
-preserves his acceleration when that move completes, carrying him through the
-wall where he becomes occluded. The station's `BH_Die` branch is not reached.
+curves a non-strafing flyer toward that node and preserves his final
+acceleration when the move completes, carrying him into the wall where he
+becomes occluded. The station's `BH_Die` branch is not reached.
 
 ## Shipped evidence
 
@@ -63,18 +64,29 @@ exact `Lev_Tut3b.unr` and `Engine.dll` pair cannot drive Peeves into
 ## Retail movement completion
 
 The matching `Engine.dll` implementation of `APawn::moveToward` treats
-`PHYS_Swimming` and `PHYS_Flying` specially. Flying arrival requires less than
-16 horizontal units to the destination and a vertical separation below
-`max(48, CollisionHeight)`. On success, those two physics modes bypass the
-acceleration-zeroing block used by other modes; `PollMoveTo` then clears only
-the latent-action field.
+`PHYS_Swimming` and `PHYS_Flying` specially when `bCanStrafe` is false. While
+the move is active, it derives acceleration from the pawn's current rotation
+rather than the normalized destination delta; the normal rotation poll still
+turns the pawn toward the destination. This produces a curved approach rather
+than allowing the pawn to strafe directly toward the node. Flying arrival
+requires less than 16 horizontal units to the destination and a vertical
+separation below `max(48, CollisionHeight)`. On success, the non-strafing
+flying/swimming branch bypasses the acceleration-zeroing block; `PollMoveTo`
+then clears only the latent-action field. Strafing flyers use direct
+destination acceleration and clear it on arrival.
+
+The flag identification is encoded in the shipped data and binary. `Pawn`'s
+embedded declaration lists nine packed booleans before `bCanStrafe`, making it
+bit `0x200`; `APawn::moveToward` tests bit `0x200` of the Pawn flag word before
+selecting the flying/swimming branch. Neither `Tut3.u` nor `Lev_Tut3b.unr`
+overrides `bCanStrafe` for Peeves, so he uses the inherited false default.
 
 Peeves also sets `bCollideWorld=false` before entering the exit patrol. His
-retained acceleration and velocity therefore carry him beyond `HPath_F1` and
-through the wall while the script remains in its idle loop. An OpenHP1 replay
-completed the move 13.99 units from `HPath_F1`, matching the retail threshold,
-but stopped after a short 39.61-unit coast because OpenHP1 had cleared the
-acceleration for every physics mode.
+curved approach leaves a final tangent aimed left of the direct route, and the
+retained acceleration and velocity carry him beyond `HPath_F1` into the wall
+while the script remains in its idle loop. OpenHP1 previously accelerated him
+directly at `HPath_F1`; retaining that incorrect straight-line acceleration
+made him pass through the castle and continue indefinitely.
 
 For reproducibility, the inspected files have these SHA-256 hashes:
 
@@ -154,5 +166,7 @@ Independent retail gameplay recordings
 ([HAFanForever](https://www.youtube.com/watch?v=QmgU2quJ8gA),
 [Global Gaming](https://www.youtube.com/watch?v=PJI3BIm7t_g)) show Peeves
 continuing beyond the stair waypoint and disappearing into the wall during the
-post-defeat camera sequence. That motion agrees with the shipped native's
-retained flying acceleration; it does not require the dead `atStation` branch.
+post-defeat camera sequence. Quarter-second inspection shows him turning left
+before he vanishes. That motion agrees with the shipped native's non-strafing
+curved approach and retained final acceleration; it does not require another
+waypoint or the dead `atStation` branch.

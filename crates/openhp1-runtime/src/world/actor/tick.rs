@@ -141,7 +141,16 @@ impl ScriptRuntime {
                         Ok(physics)
                             if matches!(physics, physics::PHYS_SWIMMING | physics::PHYS_FLYING) =>
                         {
-                            Ok(())
+                            match self.actor_bool(&class, &instance, "bCanStrafe") {
+                                Ok(false) => Ok(()),
+                                Ok(true) => self.finish_latent_movement(
+                                    target,
+                                    &class,
+                                    &mut instance,
+                                    latent,
+                                ),
+                                Err(message) => Err(message),
+                            }
                         }
                         Ok(_) => self.finish_latent_movement(target, &class, &mut instance, latent),
                         Err(message) => Err(message),

@@ -6870,7 +6870,7 @@ fn rotator_addition_wraps_each_ue1_component() {
 }
 
 #[test]
-fn latent_movement_exit_matches_retail_acceleration_cleanup() {
+fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-latent-acceleration-{}-{}",
         std::process::id(),
@@ -6947,6 +6947,8 @@ fn latent_movement_exit_matches_retail_acceleration_cleanup() {
         ("AccelRate", runtime_actor_id(206)),
         ("TimeSeconds", runtime_actor_id(207)),
         ("TimeDilation", runtime_actor_id(208)),
+        ("Rotation", runtime_actor_id(209)),
+        ("bCanStrafe", runtime_actor_id(210)),
     ]
     .into_iter()
     .collect::<HashMap<_, _>>();
@@ -7111,6 +7113,14 @@ fn latent_movement_exit_matches_retail_acceleration_cleanup() {
                 fields["TimeDilation"].clone(),
                 StoredValue::Value(Value::Float(1.0)),
             ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["bCanStrafe"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
         ]
         .into_iter()
         .collect::<InstanceState>()
@@ -7215,24 +7225,94 @@ fn latent_movement_exit_matches_retail_acceleration_cleanup() {
         runtime.instances[&caller].get(&observed_acceleration),
         Some(&StoredValue::Value(Value::Vector([-1.0; 3])))
     );
-    runtime.instances.get_mut(&receiver).unwrap().insert(
-        fields["MoveTimer"].clone(),
-        StoredValue::Value(Value::Float(-1.0)),
-    );
+
     runtime.instances.get_mut(&receiver).unwrap().insert(
         fields["Physics"].clone(),
         StoredValue::Value(Value::Byte(physics::PHYS_FLYING)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0, 16_384, 0])),
+    );
+    runtime.tick(0.0).unwrap();
+    let Some(StoredValue::Value(Value::Vector(acceleration_value))) =
+        runtime.instances[&receiver].get(&acceleration)
+    else {
+        panic!("missing flying acceleration");
+    };
+    assert!(acceleration_value[0].abs() < 1.0e-4);
+    assert!((acceleration_value[1] - 100.0).abs() < 1.0e-4);
+    assert!(acceleration_value[2].abs() < 1.0e-4);
+    assert_eq!(
+        runtime.instances[&receiver].get(&fields["DesiredRotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0; 3]))),
+        "a non-strafing flyer must accelerate along its facing while turning toward the destination"
+    );
+
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["bCanStrafe"].clone(),
+        StoredValue::Value(Value::Bool(true)),
     );
     runtime.tick(0.0).unwrap();
     assert_eq!(
         runtime.instances[&receiver].get(&acceleration),
         Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
-        "completed flying movement must retain its acceleration"
+        "a strafing flyer must accelerate directly toward the destination"
+    );
+
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["MoveTimer"].clone(),
+        StoredValue::Value(Value::Float(-1.0)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["bCanStrafe"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([0.0, 100.0, 0.0])),
+    );
+    runtime.tick(0.0).unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0, 100.0, 0.0]))),
+        "completed non-strafing flying movement must retain its acceleration"
     );
     assert_eq!(
         runtime.instances[&caller].get(&observed_acceleration),
-        Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
+        Some(&StoredValue::Value(Value::Vector([0.0, 100.0, 0.0]))),
         "resumed caller state must observe the retained flying acceleration"
+    );
+
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["bCanStrafe"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["MoveTimer"].clone(),
+        StoredValue::Value(Value::Float(-1.0)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        acceleration.clone(),
+        StoredValue::Value(Value::Vector([9.0, 8.0, 7.0])),
+    );
+    runtime.instances.get_mut(&caller).unwrap().insert(
+        observed_acceleration.clone(),
+        StoredValue::Value(Value::Vector([-1.0; 3])),
+    );
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state.clone(),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(receiver),
+        },
+    );
+    runtime.tick(0.0).unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([0.0; 3]))),
+        "completed strafing flying movement must clear its acceleration"
     );
 
     runtime.instances.get_mut(&receiver).unwrap().insert(
