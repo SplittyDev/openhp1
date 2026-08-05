@@ -43,6 +43,9 @@ that same default object, including inherited static functions.
 `FinalFunction` bytecode executes its serialized function export directly,
 bypassing virtual and state lookup; native exports use the normal native
 dispatcher, and any target failure propagates through the calling frame.
+Serialized `name` indices are package-local. Calls into another package convert
+name arguments to their text identity before binding them; otherwise a call such
+as Tut2's `TriggerEvent('Intro')` is interpreted as an unrelated Engine name.
 
 Nested remote calls may inspect or call back into their caller, so the caller's
 live instance remains addressable while the remote context executes. Serialized

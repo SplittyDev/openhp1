@@ -20,6 +20,7 @@ use super::{
     actor::advance_lifespan,
     actor::decode_latent_action,
     actor::update_touching_array,
+    execution::portable_call_value,
     native::{
         animation_parameters, bone_number, bone_position, collision_updates, log_arguments,
         next_navigation_step, noise_loudness, random_float, random_int, random_unit_vector,
@@ -1160,6 +1161,28 @@ fn dispatched_finite_function_counts_statements_not_nested_expression_tokens() {
             .is_empty()
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn call_arguments_make_package_local_names_portable() {
+    let package = Package::parse(
+        "Caller.u",
+        synthetic_runtime_package_with_extras("PlayerPawn", "TriggerEvent", &[b"Intro\0"], false)
+            .into(),
+    )
+    .unwrap();
+    let intro = package
+        .summary()
+        .names
+        .iter()
+        .position(|name| name.value.eq_ignore_ascii_case("Intro"))
+        .unwrap() as i32;
+    let value = Value::Array(vec![Value::Name(intro)]);
+
+    assert_eq!(
+        portable_call_value(&package, &value).unwrap(),
+        Value::Array(vec![Value::NameText("Intro".to_owned())])
+    );
 }
 
 #[test]

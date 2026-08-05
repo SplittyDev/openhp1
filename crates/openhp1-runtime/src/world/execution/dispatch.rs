@@ -56,12 +56,14 @@ impl ScriptRuntime {
                     return Ok(CallOutput::value(Value::None));
                 };
                 let function = self.resolved_object(&function)?;
+                let arguments = portable_call_arguments(source, &function.package, arguments)
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
                 let mut output_arguments = Vec::new();
                 let value = self.execute_function_with_outputs(
                     actor,
                     actor_class,
                     &function,
-                    arguments,
+                    &arguments,
                     instance,
                     actions,
                     depth,
@@ -69,7 +71,7 @@ impl ScriptRuntime {
                 )?;
                 Ok(CallOutput::from_arguments(
                     value,
-                    arguments,
+                    &arguments,
                     output_arguments,
                 ))
             }
@@ -97,18 +99,20 @@ impl ScriptRuntime {
                 let Some(function) = function else {
                     return Ok(CallOutput::value(Value::None));
                 };
+                let arguments = portable_call_arguments(source, &function.package, arguments)
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
                 let mut output_arguments = Vec::new();
                 self.execute_function_with_outputs(
                     actor,
                     actor_class,
                     &function,
-                    arguments,
+                    &arguments,
                     instance,
                     actions,
                     depth,
                     Some(&mut output_arguments),
                 )
-                .map(|value| CallOutput::from_arguments(value, arguments, output_arguments))
+                .map(|value| CallOutput::from_arguments(value, &arguments, output_arguments))
             }
         }
     }
@@ -598,18 +602,20 @@ impl ScriptRuntime {
                 else {
                     return Ok(CallOutput::value(Value::None));
                 };
+                let arguments = portable_call_arguments(source, &function.package, arguments)
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
                 let mut output_arguments = Vec::new();
                 self.execute_function_with_outputs(
                     current_actor,
                     class,
                     &function,
-                    arguments,
+                    &arguments,
                     &mut instance,
                     actions,
                     depth,
                     Some(&mut output_arguments),
                 )
-                .map(|value| CallOutput::from_arguments(value, arguments, output_arguments))
+                .map(|value| CallOutput::from_arguments(value, &arguments, output_arguments))
             }
             _ => self.dispatch_call(
                 current_actor,

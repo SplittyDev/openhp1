@@ -672,6 +672,45 @@ fn concrete_self_value(value: &Value, self_handle: i32) -> Value {
     }
 }
 
+pub(super) fn portable_call_value(
+    source: &Package,
+    value: &Value,
+) -> std::result::Result<Value, String> {
+    Ok(match value {
+        Value::Name(_) => Value::NameText(runtime_name(source, value)?),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| portable_call_value(source, value))
+                .collect::<std::result::Result<_, _>>()?,
+        ),
+        Value::Struct(values) => Value::Struct(
+            values
+                .iter()
+                .map(|(name, value)| {
+                    portable_call_value(source, value).map(|value| (name.clone(), value))
+                })
+                .collect::<std::result::Result<_, _>>()?,
+        ),
+        value => value.clone(),
+    })
+}
+
+fn portable_call_arguments<'a>(
+    source: &Package,
+    target: &Package,
+    arguments: &'a [Value],
+) -> std::result::Result<std::borrow::Cow<'a, [Value]>, String> {
+    if source.summary().source == target.summary().source {
+        return Ok(std::borrow::Cow::Borrowed(arguments));
+    }
+    arguments
+        .iter()
+        .map(|value| portable_call_value(source, value))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(std::borrow::Cow::Owned)
+}
+
 fn copy_output_arguments(
     arguments: &[Value],
     bindings: &[(i32, usize, bool)],
