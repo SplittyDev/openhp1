@@ -155,7 +155,9 @@ matters for sky-box cube faces.
 
 The renderer still uses only the first mip and does not cull by zones. Visible
 vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
-serialized or runtime-selected animation sequences. Mover geometry comes from
+serialized or runtime-selected animation sequences. Their transforms use
+HP1's downward-positive pitch, so their visual forward axis matches runtime
+`GetAxes` movement. Mover geometry comes from
 the brush model's `Polys` export and follows UE1's
 `Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
 therefore pivots around `Location`, not the mesh-actor

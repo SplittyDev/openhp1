@@ -3476,7 +3476,7 @@ fn actor_surface_material(
 fn rotation_matrix(rotation: Rotator) -> Mat4 {
     let radians = rotation.radians();
     Mat4::from_rotation_z(radians.y)
-        * Mat4::from_rotation_y(-radians.x)
+        * Mat4::from_rotation_y(radians.x)
         * Mat4::from_rotation_x(-radians.z)
 }
 
@@ -5283,8 +5283,18 @@ mod tests {
         assert!(
             pitch
                 .transform_vector3(glam::Vec3::X)
-                .abs_diff_eq(glam::Vec3::Z, 1.0e-6)
+                .abs_diff_eq(-glam::Vec3::Z, 1.0e-6)
         );
+        assert!(pitch.transform_vector3(glam::Vec3::X).abs_diff_eq(
+            super::rotate_unreal(
+                openhp1_map::Rotator {
+                    pitch: quarter_turn,
+                    ..Default::default()
+                },
+                glam::Vec3::X,
+            ),
+            1.0e-6,
+        ));
         assert!(
             roll.transform_vector3(glam::Vec3::Y)
                 .abs_diff_eq(-glam::Vec3::Z, 1.0e-6)
