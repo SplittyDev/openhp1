@@ -80,11 +80,13 @@ re-entering a state must not inherit an event disabled during an earlier visit.
 
 Context latent calls suspend the caller's state while movement and animation
 completion are polled on the actor that received the call.
-Completing or cancelling latent `MoveTo` and `MoveToward` clears the movement
-receiver's acceleration before the caller's resumed or replacement state code
-runs. Context calls retain caller-owned state frames while the latent action
-identifies the receiver, so a controller's own acceleration is not changed when
-it drives another pawn.
+Completing latent `MoveTo` and `MoveToward` clears the movement receiver's
+acceleration before the caller resumes, except under `PHYS_Swimming` and
+`PHYS_Flying`; the shipped native preserves acceleration for those modes.
+Cancelling latent movement during state replacement still clears acceleration.
+Context calls retain caller-owned state frames while the latent action identifies
+the receiver, so a controller's own acceleration is not changed when it drives
+another pawn.
 `FinishInterpolation` resumes the retained frame when mover physics clears
 `bInterpolating`.
 `Pawn.StopWaiting` zeros only a receiving pawn's pending `Sleep` delay, so the

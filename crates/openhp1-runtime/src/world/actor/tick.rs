@@ -137,7 +137,15 @@ impl ScriptRuntime {
                     _ => unreachable!(),
                 };
                 let completed_movement = if matches!(result, Ok(true)) {
-                    self.finish_latent_movement(target, &class, &mut instance, latent)
+                    match self.actor_byte(&class, &instance, "Physics") {
+                        Ok(physics)
+                            if matches!(physics, physics::PHYS_SWIMMING | physics::PHYS_FLYING) =>
+                        {
+                            Ok(())
+                        }
+                        Ok(_) => self.finish_latent_movement(target, &class, &mut instance, latent),
+                        Err(message) => Err(message),
+                    }
                 } else {
                     Ok(())
                 };

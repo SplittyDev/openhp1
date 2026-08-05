@@ -1,8 +1,9 @@
 # Lev_Tut3b Peeves defeat evidence
 
-The shipped script and compiled bytecode agree on the intended result: Peeves
-does not remain in the room after the encounter. He switches to an exit patrol,
-reaches a station marked `BH_Die`, and is destroyed there.
+The shipped bytecode moves Peeves to `HPath_F1` after the encounter and then
+leaves him in an idle loop under `PHYS_Flying`. The retail movement native
+preserves his acceleration when that move completes, carrying him through the
+wall where he becomes occluded. The station's `BH_Die` branch is not reached.
 
 ## Shipped evidence
 
@@ -13,8 +14,13 @@ reaches a station marked `BH_Die`, and is destroyed there.
   fields into the active patrol fields, selects the first exit path node, and
   enters `patrol`. Its compiled bytecode contains no `Destroy` call.
 - `res/System/Tut3.u`, `tut3Peeves.patrol` (export 100), calls HP1 native
-  `FindPath` (`0x229`), moves through the returned navigation points, and calls
-  `PawnAtStation` when the active navigation point is the destination station.
+  `FindPath` (`0x229`) at bytecode offset `0x016f` and immediately calls
+  `MoveTo(navP.Location)` at `0x017c`. The embedded source's null-result guard
+  is commented out and the executable bytecode contains no such branch.
+- `FindPath(HPath_F1, baseStation1)` returns null, but the unconditional move
+  still targets the current `navP`, `HPath_F1`. On arrival, `destP != navP`,
+  `navP` becomes null, and the authored `bLoopPath=false` keeps Peeves in the
+  idle animation loop permanently.
 - `res/System/Tut3.u`, `tut3Peeves.atStation` (export 106), compares the
   destination station's selected behavior with `BH_Die`. The true branch at
   decoded bytecode offset `0x00d2` calls native `0x117`, UE1 `Actor.Destroy`.
@@ -30,9 +36,10 @@ modified or copied into the repository.
 
 ## Consequence
 
-An immediate hide or destroy on the final spell would not match the authored
-state machine. If Peeves remains visible, execution failed to complete the
-exit patrol and therefore never reached the existing `Destroy` branch.
+An immediate hide or destroy on the final spell would not match the executable
+runtime path. `HPath_F2`, `HPath_F3`, `PawnAtStation`, and the existing
+`Destroy` branch are dead on this exit. Retail disappearance instead depends on
+the flying pawn retaining movement after `MoveTo(HPath_F1)` completes.
 
 ## Retail navigation discrepancy
 
@@ -52,6 +59,22 @@ whose object name is the requested destination. It does not synthesize a
 spatial link or fall back to the closest reachable node. Consequently, this
 exact `Lev_Tut3b.unr` and `Engine.dll` pair cannot drive Peeves into
 `baseStation1` through `FindPath` either.
+
+## Retail movement completion
+
+The matching `Engine.dll` implementation of `APawn::moveToward` treats
+`PHYS_Swimming` and `PHYS_Flying` specially. Flying arrival requires less than
+16 horizontal units to the destination and a vertical separation below
+`max(48, CollisionHeight)`. On success, those two physics modes bypass the
+acceleration-zeroing block used by other modes; `PollMoveTo` then clears only
+the latent-action field.
+
+Peeves also sets `bCollideWorld=false` before entering the exit patrol. His
+retained acceleration and velocity therefore carry him beyond `HPath_F1` and
+through the wall while the script remains in its idle loop. An OpenHP1 replay
+completed the move 13.99 units from `HPath_F1`, matching the retail threshold,
+but stopped after a short 39.61-unit coast because OpenHP1 had cleared the
+acceleration for every physics mode.
 
 For reproducibility, the inspected files have these SHA-256 hashes:
 
@@ -122,17 +145,14 @@ objdump -d --start-address=0x10402220 --stop-address=0x1040247e \
   /Volumes/HARRY_POTTER_EFG/System/Engine.dll
 ```
 
-This second retail revision therefore does not prove a shared runtime bug or
-an exact runtime fix. Its authored graph and native `findPath` still cannot
-reach `baseStation1`. Adding a navigation edge, nearest-node fallback, or
-Peeves-specific destroy would remain an unproven compatibility workaround;
-the retail disappearance must involve some other behavior not established by
-these assets.
+This second retail revision confirms that no missing navigation edge or
+alternate Peeves bytecode explains the exit. Adding a navigation edge,
+nearest-node fallback, or Peeves-specific destroy would remain an authored-data
+workaround rather than the shared movement behavior used by retail.
 
 Independent retail gameplay recordings
 ([HAFanForever](https://www.youtube.com/watch?v=QmgU2quJ8gA),
 [Global Gaming](https://www.youtube.com/watch?v=PJI3BIm7t_g)) show Peeves
-disappearing during the post-defeat camera sequence, but do not establish that
-this dead `atStation` branch caused the disappearance. A forced navigation
-edge, nearest-node fallback, or Peeves-specific destroy would therefore be a
-compatibility workaround rather than a demonstrated engine semantic.
+continuing beyond the stair waypoint and disappearing into the wall during the
+post-defeat camera sequence. That motion agrees with the shipped native's
+retained flying acceleration; it does not require the dead `atStation` branch.

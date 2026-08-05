@@ -6870,7 +6870,7 @@ fn rotator_addition_wraps_each_ue1_component() {
 }
 
 #[test]
-fn latent_movement_exit_releases_acceleration_before_resuming() {
+fn latent_movement_exit_matches_retail_acceleration_cleanup() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-latent-acceleration-{}-{}",
         std::process::id(),
@@ -7218,6 +7218,42 @@ fn latent_movement_exit_releases_acceleration_before_resuming() {
     runtime.instances.get_mut(&receiver).unwrap().insert(
         fields["MoveTimer"].clone(),
         StoredValue::Value(Value::Float(-1.0)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(physics::PHYS_FLYING)),
+    );
+    runtime.tick(0.0).unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&acceleration),
+        Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
+        "completed flying movement must retain its acceleration"
+    );
+    assert_eq!(
+        runtime.instances[&caller].get(&observed_acceleration),
+        Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
+        "resumed caller state must observe the retained flying acceleration"
+    );
+
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(physics::PHYS_WALKING)),
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["MoveTimer"].clone(),
+        StoredValue::Value(Value::Float(-1.0)),
+    );
+    runtime.instances.get_mut(&caller).unwrap().insert(
+        observed_acceleration.clone(),
+        StoredValue::Value(Value::Vector([-1.0; 3])),
+    );
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state.clone(),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(receiver),
+        },
     );
     runtime.tick(0.0).unwrap();
     assert_eq!(
