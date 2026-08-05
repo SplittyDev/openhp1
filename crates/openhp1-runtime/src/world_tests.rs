@@ -1363,7 +1363,7 @@ fn player_input_populates_broom_channels() {
     let instance = &runtime.instances[&player];
     for (name, value) in [
         ("aBroomYaw", Value::Float(192.0)),
-        ("aBroomPitch", Value::Float(-96.0)),
+        ("aBroomPitch", Value::Float(96.0)),
         ("bBroomYawLeft", Value::Byte(1)),
         ("bBroomYawRight", Value::Byte(0)),
         ("bBroomPitchUp", Value::Byte(1)),

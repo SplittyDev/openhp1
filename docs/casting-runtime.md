@@ -25,6 +25,8 @@ compiled calls. Do not commit extracted source or generated dumps.
 `DefUser.ini` maps `LeftMouse` to the `AltFire` alias. The alias both updates
 the held `bAltFire` button and invokes the `AltFire` exec, so the press enters
 aiming and the state later observes release as `bAltFire == 0`.
+Its `MouseY` binding feeds `aMouseY` with positive speed. A positive UE1 pitch
+points toward positive Z, so the target ray follows the rendered view vertically.
 
 `Harry.AltFire` rejects the press when Harry is frozen or falling, the HUD is
 in cutscene mode, a boss encounter has disabled casting, Harry has no weapon,

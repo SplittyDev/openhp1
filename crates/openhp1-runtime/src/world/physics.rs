@@ -69,8 +69,8 @@ impl ScriptRuntime {
         let pitch = if physics == PHYS_WALKING {
             0
         } else {
-            ((-direction.z).atan2(direction.x.hypot(direction.y))
-                * (65_536.0 / std::f32::consts::TAU)) as i32
+            (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
+                as i32
         };
         self.set_actor_value(
             class,
@@ -126,8 +126,8 @@ impl ScriptRuntime {
         let pitch = if physics == PHYS_WALKING {
             0
         } else {
-            ((-direction.z).atan2(direction.x.hypot(direction.y))
-                * (65_536.0 / std::f32::consts::TAU)) as i32
+            (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU))
+                as i32
         };
         self.set_actor_value(
             class,

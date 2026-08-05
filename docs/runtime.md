@@ -493,6 +493,9 @@ normals.
 In the runtime's Unreal coordinate representation, `vector >> rotator` turns
 an authored local offset into world space and `vector << rotator` reverses that
 transform. Camera scripts rely on this distinction for their follow offsets.
+Positive pitch points toward positive Unreal Z, matching the actor transform;
+`rotator()` and `vector()` preserve that inverse relationship. Broom acceleration
+and spell-target rays both consume this shared direction conversion.
 `WarpZoneInfo.Warp` and `UnWarp` apply the corresponding inverse coordinate
 transforms to their location, velocity, and rotation output parameters.
 Harry's authored `PostBeginPlay` selects `BaseCam`; the game does not override
@@ -508,6 +511,8 @@ A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 Those movement and mouse axes also feed HP1's separate broom pitch/yaw input
 channels. Right click or Shift boosts, left click or Z brakes, and the ordinary
 jump input activates the broom action.
+The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
+`aBroomPitch` speed `-6.0`; OpenHP1 preserves those opposite signs.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. Desktop raw motion receives an additional

@@ -215,7 +215,7 @@ impl ScriptRuntime {
                 ("aMouseX", Value::Float(input.mouse_x)),
                 ("aMouseY", Value::Float(input.mouse_y)),
                 ("aBroomYaw", Value::Float(input.mouse_x)),
-                ("aBroomPitch", Value::Float(input.mouse_y)),
+                ("aBroomPitch", Value::Float(-input.mouse_y)),
                 ("bAltFire", Value::Byte(u8::from(input.alt_fire))),
                 ("bBroomYawLeft", Value::Byte(u8::from(input.base_x < 0.0))),
                 ("bBroomYawRight", Value::Byte(u8::from(input.base_x > 0.0))),
