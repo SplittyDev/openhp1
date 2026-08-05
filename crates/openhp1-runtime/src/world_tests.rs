@@ -28,7 +28,7 @@ use super::{
     },
     state::{event_disabled, probe_event_index, set_event_disabled},
 };
-use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
+use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds, Zone};
 use openhp1_physics::BspCollision;
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -3060,7 +3060,7 @@ fn actor_reachable_bsp() -> Arc<BspCollision> {
                 coplanar: -1,
                 collision_bound: (index == 0).then_some(0).unwrap_or(-1),
                 render_bound: -1,
-                zones: [0; 2],
+                zones: [1; 2],
                 vertex_count: 0,
                 leaves: [0; 2],
             })
@@ -3068,7 +3068,18 @@ fn actor_reachable_bsp() -> Arc<BspCollision> {
         surfaces: Vec::new(),
         vertices: Vec::new(),
         shared_side_count: 0,
-        zones: Vec::new(),
+        zones: vec![
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+            Zone {
+                actor: ObjectReference::None,
+                connectivity: 0,
+                visibility: 0,
+            },
+        ],
         polys: ObjectReference::None,
         light_maps: Vec::new(),
         light_bits: Vec::new(),
@@ -3226,6 +3237,7 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
         "ZoneFluidFriction",
         "ZoneTerminalVelocity",
         "bWaterZone",
+        "bKillZone",
         "bPainZone",
         "DamageType",
         "ReducedDamageType",
@@ -3338,6 +3350,10 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
                 StoredValue::Value(Value::Bool(false)),
             ),
             (
+                fields["bKillZone"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
                 fields["bPainZone"].clone(),
                 StoredValue::Value(Value::Bool(false)),
             ),
@@ -3359,6 +3375,21 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
             .damage_type
             .as_deref(),
         Some("None"),
+    );
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["bKillZone"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    assert!(
+        runtime
+            .zone_physics(Vec3::ZERO, 0, &runtime.instances[&0].clone())
+            .unwrap()
+            .is_none(),
+        "authored kill zones must follow the FellOutOfWorld path",
+    );
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["bKillZone"].clone(),
+        StoredValue::Value(Value::Bool(false)),
     );
     let navigation = runtime.object_handle(navigation).unwrap();
     let mut pawn_instance = [

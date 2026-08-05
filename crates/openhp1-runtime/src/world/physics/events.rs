@@ -142,6 +142,12 @@ impl ScriptRuntime {
                 .cloned()
                 .ok_or_else(|| format!("zone actor {zone_actor} instance is active"))?
         };
+        if self
+            .optional_actor_bool(&class, &instance, "bKillZone")?
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
         Ok(Some(ZonePhysics {
             gravity: Vec3::from_array(self.actor_vector(&class, &instance, "ZoneGravity")?),
             velocity: Vec3::from_array(self.actor_vector(&class, &instance, "ZoneVelocity")?),
