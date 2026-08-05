@@ -226,7 +226,11 @@ impl LoadedScene {
             &mut water_animations,
         );
         let mut hidden_actor_positions = HashMap::new();
-        for (actor_index, actor) in actors.iter().enumerate().filter(|(_, actor)| actor.hidden) {
+        for (actor_index, actor) in actors
+            .iter()
+            .enumerate()
+            .filter(|(_, actor)| actor.hidden || actor.draw_type == 0)
+        {
             let Some(render) = &actor.render else {
                 continue;
             };
@@ -801,18 +805,19 @@ impl LoadedScene {
                     let fraction = (index as f32 + 0.5) / count.max(1) as f32;
                     let owner_mesh_position = (system.config.distribution == 2)
                         .then(|| {
-                            system
-                                .config
-                                .owner
-                                .and_then(|owner| self.actors.get(owner))
-                                .and_then(|owner| owner.render.as_ref())
-                                .and_then(|render| {
-                                    random_mesh_position(
-                                        &self.render.mesh.positions,
-                                        &self.render.mesh.indices[render.indices.clone()],
-                                        &mut system.random,
-                                    )
-                                })
+                            system.config.owner.and_then(|owner| {
+                                let render = self.actors.get(owner)?.render.as_ref()?;
+                                let hidden = self
+                                    .hidden_actor_positions
+                                    .get(&owner)
+                                    .map(|positions| (positions.as_slice(), render.vertices.start));
+                                random_mesh_position(
+                                    &self.render.mesh.positions,
+                                    hidden,
+                                    &self.render.mesh.indices[render.indices.clone()],
+                                    &mut system.random,
+                                )
+                            })
                         })
                         .flatten();
                     let center = owner_mesh_position
@@ -1950,13 +1955,29 @@ fn uniform_particle_distance(
         * period.random
 }
 
-fn random_mesh_position(positions: &[Vec3], indices: &[u32], random: &mut u32) -> Option<Vec3> {
+fn random_mesh_position(
+    positions: &[Vec3],
+    hidden: Option<(&[Vec3], usize)>,
+    indices: &[u32],
+    random: &mut u32,
+) -> Option<Vec3> {
     let triangles = indices.len() / 3;
     let triangle = (random_unit(random) * triangles as f32) as usize;
     let indices = indices.get(triangle * 3..triangle * 3 + 3)?;
-    let a = *positions.get(indices[0] as usize)?;
-    let b = *positions.get(indices[1] as usize)?;
-    let c = *positions.get(indices[2] as usize)?;
+    let position = |index: u32| {
+        let index = index as usize;
+        hidden
+            .and_then(|(positions, first)| {
+                index
+                    .checked_sub(first)
+                    .and_then(|index| positions.get(index))
+            })
+            .or_else(|| positions.get(index))
+            .copied()
+    };
+    let a = position(indices[0])?;
+    let b = position(indices[1])?;
+    let c = position(indices[2])?;
     let first = random_unit(random);
     let second = random_unit(random);
     Some(a * (first * second) + b * (first * (1.0 - second)) + c * (1.0 - first))
@@ -4969,11 +4990,53 @@ mod tests {
         let mut random = 0;
         let point = super::random_mesh_position(
             &[glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            None,
             &[0, 1, 2],
             &mut random,
         )
         .unwrap();
         assert!(point.x >= 0.0 && point.y >= 0.0 && point.x + point.y <= 1.0001);
+    }
+
+    #[test]
+    fn owner_mesh_distribution_samples_hidden_source_geometry() {
+        let mut scene = particle_test_scene();
+        scene.actors[0].draw_type = 2;
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actors[0].render = Some(crate::SceneActorRenderRange {
+            vertices: 4..7,
+            indices: 0..3,
+        });
+        scene.render.mesh.positions = vec![glam::Vec3::ZERO; 4];
+        scene.render.mesh.positions.extend([
+            glam::Vec3::new(10.0, 0.0, 0.0),
+            glam::Vec3::new(10.0, 1.0, 0.0),
+            glam::Vec3::new(10.0, 0.0, 1.0),
+        ]);
+        scene.render.mesh.indices = vec![4, 5, 6];
+        let system = scene.particles.get_mut(&0).unwrap();
+        system.config = ParticleEmitter {
+            actor: 0,
+            owner: Some(0),
+            emit: true,
+            distribution: 2,
+            particles_alive: 1,
+            particles_per_second: ParticleFloat {
+                base: 1.0,
+                random: 0.0,
+            },
+            lifetime: ParticleFloat {
+                base: 10.0,
+                random: 0.0,
+            },
+            ..Default::default()
+        };
+        system.particles.clear();
+
+        assert!(scene.set_actor_draw_type(0, 0).unwrap());
+        assert!(scene.actors[0].render.is_some());
+        assert!(scene.tick_particles(1.0));
+        assert!((scene.particles[&0].particles[0].location.x - 10.0).abs() < 0.0001);
     }
 
     #[test]

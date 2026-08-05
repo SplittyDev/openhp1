@@ -137,9 +137,9 @@ fn main() -> Result<()> {
             anyhow::ensure!(
                 actor.draw_type != 0
                     || scene.render.mesh.positions[render.vertices.clone()]
-                        .iter()
-                        .all(|position| *position == Vec3::ZERO),
-                "{} retained visible geometry after switching to DT_None",
+                        .windows(2)
+                        .all(|positions| positions[0] == positions[1]),
+                "{} retained non-collapsed geometry after switching to DT_None",
                 actor.name
             );
         }

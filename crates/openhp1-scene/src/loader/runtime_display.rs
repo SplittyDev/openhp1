@@ -557,6 +557,9 @@ impl LoadedScene {
         }
         actor.draw_type = draw_type;
         self.actor_states[actor_index].actor.draw_type = draw_type;
+        if draw_type == 0 {
+            return self.sync_actor_render_visibility(actor_index);
+        }
         self.rebuild_current_actor_render(actor_index)
     }
 }

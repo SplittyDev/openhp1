@@ -228,7 +228,9 @@ remain attached to their moving system. `bVelocityRelative` adds the owner's
 current velocity once when each particle is emitted. Authored size growth,
 delay, and end scale, `DripTime`, and sprite `SpinRate` are applied over each
 particle's lifetime. Particle velocity uses the authored exponential `Damping`
-decay. A
+decay. `DIST_OwnerMesh` (`Distribution=2`) samples the owner's mesh surface,
+including source geometry retained while `DrawType=None`; Lev_Tut2 uses that
+combination to draw each training hoop entirely from particles. A
 `PPRIM_Liquid` particle (`RenderPrimitive=2`) uses a world-horizontal quad,
 rather than a camera billboard, and spins about its vertical normal.
 `Gesture` assigned to
