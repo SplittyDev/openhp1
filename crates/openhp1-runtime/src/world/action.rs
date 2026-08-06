@@ -542,6 +542,11 @@ pub enum ActorAction {
         actor: usize,
         level: u8,
     },
+    FinishQuidditchMatch {
+        actor: usize,
+        team0_score: i32,
+        opponent_score: i32,
+    },
     UpdateUrl {
         actor: usize,
         option: String,
@@ -648,6 +653,7 @@ impl ActorAction {
             | Self::StopSound { actor, .. }
             | Self::ClientTravel { actor, .. }
             | Self::UnlockQuidditch { actor, .. }
+            | Self::FinishQuidditchMatch { actor, .. }
             | Self::UpdateUrl { actor, .. }
             | Self::SpawnActor { actor, .. }
             | Self::SetLocation { actor, .. }

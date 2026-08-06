@@ -503,6 +503,15 @@ impl ScriptRuntime {
                         level,
                     });
                 }
+            } else if let (Some(name), [Value::Int(team0_score), Value::Int(opponent_score)]) =
+                (name, arguments)
+                && name.eq_ignore_ascii_case("FinishGame")
+            {
+                actions.push(ActorAction::FinishQuidditchMatch {
+                    actor: current_actor,
+                    team0_score: *team0_score,
+                    opponent_score: *opponent_score,
+                });
             }
             return Ok(CallOutput::value(Value::None));
         }

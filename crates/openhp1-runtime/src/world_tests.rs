@@ -870,6 +870,7 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
         ("Book.u", "HPConsole", "menuBook"),
         ("Page.u", "FEBook", "QuidMatchPage"),
         ("Unlock.u", "FEQuidMatchPage", "UnlockQuidditch"),
+        ("Finish.u", "FEQuidMatchPage", "FinishGame"),
     ] {
         fs::write(
             system.join(file),
@@ -995,6 +996,29 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
     assert_eq!(
         actions,
         [ActorAction::UnlockQuidditch { actor: 7, level: 1 }]
+    );
+    actions.clear();
+    let finish_source = runtime.packages.load_path(system.join("Finish.u")).unwrap();
+    runtime
+        .dispatch_context_call(
+            7,
+            &player_class,
+            page,
+            &finish_source,
+            FunctionCall::Virtual(1),
+            &[Value::Int(170), Value::Int(80)],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        actions,
+        [ActorAction::FinishQuidditchMatch {
+            actor: 7,
+            team0_score: 170,
+            opponent_score: 80,
+        }]
     );
     fs::remove_dir_all(root).unwrap();
 }
