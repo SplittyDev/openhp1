@@ -56,21 +56,31 @@ SurrealEngine checkout. This is the important distinction: zone zero is an
 out-of-world physics region even though rendering may legitimately use zone
 zero as an ambient fallback.
 
-Before the fix, OpenHP1 lost both death signals at the shared zone seam:
+OpenHP1 originally lost both death signals at the shared zone seam:
 
-- `BspCollision::zone_at` can return zone index zero, but
-  `world::zone_actor_at` falls back to the active `LevelInfo` whenever that
-  zone has no zone actor. `zone_physics` consequently returns an ordinary
-  `ZonePhysics`, so the existing `None => FellOutOfWorld` branches in walking,
-  falling, swimming, flying, and rolling physics are not reached for zone
-  zero.
+- `world::zone_actor_at` correctly returns `None` for BSP zone zero, but
+  `zone_physics` converted that value into an error. The existing
+  `None => FellOutOfWorld` branches in walking, falling, swimming, flying, and
+  rolling physics were therefore never reached.
 - `ZonePhysics` samples water, pain, and damage type, but not `bKillZone`.
 
 That was the shared cause of void/kill regions behaving like ordinary space.
-`zone_actor_at` now treats BSP zone zero as outside the world, and
-`zone_physics` treats an authored `bKillZone` as lethal. Both reuse the
-existing `None => FellOutOfWorld` physics dispatch instead of adding a height
-or map-specific workaround.
+`zone_physics` now preserves the out-of-world `None` result and treats an
+authored `bKillZone` as lethal. Both reuse the existing shared physics dispatch
+instead of adding a height or map-specific workaround.
+
+The original PC manual says both depleted stamina and a fall from a great
+height faint Harry and restart from the last save point. `baseHarry.stateDead`
+is the shipped implementation of that presentation and reload: `KillHarry`
+plays `faint`, waits, and calls `LoadSelectedSlot`. Out-of-world physics routes
+`baseHarry` through `KillHarry(True)` while other actors retain the engine's
+ordinary `FellOutOfWorld` event.
+
+The engine death path also calls static functions through class objects such
+as `LocalMessage`. UE1 class exports have no object class reference; their
+export class is `None`. Context dispatch must therefore use the class defaults
+for such a receiver rather than trying to instantiate it as an ordinary
+object. Otherwise `Pawn.Died` stops before its death state completes.
 
 Harry also has a separate pain-damage path. `HarryPotter.u` active
 `Harry.TakeDamage` export 298 tests damage types `ZonePain` and `pit`, enters

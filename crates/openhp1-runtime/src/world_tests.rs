@@ -795,9 +795,18 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
         [ConsoleCommandAction::SaveGame { slot: 9 }]
     );
 
-    let snapshot = save_snapshot_runtime(&root, 99)
-        .save_game("Maps/Test.unr")
-        .unwrap();
+    let mut source = save_snapshot_runtime(&root, 99);
+    let package = source.packages.load("Test").unwrap();
+    let transient = runtime_actor_id(99);
+    source.actor_objects.insert(99, transient.clone());
+    source.object_actors.insert(transient.clone(), 99);
+    source.actor_classes.insert(99, object_id(&package, 0));
+    source.instances.insert(99, InstanceState::default());
+    source.instances.get_mut(&7).unwrap().insert(
+        object_id(&package, 12),
+        StoredValue::Object(Some(transient)),
+    );
+    let snapshot = source.save_game("Maps/Test.unr").unwrap();
     let mut restored = save_snapshot_runtime(&root, -1);
     let actions = restored.restore_game("maps/test.unr", &snapshot).unwrap();
     let package = restored.packages.load("Test").unwrap();
@@ -810,6 +819,11 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
         restored.instances[&7][&object_id(&package, 11)],
         StoredValue::Object(Some(host_console_id()))
     );
+    assert_eq!(
+        restored.instances[&7][&object_id(&package, 12)],
+        StoredValue::Object(None),
+    );
+    assert!(!restored.actor_objects.contains_key(&99));
     let StoredValue::Value(Value::Struct(target)) =
         &restored.instances[&7][&object_id(&package, 10)]
     else {
@@ -2931,6 +2945,26 @@ fn zone_zero_is_out_of_world() {
         None,
         "UE1 zone zero is outside the world, not LevelInfo fallback",
     );
+
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-zone-zero-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    runtime.collision = Some(Arc::new(collision));
+    runtime.level_info = Some(4);
+    assert!(
+        runtime
+            .zone_physics(Vec3::ZERO, 0, &InstanceState::default())
+            .unwrap()
+            .is_none(),
+        "falling physics must dispatch FellOutOfWorld in zone zero",
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

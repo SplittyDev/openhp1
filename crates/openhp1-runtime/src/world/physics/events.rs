@@ -1,6 +1,37 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn fell_out_of_world(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        if self
+            .class_has_name(class, "baseHarry")
+            .map_err(|error| error.to_string())?
+        {
+            self.call_actor_event(
+                actor,
+                class,
+                instance,
+                "KillHarry",
+                vec![Value::Bool(true)],
+                actions,
+            )
+        } else {
+            self.call_actor_event(
+                actor,
+                class,
+                instance,
+                "FellOutOfWorld",
+                Vec::new(),
+                actions,
+            )
+        }
+    }
+
     pub(in crate::world) fn phys_landed(
         &mut self,
         actor: usize,
@@ -117,14 +148,15 @@ impl ScriptRuntime {
             .collision
             .as_ref()
             .ok_or_else(|| "physics requires a configured BSP collision model".to_owned())?;
-        let zone_actor = zone_actor_at(
+        let Some(zone_actor) = zone_actor_at(
             collision,
             location,
             self.level_package.as_ref(),
             &self.object_actors,
             self.level_info,
-        )
-        .ok_or_else(|| "location has no registered ZoneInfo or LevelInfo".to_owned())?;
+        ) else {
+            return Ok(None);
+        };
         let class = self
             .actor_classes
             .get(&zone_actor)

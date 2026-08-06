@@ -518,12 +518,7 @@ impl ScriptRuntime {
         let Some(actor) = self.object_actors.get(&object).copied() else {
             let resolved = self.resolved_object(&object)?;
             let export = &resolved.package.summary().exports[resolved.export_index];
-            if resolved
-                .package
-                .summary()
-                .class_name(export)
-                .is_some_and(|class| class.eq_ignore_ascii_case("Class"))
-            {
+            if export.class == ObjectReference::None {
                 let self_handle =
                     self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
                         DispatchError::UnregisteredActor {
@@ -1515,6 +1510,45 @@ mod iterator_tests {
         let actor = Vec3::new(512.0, 0.0, 0.0);
         assert!(within_radius(None, location, actor));
         assert!(!within_radius(Some(15.0), location, actor));
+    }
+
+    #[test]
+    fn class_object_context_uses_class_defaults() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let current_class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        let class = object_id(&source, 1);
+        assert_eq!(source.summary().exports[1].class, ObjectReference::None);
+        runtime
+            .class_defaults
+            .insert(class.clone(), InstanceState::default());
+        let current_object = runtime_actor_id(7);
+        runtime.actor_objects.insert(7, current_object.clone());
+        runtime.object_actors.insert(current_object, 7);
+        runtime.actor_classes.insert(7, object_id(&source, 0));
+        let receiver = runtime.object_handle(class).unwrap();
+
+        assert_eq!(
+            runtime
+                .dispatch_context_call(
+                    7,
+                    &current_class,
+                    receiver,
+                    &source,
+                    FunctionCall::Native(RAND_RANGE),
+                    &[Value::Float(2.0), Value::Float(2.0)],
+                    &mut InstanceState::default(),
+                    &mut Vec::new(),
+                    0,
+                )
+                .unwrap()
+                .value,
+            Value::Float(2.0),
+        );
     }
 
     #[test]

@@ -278,14 +278,7 @@ impl ScriptRuntime {
         }
         let old_location = self.actor_vector(class, instance, "Location")?;
         let Some(zone) = self.zone_physics(Vec3::from_array(old_location), actor, instance)? else {
-            self.call_actor_event(
-                actor,
-                class,
-                instance,
-                "FellOutOfWorld",
-                Vec::new(),
-                actions,
-            )?;
+            self.fell_out_of_world(actor, class, instance, actions)?;
             return Ok(());
         };
         self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;

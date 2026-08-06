@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use super::state::set_event_disabled;
 use super::*;
@@ -138,6 +141,7 @@ impl ScriptRuntime {
         let mut actors = self
             .actor_objects
             .iter()
+            .filter(|(_, object)| object.package.as_ref() != "<runtime>")
             .map(|(&actor, object)| {
                 self.save_actor(
                     actor,
@@ -169,6 +173,7 @@ impl ScriptRuntime {
         let mut animation_commands = self
             .animation_commands
             .iter()
+            .filter(|(actor, _)| !self.transient_actor(**actor))
             .map(|(&actor, command)| {
                 if !command.relative_rate.is_finite() || !command.tween_time.is_finite() {
                     return Err(save_error("animation command contains a non-finite value"));
@@ -188,22 +193,32 @@ impl ScriptRuntime {
         let mut animation_channels = self
             .animation_channels
             .iter()
+            .filter(|(actor, _)| !self.transient_actor(**actor))
             .flat_map(|(&actor, channels)| {
-                channels.iter().map(move |channel| SavedAnimationChannel {
-                    actor,
-                    root_bone: channel.root_bone,
-                    target: channel.actor,
-                })
+                channels
+                    .iter()
+                    .filter(|channel| !self.transient_actor(channel.actor))
+                    .map(move |channel| SavedAnimationChannel {
+                        actor,
+                        root_bone: channel.root_bone,
+                        target: channel.actor,
+                    })
             })
             .collect::<Vec<_>>();
         animation_channels
             .sort_by_key(|channel| (channel.actor, channel.root_bone, channel.target));
-        let mut animating = self.animating.iter().copied().collect::<Vec<_>>();
+        let mut animating = self
+            .animating
+            .iter()
+            .copied()
+            .filter(|actor| !self.transient_actor(*actor))
+            .collect::<Vec<_>>();
         animating.sort_unstable();
         let mut player_probe_touching = self
             .player_probe_touching
             .iter()
             .copied()
+            .filter(|actor| !self.transient_actor(*actor))
             .collect::<Vec<_>>();
         player_probe_touching.sort_unstable();
         let snapshot = SavedRuntime {
@@ -289,6 +304,8 @@ impl ScriptRuntime {
     }
 
     fn restore_snapshot(&mut self, snapshot: SavedRuntime) -> DispatchResult<Vec<ActorAction>> {
+        let mut snapshot = snapshot;
+        discard_transient_actors(&mut snapshot);
         if self
             .actor_objects
             .values()
@@ -301,49 +318,27 @@ impl ScriptRuntime {
             authored.insert(saved_object(object)?, actor);
         }
         let mut targets = BTreeMap::new();
-        let mut dynamic = Vec::new();
         for saved in &snapshot.actors {
             if targets.insert(saved.actor, 0usize).is_some() {
                 return Err(save_error("snapshot has duplicate actor indices"));
             }
-            if saved.object.package == "<runtime>" {
-                dynamic.push(saved);
-            } else {
-                let actor = authored
-                    .remove(&saved.object)
-                    .ok_or_else(|| save_error("snapshot actor is missing from the authored map"))?;
-                let class = self
-                    .actor_classes
-                    .get(&actor)
-                    .ok_or(DispatchError::UnregisteredActor { actor })?;
-                if saved_object(class)? != saved.class {
-                    return Err(save_error(
-                        "snapshot actor class does not match the authored map",
-                    ));
-                }
-                targets.insert(saved.actor, actor);
+            let actor = authored
+                .remove(&saved.object)
+                .ok_or_else(|| save_error("snapshot actor is missing from the authored map"))?;
+            let class = self
+                .actor_classes
+                .get(&actor)
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            if saved_object(class)? != saved.class {
+                return Err(save_error(
+                    "snapshot actor class does not match the authored map",
+                ));
             }
+            targets.insert(saved.actor, actor);
         }
         if !authored.is_empty() {
             return Err(save_error("snapshot is missing authored actors"));
         }
-        for saved in dynamic {
-            let actor = saved.actor;
-            if self.actor_objects.contains_key(&actor) {
-                return Err(save_error(
-                    "snapshot dynamic actor conflicts with an authored actor",
-                ));
-            }
-            let class = self.resolve_saved_object(&saved.class)?;
-            let object = runtime_actor_id(actor);
-            self.object_handle(object.clone())?;
-            self.object_actors.insert(object.clone(), actor);
-            self.actor_objects.insert(actor, object);
-            self.actor_classes
-                .insert(actor, object_id(&class.package, class.export_index));
-            targets.insert(saved.actor, actor);
-        }
-
         self.instances.clear();
         self.object_instances.clear();
         self.actor_states.clear();
@@ -525,41 +520,6 @@ impl ScriptRuntime {
             let actor = *targets
                 .get(&saved.actor)
                 .ok_or_else(|| save_error("snapshot projection actor is missing"))?;
-            if saved.object.package == "<runtime>" && !saved.destroyed {
-                let class_id = self
-                    .actor_classes
-                    .get(&actor)
-                    .cloned()
-                    .ok_or(DispatchError::UnregisteredActor { actor })?;
-                let class = self.resolved_object(&class_id)?;
-                let instance = self
-                    .instances
-                    .get(&actor)
-                    .cloned()
-                    .ok_or(DispatchError::ActiveActorContext { actor })?;
-                let location = actor_vector(self, &class, &instance, "Location")?;
-                let rotation = actor_rotator(self, &class, &instance, "Rotation")?;
-                actions.push(ActorAction::SpawnActor {
-                    actor,
-                    name: format!(
-                        "{}{}",
-                        class
-                            .package
-                            .summary()
-                            .name(class.package.summary().exports[class.export_index].object_name),
-                        actor
-                    ),
-                    class_package: Arc::clone(&class.package.summary().source),
-                    class_export: class.export_index,
-                    class_name: class
-                        .package
-                        .summary()
-                        .name(class.package.summary().exports[class.export_index].object_name)
-                        .to_owned(),
-                    location,
-                    rotation,
-                });
-            }
             actions.extend(self.saved_scene_actions(actor)?);
             if saved.destroyed {
                 actions.push(ActorAction::DestroyActor { actor });
@@ -728,6 +688,88 @@ impl ScriptRuntime {
         }
         Ok(actions)
     }
+
+    fn transient_actor(&self, actor: usize) -> bool {
+        self.actor_objects
+            .get(&actor)
+            .is_some_and(|object| object.package.as_ref() == "<runtime>")
+    }
+}
+
+fn discard_transient_actors(snapshot: &mut SavedRuntime) {
+    let transient = snapshot
+        .actors
+        .iter()
+        .filter(|actor| actor.object.package == "<runtime>")
+        .map(|actor| actor.actor)
+        .collect::<BTreeSet<_>>();
+    if transient.is_empty() {
+        return;
+    }
+    snapshot
+        .actors
+        .retain(|actor| !transient.contains(&actor.actor));
+    for actor in &mut snapshot.actors {
+        for (_, value) in &mut actor.instance {
+            discard_transient_reference(value);
+        }
+        if let Some(frame) = &mut actor.frame {
+            for (_, value) in &mut frame.locals {
+                discard_transient_reference(value);
+            }
+            if saved_latent_actor(frame.latent).is_some_and(|actor| transient.contains(&actor)) {
+                frame.latent = SavedLatent::Continue;
+            }
+        }
+    }
+    for instance in &mut snapshot.object_instances {
+        for (_, value) in &mut instance.instance {
+            discard_transient_reference(value);
+        }
+    }
+    snapshot
+        .animation_commands
+        .retain(|command| !transient.contains(&command.actor));
+    snapshot.animation_channels.retain(|channel| {
+        !transient.contains(&channel.actor) && !transient.contains(&channel.target)
+    });
+    snapshot
+        .animating
+        .retain(|actor| !transient.contains(actor));
+    snapshot
+        .player_probe_touching
+        .retain(|actor| !transient.contains(actor));
+}
+
+fn discard_transient_reference(value: &mut SavedValue) {
+    match value {
+        SavedValue::Object(Some(object)) if object.package == "<runtime>" => {
+            *value = SavedValue::Object(None);
+        }
+        SavedValue::Struct(fields) => {
+            for (_, value) in fields {
+                discard_transient_reference(value);
+            }
+        }
+        SavedValue::Array(values) => {
+            for value in values {
+                discard_transient_reference(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn saved_latent_actor(latent: SavedLatent) -> Option<usize> {
+    match latent {
+        SavedLatent::FinishAnimation(actor)
+        | SavedLatent::FinishInterpolation(actor)
+        | SavedLatent::MoveTo(actor)
+        | SavedLatent::MoveToward(actor)
+        | SavedLatent::TurnTo(actor)
+        | SavedLatent::TurnToward(actor) => Some(actor),
+        SavedLatent::Continue | SavedLatent::Stop | SavedLatent::Sleep(_) => None,
+    }
 }
 
 fn saved_object(object: &ObjectId) -> DispatchResult<SavedObject> {
@@ -747,6 +789,14 @@ fn saved_object(object: &ObjectId) -> DispatchResult<SavedObject> {
     })
 }
 
+fn saved_object_reference(object: &ObjectId) -> DispatchResult<Option<SavedObject>> {
+    if object.package.as_ref() == "<runtime>" {
+        Ok(None)
+    } else {
+        saved_object(object).map(Some)
+    }
+}
+
 fn saved_stored_value(runtime: &ScriptRuntime, value: &StoredValue) -> DispatchResult<SavedValue> {
     Ok(match value {
         StoredValue::Value(value) => saved_plain_value(runtime, value)?,
@@ -757,9 +807,13 @@ fn saved_stored_value(runtime: &ScriptRuntime, value: &StoredValue) -> DispatchR
                 .collect::<DispatchResult<_>>()?,
         ),
         StoredValue::Name(value) => SavedValue::Name(value.clone()),
-        StoredValue::Object(value) => {
-            SavedValue::Object(value.as_ref().map(saved_object).transpose()?)
-        }
+        StoredValue::Object(value) => SavedValue::Object(
+            value
+                .as_ref()
+                .map(saved_object_reference)
+                .transpose()?
+                .flatten(),
+        ),
         StoredValue::UnresolvedObject(value) => SavedValue::UnresolvedObject(value.clone()),
         StoredValue::SelfObject => SavedValue::SelfObject,
     })
@@ -783,7 +837,7 @@ fn saved_plain_value(runtime: &ScriptRuntime, value: &Value) -> DispatchResult<S
                 .ok()
                 .filter(|index| *index < runtime.handle_objects.len())
                 .ok_or(DispatchError::InvalidObjectHandle { handle: *value })?;
-            SavedValue::Object(Some(saved_object(&runtime.handle_objects[index])?))
+            SavedValue::Object(saved_object_reference(&runtime.handle_objects[index])?)
         }
         Value::Object(value) => return Err(DispatchError::InvalidObjectHandle { handle: *value }),
         Value::Vector(value) if value.iter().all(|value| value.is_finite()) => {
@@ -833,9 +887,9 @@ fn saved_frame_value(runtime: &ScriptRuntime, value: &Value) -> DispatchResult<S
                 .ok()
                 .filter(|index| *index < runtime.handle_objects.len())
                 .ok_or(DispatchError::InvalidObjectHandle { handle: *handle })?;
-            Ok(SavedValue::Object(Some(saved_object(
+            Ok(SavedValue::Object(saved_object_reference(
                 &runtime.handle_objects[index],
-            )?)))
+            )?))
         }
         Value::Struct(values) => {
             let mut fields = values
@@ -891,36 +945,6 @@ fn restore_latent(
         SavedLatent::TurnTo(value) => LatentAction::TurnTo(actor(value)?),
         SavedLatent::TurnToward(value) => LatentAction::TurnToward(actor(value)?),
     })
-}
-
-fn actor_vector(
-    runtime: &mut ScriptRuntime,
-    class: &ResolvedObject,
-    instance: &InstanceState,
-    name: &str,
-) -> DispatchResult<[f32; 3]> {
-    match runtime.instance_property(class, instance, name)? {
-        Some(StoredValue::Value(Value::Vector(value)))
-            if value.iter().all(|value| value.is_finite()) =>
-        {
-            Ok(value)
-        }
-        Some(value) => Err(save_error(format!("actor {name} is {value:?}"))),
-        None => Err(save_error(format!("actor has no {name} property"))),
-    }
-}
-
-fn actor_rotator(
-    runtime: &mut ScriptRuntime,
-    class: &ResolvedObject,
-    instance: &InstanceState,
-    name: &str,
-) -> DispatchResult<[i32; 3]> {
-    match runtime.instance_property(class, instance, name)? {
-        Some(StoredValue::Value(Value::Rotator(value))) => Ok(value),
-        Some(value) => Err(save_error(format!("actor {name} is {value:?}"))),
-        None => Err(save_error(format!("actor has no {name} property"))),
-    }
 }
 
 fn actor_animation_phase(
@@ -1525,5 +1549,99 @@ fn read_value(reader: &mut SaveReader<'_>, depth: usize) -> DispatchResult<Saved
 fn save_error(message: impl Into<String>) -> DispatchError {
     DispatchError::SaveState {
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved_actor(actor: usize, package: &str) -> SavedActor {
+        SavedActor {
+            actor,
+            object: SavedObject {
+                package: package.to_owned(),
+                export_index: 0,
+            },
+            class: SavedObject {
+                package: "Test".to_owned(),
+                export_index: 1,
+            },
+            instance: Vec::new(),
+            state: None,
+            state_revision: 0,
+            frame: None,
+            timer: None,
+            destroyed: false,
+            disabled_events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_snapshots_discard_transient_actors_and_references() {
+        let transient = SavedObject {
+            package: "<runtime>".to_owned(),
+            export_index: 9,
+        };
+        let field = SavedObject {
+            package: "Test".to_owned(),
+            export_index: 2,
+        };
+        let mut authored = saved_actor(1, "Test");
+        authored
+            .instance
+            .push((field.clone(), SavedValue::Object(Some(transient.clone()))));
+        authored.frame = Some(SavedFrame {
+            state: field.clone(),
+            instruction_pointer: 0,
+            locals: vec![(0, SavedValue::Object(Some(transient.clone())))],
+            latent: SavedLatent::MoveToward(9),
+        });
+        let mut snapshot = SavedRuntime {
+            map: "Maps/Test.unr".to_owned(),
+            random_state: 0,
+            player_alt_fire_pressed: false,
+            actors: vec![authored, saved_actor(9, "<runtime>")],
+            object_instances: vec![SavedObjectInstance {
+                object: field.clone(),
+                class: field.clone(),
+                instance: vec![(field, SavedValue::Object(Some(transient)))],
+            }],
+            animation_commands: vec![SavedAnimationCommand {
+                actor: 9,
+                sequence: "Cast".to_owned(),
+                relative_rate: 1.0,
+                tween_time: 0.0,
+                looping: true,
+                tween_only: false,
+                root_motion: false,
+            }],
+            animation_channels: vec![SavedAnimationChannel {
+                actor: 1,
+                root_bone: 0,
+                target: 9,
+            }],
+            animating: vec![9],
+            player_probe_touching: vec![9],
+        };
+
+        discard_transient_actors(&mut snapshot);
+
+        assert_eq!(snapshot.actors.len(), 1);
+        assert!(matches!(
+            snapshot.actors[0].instance[0].1,
+            SavedValue::Object(None)
+        ));
+        let frame = snapshot.actors[0].frame.as_ref().unwrap();
+        assert!(matches!(frame.locals[0].1, SavedValue::Object(None)));
+        assert!(matches!(frame.latent, SavedLatent::Continue));
+        assert!(matches!(
+            snapshot.object_instances[0].instance[0].1,
+            SavedValue::Object(None)
+        ));
+        assert!(snapshot.animation_commands.is_empty());
+        assert!(snapshot.animation_channels.is_empty());
+        assert!(snapshot.animating.is_empty());
+        assert!(snapshot.player_probe_touching.is_empty());
     }
 }
