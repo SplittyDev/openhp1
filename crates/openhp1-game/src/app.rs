@@ -19,7 +19,7 @@ use openhp1_runtime::{
 };
 use openhp1_scene::{
     LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
-    initialize_runtime_with_console_unstarted, unreal_to_render,
+    unreal_to_render,
 };
 use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
@@ -497,6 +497,20 @@ struct Graphics {
     display_settings: DisplaySettings,
 }
 
+fn initialize_saved_runtime(
+    scene: &mut LoadedScene,
+    console: ConsoleCommands,
+    in_hub_flow: bool,
+) -> Result<(ScriptRuntime, usize)> {
+    let mut runtime = initialize_runtime_with_console(scene, console, in_hub_flow, |_| Ok(()))?;
+    let mut deferred_calls = 0;
+    let actions = runtime.dispatch_player_event("Possess", &[])?;
+    deferred_calls += apply_runtime_actions_with(scene, &mut runtime, actions, |_| Ok(()))?.1;
+    let actions = runtime.initialize_player_hud()?;
+    deferred_calls += apply_runtime_actions_with(scene, &mut runtime, actions, |_| Ok(()))?.1;
+    Ok((runtime, deferred_calls))
+}
+
 impl Graphics {
     fn new(
         window: Arc<Window>,
@@ -583,38 +597,22 @@ impl Graphics {
                 None
             }
         };
-        let mut runtime = if saved.is_some() {
-            initialize_runtime_with_console_unstarted(&mut scene, console.clone(), in_hub_flow)?
+        let (mut runtime, mut deferred_calls) = if saved.is_some() {
+            initialize_saved_runtime(&mut scene, console.clone(), in_hub_flow)?
         } else {
-            initialize_runtime_with_console(&mut scene, console.clone(), in_hub_flow, |action| {
-                play_audio_action(audio.as_mut(), action)
-            })?
+            (
+                initialize_runtime_with_console(
+                    &mut scene,
+                    console.clone(),
+                    in_hub_flow,
+                    |action| play_audio_action(audio.as_mut(), action),
+                )?,
+                0,
+            )
         };
         let player = runtime
             .player_actor()
             .context("Lev_Tut1 has no registered PlayerPawn actor")?;
-        let mut deferred_calls = 0;
-        if saved.is_some() {
-            let actions = runtime.initialize_game()?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-            for event in [
-                "PreBeginPlay",
-                "BeginPlay",
-                "PostBeginPlay",
-                "SetInitialState",
-            ] {
-                let actions = runtime.dispatch_player_event(event, &[])?;
-                deferred_calls +=
-                    apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-            }
-            let actions = runtime.dispatch_player_event("Possess", &[])?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-            let actions = runtime.initialize_player_hud()?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-        }
         if let Some(saved) = saved {
             let map = map_identifier(&scene.path, &game_root)?;
             let actions = runtime.restore_game(&map, saved)?;
@@ -2079,6 +2077,48 @@ mod tests {
         assert_eq!(active_save_slot(99, Some(3)), 3);
         assert_eq!(active_save_slot(99, None), 99);
         assert_eq!(active_save_slot(2, Some(3)), 2);
+    }
+
+    #[test]
+    #[ignore = "requires the local original-game corpus"]
+    fn saved_quidditch_runtime_reconstructs_hoop_particle_owners() {
+        let game_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res");
+        let map = game_root.join("Maps/Lev_Tut2.unr");
+        let mut source_scene = LoadedScene::load(map.clone()).unwrap();
+        let source_console = ConsoleCommands::headless(&game_root).unwrap();
+        let (source, _) =
+            initialize_saved_runtime(&mut source_scene, source_console, true).unwrap();
+        let snapshot = source.save_game("Maps/Lev_Tut2.unr").unwrap();
+
+        let mut scene = LoadedScene::load(map).unwrap();
+        let console = ConsoleCommands::headless(&game_root).unwrap();
+        let (mut runtime, _) = initialize_saved_runtime(&mut scene, console, true).unwrap();
+        let actions = runtime
+            .restore_game("Maps/Lev_Tut2.unr", &snapshot)
+            .unwrap();
+        apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(())).unwrap();
+
+        let hoop_actors = scene
+            .actors
+            .iter()
+            .enumerate()
+            .filter(|(_, actor)| actor.name.to_ascii_lowercase().starts_with("broomhoop"))
+            .map(|(actor, _)| actor)
+            .collect::<HashSet<_>>();
+        let emitters = runtime.particle_emitters().unwrap();
+        let hoop_emitters = emitters
+            .iter()
+            .filter(|emitter| {
+                emitter
+                    .owner
+                    .is_some_and(|owner| hoop_actors.contains(&owner))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(hoop_emitters.len(), hoop_actors.len());
+        assert_eq!(
+            hoop_emitters.iter().filter(|emitter| emitter.emit).count(),
+            3
+        );
     }
 
     #[test]

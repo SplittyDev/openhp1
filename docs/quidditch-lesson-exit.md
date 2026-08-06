@@ -150,3 +150,10 @@ A save written after the wrong mode was selected contains the wrong cutscene's
 entire actor state, not only a stale `bReplay` boolean. Such a checkpoint must
 be regenerated at the same level entrance under the correct host-flow mode;
 changing the boolean or replaying lifecycle events is not a safe migration.
+
+Save loading must reconstruct the full map lifecycle before overlaying the
+authored snapshot, not only the player lifecycle. `BroomHoop.PostBeginPlay`
+sets `DrawType=DT_None` and creates the attached particle actors that render
+the course; those spawned actors are intentionally absent from the snapshot.
+Restoring without that reconstruction leaves correctly active hoop states but
+no visible rings.
