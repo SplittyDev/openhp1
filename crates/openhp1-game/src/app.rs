@@ -518,6 +518,7 @@ impl Graphics {
         )
         .context("could not configure game console commands")?;
         let screenshot_dir = console.settings_dir().join("Screenshots");
+        let settings_dir = console.settings_dir().to_path_buf();
         let save_dir = console.settings_dir().join("Saves");
         let (music_volume, sound_volume) = audio_volumes(&scene);
         let mut audio = match AudioPlayer::new(music_volume, sound_volume) {
@@ -654,6 +655,7 @@ impl Graphics {
             &egui_context,
             &game_root,
             &scene.path,
+            &settings_dir,
             &save_dir,
             ui::OptionsState {
                 resolution: (initial_size.width, initial_size.height),

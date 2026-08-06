@@ -468,10 +468,11 @@ impl GameUi {
         context: &egui::Context,
         game_root: &Path,
         map: &Path,
+        settings_dir: &Path,
         save_dir: &Path,
         options: OptionsState,
     ) -> Result<Self> {
-        let mut packages = PackageStore::scan_game_root_with_settings_dir(game_root, save_dir)?;
+        let mut packages = PackageStore::scan_game_root_with_settings_dir(game_root, settings_dir)?;
         let textures = UiTextures {
             main_background: (1..=6)
                 .map(|index| {
