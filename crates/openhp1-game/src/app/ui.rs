@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
-use openhp1_runtime::PlayerUiState;
+use openhp1_runtime::{PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
@@ -389,6 +389,7 @@ pub(super) struct GameUi {
     selected_slot: Option<usize>,
     action: Option<Action>,
     save_slots: [bool; 6],
+    save_slot_textures: [Option<TextureHandle>; 6],
     labels: Labels,
     option_labels: OptionLabels,
     options: OptionValues,
@@ -1007,6 +1008,11 @@ impl GameUi {
             fs::metadata(save_dir.join(format!("save{slot}.usa")))
                 .is_ok_and(|metadata| metadata.is_file())
         });
+        let save_slot_textures = std::array::from_fn(|slot| {
+            save_slots[slot]
+                .then(|| load_save_thumbnail(context, game_root, save_dir, slot))
+                .flatten()
+        });
         let quidditch_unlocked = packages
             .config_values("HP", "HPMenu.FEQuidMatchPage", "unlocked")
             .first()
@@ -1025,6 +1031,7 @@ impl GameUi {
             selected_slot: None,
             action: None,
             save_slots,
+            save_slot_textures,
             labels,
             option_labels,
             options,
@@ -1360,8 +1367,12 @@ impl GameUi {
                 scale,
                 x,
                 y,
-                &self.textures.empty_slot,
-                &self.textures.empty_slot,
+                self.save_slot_textures[slot]
+                    .as_ref()
+                    .unwrap_or(&self.textures.empty_slot),
+                self.save_slot_textures[slot]
+                    .as_ref()
+                    .unwrap_or(&self.textures.empty_slot),
                 kind,
             ) {
                 if self.save_slots[slot] {
@@ -2281,6 +2292,123 @@ fn load_texture(
     Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
 }
 
+fn load_save_thumbnail(
+    context: &egui::Context,
+    game_root: &Path,
+    save_dir: &Path,
+    slot: usize,
+) -> Option<TextureHandle> {
+    let save = fs::read(save_dir.join(format!("save{slot}.usa"))).ok()?;
+    let level = ScriptRuntime::saved_game_map(&save)
+        .ok()
+        .and_then(|map| map_stem(&map));
+    let directory = fs::read_dir(game_root.join("Save")).ok()?;
+    let files = directory
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            Some((
+                entry.file_name().to_str()?.to_ascii_lowercase(),
+                entry.path(),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    let path = level
+        .and_then(|level| files.get(&format!("sgs {level}.bmp")).cloned())
+        .or_else(|| files.get("defaultgamesnap.bmp").cloned())?;
+    let image = decode_indexed_bmp(&fs::read(path).ok()?).ok()?;
+    Some(context.load_texture(
+        format!("save-thumbnail-{slot}"),
+        image,
+        egui::TextureOptions::NEAREST,
+    ))
+}
+
+fn map_stem(map: &str) -> Option<String> {
+    let filename = map.rsplit(['/', '\\']).next()?;
+    Some(
+        filename
+            .strip_suffix(".unr")
+            .unwrap_or(filename)
+            .to_ascii_lowercase(),
+    )
+}
+
+fn decode_indexed_bmp(bytes: &[u8]) -> Result<egui::ColorImage> {
+    let u16_at = |offset| {
+        bytes
+            .get(offset..offset + 2)
+            .map(|value| u16::from_le_bytes([value[0], value[1]]))
+    };
+    let u32_at = |offset| {
+        bytes
+            .get(offset..offset + 4)
+            .map(|value| u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+    };
+    if bytes.get(..2) != Some(b"BM")
+        || u16_at(26) != Some(1)
+        || u16_at(28) != Some(8)
+        || u32_at(30) != Some(0)
+    {
+        bail!("save thumbnail is not an uncompressed 8-bit BMP");
+    }
+    let data_offset = usize::try_from(u32_at(10).context("BMP has no pixel offset")?)?;
+    let dib_size = usize::try_from(u32_at(14).context("BMP has no DIB header")?)?;
+    let width = i32::from_le_bytes(bytes.get(18..22).context("BMP has no width")?.try_into()?);
+    let signed_height =
+        i32::from_le_bytes(bytes.get(22..26).context("BMP has no height")?.try_into()?);
+    if width <= 0 || signed_height == 0 {
+        bail!("save thumbnail has invalid dimensions");
+    }
+    let width = usize::try_from(width)?;
+    let height = usize::try_from(signed_height.unsigned_abs())?;
+    let colors = match usize::try_from(u32_at(46).unwrap_or(0))? {
+        0 => 256,
+        colors => colors,
+    };
+    let palette_offset = 14usize
+        .checked_add(dib_size)
+        .context("BMP palette overflow")?;
+    let palette_end = palette_offset
+        .checked_add(colors.checked_mul(4).context("BMP palette overflow")?)
+        .context("BMP palette overflow")?;
+    if palette_end > data_offset || palette_end > bytes.len() {
+        bail!("save thumbnail palette is truncated");
+    }
+    let stride = width.checked_add(3).context("BMP row overflow")? & !3;
+    let pixel_end = data_offset
+        .checked_add(stride.checked_mul(height).context("BMP pixel overflow")?)
+        .context("BMP pixel overflow")?;
+    if pixel_end > bytes.len() {
+        bail!("save thumbnail pixels are truncated");
+    }
+    let rgba_len = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .context("BMP image size overflow")?;
+    let mut rgba = vec![0; rgba_len];
+    for y in 0..height {
+        let source_y = if signed_height > 0 { height - 1 - y } else { y };
+        for x in 0..width {
+            let index = usize::from(bytes[data_offset + source_y * stride + x]);
+            if index >= colors {
+                bail!("save thumbnail uses a missing palette color");
+            }
+            let palette = palette_offset + index * 4;
+            let pixel = (y * width + x) * 4;
+            rgba[pixel..pixel + 4].copy_from_slice(&[
+                bytes[palette + 2],
+                bytes[palette + 1],
+                bytes[palette],
+                255,
+            ]);
+        }
+    }
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [width, height],
+        &rgba,
+    ))
+}
+
 fn load_audio_clip(packages: &mut PackageStore, name: &str) -> Result<AudioClip> {
     let ResolvedObject {
         package,
@@ -2805,6 +2933,30 @@ mod tests {
             ),
             Some(0)
         );
+    }
+
+    #[test]
+    fn save_thumbnail_decodes_bottom_up_indexed_bmp() {
+        let mut bmp = vec![0; 70];
+        bmp[..2].copy_from_slice(b"BM");
+        bmp[2..6].copy_from_slice(&70u32.to_le_bytes());
+        bmp[10..14].copy_from_slice(&62u32.to_le_bytes());
+        bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&2i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&2i32.to_le_bytes());
+        bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+        bmp[28..30].copy_from_slice(&8u16.to_le_bytes());
+        bmp[46..50].copy_from_slice(&2u32.to_le_bytes());
+        bmp[58..62].copy_from_slice(&[0, 0, 255, 0]);
+        bmp[62..66].copy_from_slice(&[1, 0, 0, 0]);
+        bmp[66..70].copy_from_slice(&[0, 1, 0, 0]);
+
+        let image = decode_indexed_bmp(&bmp).unwrap();
+        assert_eq!(image.size, [2, 2]);
+        assert_eq!(image.pixels[0], Color32::BLACK);
+        assert_eq!(image.pixels[1], Color32::RED);
+        assert_eq!(image.pixels[2], Color32::RED);
+        assert_eq!(map_stem(r"Maps\Lev_Tut1.unr").as_deref(), Some("lev_tut1"));
     }
 
     #[test]
