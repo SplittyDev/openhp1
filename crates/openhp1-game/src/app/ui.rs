@@ -2416,12 +2416,15 @@ fn option_button(
         Id::new(("option", x.to_bits(), y.to_bits())),
         Sense::click(),
     );
-    ui.painter().image(
-        texture.id(),
-        rect,
-        texture_uv(texture, Vec2::new(134.0, 18.0)),
-        Color32::WHITE,
-    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().image(
+            texture.id(),
+            rect,
+            texture_uv(texture, Vec2::new(134.0, 18.0)),
+            Color32::WHITE,
+        );
+    }
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,

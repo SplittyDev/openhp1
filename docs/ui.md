@@ -57,6 +57,9 @@ misrepresent it. Only the 32-bit colour format supported by the wgpu renderer
 is exposed. Detail lists and localized display names come directly from
 `HPMenu`, and control coordinates follow the irregular authored row spacing
 which aligns with the controls baked into `FEOptionsBackTexture1` through `6`.
+The purple option bars are part of that background; `FEOverOption3Texture` is
+painted only while the matching control is under the pointer, and
+`FEOverOptionTexture` remains visible while its drop-down is open.
 
 The Quidditch page's `globalconfig unlocked` value is a three-state progression
 stored under `HPMenu.FEQuidMatchPage` in `HP.ini`: `0` locks both choices, `1`
