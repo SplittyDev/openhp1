@@ -43,10 +43,13 @@ actual WAV duration plus the authored lead/trailing delay.
 `FEOptionsPage` uses `HPMenuOptionCombo`, not cycling buttons, for resolution,
 colour depth, texture detail, and object detail. Its shipped combo list uses
 `FEComboListSmall` for at most three entries, `FEComboListLarge` otherwise,
-and stretches `FEComboListBox` across the hovered row. OpenHP1 obtains modern
-resolution entries from winit's display modes and exposes only the 32-bit
-colour format supported by the wgpu renderer; the detail lists and localized
-display names come directly from `HPMenu`.
+and stretches `FEComboListBox` across the hovered row. The shipped
+`IsSupportedResolution` list is 512x384, 640x480, 800x600, and 1024x768;
+OpenHP1 also retains the active modern window size so opening Options does not
+misrepresent it. Only the 32-bit colour format supported by the wgpu renderer
+is exposed. Detail lists and localized display names come directly from
+`HPMenu`, and control coordinates follow the irregular authored row spacing
+which aligns with the controls baked into `FEOptionsBackTexture1` through `6`.
 
 The Quidditch page's `globalconfig unlocked` value is a three-state progression
 stored under `HPMenu.FEQuidMatchPage` in `HP.ini`: `0` locks both choices, `1`

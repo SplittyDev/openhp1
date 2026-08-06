@@ -13,6 +13,7 @@ use openhp1_runtime::PlayerUiState;
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
+const AUTHORED_RESOLUTIONS: [(u32, u32); 4] = [(512, 384), (640, 480), (800, 600), (1024, 768)];
 const QUIDDITCH_FIXTURES: [QuidditchFixture; 6] = [
     QuidditchFixture::new(0, 3, 1, 2, "Quid_SlythA.unr"),
     QuidditchFixture::new(0, 1, 2, 3, "Quid_RavenA.unr"),
@@ -952,12 +953,7 @@ impl GameUi {
             .collect::<Result<_>>()?;
         let harry_card_objective =
             packages.localize("Pickup2", "all", "harry_potter_card_objective");
-        let mut resolutions = options.resolutions;
-        if !resolutions.contains(&options.resolution) {
-            resolutions.push(options.resolution);
-        }
-        resolutions.sort_unstable();
-        resolutions.dedup();
+        let resolutions = option_resolutions(options.resolutions, options.resolution);
         let resolution = resolutions
             .iter()
             .position(|candidate| *candidate == options.resolution)
@@ -1366,7 +1362,7 @@ impl GameUi {
         option_text(ui, scale, 212.0, 59.0, &self.option_labels.video, BLUE);
         option_text(ui, scale, 374.0, 59.0, &self.option_labels.controls, BLUE);
 
-        let left_rows = [87.0, 118.0, 149.0, 180.0];
+        let left_rows = [87.0, 125.0, 165.0, 201.0];
         let left_labels = [
             &self.option_labels.resolution,
             &self.option_labels.color_depth,
@@ -1423,7 +1419,7 @@ impl GameUi {
             ui,
             scale,
             45.0,
-            211.0,
+            238.0,
             &self.option_labels.brightness,
             PURPLE,
         );
@@ -1431,7 +1427,7 @@ impl GameUi {
             ui,
             scale,
             159.0,
-            205.0,
+            238.0,
             &self.textures.slider_track,
             &self.textures.slider_knob,
             &mut self.options.brightness,
@@ -1442,7 +1438,7 @@ impl GameUi {
             ui,
             scale,
             45.0,
-            244.0,
+            271.0,
             &self.option_labels.mouse_speed,
             PURPLE,
         );
@@ -1450,7 +1446,7 @@ impl GameUi {
             ui,
             scale,
             159.0,
-            238.0,
+            271.0,
             &self.textures.slider_track,
             &self.textures.slider_knob,
             &mut self.options.mouse_speed,
@@ -1459,7 +1455,7 @@ impl GameUi {
             ui,
             scale,
             159.0,
-            268.0,
+            298.0,
             &self.option_labels.detail[3],
             PURPLE,
         );
@@ -1467,16 +1463,16 @@ impl GameUi {
             ui,
             scale,
             293.0,
-            268.0,
+            298.0,
             &self.option_labels.detail[1],
             PURPLE,
         );
-        option_text(ui, scale, 212.0, 294.0, &self.option_labels.audio, BLUE);
+        option_text(ui, scale, 212.0, 326.0, &self.option_labels.audio, BLUE);
         option_label(
             ui,
             scale,
             45.0,
-            320.0,
+            352.0,
             &self.option_labels.music_volume,
             PURPLE,
         );
@@ -1484,7 +1480,7 @@ impl GameUi {
             ui,
             scale,
             159.0,
-            314.0,
+            352.0,
             &self.textures.slider_track,
             &self.textures.slider_knob,
             &mut self.options.music_volume,
@@ -1497,7 +1493,7 @@ impl GameUi {
             ui,
             scale,
             45.0,
-            357.0,
+            389.0,
             &self.option_labels.sound_volume,
             PURPLE,
         );
@@ -1505,7 +1501,7 @@ impl GameUi {
             ui,
             scale,
             159.0,
-            351.0,
+            389.0,
             &self.textures.slider_track,
             &self.textures.slider_knob,
             &mut self.options.sound_volume,
@@ -1525,8 +1521,8 @@ impl GameUi {
             "Z",
             "X",
         ];
-        for (index, (label, value)) in self.option_labels.keys.iter().zip(key_values).enumerate() {
-            let y = 87.0 + index as f32 * 31.0;
+        let key_rows = [87.0, 125.0, 165.0, 201.0, 239.0, 279.0, 317.0, 357.0];
+        for ((label, value), y) in self.option_labels.keys.iter().zip(key_values).zip(key_rows) {
             let _ = option_button(ui, scale, 329.0, y, &self.textures.option_bar, value);
             option_label(ui, scale, 484.0, y, label, PURPLE);
         }
@@ -1534,7 +1530,7 @@ impl GameUi {
             ui,
             scale,
             329.0,
-            338.0,
+            397.0,
             &self.textures.checkbox_off,
             &self.textures.checkbox_on,
             &self.option_labels.auto_jump,
@@ -1546,7 +1542,7 @@ impl GameUi {
             ui,
             scale,
             329.0,
-            358.0,
+            417.0,
             &self.textures.checkbox_off,
             &self.textures.checkbox_on,
             &self.option_labels.invert_broom,
@@ -2512,6 +2508,17 @@ fn combo_list_height(item_count: usize) -> f32 {
     if item_count > 3 { 89.0 } else { 54.0 }
 }
 
+fn option_resolutions(available: Vec<(u32, u32)>, current: (u32, u32)) -> Vec<(u32, u32)> {
+    let mut resolutions = available
+        .into_iter()
+        .filter(|resolution| AUTHORED_RESOLUTIONS.contains(resolution))
+        .collect::<Vec<_>>();
+    resolutions.push(current);
+    resolutions.sort_unstable();
+    resolutions.dedup();
+    resolutions
+}
+
 fn changed_hud_counters(previous: PlayerUiState, current: PlayerUiState) -> [bool; 4] {
     let values = |player: PlayerUiState| {
         [
@@ -2697,6 +2704,17 @@ mod tests {
     fn combo_lists_use_the_two_authored_popup_sizes() {
         assert_eq!(combo_list_height(3), 54.0);
         assert_eq!(combo_list_height(4), 89.0);
+    }
+
+    #[test]
+    fn options_keep_authored_resolutions_plus_the_active_window() {
+        assert_eq!(
+            option_resolutions(
+                vec![(3840, 2160), (800, 600), (640, 480), (1920, 1080)],
+                (2560, 1600),
+            ),
+            vec![(640, 480), (800, 600), (2560, 1600)]
+        );
     }
 
     #[test]
