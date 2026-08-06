@@ -33,6 +33,31 @@ fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
     !pushable && normal.z.abs() < 0.2
 }
 
+fn two_wall_adjust(
+    delta: Vec3,
+    hit_normal: Vec3,
+    old_hit_normal: Vec3,
+    desired_direction: Vec3,
+    hit_fraction: f32,
+) -> Vec3 {
+    if old_hit_normal.dot(hit_normal) <= 0.0 {
+        let direction = hit_normal.cross(old_hit_normal).normalize_or_zero();
+        let adjusted = direction * delta.dot(direction) * (1.0 - hit_fraction);
+        if desired_direction.dot(adjusted) < 0.0 {
+            -adjusted
+        } else {
+            adjusted
+        }
+    } else {
+        let adjusted = (delta - hit_normal * delta.dot(hit_normal)) * (1.0 - hit_fraction);
+        if adjusted.dot(desired_direction) > 0.0 {
+            adjusted
+        } else {
+            Vec3::ZERO
+        }
+    }
+}
+
 fn player_rotation_is_script_controlled(
     player_pawn: bool,
     actor: usize,
@@ -496,6 +521,28 @@ mod tests {
         assert!(should_slide_walking_collision(false, Vec3::X));
         assert!(!should_slide_walking_collision(true, Vec3::X));
         assert!(!should_slide_walking_collision(false, Vec3::Z));
+    }
+
+    #[test]
+    fn two_wall_adjustment_matches_original_corner_branches() {
+        let old_normal = Vec3::new(1.0, -3.0, 1.0).normalize();
+        let hit_normal = Vec3::new(-3.0, 0.0, 1.0).normalize();
+        let desired = Vec3::NEG_Z;
+        let delta = desired - old_normal * desired.dot(old_normal);
+
+        let adjusted = two_wall_adjust(delta, hit_normal, old_normal, desired, 0.0);
+
+        assert!(adjusted.z < 0.0);
+        assert!(adjusted.dot(old_normal).abs() < 1.0e-6);
+        assert!(adjusted.dot(hit_normal).abs() < 1.0e-6);
+
+        let hit_normal = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let adjusted = two_wall_adjust(Vec3::Y, hit_normal, Vec3::Y, Vec3::Y, 0.0);
+        assert!(adjusted.abs_diff_eq(Vec3::new(-0.5, 0.5, 0.0), 1.0e-6));
+        assert_eq!(
+            two_wall_adjust(Vec3::Y, hit_normal, Vec3::Y, Vec3::X, 0.0),
+            Vec3::ZERO
+        );
     }
 
     #[test]

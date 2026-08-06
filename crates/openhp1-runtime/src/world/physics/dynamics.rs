@@ -119,13 +119,24 @@ impl ScriptRuntime {
                 continue;
             }
             if hit.normal.z < WALKABLE_FLOOR_Z {
-                let aligned =
+                let mut aligned =
                     (move_delta - hit.normal * move_delta.dot(hit.normal)) * (1.0 - hit.fraction);
                 if move_delta.dot(aligned) >= 0.0 {
                     let slope =
                         self.try_move_actor(actor, class, aligned.to_array(), instance, actions)?;
-                    if slope.fraction < 1.0 && slope.normal.z > WALKABLE_FLOOR_Z {
-                        self.phys_landed(
+                    if slope.fraction < 1.0 {
+                        if slope.normal.z > WALKABLE_FLOOR_Z {
+                            self.phys_landed(
+                                actor,
+                                class,
+                                instance,
+                                slope.normal,
+                                slope.actor,
+                                actions,
+                            )?;
+                            return Ok(());
+                        }
+                        self.call_hit_wall(
                             actor,
                             class,
                             instance,
@@ -133,7 +144,31 @@ impl ScriptRuntime {
                             slope.actor,
                             actions,
                         )?;
-                        return Ok(());
+                        aligned = two_wall_adjust(
+                            aligned,
+                            slope.normal,
+                            hit.normal,
+                            move_delta.normalize_or_zero(),
+                            slope.fraction,
+                        );
+                        let corner = self.try_move_actor(
+                            actor,
+                            class,
+                            aligned.to_array(),
+                            instance,
+                            actions,
+                        )?;
+                        if corner.fraction < 1.0 && corner.normal.z > WALKABLE_FLOOR_Z {
+                            self.phys_landed(
+                                actor,
+                                class,
+                                instance,
+                                corner.normal,
+                                corner.actor,
+                                actions,
+                            )?;
+                            return Ok(());
+                        }
                     }
                 }
                 if !self.actor_bool(class, instance, "bJustTeleported")? {

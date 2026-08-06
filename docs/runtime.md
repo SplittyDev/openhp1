@@ -301,6 +301,9 @@ that every UE1 `PlayerPawn` movement action uses generic pawn rotation.
 untraveled delta along the collision plane; it is not an alias for `Move`.
 Walking players use the same wall-slide response for non-pushable actor
 collisions as for BSP walls.
+Falling actors that hit a second wall use the original engine's
+`AActor::TwoWallAdjust` response, projecting the remaining movement along both
+surfaces instead of stopping in a corner.
 `Actor.SetLocation` validates its finite target before changing persistent or
 scene state. When `bCollideWorld` or `bCollideWhenPlacing` is set, the target
 cylinder or box is checked at the target and its nearby UE1 placement grid;
