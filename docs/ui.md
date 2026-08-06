@@ -63,11 +63,14 @@ because the OpenHP1 renderer does not currently consume those configuration
 values.
 
 Graphics changes preview immediately and are persisted together under
-`[OpenHP1.Graphics]` in the writable `OpenHP1.ini` overlay when the page closes.
-They survive authored level travel and save loading. The resolution list keeps
-the four shipped 4:3 sizes, adds enhanced 4:3 and 16:9 presets, and retains an
-active non-preset value as Custom. This setting controls the composed internal
-frame rather than the winit window, which remains independently resizable.
+`[OpenHP1.Graphics]` in the writable `OpenHP1.ini` overlay. OpenHP1 writes the
+complete section on first launch so it can also be edited directly, then saves
+changes when the page closes. The defaults are a 1024x768 internal frame, the
+Classic renderer, 32-bit colour, and the midpoint Classic brightness. They
+survive authored level travel and save loading. The resolution list keeps the
+four shipped 4:3 sizes, adds enhanced 4:3 and 16:9 presets, and retains an active
+non-preset value as Custom. This setting controls the composed internal frame
+rather than the independently resizable winit window, which starts at 1280x800.
 
 The Quidditch page's `globalconfig unlocked` value is a three-state progression
 stored under `HPMenu.FEQuidMatchPage` in `HP.ini`: `0` locks both choices, `1`

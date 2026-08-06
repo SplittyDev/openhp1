@@ -46,6 +46,7 @@ mod ui;
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
 const DEBUG_FAST_FORWARD_TICKS: usize = 16;
+const DEFAULT_WINDOW_SIZE: (u32, u32) = (1280, 800);
 
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
@@ -71,7 +72,7 @@ impl ApplicationHandler for GameApp {
         let Some(scene) = self.scene.take() else {
             return;
         };
-        let window_size = configured_window_size(&scene).unwrap_or((1280, 800));
+        let window_size = DEFAULT_WINDOW_SIZE;
         let attributes = WindowAttributes::default()
             .with_title("OpenHP1")
             .with_inner_size(Size::Logical(LogicalSize::new(
@@ -578,13 +579,16 @@ impl Graphics {
             resolutions,
         )
         .context("could not configure game console commands")?;
-        let graphics_settings = graphics_settings.unwrap_or_else(|| {
-            GraphicsSettings::load(
-                &console,
-                [initial_size.width.max(1), initial_size.height.max(1)],
-                renderer_override,
-            )
-        });
+        let graphics_settings = match graphics_settings {
+            Some(settings) => settings,
+            None => {
+                let settings = GraphicsSettings::load(&console, renderer_override);
+                if let Err(error) = settings.save(&console) {
+                    last_error = Some(format!("could not initialize graphics settings: {error}"));
+                }
+                settings
+            }
+        };
         let display_settings = graphics_settings.display();
         let screenshot_dir = console.settings_dir().join("Screenshots");
         let settings_dir = console.settings_dir().to_path_buf();
@@ -1671,22 +1675,6 @@ fn horizontal_to_vertical_fov(horizontal: f32, aspect: f32) -> f32 {
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
-}
-
-fn configured_window_size(scene: &LoadedScene) -> Option<(u32, u32)> {
-    let client = scene
-        .config_value("Engine.Engine", "ViewportManager")
-        .unwrap_or_else(|| "WinDrv.WindowsClient".to_owned());
-    let dimension = |key| {
-        scene
-            .config_value(&client, key)
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|value| *value > 0)
-    };
-    Some((
-        dimension("WindowedViewportX")?,
-        dimension("WindowedViewportY")?,
-    ))
 }
 
 fn map_identifier(map: &Path, game_root: &Path) -> Result<String> {

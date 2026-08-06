@@ -9,6 +9,8 @@ const CONFIG: &str = "OpenHP1";
 const SECTION: &str = "OpenHP1.Graphics";
 const MAX_RENDER_PIXELS: u64 = 3840 * 2160;
 
+pub(super) const DEFAULT_RESOLUTION: [u32; 2] = [1024, 768];
+
 pub(super) const RESOLUTION_PRESETS: [([u32; 2], &str); 12] = [
     ([512, 384], "512x384 (Classic)"),
     ([640, 480], "640x480 (Classic)"),
@@ -49,13 +51,25 @@ pub(super) struct GraphicsSettings {
     pub(super) modern_display: DisplaySettings,
 }
 
+impl Default for GraphicsSettings {
+    fn default() -> Self {
+        Self {
+            resolution: DEFAULT_RESOLUTION,
+            renderer: RendererSettings::default(),
+            color_depth: ColorDepth::default(),
+            classic_display: DisplaySettings::for_mode(RendererMode::Classic),
+            modern_display: DisplaySettings::for_mode(RendererMode::Modern),
+        }
+    }
+}
+
 impl GraphicsSettings {
     pub(super) fn load(
         console: &ConsoleCommands,
-        fallback_resolution: [u32; 2],
         renderer_override: Option<RendererSettings>,
     ) -> Self {
-        let mut renderer = RendererSettings::default();
+        let defaults = Self::default();
+        let mut renderer = defaults.renderer;
         renderer.mode = config(console, "Renderer")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.mode);
@@ -77,7 +91,7 @@ impl GraphicsSettings {
         let classic = DisplaySettings::for_mode(RendererMode::Classic);
         let modern = DisplaySettings::for_mode(RendererMode::Modern);
         Self {
-            resolution: resolution(width, height).unwrap_or(fallback_resolution),
+            resolution: resolution(width, height).unwrap_or(defaults.resolution),
             renderer,
             color_depth: match config(console, "ColorDepth").as_deref() {
                 Some("rgb565") => ColorDepth::Rgb565,
@@ -198,6 +212,23 @@ fn parse_bool(value: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_match_the_classic_game_presentation() {
+        assert_eq!(
+            GraphicsSettings::default(),
+            GraphicsSettings {
+                resolution: [1024, 768],
+                renderer: RendererSettings::default(),
+                color_depth: ColorDepth::TrueColor,
+                classic_display: DisplaySettings {
+                    brightness: 0.6,
+                    contrast: 1.0,
+                },
+                modern_display: DisplaySettings::for_mode(RendererMode::Modern),
+            }
+        );
+    }
 
     #[test]
     fn dimensions_reject_invalid_or_unsafe_render_targets() {
