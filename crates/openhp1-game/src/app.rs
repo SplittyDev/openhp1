@@ -973,18 +973,21 @@ impl Graphics {
                     self.pending_screenshots.push(snapshot);
                 }
                 ConsoleCommandAction::SaveGame { slot } => {
+                    let slot = active_save_slot(slot, self.last_save_slot);
                     if let Err(error) = self.save_game(slot) {
                         self.last_error = Some(format!("could not save game: {error:#}"));
                     } else {
                         self.last_save_slot = Some(slot);
                     }
                 }
-                ConsoleCommandAction::OpenSave { slot } => match self.open_save(slot) {
-                    Ok(saved) => load = Some(saved),
-                    Err(error) => {
-                        self.last_error = Some(format!("could not open saved game: {error:#}"));
+                ConsoleCommandAction::OpenSave { slot } => {
+                    match self.open_save(active_save_slot(slot, self.last_save_slot)) {
+                        Ok(saved) => load = Some(saved),
+                        Err(error) => {
+                            self.last_error = Some(format!("could not open saved game: {error:#}"));
+                        }
                     }
-                },
+                }
             }
         }
         if exit {
@@ -1313,6 +1316,14 @@ impl Graphics {
             self.renderer
                 .reload_scene(&self.device, &self.queue, &self.scene.render);
         }
+    }
+}
+
+fn active_save_slot(requested: u32, selected: Option<u32>) -> u32 {
+    if requested == 99 {
+        selected.unwrap_or(requested)
+    } else {
+        requested
     }
 }
 
@@ -1844,6 +1855,13 @@ mod tests {
         assert!(is_fast_forward_key(KeyCode::NumpadAdd));
         assert!(is_fast_forward_key(KeyCode::KeyF));
         assert!(!is_fast_forward_key(KeyCode::F2));
+    }
+
+    #[test]
+    fn selected_slot_bridge_keeps_direct_level_slot_99_as_the_fallback() {
+        assert_eq!(active_save_slot(99, Some(3)), 3);
+        assert_eq!(active_save_slot(99, None), 99);
+        assert_eq!(active_save_slot(2, Some(3)), 2);
     }
 
     #[test]

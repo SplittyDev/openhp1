@@ -30,6 +30,11 @@ state and console actions stay in `openhp1-runtime`; original package texture
 decoding stays in `openhp1-texture`. A separate UI crate is not warranted
 unless a second executable needs the complete game UI.
 
+Selecting or creating one of the six game slots also establishes the active
+slot used by the authored `SaveSelectedSlot` and `LoadSelectedSlot` console
+calls. Their host marker `99` resolves to that active slot; direct level starts
+without a slot retain `save99.usa` as the shipped `FESlotPage` fallback.
+
 `FEOptionsPage` uses `HPMenuOptionCombo`, not cycling buttons, for resolution,
 colour depth, texture detail, and object detail. Its shipped combo list uses
 `FEComboListSmall` for at most three entries, `FEComboListLarge` otherwise,
