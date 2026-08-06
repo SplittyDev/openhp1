@@ -32,6 +32,11 @@ on world BSP geometry.
    screen space during the playable pass.
 11. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui and
     exposes searchable actor state and diagnostics.
+12. `openhp1-game` renders the scene and its UI into the selected internal
+    resolution, then presents that texture into the largest centered rectangle
+    that fits the independently resizable window. Exact integer enlargement
+    uses nearest sampling; other sizes use linear sampling and black
+    letterbox/pillarbox bars.
 
 The renderer does not know package paths or export indices. It accepts decoded
 CPU geometry and texture images plus a caller-provided wgpu device, queue,
@@ -104,6 +109,12 @@ cargo run --release -p openhp1-viewer -- \
 `--tone-mapper` accepts `agx`, `reinhard` (or `classic`), and `aces`.
 `--ambient-occlusion` accepts `ssao` and `off`. These settings have no effect
 on the classic renderer.
+
+The in-game Graphics Settings page edits the same `RendererSettings` used by
+the viewer and command line. Its Classic-only 16-bit option keeps the actual
+wgpu targets at 32-bit and quantizes the final composed frame to RGB565 in the
+presentation shader; it is an output emulation rather than a claim that every
+texture and blend operation ran through a historical 16-bit framebuffer.
 
 The original lightmaps remain the modern renderer's static lighting source.
 Dynamic diffuse GI, DDGI volumes, specular materials, and reflection probes are

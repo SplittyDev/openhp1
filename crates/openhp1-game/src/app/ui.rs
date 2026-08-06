@@ -9,11 +9,13 @@ use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
+use openhp1_render::{AmbientOcclusion, RendererMode, ToneMapper};
 use openhp1_runtime::{PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
+use super::graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS};
+
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
-const AUTHORED_RESOLUTIONS: [(u32, u32); 4] = [(512, 384), (640, 480), (800, 600), (1024, 768)];
 const STORY_MIN_TIME_ON_PAGE: Duration = Duration::from_secs(2);
 const STORY_SOUND_ADVANCE: Duration = Duration::from_millis(100);
 const STORY_TRAILING_TIME: Duration = Duration::from_secs(1);
@@ -78,21 +80,17 @@ pub(super) enum Action {
     NewGame(u32),
     PlayUiSound(AudioClip),
     Resume,
-    SetBrightness(f32),
+    ApplyGraphics(GraphicsSettings),
+    SaveGraphics(GraphicsSettings),
     SetMouseSensitivity(f32),
     SetMusicVolume(u8),
-    SetObjectDetail(usize),
-    SetResolution(u32, u32),
     SetSoundVolume(u8),
-    SetTextureDetail(usize),
     SetAutoJump(bool),
     SetInvertBroom(bool),
 }
 
 pub(super) struct OptionsState {
-    pub(super) resolution: (u32, u32),
-    pub(super) resolutions: Vec<(u32, u32)>,
-    pub(super) brightness: f32,
+    pub(super) graphics: GraphicsSettings,
     pub(super) music_volume: f32,
     pub(super) sound_volume: f32,
 }
@@ -102,6 +100,7 @@ enum Page {
     Main,
     Slots,
     Options,
+    Graphics,
     Quidditch,
     Report,
     Folio,
@@ -329,10 +328,6 @@ struct UiTextures {
     back_hover: TextureHandle,
     options_background: Vec<TextureHandle>,
     option_bar: TextureHandle,
-    option_bar_open: TextureHandle,
-    combo_list_small: TextureHandle,
-    combo_list_large: TextureHandle,
-    combo_list_selection: TextureHandle,
     quidditch_background: Vec<TextureHandle>,
     broomstick_practice_locked: TextureHandle,
     broomstick_practice: TextureHandle,
@@ -366,14 +361,9 @@ struct UiTextures {
 }
 
 struct OptionValues {
-    resolution: usize,
-    resolutions: Vec<(u32, u32)>,
-    brightness: f32,
     mouse_speed: f32,
     music_volume: f32,
     sound_volume: f32,
-    texture_detail: usize,
-    object_detail: usize,
     auto_jump: bool,
     invert_broom: bool,
 }
@@ -393,6 +383,7 @@ pub(super) struct GameUi {
     labels: Labels,
     option_labels: OptionLabels,
     options: OptionValues,
+    graphics: GraphicsSettings,
     open_combo: Option<usize>,
     game_root: PathBuf,
     settings_dir: PathBuf,
@@ -419,8 +410,6 @@ struct OptionLabels {
     controls: String,
     resolution: String,
     color_depth: String,
-    texture_detail: String,
-    object_detail: String,
     brightness: String,
     mouse_speed: String,
     detail: [String; 5],
@@ -512,44 +501,11 @@ impl GameUi {
                 "HPMenu.Icons.FELeftReturnOverIcon",
                 true,
             )?,
-            options_background: (1..=6)
-                .map(|index| {
-                    load_texture(
-                        context,
-                        &mut packages,
-                        &format!("HPMenu.Icons.FEOptionsBackTexture{index}"),
-                        false,
-                    )
-                })
-                .collect::<Result<_>>()?,
+            options_background: load_options_background(context, &mut packages)?,
             option_bar: load_texture(
                 context,
                 &mut packages,
                 "HPMenu.Icons.FEOverOption3Texture",
-                true,
-            )?,
-            option_bar_open: load_texture(
-                context,
-                &mut packages,
-                "HPMenu.Icons.FEOverOptionTexture",
-                true,
-            )?,
-            combo_list_small: load_texture(
-                context,
-                &mut packages,
-                "HPMenu.Icons.FEComboListSmall",
-                true,
-            )?,
-            combo_list_large: load_texture(
-                context,
-                &mut packages,
-                "HPMenu.Icons.FEComboListLarge",
-                true,
-            )?,
-            combo_list_selection: load_texture(
-                context,
-                &mut packages,
-                "HPMenu.Icons.FEComboListBox",
                 true,
             )?,
             quidditch_background: (1..=6)
@@ -919,8 +875,6 @@ impl GameUi {
             controls: localized("options_16")?,
             resolution: localized("options_02")?,
             color_depth: localized("options_03")?,
-            texture_detail: localized("options_05")?,
-            object_detail: localized("options_12")?,
             brightness: localized("options_04")?,
             mouse_speed: localized("options_17")?,
             detail: [
@@ -964,44 +918,15 @@ impl GameUi {
             .collect::<Result<_>>()?;
         let harry_card_objective =
             packages.localize("Pickup2", "all", "harry_potter_card_objective");
-        let resolutions = option_resolutions(options.resolutions, options.resolution);
-        let resolution = resolutions
-            .iter()
-            .position(|candidate| *candidate == options.resolution)
-            .unwrap_or_default();
-        let viewport_manager = packages
-            .config_value("Engine.Engine", "ViewportManager")
-            .unwrap_or_else(|| "WinDrv.WindowsClient".to_owned());
         let mouse_sensitivity =
             config_value(&packages, "User", "Engine.PlayerPawn", "MouseSensitivity")
                 .and_then(|value| value.parse::<f32>().ok())
                 .unwrap_or(5.1);
-        let texture_detail = config_value(&packages, "System", &viewport_manager, "TextureDetail")
-            .and_then(|value| detail_index(&value, &["High", "Medium", "Low"]))
-            .unwrap_or_default();
-        let object_detail = config_value(&packages, "User", "Engine.PlayerPawn", "ObjectDetail")
-            .and_then(|value| {
-                detail_index(
-                    &value,
-                    &[
-                        "ObjectDetailVeryHigh",
-                        "ObjectDetailHigh",
-                        "ObjectDetailMedium",
-                        "ObjectDetailLow",
-                        "ObjectDetailVeryLow",
-                    ],
-                )
-            })
-            .unwrap_or_default();
+        let graphics = options.graphics;
         let options = OptionValues {
-            resolution,
-            resolutions,
-            brightness: ((options.brightness - 0.2) / 0.8).clamp(0.0, 1.0),
             mouse_speed: ((mouse_sensitivity - 0.2) / 9.8).clamp(0.0, 1.0),
             music_volume: options.music_volume,
             sound_volume: options.sound_volume,
-            texture_detail,
-            object_detail,
             auto_jump: config_bool(&packages, "User", "Engine.PlayerPawn", "bAutoJump"),
             invert_broom: config_bool(&packages, "User", "HPBase.baseHarry", "bInvertBroomPitch"),
         };
@@ -1036,6 +961,7 @@ impl GameUi {
             labels,
             option_labels,
             options,
+            graphics,
             open_combo: None,
             game_root: game_root.to_path_buf(),
             settings_dir: save_dir.to_path_buf(),
@@ -1076,6 +1002,12 @@ impl GameUi {
     pub(super) fn escape(&mut self) -> bool {
         self.confirm_exit = false;
         self.confirm_quit_game = false;
+        if self.page == Page::Graphics {
+            self.page = Page::Options;
+            self.open_combo = None;
+            self.action = Some(Action::SaveGraphics(self.graphics));
+            return false;
+        }
         if !self.startup {
             self.open = false;
             return true;
@@ -1105,6 +1037,10 @@ impl GameUi {
         }
         self.player = player;
         self.player_seen = true;
+    }
+
+    pub(super) fn set_graphics_settings(&mut self, settings: GraphicsSettings) {
+        self.graphics = settings;
     }
 
     pub(super) fn unlock_quidditch(&mut self, level: u8) -> Result<()> {
@@ -1153,6 +1089,7 @@ impl GameUi {
         let background = match self.page {
             Page::Slots => &self.textures.save_background,
             Page::Options => &self.textures.options_background,
+            Page::Graphics => &self.textures.options_background,
             Page::Quidditch => &self.textures.quidditch_background,
             Page::Report => &self.textures.report_background,
             Page::Folio if self.folio_page == 6 => &self.textures.folio_harry_background,
@@ -1186,6 +1123,7 @@ impl GameUi {
                     Page::Main => self.main_page(ui, scale),
                     Page::Slots => self.slot_page(ui, scale),
                     Page::Options => self.options_page(ui, scale),
+                    Page::Graphics => self.graphics_page(ui, scale),
                     Page::Quidditch => self.quidditch_page(ui, scale),
                     Page::Report => self.report_page(ui, scale),
                     Page::Folio => self.folio_page(ui, scale),
@@ -1411,80 +1349,12 @@ impl GameUi {
         const PURPLE: Color32 = Color32::from_rgb(96, 0, 96);
         const BLUE: Color32 = Color32::from_rgb(20, 60, 210);
         page_title(ui, scale, 27.0, &self.option_labels.title, PURPLE);
-        option_text(ui, scale, 212.0, 59.0, &self.option_labels.video, BLUE);
         option_text(ui, scale, 374.0, 59.0, &self.option_labels.controls, BLUE);
-
-        let left_rows = [87.0, 125.0, 165.0, 201.0];
-        let left_labels = [
-            &self.option_labels.resolution,
-            &self.option_labels.color_depth,
-            &self.option_labels.texture_detail,
-            &self.option_labels.object_detail,
-        ];
-        for (y, label) in left_rows.into_iter().zip(left_labels) {
-            option_label(ui, scale, 45.0, y, label, PURPLE);
-        }
-
-        let resolution = self.options.resolutions[self.options.resolution];
-        if option_button(
-            ui,
-            scale,
-            159.0,
-            left_rows[0],
-            &self.textures.option_bar,
-            &format!("{}x{}", resolution.0, resolution.1),
-        ) {
-            self.open_combo = (self.open_combo != Some(0)).then_some(0);
-        }
-        if option_button(
-            ui,
-            scale,
-            159.0,
-            left_rows[1],
-            &self.textures.option_bar,
-            "32 Bit",
-        ) {
-            self.open_combo = (self.open_combo != Some(1)).then_some(1);
-        }
-        if option_button(
-            ui,
-            scale,
-            159.0,
-            left_rows[2],
-            &self.textures.option_bar,
-            &self.option_labels.detail[self.options.texture_detail + 1],
-        ) {
-            self.open_combo = (self.open_combo != Some(2)).then_some(2);
-        }
-        if option_button(
-            ui,
-            scale,
-            159.0,
-            left_rows[3],
-            &self.textures.option_bar,
-            &self.option_labels.detail[self.options.object_detail],
-        ) {
-            self.open_combo = (self.open_combo != Some(3)).then_some(3);
-        }
-
-        option_label(
-            ui,
-            scale,
-            45.0,
-            238.0,
-            &self.option_labels.brightness,
-            PURPLE,
-        );
-        if option_slider(
-            ui,
-            scale,
-            159.0,
-            238.0,
-            &self.textures.slider_track,
-            &self.textures.slider_knob,
-            &mut self.options.brightness,
-        ) {
-            self.action = Some(Action::SetBrightness(0.2 + self.options.brightness * 0.8));
+        option_text(ui, scale, 172.0, 72.0, &self.option_labels.video, BLUE);
+        option_label(ui, scale, 45.0, 125.0, "Graphics Settings", PURPLE);
+        if option_button(ui, scale, 159.0, 125.0, &self.textures.option_bar, "Open") {
+            self.page = Page::Graphics;
+            self.open_combo = None;
         }
         option_label(
             ui,
@@ -1590,6 +1460,7 @@ impl GameUi {
             &self.textures.checkbox_off,
             &self.textures.checkbox_on,
             &self.option_labels.auto_jump,
+            PURPLE,
             self.options.auto_jump,
         ) {
             self.options.auto_jump = !self.options.auto_jump;
@@ -1603,6 +1474,7 @@ impl GameUi {
             &self.textures.checkbox_off,
             &self.textures.checkbox_on,
             &self.option_labels.invert_broom,
+            PURPLE,
             self.options.invert_broom,
         ) {
             self.options.invert_broom = !self.options.invert_broom;
@@ -1620,55 +1492,241 @@ impl GameUi {
             self.page = self.options_return;
             self.open_combo = None;
         }
+    }
+
+    fn graphics_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        const GOLD: Color32 = Color32::from_rgb(221, 190, 91);
+        const LABEL: Color32 = Color32::from_rgb(236, 217, 156);
+        let panel = scaled_rect(ui.min_rect().min, scale, 25.0, 39.0, 590.0, 390.0);
+        ui.painter().rect_filled(
+            panel,
+            6.0 * scale,
+            Color32::from_rgba_premultiplied(37, 25, 15, 248),
+        );
+        page_title(ui, scale, 25.0, "Graphics Settings", GOLD);
+        option_text(ui, scale, 320.0, 62.0, "Display", GOLD);
+
+        let resolutions = graphics_resolutions(self.graphics.resolution);
+        let resolution = resolutions
+            .iter()
+            .position(|(size, _)| *size == self.graphics.resolution)
+            .unwrap_or_default();
+        option_label(ui, scale, 72.0, 82.0, &self.option_labels.resolution, LABEL);
+        if graphics_button(ui, scale, 205.0, 82.0, 330.0, &resolutions[resolution].1) {
+            self.open_combo = (self.open_combo != Some(0)).then_some(0);
+        }
+
+        option_label(ui, scale, 72.0, 117.0, "Render Pipeline", LABEL);
+        if graphics_button(
+            ui,
+            scale,
+            205.0,
+            117.0,
+            330.0,
+            match self.graphics.renderer.mode {
+                RendererMode::Classic => "Classic",
+                RendererMode::Modern => "Modern",
+            },
+        ) {
+            self.open_combo = (self.open_combo != Some(1)).then_some(1);
+        }
+
+        match self.graphics.renderer.mode {
+            RendererMode::Classic => {
+                option_label(
+                    ui,
+                    scale,
+                    72.0,
+                    152.0,
+                    &self.option_labels.color_depth,
+                    LABEL,
+                );
+                if graphics_button(
+                    ui,
+                    scale,
+                    205.0,
+                    152.0,
+                    330.0,
+                    self.graphics.color_depth.label(),
+                ) {
+                    self.open_combo = (self.open_combo != Some(2)).then_some(2);
+                }
+                option_label(
+                    ui,
+                    scale,
+                    72.0,
+                    199.0,
+                    &self.option_labels.brightness,
+                    LABEL,
+                );
+                let mut brightness =
+                    ((self.graphics.classic_display.brightness - 0.2) / 0.8).clamp(0.0, 1.0);
+                if graphics_slider(
+                    ui,
+                    scale,
+                    205.0,
+                    199.0,
+                    330.0,
+                    &self.textures.slider_knob,
+                    &mut brightness,
+                ) {
+                    self.graphics.classic_display.brightness = 0.2 + brightness * 0.8;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                option_text(ui, scale, 205.0, 226.0, "Darker", LABEL);
+                option_text(ui, scale, 535.0, 226.0, "Brighter", LABEL);
+            }
+            RendererMode::Modern => {
+                option_label(ui, scale, 72.0, 152.0, "Tone Mapper", LABEL);
+                if graphics_button(
+                    ui,
+                    scale,
+                    205.0,
+                    152.0,
+                    330.0,
+                    tone_mapper_label(self.graphics.renderer.tone_mapper),
+                ) {
+                    self.open_combo = (self.open_combo != Some(3)).then_some(3);
+                }
+                option_label(
+                    ui,
+                    scale,
+                    72.0,
+                    194.0,
+                    &self.option_labels.brightness,
+                    LABEL,
+                );
+                let mut brightness =
+                    ((self.graphics.modern_display.brightness - 0.2) / 0.8).clamp(0.0, 1.0);
+                if graphics_slider(
+                    ui,
+                    scale,
+                    205.0,
+                    194.0,
+                    330.0,
+                    &self.textures.slider_knob,
+                    &mut brightness,
+                ) {
+                    self.graphics.modern_display.brightness = 0.2 + brightness * 0.8;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                option_label(ui, scale, 72.0, 236.0, "Contrast", LABEL);
+                let mut contrast =
+                    ((self.graphics.modern_display.contrast - 0.5) / 1.5).clamp(0.0, 1.0);
+                if graphics_slider(
+                    ui,
+                    scale,
+                    205.0,
+                    236.0,
+                    330.0,
+                    &self.textures.slider_knob,
+                    &mut contrast,
+                ) {
+                    self.graphics.modern_display.contrast = 0.5 + contrast * 1.5;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                let ssao = self.graphics.renderer.ambient_occlusion == AmbientOcclusion::Ssao;
+                if option_checkbox(
+                    ui,
+                    scale,
+                    205.0,
+                    282.0,
+                    &self.textures.checkbox_off,
+                    &self.textures.checkbox_on,
+                    "Ambient Occlusion (SSAO)",
+                    LABEL,
+                    ssao,
+                ) {
+                    self.graphics.renderer.ambient_occlusion = if ssao {
+                        AmbientOcclusion::Off
+                    } else {
+                        AmbientOcclusion::Ssao
+                    };
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                if option_checkbox(
+                    ui,
+                    scale,
+                    205.0,
+                    313.0,
+                    &self.textures.checkbox_off,
+                    &self.textures.checkbox_on,
+                    "Bloom",
+                    LABEL,
+                    self.graphics.renderer.bloom,
+                ) {
+                    self.graphics.renderer.bloom = !self.graphics.renderer.bloom;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+            }
+        }
+
+        if textured_button(
+            ui,
+            scale,
+            565.0,
+            431.0,
+            &self.textures.back,
+            &self.textures.back_hover,
+            "",
+        ) {
+            self.page = Page::Options;
+            self.open_combo = None;
+            self.action = Some(Action::SaveGraphics(self.graphics));
+        }
 
         if let Some(combo) = self.open_combo {
-            let (items, selected) = match combo {
+            let (items, selected, y) = match combo {
                 0 => (
-                    self.options
-                        .resolutions
+                    resolutions
                         .iter()
-                        .map(|(width, height)| format!("{width}x{height}"))
+                        .map(|(_, label)| label.clone())
                         .collect::<Vec<_>>(),
-                    self.options.resolution,
+                    resolution,
+                    100.0,
                 ),
-                1 => (vec!["32 Bit".to_owned()], 0),
+                1 => (
+                    vec!["Classic".to_owned(), "Modern".to_owned()],
+                    usize::from(self.graphics.renderer.mode == RendererMode::Modern),
+                    135.0,
+                ),
                 2 => (
-                    self.option_labels.detail[1..=3].to_vec(),
-                    self.options.texture_detail,
+                    vec!["32 Bit".to_owned(), "16 Bit (Emulated)".to_owned()],
+                    usize::from(self.graphics.color_depth == ColorDepth::Rgb565),
+                    170.0,
                 ),
                 3 => (
-                    self.option_labels.detail.to_vec(),
-                    self.options.object_detail,
+                    vec!["AgX".to_owned(), "Reinhard".to_owned(), "ACES".to_owned()],
+                    match self.graphics.renderer.tone_mapper {
+                        ToneMapper::AgX => 0,
+                        ToneMapper::Reinhard => 1,
+                        ToneMapper::Aces => 2,
+                    },
+                    170.0,
                 ),
                 _ => unreachable!(),
             };
-            if let Some(selection) = option_combo_list(
-                ui,
-                scale,
-                159.0,
-                left_rows[combo] + 18.0,
-                &self.textures,
-                &items,
-                selected,
-            ) {
+            if let Some(selection) =
+                graphics_combo_list(ui, scale, 205.0, y, 330.0, &items, selected)
+            {
                 match combo {
-                    0 => {
-                        self.options.resolution = selection;
-                        let (width, height) = self.options.resolutions[selection];
-                        self.action = Some(Action::SetResolution(width, height));
+                    0 => self.graphics.resolution = resolutions[selection].0,
+                    1 => {
+                        self.graphics.renderer.mode =
+                            [RendererMode::Classic, RendererMode::Modern][selection]
                     }
-                    1 => {}
                     2 => {
-                        self.options.texture_detail = selection;
-                        self.action = Some(Action::SetTextureDetail(selection));
+                        self.graphics.color_depth =
+                            [ColorDepth::TrueColor, ColorDepth::Rgb565][selection]
                     }
                     3 => {
-                        self.options.object_detail = selection;
-                        self.action = Some(Action::SetObjectDetail(selection));
+                        self.graphics.renderer.tone_mapper =
+                            [ToneMapper::AgX, ToneMapper::Reinhard, ToneMapper::Aces][selection]
                     }
                     _ => unreachable!(),
                 }
                 self.open_combo = None;
+                self.action = Some(Action::ApplyGraphics(self.graphics));
             }
         }
     }
@@ -2274,6 +2332,15 @@ fn load_texture(
     name: &str,
     masked: bool,
 ) -> Result<TextureHandle> {
+    let image = load_color_image(packages, name, masked)?;
+    Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
+}
+
+fn load_color_image(
+    packages: &mut PackageStore,
+    name: &str,
+    masked: bool,
+) -> Result<egui::ColorImage> {
     let ResolvedObject {
         package,
         export_index,
@@ -2290,9 +2357,99 @@ fn load_texture(
         .first()
         .context("shipped UI texture has no mip")?;
     let rgba = texture.rgba(0, &palette, masked)?;
-    let image =
-        egui::ColorImage::from_rgba_unmultiplied([mip.width as usize, mip.height as usize], &rgba);
-    Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [mip.width as usize, mip.height as usize],
+        &rgba,
+    ))
+}
+
+fn load_options_background(
+    context: &egui::Context,
+    packages: &mut PackageStore,
+) -> Result<Vec<TextureHandle>> {
+    let mut images = (1..=6)
+        .map(|index| {
+            load_color_image(
+                packages,
+                &format!("HPMenu.Icons.FEOptionsBackTexture{index}"),
+                false,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let clean = (1..=6)
+        .map(|index| {
+            load_color_image(
+                packages,
+                &format!("HPMenu.Icons.HPLevelInfoBackground{index}"),
+                false,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if images
+        .iter()
+        .chain(&clean)
+        .any(|image| image.size != [256, 256])
+    {
+        bail!("shipped parchment background tiles must be 256x256");
+    }
+    restore_options_span(&mut images, &clean, 65..115);
+    restore_options_span(&mut images, &clean, 154..275);
+    Ok(images
+        .into_iter()
+        .enumerate()
+        .map(|(index, image)| {
+            context.load_texture(
+                format!("OpenHP1 options background {}", index + 1),
+                image,
+                egui::TextureOptions::NEAREST,
+            )
+        })
+        .collect())
+}
+
+fn restore_options_span(
+    images: &mut [egui::ColorImage],
+    clean: &[egui::ColorImage],
+    rows: std::ops::Range<usize>,
+) {
+    const LEFT: usize = 132;
+    const RIGHT: usize = 320;
+    const FEATHER: usize = 8;
+    let top = rows.start;
+    let bottom = rows.end;
+    for y in rows {
+        for x in LEFT..RIGHT {
+            let distance = (x - LEFT)
+                .min(RIGHT - 1 - x)
+                .min(y - top)
+                .min(bottom - 1 - y)
+                .min(FEATHER);
+            let original = tiled_pixel(images, x, y);
+            let replacement = tiled_pixel(clean, x, y);
+            *tiled_pixel_mut(images, x, y) =
+                interpolate_color(original, replacement, distance, FEATHER);
+        }
+    }
+}
+
+fn tiled_pixel(images: &[egui::ColorImage], x: usize, y: usize) -> Color32 {
+    let tile = y / 256 * 3 + x / 256;
+    images[tile].pixels[y % 256 * 256 + x % 256]
+}
+
+fn tiled_pixel_mut(images: &mut [egui::ColorImage], x: usize, y: usize) -> &mut Color32 {
+    let tile = y / 256 * 3 + x / 256;
+    &mut images[tile].pixels[y % 256 * 256 + x % 256]
+}
+
+fn interpolate_color(left: Color32, right: Color32, amount: usize, total: usize) -> Color32 {
+    let left = left.to_array();
+    let right = right.to_array();
+    let channel = |index| {
+        ((usize::from(left[index]) * (total - amount) + usize::from(right[index]) * amount) / total)
+            as u8
+    };
+    Color32::from_rgba_unmultiplied(channel(0), channel(1), channel(2), channel(3))
 }
 
 fn load_save_thumbnail(
@@ -2607,45 +2764,56 @@ fn option_button(
     response.clicked()
 }
 
-fn option_combo_list(
+fn graphics_button(ui: &mut egui::Ui, scale: f32, x: f32, y: f32, width: f32, text: &str) -> bool {
+    let rect = scaled_rect(ui.min_rect().min, scale, x, y, width, 22.0);
+    let response = ui.interact(
+        rect,
+        Id::new(("graphics option", x.to_bits(), y.to_bits())),
+        Sense::click(),
+    );
+    ui.painter().rect_filled(
+        rect,
+        4.0 * scale,
+        if response.hovered() {
+            Color32::from_rgb(131, 102, 154)
+        } else {
+            Color32::from_rgb(91, 69, 113)
+        },
+    );
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(11.0 * scale),
+        Color32::WHITE,
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.clicked()
+}
+
+fn graphics_combo_list(
     ui: &mut egui::Ui,
     scale: f32,
     x: f32,
     y: f32,
-    textures: &UiTextures,
+    width: f32,
     items: &[String],
     selected: usize,
 ) -> Option<usize> {
     let origin = ui.min_rect().min;
-    let bar = scaled_rect(origin, scale, x, y - 18.0, 134.0, 18.0);
-    ui.painter().image(
-        textures.option_bar_open.id(),
-        bar,
-        texture_uv(&textures.option_bar_open, Vec2::new(134.0, 18.0)),
-        Color32::WHITE,
+    let item_height = 17.0;
+    let popup = scaled_rect(
+        origin,
+        scale,
+        x,
+        y,
+        width,
+        6.0 + item_height * items.len() as f32,
     );
-    ui.painter().text(
-        bar.center(),
-        Align2::CENTER_CENTER,
-        &items[selected],
-        FontId::proportional(10.0 * scale),
-        Color32::BLACK,
-    );
-
-    let height = combo_list_height(items.len());
-    let background = if items.len() > 3 {
-        &textures.combo_list_large
-    } else {
-        &textures.combo_list_small
-    };
-    let popup = scaled_rect(origin, scale, x, y, 147.0, height);
-    ui.painter().image(
-        background.id(),
-        popup,
-        texture_uv(background, Vec2::new(147.0, height)),
-        Color32::WHITE,
-    );
-    let item_height = (height - 7.0) / items.len() as f32;
+    ui.painter()
+        .rect_filled(popup, 4.0 * scale, Color32::from_rgb(218, 196, 125));
     let responses = items
         .iter()
         .enumerate()
@@ -2655,7 +2823,7 @@ fn option_combo_list(
                 scale,
                 x,
                 y + 3.0 + item_height * index as f32,
-                147.0,
+                width,
                 item_height,
             );
             ui.interact(
@@ -2668,18 +2836,11 @@ fn option_combo_list(
     let hovered = responses.iter().position(egui::Response::hovered);
     for (index, (item, response)) in items.iter().zip(&responses).enumerate() {
         if hovered == Some(index) || (hovered.is_none() && selected == index) {
-            ui.painter().image(
-                textures.combo_list_selection.id(),
-                response.rect,
-                texture_uv(
-                    &textures.combo_list_selection,
-                    textures.combo_list_selection.size_vec2(),
-                ),
-                Color32::WHITE,
-            );
+            ui.painter()
+                .rect_filled(response.rect, 0.0, Color32::from_rgb(139, 118, 70));
         }
         ui.painter().text(
-            response.rect.min + Vec2::new(12.0, item_height * 0.5) * scale,
+            response.rect.min + Vec2::new(10.0, item_height * 0.5) * scale,
             Align2::LEFT_CENTER,
             item,
             FontId::proportional(10.0 * scale),
@@ -2695,8 +2856,23 @@ fn option_combo_list(
     None
 }
 
-fn combo_list_height(item_count: usize) -> f32 {
-    if item_count > 3 { 89.0 } else { 54.0 }
+fn graphics_resolutions(current: [u32; 2]) -> Vec<([u32; 2], String)> {
+    let mut resolutions = RESOLUTION_PRESETS
+        .iter()
+        .map(|(size, label)| (*size, (*label).to_owned()))
+        .collect::<Vec<_>>();
+    if !resolutions.iter().any(|(size, _)| *size == current) {
+        resolutions.push((current, format!("{}x{} (Custom)", current[0], current[1])));
+    }
+    resolutions
+}
+
+fn tone_mapper_label(tone_mapper: ToneMapper) -> &'static str {
+    match tone_mapper {
+        ToneMapper::AgX => "AgX",
+        ToneMapper::Reinhard => "Reinhard",
+        ToneMapper::Aces => "ACES",
+    }
 }
 
 fn config_value(packages: &PackageStore, config: &str, section: &str, key: &str) -> Option<String> {
@@ -2709,23 +2885,6 @@ fn config_value(packages: &PackageStore, config: &str, section: &str, key: &str)
 fn config_bool(packages: &PackageStore, config: &str, section: &str, key: &str) -> bool {
     config_value(packages, config, section, key)
         .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
-}
-
-fn detail_index(value: &str, choices: &[&str]) -> Option<usize> {
-    choices
-        .iter()
-        .position(|choice| choice.eq_ignore_ascii_case(value))
-}
-
-fn option_resolutions(available: Vec<(u32, u32)>, current: (u32, u32)) -> Vec<(u32, u32)> {
-    let mut resolutions = available
-        .into_iter()
-        .filter(|resolution| AUTHORED_RESOLUTIONS.contains(resolution))
-        .collect::<Vec<_>>();
-    resolutions.push(current);
-    resolutions.sort_unstable();
-    resolutions.dedup();
-    resolutions
 }
 
 fn changed_hud_counters(previous: PlayerUiState, current: PlayerUiState) -> [bool; 4] {
@@ -2791,6 +2950,55 @@ fn option_slider(
     changed
 }
 
+fn graphics_slider(
+    ui: &mut egui::Ui,
+    scale: f32,
+    x: f32,
+    y: f32,
+    width: f32,
+    knob: &TextureHandle,
+    value: &mut f32,
+) -> bool {
+    let rect = scaled_rect(ui.min_rect().min, scale, x, y, width, 25.0);
+    let response = ui.interact(
+        rect,
+        Id::new(("graphics slider", x.to_bits(), y.to_bits())),
+        Sense::click_and_drag(),
+    );
+    let changed = (response.clicked() || response.dragged())
+        && response.interact_pointer_pos().is_some_and(|pointer| {
+            let next = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+            let changed = (*value - next).abs() > f32::EPSILON;
+            *value = next;
+            changed
+        });
+    let track = Rect::from_min_size(
+        rect.min + Vec2::new(0.0, 8.0) * scale,
+        Vec2::new(width, 9.0) * scale,
+    );
+    ui.painter().rect_filled(
+        track,
+        4.0 * scale,
+        if response.hovered() {
+            Color32::from_rgb(131, 102, 154)
+        } else {
+            Color32::from_rgb(91, 69, 113)
+        },
+    );
+    let knob_width = 9.0 * scale;
+    let knob_position = Pos2::new(
+        rect.left() + (rect.width() - knob_width) * *value,
+        rect.top(),
+    );
+    ui.painter().image(
+        knob.id(),
+        Rect::from_min_size(knob_position, Vec2::new(9.0, 25.0) * scale),
+        texture_uv(knob, Vec2::new(9.0, 25.0)),
+        Color32::WHITE,
+    );
+    changed
+}
+
 fn option_checkbox(
     ui: &mut egui::Ui,
     scale: f32,
@@ -2799,6 +3007,7 @@ fn option_checkbox(
     off: &TextureHandle,
     on: &TextureHandle,
     text: &str,
+    text_color: Color32,
     checked: bool,
 ) -> bool {
     let texture = if checked { on } else { off };
@@ -2819,7 +3028,7 @@ fn option_checkbox(
         Align2::LEFT_CENTER,
         text,
         FontId::proportional(10.0 * scale),
-        Color32::from_rgb(96, 0, 96),
+        text_color,
     );
     response.clicked()
 }
@@ -2917,35 +3126,6 @@ mod tests {
     }
 
     #[test]
-    fn combo_lists_use_the_two_authored_popup_sizes() {
-        assert_eq!(combo_list_height(3), 54.0);
-        assert_eq!(combo_list_height(4), 89.0);
-    }
-
-    #[test]
-    fn options_keep_authored_resolutions_plus_the_active_window() {
-        assert_eq!(
-            option_resolutions(
-                vec![(3840, 2160), (800, 600), (640, 480), (1920, 1080)],
-                (2560, 1600),
-            ),
-            vec![(640, 480), (800, 600), (2560, 1600)]
-        );
-    }
-
-    #[test]
-    fn option_detail_values_follow_the_authored_config_names() {
-        assert_eq!(detail_index("low", &["High", "Medium", "Low"]), Some(2));
-        assert_eq!(
-            detail_index(
-                "ObjectDetailVeryHigh",
-                &["ObjectDetailVeryHigh", "ObjectDetailHigh"]
-            ),
-            Some(0)
-        );
-    }
-
-    #[test]
     fn save_thumbnail_decodes_bottom_up_indexed_bmp() {
         let mut bmp = vec![0; 70];
         bmp[..2].copy_from_slice(b"BM");
@@ -2967,6 +3147,14 @@ mod tests {
         assert_eq!(image.pixels[1], Color32::RED);
         assert_eq!(image.pixels[2], Color32::RED);
         assert_eq!(map_stem(r"Maps\Lev_Tut1.unr").as_deref(), Some("lev_tut1"));
+    }
+
+    #[test]
+    fn options_background_cleanup_interpolates_opaque_colors() {
+        assert_eq!(
+            interpolate_color(Color32::BLACK, Color32::WHITE, 1, 2),
+            Color32::from_rgb(127, 127, 127)
+        );
     }
 
     #[test]

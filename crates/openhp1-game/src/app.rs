@@ -32,9 +32,16 @@ use winit::{
     window::{CursorGrabMode, Window, WindowAttributes, WindowId},
 };
 
-use self::{console::DeveloperConsole, ui::GameUi};
+use self::{
+    console::DeveloperConsole,
+    graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS},
+    presentation::Presentation,
+    ui::GameUi,
+};
 
 mod console;
+mod graphics_settings;
+mod presentation;
 mod ui;
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
@@ -43,15 +50,15 @@ const DEBUG_FAST_FORWARD_TICKS: usize = 16;
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
     graphics: Option<Graphics>,
-    renderer_settings: RendererSettings,
+    renderer_override: Option<RendererSettings>,
 }
 
 impl GameApp {
-    pub(crate) fn new(scene: LoadedScene, renderer_settings: RendererSettings) -> Self {
+    pub(crate) fn new(scene: LoadedScene, renderer_override: Option<RendererSettings>) -> Self {
         Self {
             scene: Some(scene),
             graphics: None,
-            renderer_settings,
+            renderer_override,
         }
     }
 }
@@ -74,7 +81,9 @@ impl ApplicationHandler for GameApp {
         let result = event_loop
             .create_window(attributes)
             .context("failed to create the game window")
-            .and_then(|window| Graphics::new(Arc::new(window), scene, self.renderer_settings));
+            .and_then(|window| {
+                Graphics::new(Arc::new(window), scene, self.renderer_override.take())
+            });
         match result {
             Ok(mut graphics) => {
                 if !graphics.game_ui.is_open() {
@@ -112,10 +121,11 @@ impl ApplicationHandler for GameApp {
                 RenderOutcome::Exit => event_loop.exit(),
                 RenderOutcome::Load(saved) => {
                     let window = Arc::clone(&graphics.window);
+                    let graphics_settings = graphics.graphics_settings;
                     let slot = saved.slot;
                     let path = saved.map_path(&graphics.scene.path);
                     match path.and_then(LoadedScene::load).and_then(|scene| {
-                        Graphics::new_with_save(window, scene, &saved.bytes, self.renderer_settings)
+                        Graphics::new_with_save(window, scene, &saved.bytes, graphics_settings)
                     }) {
                         Ok(mut replacement) => {
                             replacement.last_save_slot = Some(slot);
@@ -140,8 +150,11 @@ impl ApplicationHandler for GameApp {
                 }
                 RenderOutcome::LoadLevel(path, save_slot, travel) => {
                     let window = Arc::clone(&graphics.window);
+                    let graphics_settings = graphics.graphics_settings;
                     match LoadedScene::load(path.clone())
-                        .and_then(|scene| Graphics::new(window, scene, self.renderer_settings))
+                        .and_then(|scene| {
+                            Graphics::new_with_settings(window, scene, graphics_settings)
+                        })
                         .and_then(|mut replacement| {
                             if let Some(travel) = &travel {
                                 replacement
@@ -447,6 +460,7 @@ struct Graphics {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: SurfaceConfiguration,
+    presentation: Presentation,
     renderer: Renderer,
     camera: Camera,
     scene: LoadedScene,
@@ -474,6 +488,7 @@ struct Graphics {
     save_dir: PathBuf,
     last_save_slot: Option<u32>,
     pending_screenshots: Vec<Option<u32>>,
+    graphics_settings: GraphicsSettings,
     display_settings: DisplaySettings,
 }
 
@@ -481,27 +496,35 @@ impl Graphics {
     fn new(
         window: Arc<Window>,
         scene: LoadedScene,
-        renderer_settings: RendererSettings,
+        renderer_override: Option<RendererSettings>,
     ) -> Result<Self> {
-        Self::new_inner(window, scene, None, renderer_settings)
+        Self::new_inner(window, scene, None, None, renderer_override)
+    }
+
+    fn new_with_settings(
+        window: Arc<Window>,
+        scene: LoadedScene,
+        graphics_settings: GraphicsSettings,
+    ) -> Result<Self> {
+        Self::new_inner(window, scene, None, Some(graphics_settings), None)
     }
 
     fn new_with_save(
         window: Arc<Window>,
         scene: LoadedScene,
         bytes: &[u8],
-        renderer_settings: RendererSettings,
+        graphics_settings: GraphicsSettings,
     ) -> Result<Self> {
-        Self::new_inner(window, scene, Some(bytes), renderer_settings)
+        Self::new_inner(window, scene, Some(bytes), Some(graphics_settings), None)
     }
 
     fn new_inner(
         window: Arc<Window>,
         mut scene: LoadedScene,
         saved: Option<&[u8]>,
-        renderer_settings: RendererSettings,
+        graphics_settings: Option<GraphicsSettings>,
+        renderer_override: Option<RendererSettings>,
     ) -> Result<Self> {
-        let display_settings = DisplaySettings::for_mode(renderer_settings.mode);
         let mut last_error = None;
         let game_root = scene
             .path
@@ -510,13 +533,24 @@ impl Graphics {
             .context("map path must be inside the game's Maps directory")?
             .to_path_buf();
         let initial_size = window.inner_size();
-        let resolutions = display_resolutions(&window);
+        let resolutions = RESOLUTION_PRESETS
+            .iter()
+            .map(|(size, _)| (size[0], size[1]))
+            .collect::<Vec<_>>();
         let console = ConsoleCommands::production(
             &game_root,
             (initial_size.width, initial_size.height),
-            resolutions.clone(),
+            resolutions,
         )
         .context("could not configure game console commands")?;
+        let graphics_settings = graphics_settings.unwrap_or_else(|| {
+            GraphicsSettings::load(
+                &console,
+                [initial_size.width.max(1), initial_size.height.max(1)],
+                renderer_override,
+            )
+        });
+        let display_settings = graphics_settings.display();
         let screenshot_dir = console.settings_dir().join("Screenshots");
         let settings_dir = console.settings_dir().to_path_buf();
         let save_dir = console.settings_dir().join("Saves");
@@ -631,16 +665,21 @@ impl Graphics {
         config.present_mode = wgpu::PresentMode::Fifo;
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
+        let presentation = Presentation::new(&device, config.format, graphics_settings.resolution);
         let renderer = Renderer::new_with_settings(
             &device,
             &queue,
             config.format,
             &scene.render,
-            [size.width, size.height],
-            renderer_settings,
+            presentation.size(),
+            graphics_settings.renderer,
         );
         let far = (renderer.bounds().radius().max(100.0) * 10.0).max(10_000.0);
-        let camera = camera_from_player_view(player_view, size, far);
+        let camera = camera_from_player_view(
+            player_view,
+            PhysicalSize::new(presentation.size()[0], presentation.size()[1]),
+            far,
+        );
         let egui_context = egui::Context::default();
         let egui = egui_winit::State::new(
             egui_context.clone(),
@@ -658,9 +697,7 @@ impl Graphics {
             &settings_dir,
             &save_dir,
             ui::OptionsState {
-                resolution: (initial_size.width, initial_size.height),
-                resolutions,
-                brightness: display_settings.brightness,
+                graphics: graphics_settings,
                 music_volume,
                 sound_volume,
             },
@@ -671,6 +708,7 @@ impl Graphics {
             device,
             queue,
             config,
+            presentation,
             renderer,
             camera,
             scene,
@@ -698,6 +736,7 @@ impl Graphics {
             save_dir,
             last_save_slot: None,
             pending_screenshots: Vec::new(),
+            graphics_settings,
             display_settings,
         })
     }
@@ -709,8 +748,6 @@ impl Graphics {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
-        self.renderer
-            .resize(&self.device, [size.width, size.height]);
     }
 
     fn mouse_button(&mut self, button: MouseButton, state: ElementState) {
@@ -827,7 +864,12 @@ impl Graphics {
         };
         let view = frame.texture.create_view(&Default::default());
         let egui_context = self.egui.egui_ctx().clone();
-        let egui_input = self.egui.take_egui_input(&self.window);
+        let mut egui_input = self.egui.take_egui_input(&self.window);
+        self.presentation.transform_input(
+            &mut egui_input,
+            [self.config.width, self.config.height],
+            self.window.scale_factor() as f32,
+        );
         let egui_output = egui_context.run_ui(egui_input, |ui| {
             self.game_ui.ui(ui.ctx());
             self.debug_overlay(ui.ctx());
@@ -841,8 +883,9 @@ impl Graphics {
                 .update_texture(&self.device, &self.queue, *id, delta);
         }
         let paint_jobs = egui_context.tessellate(egui_output.shapes, egui_output.pixels_per_point);
+        let render_size = self.presentation.size();
         let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
+            size_in_pixels: render_size,
             pixels_per_point: egui_output.pixels_per_point,
         };
         let mut encoder = self
@@ -853,18 +896,18 @@ impl Graphics {
         self.render_stats = self.renderer.render(
             &self.queue,
             &mut encoder,
-            &view,
+            self.presentation.view(),
             &self.camera,
-            [self.config.width, self.config.height],
+            render_size,
             self.display_settings,
         );
         let screenshots = match prepare_screenshots(
             &self.device,
             &mut encoder,
-            &frame.texture,
+            self.presentation.texture(),
             self.config.format,
-            self.config.width,
-            self.config.height,
+            render_size[0],
+            render_size[1],
             &self.screenshot_dir,
             std::mem::take(&mut self.pending_screenshots),
         ) {
@@ -885,7 +928,7 @@ impl Graphics {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("OpenHP1 diagnostics overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: self.presentation.view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -901,6 +944,16 @@ impl Graphics {
             self.egui_renderer
                 .render(&mut pass.forget_lifetime(), &paint_jobs, &screen);
         }
+        self.presentation.draw(
+            &mut encoder,
+            &view,
+            [self.config.width, self.config.height],
+            if self.graphics_settings.renderer.mode == openhp1_render::RendererMode::Classic {
+                self.graphics_settings.color_depth
+            } else {
+                ColorDepth::TrueColor
+            },
+        );
         commands.push(encoder.finish());
         self.queue.submit(commands);
         for id in &egui_output.textures_delta.free {
@@ -960,35 +1013,15 @@ impl Graphics {
                 self.capture_input();
                 RenderOutcome::Continue
             }
-            Some(ui::Action::SetResolution(width, height)) => {
-                self.console.console_command(
-                    self.player,
-                    "PlayerPawn",
-                    &format!("SetRes {width}x{height}"),
-                );
-                for (key, value) in [("WindowedViewportX", width), ("WindowedViewportY", height)] {
-                    self.console.console_command(
-                        self.player,
-                        "PlayerPawn",
-                        &format!("set ini:Engine.Engine.ViewportManager {key} {value}"),
-                    );
-                }
-                self.console
-                    .console_command(self.player, "PlayerPawn", "FLUSH");
+            Some(ui::Action::ApplyGraphics(settings)) => {
+                self.apply_graphics_settings(settings);
                 RenderOutcome::Continue
             }
-            Some(ui::Action::SetBrightness(brightness)) => {
-                self.display_settings.brightness = brightness.clamp(0.2, 1.0);
-                self.console.console_command(
-                    self.player,
-                    "PlayerPawn",
-                    &format!(
-                        "set ini:Engine.Engine.ViewportManager Brightness {}",
-                        self.display_settings.brightness
-                    ),
-                );
-                self.console
-                    .console_command(self.player, "PlayerPawn", "FLUSH");
+            Some(ui::Action::SaveGraphics(settings)) => {
+                self.apply_graphics_settings(settings);
+                if let Err(error) = settings.save(&self.console) {
+                    self.last_error = Some(format!("could not save graphics settings: {error}"));
+                }
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetMusicVolume(volume)) => {
@@ -1003,35 +1036,6 @@ impl Graphics {
             }
             Some(ui::Action::SetMouseSensitivity(sensitivity)) => {
                 self.dispatch_player_option("SetSensitivity", &[Value::Float(sensitivity)]);
-                RenderOutcome::Continue
-            }
-            Some(ui::Action::SetTextureDetail(detail)) => {
-                let value = ["High", "Medium", "Low"][detail];
-                self.console.console_command(
-                    self.player,
-                    "PlayerPawn",
-                    &format!("set ini:Engine.Engine.ViewportManager TextureDetail {value}"),
-                );
-                self.console
-                    .console_command(self.player, "PlayerPawn", "FLUSH");
-                RenderOutcome::Continue
-            }
-            Some(ui::Action::SetObjectDetail(detail)) => {
-                let value = [
-                    "ObjectDetailVeryHigh",
-                    "ObjectDetailHigh",
-                    "ObjectDetailMedium",
-                    "ObjectDetailLow",
-                    "ObjectDetailVeryLow",
-                ][detail];
-                if let Err(error) = self.console.save_config_value(
-                    "User",
-                    "Engine.PlayerPawn",
-                    "ObjectDetail",
-                    value,
-                ) {
-                    self.last_error = Some(format!("could not save object detail: {error}"));
-                }
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetAutoJump(enabled)) => {
@@ -1063,6 +1067,30 @@ impl Graphics {
         }
     }
 
+    fn apply_graphics_settings(&mut self, settings: GraphicsSettings) {
+        let resolution_changed = self.graphics_settings.resolution != settings.resolution;
+        let renderer_changed = self.graphics_settings.renderer != settings.renderer;
+        if resolution_changed {
+            self.presentation
+                .resize(&self.device, self.config.format, settings.resolution);
+        }
+        if renderer_changed {
+            self.renderer = Renderer::new_with_settings(
+                &self.device,
+                &self.queue,
+                self.config.format,
+                &self.scene.render,
+                self.presentation.size(),
+                settings.renderer,
+            );
+        } else if resolution_changed {
+            self.renderer.resize(&self.device, self.presentation.size());
+        }
+        self.graphics_settings = settings;
+        self.display_settings = settings.display();
+        self.game_ui.set_graphics_settings(settings);
+    }
+
     fn dispatch_player_option(&mut self, function: &str, arguments: &[Value]) {
         let result = (|| -> Result<()> {
             let actions = self.runtime.dispatch_player_event(function, arguments)?;
@@ -1087,9 +1115,9 @@ impl Graphics {
             match action {
                 ConsoleCommandAction::Exit => exit = true,
                 ConsoleCommandAction::SetResolution { width, height } => {
-                    let _ = self
-                        .window
-                        .request_inner_size(PhysicalSize::new(width, height));
+                    let mut settings = self.graphics_settings;
+                    settings.resolution = [width, height];
+                    self.apply_graphics_settings(settings);
                 }
                 ConsoleCommandAction::SetMusicVolume(volume) => {
                     if let Some(audio) = self.audio.as_mut() {
@@ -1369,7 +1397,7 @@ impl Graphics {
                 if !self.fly_camera_active {
                     self.camera = camera_from_player_view(
                         view,
-                        PhysicalSize::new(self.config.width, self.config.height),
+                        PhysicalSize::new(self.presentation.size()[0], self.presentation.size()[1]),
                         self.camera.far,
                     );
                     if self.scene.update_sprite_billboards(Rotator {
@@ -1503,15 +1531,6 @@ fn repeated_player_input(input: PlayerInput) -> PlayerInput {
 
 fn is_fast_forward_key(key: KeyCode) -> bool {
     matches!(key, KeyCode::Equal | KeyCode::NumpadAdd | KeyCode::KeyF)
-}
-
-fn display_resolutions(window: &Window) -> Vec<(u32, u32)> {
-    window
-        .available_monitors()
-        .flat_map(|monitor| monitor.video_modes())
-        .map(|mode| mode.size())
-        .map(|size| (size.width, size.height))
-        .collect()
 }
 
 fn open_url(url: &str) -> std::io::Result<()> {

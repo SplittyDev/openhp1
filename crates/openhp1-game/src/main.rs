@@ -77,7 +77,7 @@ fn init_logging() -> Result<PathBuf> {
 
 struct Options {
     level: PathBuf,
-    renderer: RendererSettings,
+    renderer: Option<RendererSettings>,
 }
 
 fn options() -> Result<Options> {
@@ -87,7 +87,7 @@ fn options() -> Result<Options> {
 fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options> {
     let mut options = Options {
         level: PathBuf::from("res/Maps/startup.unr"),
-        renderer: RendererSettings::default(),
+        renderer: None,
     };
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
@@ -101,12 +101,13 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
         let argument = argument
             .to_str()
             .context("renderer arguments must be valid UTF-8")?;
+        let renderer = options.renderer.get_or_insert_default();
         if let Some(value) = argument.strip_prefix("--renderer=") {
-            options.renderer.mode = value.parse()?;
+            renderer.mode = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--tone-mapper=") {
-            options.renderer.tone_mapper = value.parse()?;
+            renderer.tone_mapper = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--ambient-occlusion=") {
-            options.renderer.ambient_occlusion = value.parse()?;
+            renderer.ambient_occlusion = value.parse()?;
         } else {
             bail!(
                 "usage: openhp1-game [--level <map path>] [--renderer=classic|modern] \
@@ -126,7 +127,7 @@ mod tests {
     fn parses_renderer_and_level_options() {
         let defaults = options_from([]).unwrap();
         assert_eq!(defaults.level, PathBuf::from("res/Maps/startup.unr"));
-        assert_eq!(defaults.renderer, RendererSettings::default());
+        assert_eq!(defaults.renderer, None);
 
         let options = options_from([
             OsString::from("--renderer=modern"),
@@ -137,8 +138,9 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(options.level, PathBuf::from("/game/Maps/Lev2_HogFront.unr"));
-        assert_eq!(options.renderer.mode, RendererMode::Modern);
-        assert_eq!(options.renderer.tone_mapper, ToneMapper::Aces);
-        assert_eq!(options.renderer.ambient_occlusion, AmbientOcclusion::Off);
+        let renderer = options.renderer.unwrap();
+        assert_eq!(renderer.mode, RendererMode::Modern);
+        assert_eq!(renderer.tone_mapper, ToneMapper::Aces);
+        assert_eq!(renderer.ambient_occlusion, AmbientOcclusion::Off);
     }
 }

@@ -73,6 +73,24 @@ impl ConsoleCommands {
         key: &str,
         value: impl Into<String>,
     ) -> io::Result<()> {
+        self.save_config_values(config, section, &[(key, value.into())])
+    }
+
+    pub fn config_value(&self, config: &str, section: &str, key: &str) -> Option<String> {
+        self.state
+            .borrow()
+            .packages
+            .config_values(config, section, key)
+            .into_iter()
+            .next()
+    }
+
+    pub fn save_config_values(
+        &self,
+        config: &str,
+        section: &str,
+        values: &[(&str, String)],
+    ) -> io::Result<()> {
         let state = self.state.borrow();
         if !state.persist {
             return Ok(());
@@ -81,11 +99,14 @@ impl ConsoleCommands {
             .packages
             .save_config(
                 config,
-                &[ConfigEntry {
-                    section: section.to_owned(),
-                    key: key.to_owned(),
-                    values: vec![value.into()],
-                }],
+                &values
+                    .iter()
+                    .map(|(key, value)| ConfigEntry {
+                        section: section.to_owned(),
+                        key: (*key).to_owned(),
+                        values: vec![value.clone()],
+                    })
+                    .collect::<Vec<_>>(),
             )
             .map_err(|error| io::Error::other(error.to_string()))
     }
@@ -732,6 +753,24 @@ mod tests {
             fs::read_to_string(settings.join("User.ini"))
                 .unwrap()
                 .contains("[Engine.PlayerPawn]\nObjectDetail=ObjectDetailHigh")
+        );
+        commands
+            .save_config_values(
+                "OpenHP1",
+                "OpenHP1.Graphics",
+                &[
+                    ("Renderer", "modern".to_owned()),
+                    ("ResolutionX", "1920".to_owned()),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            commands.config_value("OpenHP1", "OpenHP1.Graphics", "Renderer"),
+            Some("modern".to_owned())
+        );
+        assert_eq!(
+            commands.config_value("OpenHP1", "OpenHP1.Graphics", "ResolutionX"),
+            Some("1920".to_owned())
         );
         commands.console_command(0, "Console", "exit");
         assert_eq!(

@@ -165,6 +165,18 @@ fn report_text(graphics: &Graphics, issue: &str, captured: Duration) -> String {
     writeln!(report, "- Bloom: `{}`", settings.bloom).unwrap();
     writeln!(
         report,
+        "- Internal resolution: `{}x{}`",
+        graphics.graphics_settings.resolution[0], graphics.graphics_settings.resolution[1]
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "- Color depth: `{:?}`",
+        graphics.graphics_settings.color_depth
+    )
+    .unwrap();
+    writeln!(
+        report,
         "- Display brightness / contrast: `{:.3} / {:.3}`",
         graphics.display_settings.brightness, graphics.display_settings.contrast
     )

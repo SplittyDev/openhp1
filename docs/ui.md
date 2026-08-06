@@ -51,19 +51,23 @@ OpenHP1 performs that same entry save after a new game and each authored level
 travel, so quitting during the opening lesson resumes at the entered level
 rather than replaying the storybook.
 
-`FEOptionsPage` uses `HPMenuOptionCombo`, not cycling buttons, for resolution,
-colour depth, texture detail, and object detail. Its shipped combo list uses
-`FEComboListSmall` for at most three entries, `FEComboListLarge` otherwise,
-and stretches `FEComboListBox` across the hovered row. The shipped
-`IsSupportedResolution` list is 512x384, 640x480, 800x600, and 1024x768;
-OpenHP1 also retains the active modern window size so opening Options does not
-misrepresent it. Only the 32-bit colour format supported by the wgpu renderer
-is exposed. Detail lists and localized display names come directly from
-`HPMenu`, and control coordinates follow the irregular authored row spacing
-which aligns with the controls baked into `FEOptionsBackTexture1` through `6`.
-The purple option bars are part of that background; `FEOverOption3Texture` is
-painted only while the matching control is under the pointer, and
-`FEOverOptionTexture` remains visible while its drop-down is open.
+The shipped `FEOptionsPage` exposes resolution, colour depth, texture detail,
+object detail, and brightness directly. OpenHP1 replaces that Video block with
+one Graphics Settings button while retaining the authored controls, audio,
+navigation, and book layout around it. The separate OpenHP1-owned page exposes
+the internal render resolution and Classic/Modern renderer selection. Classic
+adds brightness and optional final-frame RGB565 emulation; Modern adds its own
+brightness and contrast values, tone mapper, SSAO, and bloom. Classic remains
+the default. The original texture and object detail controls are omitted
+because the OpenHP1 renderer does not currently consume those configuration
+values.
+
+Graphics changes preview immediately and are persisted together under
+`[OpenHP1.Graphics]` in the writable `OpenHP1.ini` overlay when the page closes.
+They survive authored level travel and save loading. The resolution list keeps
+the four shipped 4:3 sizes, adds enhanced 4:3 and 16:9 presets, and retains an
+active non-preset value as Custom. This setting controls the composed internal
+frame rather than the winit window, which remains independently resizable.
 
 The Quidditch page's `globalconfig unlocked` value is a three-state progression
 stored under `HPMenu.FEQuidMatchPage` in `HP.ini`: `0` locks both choices, `1`
