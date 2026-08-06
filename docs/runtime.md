@@ -52,6 +52,11 @@ live instance remains addressable while the remote context executes. Serialized
 `UStruct` child chains may contain any `UField`; non-property fields are skipped
 by following their shared `Next` link.
 
+The host `Player.Console` bridge retains authored console fields as mutable
+instance state. Desktop Space and wand press/release edges update the same
+`bSpacePressed` and `bSpaceReleased` fields read and written by HP1 scripts;
+host calls and ordinary context field access therefore share one receiver.
+
 Runtime actions update both persistent actor state and the corresponding scene
 state. In particular, later animation ticks must not undo `SetLocation` or
 other transform changes. Direct `PrePivot` assignments also move rendered

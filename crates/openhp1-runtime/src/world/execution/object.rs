@@ -371,6 +371,19 @@ impl ScriptRuntime {
         {
             return self.object_handle(host_menu_book_id()).map(Value::Object);
         }
+        if context_object.as_ref() == Some(&host_console_id()) {
+            return match self
+                .host_console_instance
+                .get(&field_name.to_ascii_lowercase())
+                .cloned()
+            {
+                Some(value) => self.frame_value(&value),
+                None => {
+                    let field = self.resolved_object(&field)?;
+                    Ok(self.zero_field_value(&field)?.unwrap_or(Value::None))
+                }
+            };
+        }
         if context_object.as_ref() == Some(&host_menu_book_id())
             && field_name.eq_ignore_ascii_case("QuidMatchPage")
         {
@@ -559,7 +572,7 @@ impl ScriptRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn set_context_field(
+    pub(in crate::world) fn set_context_field(
         &mut self,
         current_actor: usize,
         receiver: i32,
@@ -572,6 +585,14 @@ impl ScriptRuntime {
         let Some(field) = self.resolve_reference(source, field)? else {
             return Ok(());
         };
+        let field_name = {
+            let field = self.resolved_object(&field)?;
+            field
+                .package
+                .summary()
+                .name(field.package.summary().exports[field.export_index].object_name)
+                .to_owned()
+        };
         let self_handle =
             self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
                 DispatchError::UnregisteredActor {
@@ -583,6 +604,11 @@ impl ScriptRuntime {
             current_actor
         } else {
             let object = self.object_for_handle(receiver)?;
+            if object == host_console_id() {
+                self.host_console_instance
+                    .insert(field_name.to_ascii_lowercase(), value);
+                return Ok(());
+            }
             let Some(actor) = self.object_actors.get(&object).copied() else {
                 let resolved = self.resolved_object(&object)?;
                 let export = &resolved.package.summary().exports[resolved.export_index];
@@ -613,14 +639,6 @@ impl ScriptRuntime {
                 return Ok(());
             };
             actor
-        };
-        let field_name = {
-            let field = self.resolved_object(&field)?;
-            field
-                .package
-                .summary()
-                .name(field.package.summary().exports[field.export_index].object_name)
-                .to_owned()
         };
         let is_base = field_name.eq_ignore_ascii_case("Base");
         let is_hidden = field_name.eq_ignore_ascii_case("bHidden");

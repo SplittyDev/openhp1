@@ -38,6 +38,7 @@ impl ScriptRuntime {
             state_lookups: HashMap::default(),
             instances: HashMap::default(),
             object_instances: HashMap::default(),
+            host_console_instance: HashMap::default(),
             class_defaults: HashMap::default(),
             class_relations: HashMap::default(),
             fields: HashMap::default(),

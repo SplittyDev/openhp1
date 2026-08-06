@@ -7,6 +7,7 @@ pub struct PlayerInput {
     pub mouse_y: f32,
     pub alt_fire: bool,
     pub alt_fire_pressed: bool,
+    pub alt_fire_released: bool,
     pub space_pressed: bool,
     pub space_released: bool,
     pub jump: bool,

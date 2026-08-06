@@ -342,11 +342,31 @@ impl ScriptRuntime {
         self.instances.insert(actor, instance);
         if result.is_ok() {
             self.player_alt_fire_pressed |= input.alt_fire_pressed;
+            if input.alt_fire_pressed {
+                self.host_console_instance.insert(
+                    "bspacereleased".to_owned(),
+                    StoredValue::Value(Value::Bool(false)),
+                );
+            }
+            if input.alt_fire_released {
+                self.host_console_instance.insert(
+                    "bspacereleased".to_owned(),
+                    StoredValue::Value(Value::Bool(true)),
+                );
+            }
             if input.space_pressed {
                 self.player_space_pressed = true;
+                self.host_console_instance.insert(
+                    "bspacepressed".to_owned(),
+                    StoredValue::Value(Value::Bool(true)),
+                );
             }
             if input.space_released {
                 self.player_space_pressed = false;
+                self.host_console_instance.insert(
+                    "bspacepressed".to_owned(),
+                    StoredValue::Value(Value::Bool(false)),
+                );
             }
         }
         result

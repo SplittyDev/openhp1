@@ -207,6 +207,7 @@ pub struct ScriptRuntime {
     state_lookups: HashMap<StateLookup, Option<ObjectId>>,
     instances: HashMap<usize, InstanceState>,
     object_instances: HashMap<ObjectId, (ObjectId, InstanceState)>,
+    host_console_instance: HashMap<String, StoredValue>,
     class_defaults: HashMap<ObjectId, InstanceState>,
     class_relations: HashMap<(ObjectId, ObjectId), bool>,
     fields: HashMap<(ObjectId, String), Option<ObjectId>>,

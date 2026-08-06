@@ -867,6 +867,7 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
         ("Save.u", "HPConsole", "SaveSelectedSlot"),
         ("Load.u", "HPConsole", "LoadSelectedSlot"),
         ("Travel.u", "HPConsole", "ChangeLevel"),
+        ("SpaceFlag.u", "baseConsole", "bSpaceReleased"),
         ("Book.u", "HPConsole", "menuBook"),
         ("Page.u", "FEBook", "QuidMatchPage"),
         ("Unlock.u", "FEQuidMatchPage", "UnlockQuidditch"),
@@ -883,6 +884,7 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     runtime.set_console_command_host(console.clone());
     runtime.player_actor = Some(7);
+    runtime.actor_objects.insert(7, runtime_actor_id(7));
     let player_package = runtime.packages.load_path(system.join("Player.u")).unwrap();
     let console_package = runtime
         .packages
@@ -910,8 +912,30 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
         panic!("baseConsole cast rejected the host bridge");
     };
 
+    let space_flag = runtime
+        .packages
+        .load_path(system.join("SpaceFlag.u"))
+        .unwrap();
     let mut instance = InstanceState::default();
     let mut actions = Vec::new();
+    runtime
+        .set_context_field(
+            7,
+            console_handle,
+            &space_flag,
+            2,
+            Value::Bool(true),
+            &mut instance,
+            &mut actions,
+        )
+        .unwrap();
+    assert_eq!(
+        runtime
+            .context_field_value(7, console_handle, &space_flag, 2, &instance)
+            .unwrap(),
+        Value::Bool(true)
+    );
+
     for (file, expected) in [
         ("Save.u", ConsoleCommandAction::SaveGame { slot: 99 }),
         ("Load.u", ConsoleCommandAction::OpenSave { slot: 99 }),
@@ -1785,6 +1809,10 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
             .unwrap()
             .is_empty()
     );
+    assert_eq!(
+        runtime.host_console_instance.get("bspacepressed"),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
     assert!(
         runtime
             .tick_player(
@@ -1796,6 +1824,10 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
             )
             .unwrap()
             .is_empty()
+    );
+    assert_eq!(
+        runtime.host_console_instance.get("bspacepressed"),
+        Some(&StoredValue::Value(Value::Bool(false)))
     );
     runtime.instances.get_mut(&player).unwrap().insert(
         fields["CarryingActor"].clone(),

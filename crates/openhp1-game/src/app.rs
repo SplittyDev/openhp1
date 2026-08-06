@@ -301,6 +301,7 @@ struct InputState {
     cast_mouse: bool,
     boost_mouse: bool,
     cast_requested: bool,
+    cast_release_requested: bool,
     space_requested: bool,
     space_release_requested: bool,
     jump_requested: bool,
@@ -315,6 +316,7 @@ impl InputState {
                 if first_press {
                     if key == KeyCode::Space {
                         self.space_requested = true;
+                        self.jump_requested = true;
                     } else if matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight) {
                         self.jump_requested = true;
                     } else if matches!(key, KeyCode::AltLeft | KeyCode::AltRight) {
@@ -326,6 +328,12 @@ impl InputState {
                 self.keys.remove(&key);
                 if key == KeyCode::Space {
                     self.space_release_requested = true;
+                } else if matches!(key, KeyCode::AltLeft | KeyCode::AltRight)
+                    && !self.cast_mouse
+                    && !self.keys.contains(&KeyCode::AltLeft)
+                    && !self.keys.contains(&KeyCode::AltRight)
+                {
+                    self.cast_release_requested = true;
                 }
             }
         }
@@ -337,6 +345,9 @@ impl InputState {
                 let pressed = state == ElementState::Pressed;
                 self.cast_requested |= pressed && !self.cast_mouse;
                 self.cast_mouse = pressed;
+                self.cast_release_requested |= !pressed
+                    && !self.keys.contains(&KeyCode::AltLeft)
+                    && !self.keys.contains(&KeyCode::AltRight);
             }
             MouseButton::Right => {
                 let pressed = state == ElementState::Pressed;
@@ -367,6 +378,7 @@ impl InputState {
             mouse_y: mouse_axis(-self.mouse_delta.1, delta_time, 6.0),
             alt_fire: casting,
             alt_fire_pressed: self.cast_requested,
+            alt_fire_released: self.cast_release_requested,
             space_pressed: self.space_requested,
             space_released: self.space_release_requested,
             jump: self.jump_requested,
@@ -378,6 +390,7 @@ impl InputState {
         };
         self.mouse_delta = (0.0, 0.0);
         self.cast_requested = false;
+        self.cast_release_requested = false;
         self.space_requested = false;
         self.space_release_requested = false;
         self.jump_requested = false;
@@ -390,6 +403,7 @@ impl InputState {
         self.cast_mouse = false;
         self.boost_mouse = false;
         self.cast_requested = false;
+        self.cast_release_requested = false;
         self.space_requested = false;
         self.space_release_requested = false;
         self.jump_requested = false;
@@ -1382,6 +1396,7 @@ fn repeated_player_input(input: PlayerInput) -> PlayerInput {
         mouse_x: 0.0,
         mouse_y: 0.0,
         alt_fire_pressed: false,
+        alt_fire_released: false,
         space_pressed: false,
         space_released: false,
         jump: false,
@@ -1754,7 +1769,7 @@ mod tests {
         assert!(!player.alt_fire);
         assert!(!player.alt_fire_pressed);
         assert!(player.space_pressed);
-        assert!(!player.jump);
+        assert!(player.jump);
         assert!(player.broom_pitch_up);
         assert!(!player.broom_pitch_down);
         assert!(!player.broom_boost);
@@ -1786,12 +1801,14 @@ mod tests {
         assert!((player.mouse_y - 96.0).abs() < 1e-4);
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
+        assert!(!player.alt_fire_released);
         assert!(player.broom_brake);
         assert!(!input.player_input(1.0 / 60.0).alt_fire_pressed);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Released);
         let player = input.player_input(1.0 / 60.0);
         assert!(!player.alt_fire);
+        assert!(player.alt_fire_released);
         assert!(!player.broom_brake);
         input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
         let player = input.player_input(1.0 / 60.0);
