@@ -141,6 +141,12 @@ impl ApplicationHandler for GameApp {
                     {
                         Ok(mut replacement) => {
                             replacement.last_save_slot = save_slot;
+                            if let Some(slot) = save_slot
+                                && let Err(error) = replacement.save_game(slot)
+                            {
+                                replacement.last_error =
+                                    Some(format!("could not save new level: {error:#}"));
+                            }
                             replacement.game_ui.preserve_session_from(&graphics.game_ui);
                             std::mem::swap(
                                 &mut replacement.debug_console,
@@ -761,7 +767,7 @@ impl Graphics {
         }
         if let Some(url) = self.pending_level_travel.take() {
             match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
-                Ok(path) => return RenderOutcome::LoadLevel(path, None),
+                Ok(path) => return RenderOutcome::LoadLevel(path, self.last_save_slot),
                 Err(error) => {
                     self.last_error = Some(format!("could not travel to {url}: {error:#}"))
                 }

@@ -693,6 +693,17 @@ fn save_snapshot_runtime(root: &std::path::Path, value: i32) -> ScriptRuntime {
             (animation_frame, StoredValue::Value(Value::Float(0.375))),
             (base, StoredValue::Object(None)),
             (level, StoredValue::Object(None)),
+            (
+                object_id(&package, 10),
+                StoredValue::Value(Value::Struct(std::collections::HashMap::from([(
+                    "Target".to_owned(),
+                    Value::Object(1),
+                )]))),
+            ),
+            (
+                object_id(&package, 11),
+                StoredValue::Object(Some(host_console_id())),
+            ),
         ]
         .into_iter()
         .collect(),
@@ -786,6 +797,22 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
     assert_eq!(
         restored.instances[&7][&property],
         StoredValue::Value(Value::Int(99))
+    );
+    assert_eq!(
+        restored.instances[&7][&object_id(&package, 11)],
+        StoredValue::Object(Some(host_console_id()))
+    );
+    let StoredValue::Value(Value::Struct(target)) =
+        &restored.instances[&7][&object_id(&package, 10)]
+    else {
+        panic!("nested object handle did not restore");
+    };
+    let Value::Object(target) = target["Target"] else {
+        panic!("nested target is not an object");
+    };
+    assert_eq!(
+        restored.object_for_handle(target).unwrap(),
+        object_id(&package, 15)
     );
     assert_eq!(restored.actor_states[&7].as_deref(), Some("SavedState"));
     assert_eq!(restored.state_revisions[&7], 9);

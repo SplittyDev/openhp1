@@ -136,7 +136,9 @@ impl ScriptRuntime {
             .map(|(object, (class, instance))| {
                 let mut instance = instance
                     .iter()
-                    .map(|(field, value)| Ok((saved_object(field)?, saved_stored_value(value)?)))
+                    .map(|(field, value)| {
+                        Ok((saved_object(field)?, saved_stored_value(self, value)?))
+                    })
                     .collect::<DispatchResult<Vec<_>>>()?;
                 instance.sort_by(|(left, _), (right, _)| left.cmp(right));
                 Ok(SavedObjectInstance {
@@ -235,7 +237,7 @@ impl ScriptRuntime {
             .get(&actor)
             .ok_or(DispatchError::ActiveActorContext { actor })?
             .iter()
-            .map(|(field, value)| Ok((saved_object(field)?, saved_stored_value(value)?)))
+            .map(|(field, value)| Ok((saved_object(field)?, saved_stored_value(self, value)?)))
             .collect::<DispatchResult<Vec<_>>>()?;
         instance.sort_by(|(left, _), (right, _)| left.cmp(right));
         let frame = match self.state_frames.get(&actor) {
@@ -602,11 +604,19 @@ impl ScriptRuntime {
     }
 
     fn resolve_saved_object_id(&mut self, object: &SavedObject) -> DispatchResult<ObjectId> {
-        if object.package == "<runtime>" {
-            return Ok(runtime_actor_id(
+        let special = match object.package.as_str() {
+            "<runtime>" => Some(runtime_actor_id(
                 usize::try_from(object.export_index)
                     .map_err(|_| save_error("runtime actor index is invalid"))?,
-            ));
+            )),
+            "<host-player>" => Some(host_player_id()),
+            "<host-console>" => Some(host_console_id()),
+            "<host-menu-book>" => Some(host_menu_book_id()),
+            "<host-quidditch-page>" => Some(host_quidditch_page_id()),
+            _ => None,
+        };
+        if let Some(object) = special {
+            return Ok(object);
         }
         let object = self.resolve_saved_object(object)?;
         Ok(object_id(&object.package, object.export_index))
@@ -713,8 +723,8 @@ impl ScriptRuntime {
 }
 
 fn saved_object(object: &ObjectId) -> DispatchResult<SavedObject> {
-    let package = if object.package.as_ref() == "<runtime>" {
-        "<runtime>".to_owned()
+    let package = if object.package.starts_with('<') {
+        object.package.to_string()
     } else {
         Path::new(object.package.as_ref())
             .file_stem()
@@ -729,13 +739,13 @@ fn saved_object(object: &ObjectId) -> DispatchResult<SavedObject> {
     })
 }
 
-fn saved_stored_value(value: &StoredValue) -> DispatchResult<SavedValue> {
+fn saved_stored_value(runtime: &ScriptRuntime, value: &StoredValue) -> DispatchResult<SavedValue> {
     Ok(match value {
-        StoredValue::Value(value) => saved_plain_value(value)?,
+        StoredValue::Value(value) => saved_plain_value(runtime, value)?,
         StoredValue::Array(values) => SavedValue::Array(
             values
                 .iter()
-                .map(saved_stored_value)
+                .map(|value| saved_stored_value(runtime, value))
                 .collect::<DispatchResult<_>>()?,
         ),
         StoredValue::Name(value) => SavedValue::Name(value.clone()),
@@ -747,7 +757,7 @@ fn saved_stored_value(value: &StoredValue) -> DispatchResult<SavedValue> {
     })
 }
 
-fn saved_plain_value(value: &Value) -> DispatchResult<SavedValue> {
+fn saved_plain_value(runtime: &ScriptRuntime, value: &Value) -> DispatchResult<SavedValue> {
     Ok(match value {
         Value::None => SavedValue::None,
         Value::Byte(value) => SavedValue::Byte(*value),
@@ -760,11 +770,14 @@ fn saved_plain_value(value: &Value) -> DispatchResult<SavedValue> {
         Value::NameText(value) => SavedValue::Name(value.clone()),
         Value::Object(0) => SavedValue::Object(None),
         Value::Object(-1) => SavedValue::SelfObject,
-        Value::Object(value) => {
-            return Err(save_error(format!(
-                "instance contains unresolved object handle {value}"
-            )));
+        Value::Object(value) if *value > 0 => {
+            let index = usize::try_from(*value - 1)
+                .ok()
+                .filter(|index| *index < runtime.handle_objects.len())
+                .ok_or(DispatchError::InvalidObjectHandle { handle: *value })?;
+            SavedValue::Object(Some(saved_object(&runtime.handle_objects[index])?))
         }
+        Value::Object(value) => return Err(DispatchError::InvalidObjectHandle { handle: *value }),
         Value::Vector(value) if value.iter().all(|value| value.is_finite()) => {
             SavedValue::Vector(*value)
         }
@@ -773,7 +786,7 @@ fn saved_plain_value(value: &Value) -> DispatchResult<SavedValue> {
         Value::Struct(values) => {
             let mut fields = values
                 .iter()
-                .map(|(name, value)| Ok((name.clone(), saved_plain_value(value)?)))
+                .map(|(name, value)| Ok((name.clone(), saved_plain_value(runtime, value)?)))
                 .collect::<DispatchResult<Vec<_>>>()?;
             fields.sort_by(|(left, _), (right, _)| left.cmp(right));
             SavedValue::Struct(fields)
@@ -781,7 +794,7 @@ fn saved_plain_value(value: &Value) -> DispatchResult<SavedValue> {
         Value::Array(values) => SavedValue::Array(
             values
                 .iter()
-                .map(saved_plain_value)
+                .map(|value| saved_plain_value(runtime, value))
                 .collect::<DispatchResult<_>>()?,
         ),
     })
@@ -830,7 +843,7 @@ fn saved_frame_value(runtime: &ScriptRuntime, value: &Value) -> DispatchResult<S
                 .map(|value| saved_frame_value(runtime, value))
                 .collect::<DispatchResult<_>>()?,
         )),
-        value => saved_plain_value(value),
+        value => saved_plain_value(runtime, value),
     }
 }
 
