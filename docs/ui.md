@@ -53,3 +53,11 @@ UnrealScript and save games. Its `FEReportBackTexture*`, badge,
 sand, and coloured button textures and their coordinates come from the shipped
 `HPMenu.u` class. Resume closes the book, Options returns to the report page,
 and Quit Game returns to `startup.unr` after the localized confirmation.
+
+`FEFolioPage` reads the same 25-element `WizardCards` struct array as
+UnrealScript. Its six normal and six Harry-page backgrounds, missing-card art,
+25 small/large card pairs, page arrows, card positions, and seven-page layout
+come from `HPMenu.u`; collected IDs select the matching shipped art and
+localized `wizard_card_new_*` description. The original `FEBook.ShowTabs`
+returns before enabling its dormant side tabs, so OpenHP1 follows the active
+Report button and return-arrow navigation instead of displaying them.

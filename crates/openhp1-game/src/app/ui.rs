@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -10,6 +11,33 @@ use openhp1_runtime::PlayerUiState;
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
+const WIZARD_CARDS: [(i32, &str, &str); 25] = [
+    (101, "Dumbledore", "wizard_card_new_04b"),
+    (2, "Cornelius", "wizard_card_new_10"),
+    (69, "Bertie", "wizard_card_new_23"),
+    (17, "Morgan", "wizard_card_new_07"),
+    (41, "Godric", "wizard_card_new_17"),
+    (72, "Helga", "wizard_card_new_24"),
+    (49, "Elladora", "wizard_card_new_20"),
+    (1, "Merlin", "wizard_card_new_01"),
+    (10, "Burdock", "wizard_card_new_02"),
+    (18, "Uric", "wizard_card_new_08"),
+    (57, "Gifford", "wizard_card_new_21"),
+    (83, "Roderic", "wizard_card_new_27"),
+    (100, "Harry", "wizard_card_new_03"),
+    (82, "Rowena", "wizard_card_new_26"),
+    (19, "Newt", "wizard_card_new_09"),
+    (8, "Derwent", "wizard_card_new_25"),
+    (48, "Salizar", "wizard_card_new_19"),
+    (47, "Edgar", "wizard_card_new_18"),
+    (28, "Tilly", "wizard_card_new_12"),
+    (37, "Cassandra", "wizard_card_new_15"),
+    (24, "Adalbert", "wizard_card_new_11"),
+    (62, "Ignatia", "wizard_card_new_22"),
+    (96, "Hengist", "wizard_card_new_28"),
+    (35, "Bowman", "wizard_card_new_14"),
+    (11, "Herpo", "wizard_card_new_05"),
+];
 
 pub(super) enum Action {
     Exit,
@@ -38,6 +66,12 @@ enum Page {
     Options,
     Quidditch,
     Report,
+    Folio,
+}
+
+struct CardTextures {
+    big: TextureHandle,
+    small: TextureHandle,
 }
 
 struct UiTextures {
@@ -64,6 +98,13 @@ struct UiTextures {
     report_badges: [TextureHandle; 3],
     report_sand: [TextureHandle; 4],
     report_buttons: [[TextureHandle; 2]; 3],
+    folio_background: Vec<TextureHandle>,
+    folio_harry_background: Vec<TextureHandle>,
+    folio_cards: HashMap<i32, CardTextures>,
+    folio_missing_big: TextureHandle,
+    folio_missing_small: TextureHandle,
+    folio_right: TextureHandle,
+    folio_right_hover: TextureHandle,
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -102,6 +143,10 @@ pub(super) struct GameUi {
     settings_dir: PathBuf,
     quidditch_unlocked: u8,
     player: PlayerUiState,
+    folio_page: usize,
+    selected_card: Option<i32>,
+    card_descriptions: HashMap<i32, String>,
+    harry_card_objective: String,
     textures: UiTextures,
 }
 
@@ -359,6 +404,72 @@ impl GameUi {
                     )?,
                 ],
             ],
+            folio_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.FEFolioBackTexture{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            folio_harry_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.FEFolioHarryTexture{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
+            folio_cards: WIZARD_CARDS
+                .iter()
+                .map(|(id, name, _)| {
+                    Ok((
+                        *id,
+                        CardTextures {
+                            big: load_texture(
+                                context,
+                                &mut packages,
+                                &format!("HPMenu.Icons.WizCard{name}BigTexture"),
+                                true,
+                            )?,
+                            small: load_texture(
+                                context,
+                                &mut packages,
+                                &format!("HPMenu.Icons.WizCard{name}SmallTexture"),
+                                true,
+                            )?,
+                        },
+                    ))
+                })
+                .collect::<Result<_>>()?,
+            folio_missing_big: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.WizCardMissingBigTexture",
+                true,
+            )?,
+            folio_missing_small: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.WizCardMissingSmallTexture",
+                true,
+            )?,
+            folio_right: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FERightArrowUpIcon",
+                true,
+            )?,
+            folio_right_hover: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FERightArrowOverIcon",
+                true,
+            )?,
             slider_track: load_texture(
                 context,
                 &mut packages,
@@ -461,6 +572,12 @@ impl GameUi {
             broomstick_practice: localized("quidditch_02")?,
             quidditch_league: localized("quidditch_03")?,
         };
+        let card_descriptions = WIZARD_CARDS
+            .iter()
+            .map(|(id, _, key)| Ok((*id, localized(key)?)))
+            .collect::<Result<_>>()?;
+        let harry_card_objective =
+            packages.localize("Pickup2", "all", "harry_potter_card_objective");
         let mut resolutions = options.resolutions;
         if !resolutions.contains(&options.resolution) {
             resolutions.push(options.resolution);
@@ -513,6 +630,10 @@ impl GameUi {
             settings_dir: save_dir.to_path_buf(),
             quidditch_unlocked,
             player: PlayerUiState::default(),
+            folio_page: 0,
+            selected_card: None,
+            card_descriptions,
+            harry_card_objective,
             textures,
         })
     }
@@ -588,6 +709,8 @@ impl GameUi {
             Page::Options => &self.textures.options_background,
             Page::Quidditch => &self.textures.quidditch_background,
             Page::Report => &self.textures.report_background,
+            Page::Folio if self.folio_page == 6 => &self.textures.folio_harry_background,
+            Page::Folio => &self.textures.folio_background,
             Page::Main => &self.textures.main_background,
         };
         for (index, texture) in background.iter().enumerate() {
@@ -618,6 +741,7 @@ impl GameUi {
                     Page::Options => self.options_page(ui, scale),
                     Page::Quidditch => self.quidditch_page(ui, scale),
                     Page::Report => self.report_page(ui, scale),
+                    Page::Folio => self.folio_page(ui, scale),
                 }
                 if self.confirm_exit {
                     self.exit_confirmation(ui, scale);
@@ -1098,7 +1222,11 @@ impl GameUi {
                         self.options_return = Page::Report;
                         self.page = Page::Options;
                     }
-                    2 => {}
+                    2 => {
+                        self.folio_page = 0;
+                        self.selected_card = None;
+                        self.page = Page::Folio;
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -1109,6 +1237,15 @@ impl GameUi {
                 FontId::proportional(16.0 * scale),
                 Color32::from_rgb(215, 0, 215),
             );
+        }
+        let card_badge = scaled_rect(origin, scale, 246.0, 62.0, 128.0, 128.0);
+        if ui
+            .interact(card_badge, Id::new("report card badge"), Sense::click())
+            .clicked()
+        {
+            self.folio_page = 0;
+            self.selected_card = None;
+            self.page = Page::Folio;
         }
         let resume = scaled_rect(origin, scale, 485.0, 0.0, 100.0, 120.0);
         let response = ui.interact(resume, Id::new("resume game"), Sense::click());
@@ -1126,6 +1263,109 @@ impl GameUi {
         if response.clicked() {
             self.open = false;
             self.action = Some(Action::Resume);
+        }
+    }
+
+    fn folio_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        let origin = ui.min_rect().min;
+        page_title(
+            ui,
+            scale,
+            14.0,
+            &self.labels.folio,
+            Color32::from_rgb(96, 0, 96),
+        );
+        let harry_page = self.folio_page == 6;
+        let selected = if harry_page {
+            self.player.wizard_cards[24]
+        } else {
+            self.selected_card
+        };
+        let big = selected
+            .and_then(|id| self.textures.folio_cards.get(&id))
+            .map_or(&self.textures.folio_missing_big, |card| &card.big);
+        draw_texture(ui.painter(), origin, scale, big, Pos2::new(182.0, 31.0));
+
+        if !harry_page {
+            for (index, (x, y)) in [(49.0, 130.0), (49.0, 268.0), (449.0, 131.0), (451.0, 268.0)]
+                .into_iter()
+                .enumerate()
+            {
+                let card = self.player.wizard_cards[self.folio_page * 4 + index];
+                let texture = card
+                    .and_then(|id| self.textures.folio_cards.get(&id))
+                    .map_or(&self.textures.folio_missing_small, |card| &card.small);
+                if textured_button(ui, scale, x, y, texture, texture, "") {
+                    self.selected_card = card;
+                }
+            }
+        }
+
+        let description = selected
+            .and_then(|id| self.card_descriptions.get(&id))
+            .cloned()
+            .unwrap_or_else(|| {
+                harry_page
+                    .then(|| self.harry_card_objective.clone())
+                    .unwrap_or_default()
+            });
+        if !description.is_empty() {
+            let galley = ui.painter().layout(
+                description,
+                FontId::proportional(14.0 * scale),
+                Color32::from_rgb(96, 0, 96),
+                210.0 * scale,
+            );
+            ui.painter().galley(
+                origin + Vec2::new(211.0, 315.0) * scale,
+                galley,
+                Color32::from_rgb(96, 0, 96),
+            );
+        }
+
+        if self.folio_page > 0
+            && textured_button(
+                ui,
+                scale,
+                80.0,
+                400.0,
+                &self.textures.quidditch_back,
+                &self.textures.quidditch_back_hover,
+                "",
+            )
+        {
+            self.folio_page -= 1;
+        }
+        if self.folio_page < 6
+            && textured_button(
+                ui,
+                scale,
+                485.0,
+                400.0,
+                &self.textures.folio_right,
+                &self.textures.folio_right_hover,
+                "",
+            )
+        {
+            self.folio_page += 1;
+        }
+        ui.painter().text(
+            origin + Vec2::new(305.0, 440.0) * scale,
+            Align2::CENTER_CENTER,
+            format!("{} / 7", self.folio_page + 1),
+            FontId::proportional(14.0 * scale),
+            Color32::from_rgb(215, 0, 215),
+        );
+        if textured_button(
+            ui,
+            scale,
+            565.0,
+            431.0,
+            &self.textures.back,
+            &self.textures.back_hover,
+            "",
+        ) {
+            self.page = Page::Report;
         }
     }
 
@@ -1593,5 +1833,18 @@ mod tests {
     fn combo_lists_use_the_two_authored_popup_sizes() {
         assert_eq!(combo_list_height(3), 54.0);
         assert_eq!(combo_list_height(4), 89.0);
+    }
+
+    #[test]
+    fn folio_table_has_one_texture_pair_for_each_authored_card() {
+        assert_eq!(WIZARD_CARDS.len(), 25);
+        assert_eq!(
+            WIZARD_CARDS
+                .iter()
+                .map(|(id, _, _)| id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            25
+        );
     }
 }
