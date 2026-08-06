@@ -1,7 +1,7 @@
 use super::*;
 
 impl ScriptRuntime {
-    pub(super) fn fell_out_of_world(
+    pub(in crate::world) fn fell_out_of_world(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -12,6 +12,7 @@ impl ScriptRuntime {
             .class_has_name(class, "baseHarry")
             .map_err(|error| error.to_string())?
         {
+            self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_NONE))?;
             self.call_actor_event(
                 actor,
                 class,

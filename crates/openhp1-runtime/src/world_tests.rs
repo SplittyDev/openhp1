@@ -2972,6 +2972,8 @@ fn zone_zero_is_out_of_world() {
     let system = root.join("System");
     fs::create_dir_all(&system).unwrap();
     fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package_for("baseHarry")).unwrap();
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     runtime.collision = Some(Arc::new(collision));
     runtime.level_info = Some(4);
@@ -2981,6 +2983,40 @@ fn zone_zero_is_out_of_world() {
             .unwrap()
             .is_none(),
         "falling physics must dispatch FellOutOfWorld in zone zero",
+    );
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "KillHarry", 0),
+        None,
+    );
+    let physics = runtime_actor_id(100);
+    runtime.fields.insert(
+        (class_id.clone(), "physics".to_owned()),
+        Some(physics.clone()),
+    );
+    let mut instance = [(
+        physics,
+        StoredValue::Value(Value::Byte(physics::PHYS_FALLING)),
+    )]
+    .into_iter()
+    .collect::<InstanceState>();
+
+    runtime
+        .fell_out_of_world(0, &class, &mut instance, &mut Vec::new())
+        .unwrap();
+
+    assert_eq!(
+        runtime.actor_byte(&class, &instance, "Physics").unwrap(),
+        0,
+        "Harry's out-of-world signal must not keep resetting stateDead's latent body",
     );
     fs::remove_dir_all(root).unwrap();
 }

@@ -73,8 +73,9 @@ The original PC manual says both depleted stamina and a fall from a great
 height faint Harry and restart from the last save point. `baseHarry.stateDead`
 is the shipped implementation of that presentation and reload: `KillHarry`
 plays `faint`, waits, and calls `LoadSelectedSlot`. Out-of-world physics routes
-`baseHarry` through `KillHarry(True)` while other actors retain the engine's
-ordinary `FellOutOfWorld` event.
+`baseHarry` through `KillHarry(True)` after stopping physics, preserving
+`Pawn.FellOutOfWorld`'s `SetPhysics(PHYS_None)` behavior, while other actors
+retain the engine's ordinary `FellOutOfWorld` event.
 
 The engine death path also calls static functions through class objects such
 as `LocalMessage`. UE1 class exports have no object class reference; their
