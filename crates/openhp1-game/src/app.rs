@@ -608,6 +608,12 @@ impl Graphics {
                 deferred_calls +=
                     apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
             }
+            let actions = runtime.dispatch_player_event("Possess", &[])?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
+            let actions = runtime.initialize_player_hud()?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
         }
         if let Some(saved) = saved {
             let map = map_identifier(&scene.path, &game_root)?;
@@ -617,12 +623,6 @@ impl Graphics {
                     play_audio_action(audio.as_mut(), action)
                 })?
                 .1;
-            let actions = runtime.dispatch_player_event("Possess", &[])?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-            let actions = runtime.initialize_player_hud()?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
         } else if let Err(error) = (|| -> Result<()> {
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             deferred_calls +=

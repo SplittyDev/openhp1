@@ -140,8 +140,13 @@ to a save slot is normal story flow; a direct level launch from the Quidditch
 menu is not. This distinction must follow authored level travel as well as new
 games and loaded saves.
 
-Saved maps must restore their actor snapshot before the player `Possess` event.
-`BroomPracticeReferee.OnPlayerPossessed` then derives `bReplay` from the current
-host-flow value. Besides matching the original lifecycle, doing this after
-restore repairs saves written by older OpenHP1 builds with the wrong derived
-`bReplay` value.
+The host-flow value must be correct when the initial player `Possess` event
+runs. `BroomPracticeReferee.OnPlayerPossessed` not only derives `bReplay`; it
+also triggers either `Intro` or `ReplayIntro`. Repeating `Possess` after save
+restoration would start a second intro cutscene and leave competing cast and
+camera state active.
+
+A save written after the wrong mode was selected contains the wrong cutscene's
+entire actor state, not only a stale `bReplay` boolean. Such a checkpoint must
+be regenerated at the same level entrance under the correct host-flow mode;
+changing the boolean or replaying lifecycle events is not a safe migration.
