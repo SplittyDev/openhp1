@@ -999,6 +999,7 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
         ("Load.u", "HPConsole", "LoadSelectedSlot"),
         ("Travel.u", "HPConsole", "ChangeLevel"),
         ("SpaceFlag.u", "baseConsole", "bSpaceReleased"),
+        ("HubFlow.u", "HPConsole", "bInHubFlow"),
         ("Book.u", "HPConsole", "menuBook"),
         ("Page.u", "FEBook", "QuidMatchPage"),
         ("Unlock.u", "FEQuidMatchPage", "UnlockQuidditch"),
@@ -1063,6 +1064,25 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
     assert_eq!(
         runtime
             .context_field_value(7, console_handle, &space_flag, 2, &instance)
+            .unwrap(),
+        Value::Bool(true)
+    );
+
+    let hub_flow = runtime
+        .packages
+        .load_path(system.join("HubFlow.u"))
+        .unwrap();
+    runtime.set_in_hub_flow(false);
+    assert_eq!(
+        runtime
+            .context_field_value(7, console_handle, &hub_flow, 2, &instance)
+            .unwrap(),
+        Value::Bool(false)
+    );
+    runtime.set_in_hub_flow(true);
+    assert_eq!(
+        runtime
+            .context_field_value(7, console_handle, &hub_flow, 2, &instance)
             .unwrap(),
         Value::Bool(true)
     );

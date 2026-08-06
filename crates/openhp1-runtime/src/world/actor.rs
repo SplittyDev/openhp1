@@ -98,6 +98,13 @@ impl ScriptRuntime {
         self.console_command_host = Some(Box::new(host));
     }
 
+    pub fn set_in_hub_flow(&mut self, in_hub_flow: bool) {
+        self.host_console_instance.insert(
+            "binhubflow".to_owned(),
+            StoredValue::Value(Value::Bool(in_hub_flow)),
+        );
+    }
+
     pub fn set_collision(
         &mut self,
         collision: Arc<BspCollision>,

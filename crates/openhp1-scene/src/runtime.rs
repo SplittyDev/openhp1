@@ -28,6 +28,7 @@ pub fn initialize_runtime_with(
 pub fn initialize_runtime_with_console(
     scene: &mut LoadedScene,
     console: impl ConsoleCommandHost + 'static,
+    in_hub_flow: bool,
     external: impl FnMut(ActorAction) -> Result<()>,
 ) -> Result<ScriptRuntime> {
     let game_root = scene
@@ -37,6 +38,7 @@ pub fn initialize_runtime_with_console(
         .context("map path must be inside the game's Maps directory")?;
     let mut runtime = ScriptRuntime::new(game_root)?;
     runtime.set_console_command_host(console);
+    runtime.set_in_hub_flow(in_hub_flow);
     initialize_runtime_after_creation(scene, &mut runtime, external, true)?;
     Ok(runtime)
 }
@@ -46,6 +48,7 @@ pub fn initialize_runtime_with_console(
 pub fn initialize_runtime_with_console_unstarted(
     scene: &mut LoadedScene,
     console: impl ConsoleCommandHost + 'static,
+    in_hub_flow: bool,
 ) -> Result<ScriptRuntime> {
     let game_root = scene
         .path
@@ -54,6 +57,7 @@ pub fn initialize_runtime_with_console_unstarted(
         .context("map path must be inside the game's Maps directory")?;
     let mut runtime = ScriptRuntime::new(game_root)?;
     runtime.set_console_command_host(console);
+    runtime.set_in_hub_flow(in_hub_flow);
     initialize_runtime_after_creation(scene, &mut runtime, |_| Ok(()), false)?;
     Ok(runtime)
 }

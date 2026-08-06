@@ -153,7 +153,12 @@ impl ApplicationHandler for GameApp {
                     let graphics_settings = graphics.graphics_settings;
                     match LoadedScene::load(path.clone())
                         .and_then(|scene| {
-                            Graphics::new_with_settings(window, scene, graphics_settings)
+                            Graphics::new_with_settings(
+                                window,
+                                scene,
+                                graphics_settings,
+                                save_slot.is_some(),
+                            )
                         })
                         .and_then(|mut replacement| {
                             if let Some(travel) = &travel {
@@ -498,15 +503,23 @@ impl Graphics {
         scene: LoadedScene,
         renderer_override: Option<RendererSettings>,
     ) -> Result<Self> {
-        Self::new_inner(window, scene, None, None, renderer_override)
+        Self::new_inner(window, scene, None, None, renderer_override, false)
     }
 
     fn new_with_settings(
         window: Arc<Window>,
         scene: LoadedScene,
         graphics_settings: GraphicsSettings,
+        in_hub_flow: bool,
     ) -> Result<Self> {
-        Self::new_inner(window, scene, None, Some(graphics_settings), None)
+        Self::new_inner(
+            window,
+            scene,
+            None,
+            Some(graphics_settings),
+            None,
+            in_hub_flow,
+        )
     }
 
     fn new_with_save(
@@ -515,7 +528,14 @@ impl Graphics {
         bytes: &[u8],
         graphics_settings: GraphicsSettings,
     ) -> Result<Self> {
-        Self::new_inner(window, scene, Some(bytes), Some(graphics_settings), None)
+        Self::new_inner(
+            window,
+            scene,
+            Some(bytes),
+            Some(graphics_settings),
+            None,
+            true,
+        )
     }
 
     fn new_inner(
@@ -524,6 +544,7 @@ impl Graphics {
         saved: Option<&[u8]>,
         graphics_settings: Option<GraphicsSettings>,
         renderer_override: Option<RendererSettings>,
+        in_hub_flow: bool,
     ) -> Result<Self> {
         let mut last_error = None;
         let game_root = scene
@@ -563,9 +584,9 @@ impl Graphics {
             }
         };
         let mut runtime = if saved.is_some() {
-            initialize_runtime_with_console_unstarted(&mut scene, console.clone())?
+            initialize_runtime_with_console_unstarted(&mut scene, console.clone(), in_hub_flow)?
         } else {
-            initialize_runtime_with_console(&mut scene, console.clone(), |action| {
+            initialize_runtime_with_console(&mut scene, console.clone(), in_hub_flow, |action| {
                 play_audio_action(audio.as_mut(), action)
             })?
         };
@@ -587,12 +608,6 @@ impl Graphics {
                 deferred_calls +=
                     apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
             }
-            let actions = runtime.dispatch_player_event("Possess", &[])?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
-            let actions = runtime.initialize_player_hud()?;
-            deferred_calls +=
-                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
         }
         if let Some(saved) = saved {
             let map = map_identifier(&scene.path, &game_root)?;
@@ -602,6 +617,12 @@ impl Graphics {
                     play_audio_action(audio.as_mut(), action)
                 })?
                 .1;
+            let actions = runtime.dispatch_player_event("Possess", &[])?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
+            let actions = runtime.initialize_player_hud()?;
+            deferred_calls +=
+                apply_runtime_actions_with(&mut scene, &mut runtime, actions, |_| Ok(()))?.1;
         } else if let Err(error) = (|| -> Result<()> {
             let actions = runtime.dispatch_player_event("Possess", &[])?;
             deferred_calls +=
