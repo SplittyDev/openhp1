@@ -892,7 +892,7 @@ impl Graphics {
                         self.player,
                         &clip,
                         self.camera.position.to_array(),
-                        0,
+                        3,
                         3.2,
                         false,
                         2_000.0,

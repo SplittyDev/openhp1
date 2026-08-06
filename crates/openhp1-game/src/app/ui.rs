@@ -14,6 +14,9 @@ use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
 const AUTHORED_RESOLUTIONS: [(u32, u32); 4] = [(512, 384), (640, 480), (800, 600), (1024, 768)];
+const STORY_MIN_TIME_ON_PAGE: Duration = Duration::from_secs(2);
+const STORY_SOUND_ADVANCE: Duration = Duration::from_millis(100);
+const STORY_TRAILING_TIME: Duration = Duration::from_secs(1);
 const QUIDDITCH_FIXTURES: [QuidditchFixture; 6] = [
     QuidditchFixture::new(0, 3, 1, 2, "Quid_SlythA.unr"),
     QuidditchFixture::new(0, 1, 2, 3, "Quid_RavenA.unr"),
@@ -397,6 +400,7 @@ pub(super) struct GameUi {
     story_pages: Vec<StoryPage>,
     story_page: usize,
     story_slot: Option<u32>,
+    story_sound_at: Option<Instant>,
     story_deadline: Option<Instant>,
     card_descriptions: HashMap<i32, String>,
     harry_card_objective: String,
@@ -1008,6 +1012,7 @@ impl GameUi {
             story_pages,
             story_page: 0,
             story_slot: None,
+            story_sound_at: None,
             story_deadline: None,
             card_descriptions,
             harry_card_objective,
@@ -1039,6 +1044,7 @@ impl GameUi {
             return true;
         }
         self.story_deadline = None;
+        self.story_sound_at = None;
         self.story_slot = None;
         self.page = Page::Main;
         self.open_combo = None;
@@ -1250,27 +1256,30 @@ impl GameUi {
         self.story_slot = Some(slot);
         self.page = Page::StoryBook;
         let page = &self.story_pages[0];
-        self.story_deadline = Some(Instant::now() + page.duration + Duration::from_secs(2));
-        self.action = Some(Action::PlayUiSound(page.sound.clone()));
+        (self.story_sound_at, self.story_deadline) = story_timing(Instant::now(), page.duration);
     }
 
     fn advance_story(&mut self) {
         self.story_page += 1;
         if let Some(page) = self.story_pages.get(self.story_page) {
-            self.story_deadline = Some(Instant::now() + page.duration + Duration::from_secs(2));
-            self.action = Some(Action::PlayUiSound(page.sound.clone()));
+            (self.story_sound_at, self.story_deadline) =
+                story_timing(Instant::now(), page.duration);
         } else if let Some(slot) = self.story_slot.take() {
+            self.story_sound_at = None;
             self.story_deadline = None;
             self.action = Some(Action::NewGame(slot));
         }
     }
 
     fn storybook_page(&mut self, ui: &mut egui::Ui, scale: f32) {
-        if self
-            .story_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        let now = Instant::now();
+        if self.story_deadline.is_some_and(|deadline| now >= deadline) {
             self.advance_story();
+        } else if self.story_sound_at.is_some_and(|sound_at| now >= sound_at) {
+            self.story_sound_at = None;
+            self.action = Some(Action::PlayUiSound(
+                self.story_pages[self.story_page].sound.clone(),
+            ));
         }
         let page = &self.story_pages[self.story_page.min(self.story_pages.len() - 1)];
         for (index, texture) in page.art.iter().enumerate() {
@@ -2273,6 +2282,13 @@ fn wav_duration(bytes: &[u8]) -> Option<Duration> {
     ))
 }
 
+fn story_timing(now: Instant, narration: Duration) -> (Option<Instant>, Option<Instant>) {
+    (
+        Some(now + STORY_MIN_TIME_ON_PAGE - STORY_SOUND_ADVANCE),
+        Some(now + STORY_MIN_TIME_ON_PAGE + narration + STORY_TRAILING_TIME),
+    )
+}
+
 fn draw_texture(
     painter: &egui::Painter,
     origin: Pos2,
@@ -2797,6 +2813,18 @@ mod tests {
         wav.extend(b"data");
         wav.extend(16_000_u32.to_le_bytes());
         wav.resize(wav.len() + 16_000, 0);
-        assert_eq!(wav_duration(&wav), Some(Duration::from_secs(2)));
+        let narration = wav_duration(&wav).unwrap();
+        assert_eq!(narration, Duration::from_secs(2));
+
+        let now = Instant::now();
+        let (sound_at, deadline) = story_timing(now, narration);
+        assert_eq!(
+            sound_at.unwrap().duration_since(now),
+            Duration::from_millis(1900)
+        );
+        assert_eq!(
+            deadline.unwrap().duration_since(now),
+            Duration::from_secs(5)
+        );
     }
 }
