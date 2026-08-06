@@ -30,6 +30,11 @@ state and console actions stay in `openhp1-runtime`; original package texture
 decoding stays in `openhp1-texture`. A separate UI crate is not warranted
 unless a second executable needs the complete game UI.
 
+Every successful transition from the front end or a save into gameplay must
+recapture the reused winit window. `Graphics` rebuilds reset `InputState`, so
+leaving it uncaptured would discard gameplay keys and mouse buttons while the
+global Escape handler continued to work.
+
 Selecting or creating one of the six game slots also establishes the active
 slot used by the authored `SaveSelectedSlot` and `LoadSelectedSlot` console
 calls. Their host marker `99` resolves to that active slot; direct level starts

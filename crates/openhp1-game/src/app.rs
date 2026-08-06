@@ -72,7 +72,10 @@ impl ApplicationHandler for GameApp {
             .context("failed to create the game window")
             .and_then(|window| Graphics::new(Arc::new(window), scene, self.renderer_settings));
         match result {
-            Ok(graphics) => {
+            Ok(mut graphics) => {
+                if !graphics.game_ui.is_open() {
+                    graphics.capture_input();
+                }
                 graphics.window.request_redraw();
                 self.graphics = Some(graphics);
             }
@@ -116,6 +119,9 @@ impl ApplicationHandler for GameApp {
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
                             );
+                            if !replacement.game_ui.is_open() {
+                                replacement.capture_input();
+                            }
                             replacement.window.request_redraw();
                             self.graphics = Some(replacement);
                         }
@@ -140,6 +146,9 @@ impl ApplicationHandler for GameApp {
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
                             );
+                            if !replacement.game_ui.is_open() {
+                                replacement.capture_input();
+                            }
                             replacement.window.request_redraw();
                             self.graphics = Some(replacement);
                         }
