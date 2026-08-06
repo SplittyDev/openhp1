@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
+use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
 use openhp1_runtime::PlayerUiState;
 use openhp1_texture::{Palette, Texture};
@@ -22,6 +23,22 @@ const QUIDDITCH_FIXTURES: [QuidditchFixture; 6] = [
 ];
 const QUIDDITCH_FINAL_LEVELS: [&str; 4] =
     ["", "Quid_RavenC.unr", "Quid_HuffleC.unr", "Quid_SlythC.unr"];
+const NEW_GAME_STORY: [(&str, &str); 14] = [
+    ("3_1_", "StoryBook1"),
+    ("3_2_", "StoryBook2"),
+    ("3_3_", "StoryBook3"),
+    ("3_3_", "StoryBook52"),
+    ("3_4_", "StoryBook4"),
+    ("3_5_", "StoryBook5"),
+    ("3_5_", "storybook_new_20"),
+    ("3_6_", "storybook50"),
+    ("6_6_", "storybook_new_21"),
+    ("3_7_", "StoryBook7"),
+    ("3_7_", "StoryBook53"),
+    ("3_7_", "StoryBook54"),
+    ("3_7_", "StoryBook55"),
+    ("3_7_", "StoryBook49"),
+];
 const WIZARD_CARDS: [(i32, &str, &str); 25] = [
     (101, "Dumbledore", "wizard_card_new_04b"),
     (2, "Cornelius", "wizard_card_new_10"),
@@ -55,6 +72,7 @@ pub(super) enum Action {
     LoadSave(u32),
     LoadLevel(String),
     NewGame(u32),
+    PlayUiSound(AudioClip),
     Resume,
     SetBrightness(f32),
     SetMusicVolume(u8),
@@ -78,6 +96,7 @@ enum Page {
     Quidditch,
     Report,
     Folio,
+    StoryBook,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -285,6 +304,13 @@ struct CardTextures {
     small: TextureHandle,
 }
 
+struct StoryPage {
+    art: [TextureHandle; 4],
+    text: String,
+    sound: AudioClip,
+    duration: Duration,
+}
+
 struct UiTextures {
     main_background: Vec<TextureHandle>,
     logo: Vec<TextureHandle>,
@@ -308,6 +334,7 @@ struct UiTextures {
     quidditch_team_logos: [[TextureHandle; 3]; 4],
     quidditch_vs: TextureHandle,
     quidditch_vs_small: TextureHandle,
+    story_background: Vec<TextureHandle>,
     report_background: Vec<TextureHandle>,
     report_badges: [TextureHandle; 3],
     report_sand: [TextureHandle; 4],
@@ -366,6 +393,10 @@ pub(super) struct GameUi {
     hud_until: [Option<Instant>; 4],
     folio_page: usize,
     selected_card: Option<i32>,
+    story_pages: Vec<StoryPage>,
+    story_page: usize,
+    story_slot: Option<u32>,
+    story_deadline: Option<Instant>,
     card_descriptions: HashMap<i32, String>,
     harry_card_objective: String,
     textures: UiTextures,
@@ -584,6 +615,16 @@ impl GameUi {
                 "HPMenu.Icons.FESmallVSTexture",
                 true,
             )?,
+            story_background: (1..=6)
+                .map(|index| {
+                    load_texture(
+                        context,
+                        &mut packages,
+                        &format!("HPMenu.Icons.HPStoryTextureBackground{index}"),
+                        false,
+                    )
+                })
+                .collect::<Result<_>>()?,
             report_background: (1..=6)
                 .map(|index| {
                     load_texture(
@@ -789,6 +830,45 @@ impl GameUi {
                 })
                 .collect::<Result<_>>()?,
         };
+        let mut story_art = HashMap::new();
+        for (graphic, _) in NEW_GAME_STORY {
+            if !story_art.contains_key(graphic) {
+                let art: [TextureHandle; 4] = [1, 2, 3, 4]
+                    .map(|piece| {
+                        load_texture(
+                            context,
+                            &mut packages,
+                            &format!("StoryBookTest.Default.{graphic}00{piece}"),
+                            false,
+                        )
+                    })
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("new-game story art needs four pieces"))?;
+                story_art.insert(graphic, art);
+            }
+        }
+        let story_pages = NEW_GAME_STORY
+            .iter()
+            .map(|(graphic, dialog)| {
+                let art = story_art
+                    .get(graphic)
+                    .context("new-game story art was not loaded")?
+                    .clone();
+                let text = packages.localize("HPDialog", "all", dialog);
+                if text.is_empty() {
+                    bail!("HPDialog.int is missing [all] {dialog}");
+                }
+                let sound = load_audio_clip(&mut packages, &format!("AllDialog.{dialog}"))?;
+                Ok(StoryPage {
+                    art,
+                    text,
+                    duration: wav_duration(sound.data()).unwrap_or(Duration::from_secs(6)),
+                    sound,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let localized = |key: &str| -> Result<String> {
             let value = packages.localize("HPMenu", "text", key);
             if value.is_empty() {
@@ -929,6 +1009,10 @@ impl GameUi {
             hud_until: [None; 4],
             folio_page: 0,
             selected_card: None,
+            story_pages,
+            story_page: 0,
+            story_slot: None,
+            story_deadline: None,
             card_descriptions,
             harry_card_objective,
             textures,
@@ -958,6 +1042,8 @@ impl GameUi {
             self.open = false;
             return true;
         }
+        self.story_deadline = None;
+        self.story_slot = None;
         self.page = Page::Main;
         self.open_combo = None;
         false
@@ -1032,6 +1118,7 @@ impl GameUi {
             Page::Report => &self.textures.report_background,
             Page::Folio if self.folio_page == 6 => &self.textures.folio_harry_background,
             Page::Folio => &self.textures.folio_background,
+            Page::StoryBook => &self.textures.story_background,
             Page::Main => &self.textures.main_background,
         };
         for (index, texture) in background.iter().enumerate() {
@@ -1063,6 +1150,7 @@ impl GameUi {
                     Page::Quidditch => self.quidditch_page(ui, scale),
                     Page::Report => self.report_page(ui, scale),
                     Page::Folio => self.folio_page(ui, scale),
+                    Page::StoryBook => self.storybook_page(ui, scale),
                 }
                 if self.confirm_exit {
                     self.exit_confirmation(ui, scale);
@@ -1161,6 +1249,59 @@ impl GameUi {
         }
     }
 
+    fn start_new_game_story(&mut self, slot: u32) {
+        self.story_page = 0;
+        self.story_slot = Some(slot);
+        self.page = Page::StoryBook;
+        let page = &self.story_pages[0];
+        self.story_deadline = Some(Instant::now() + page.duration + Duration::from_secs(2));
+        self.action = Some(Action::PlayUiSound(page.sound.clone()));
+    }
+
+    fn advance_story(&mut self) {
+        self.story_page += 1;
+        if let Some(page) = self.story_pages.get(self.story_page) {
+            self.story_deadline = Some(Instant::now() + page.duration + Duration::from_secs(2));
+            self.action = Some(Action::PlayUiSound(page.sound.clone()));
+        } else if let Some(slot) = self.story_slot.take() {
+            self.story_deadline = None;
+            self.action = Some(Action::NewGame(slot));
+        }
+    }
+
+    fn storybook_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        if self
+            .story_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.advance_story();
+        }
+        let page = &self.story_pages[self.story_page.min(self.story_pages.len() - 1)];
+        for (index, texture) in page.art.iter().enumerate() {
+            draw_texture(
+                ui.painter(),
+                ui.min_rect().min,
+                scale,
+                texture,
+                Pos2::new(
+                    92.0 + (index % 2) as f32 * 256.0,
+                    42.0 + (index / 2) as f32 * 256.0,
+                ),
+            );
+        }
+        let galley = ui.painter().layout(
+            page.text.clone(),
+            FontId::proportional(14.0 * scale),
+            Color32::WHITE,
+            413.0 * scale,
+        );
+        ui.painter().galley(
+            ui.min_rect().min + Vec2::new(108.0, 381.0) * scale,
+            galley,
+            Color32::WHITE,
+        );
+    }
+
     fn slot_page(&mut self, ui: &mut egui::Ui, scale: f32) {
         page_title(ui, scale, 30.0, &self.labels.select_game, Color32::MAGENTA);
         for slot in 0..6 {
@@ -1192,7 +1333,7 @@ impl GameUi {
                 if self.save_slots[slot] {
                     self.selected_slot = Some(slot);
                 } else {
-                    self.action = Some(Action::NewGame(slot as u32));
+                    self.start_new_game_story(slot as u32);
                 }
             }
         }
@@ -2032,7 +2173,7 @@ impl GameUi {
         confirmation_panel(ui, scale, &self.labels.confirm_replace);
         if menu_button(ui, scale, 205.0, 245.0, &self.labels.yes) {
             if let Some(slot) = self.selected_slot {
-                self.action = Some(Action::NewGame(slot as u32));
+                self.start_new_game_story(slot as u32);
             }
             self.confirm_replace = false;
         }
@@ -2092,6 +2233,48 @@ fn load_texture(
     let image =
         egui::ColorImage::from_rgba_unmultiplied([mip.width as usize, mip.height as usize], &rgba);
     Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
+}
+
+fn load_audio_clip(packages: &mut PackageStore, name: &str) -> Result<AudioClip> {
+    let ResolvedObject {
+        package,
+        export_index,
+    } = packages
+        .find_localized_object(name, "Sound")?
+        .with_context(|| format!("shipped story sound {name} is missing"))?;
+    Ok(AudioClip::decode(&package, export_index)?)
+}
+
+fn wav_duration(bytes: &[u8]) -> Option<Duration> {
+    if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let mut position = 12;
+    let mut byte_rate = None;
+    let mut data_size = None;
+    while position + 8 <= bytes.len() {
+        let size =
+            u32::from_le_bytes(bytes.get(position + 4..position + 8)?.try_into().ok()?) as usize;
+        let value = position + 8;
+        let end = value.checked_add(size)?;
+        if end > bytes.len() {
+            return None;
+        }
+        match bytes.get(position..position + 4)? {
+            b"fmt " if size >= 12 => {
+                byte_rate = Some(u32::from_le_bytes(
+                    bytes.get(value + 8..value + 12)?.try_into().ok()?,
+                ));
+            }
+            b"data" => data_size = Some(size as u64),
+            _ => {}
+        }
+        position = end + (size & 1);
+    }
+    let byte_rate = u64::from(byte_rate?.max(1));
+    Some(Duration::from_secs_f64(
+        data_size? as f64 / byte_rate as f64,
+    ))
 }
 
 fn draw_texture(
@@ -2579,5 +2762,23 @@ mod tests {
         assert!(!league.fixture().level.is_empty());
         league.finish(200, 100);
         assert_eq!(league.screen, QuidditchScreen::FinalResults);
+    }
+
+    #[test]
+    fn new_game_story_uses_all_compiled_pages_and_wav_timing() {
+        assert_eq!(NEW_GAME_STORY.len(), 14);
+        assert_eq!(NEW_GAME_STORY[0], ("3_1_", "StoryBook1"));
+        assert_eq!(NEW_GAME_STORY[13], ("3_7_", "StoryBook49"));
+
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        wav.extend(16_u32.to_le_bytes());
+        wav.extend([1, 0, 1, 0]);
+        wav.extend(8_000_u32.to_le_bytes());
+        wav.extend(8_000_u32.to_le_bytes());
+        wav.extend([1, 0, 8, 0]);
+        wav.extend(b"data");
+        wav.extend(16_000_u32.to_le_bytes());
+        wav.resize(wav.len() + 16_000, 0);
+        assert_eq!(wav_duration(&wav), Some(Duration::from_secs(2)));
     }
 }

@@ -886,6 +886,23 @@ impl Graphics {
                     .join("Lev_Tut1.unr"),
                 Some(slot),
             ),
+            Some(ui::Action::PlayUiSound(clip)) => {
+                if let Some(audio) = self.audio.as_mut()
+                    && let Err(error) = audio.play_sound(
+                        self.player,
+                        &clip,
+                        self.camera.position.to_array(),
+                        0,
+                        3.2,
+                        false,
+                        2_000.0,
+                        1.0,
+                    )
+                {
+                    self.last_error = Some(format!("could not play story narration: {error}"));
+                }
+                RenderOutcome::Continue
+            }
             Some(ui::Action::Resume) => {
                 self.capture_input();
                 RenderOutcome::Continue

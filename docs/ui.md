@@ -34,6 +34,11 @@ Selecting or creating one of the six game slots also establishes the active
 slot used by the authored `SaveSelectedSlot` and `LoadSelectedSlot` console
 calls. Their host marker `99` resolves to that active slot; direct level starts
 without a slot retain `save99.usa` as the shipped `FESlotPage` fallback.
+Creating or replacing a slot follows `FESlotPage.CreateSelectedSlot`: it plays
+the 14 compiled pages of story 3 before loading `Lev_Tut1.unr`. The four-piece
+page art comes from `StoryBookTest`, narration and localized captions come from
+the matching `AllDialog`/`HPDialog` entries, and each page advances after its
+actual WAV duration plus the authored lead/trailing delay.
 
 `FEOptionsPage` uses `HPMenuOptionCombo`, not cycling buttons, for resolution,
 colour depth, texture detail, and object detail. Its shipped combo list uses
