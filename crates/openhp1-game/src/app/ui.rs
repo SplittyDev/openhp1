@@ -840,7 +840,7 @@ impl GameUi {
                             context,
                             &mut packages,
                             &format!("StoryBookTest.Default.{graphic}00{piece}"),
-                            false,
+                            true,
                         )
                     })
                     .into_iter()
