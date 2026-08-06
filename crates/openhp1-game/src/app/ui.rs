@@ -1249,8 +1249,10 @@ impl GameUi {
             let texture = &self.textures.hud_counters[index];
             draw_texture(&painter, canvas.min, scale, texture, Pos2::new(x, 4.0));
             painter.text(
-                canvas.min + Vec2::new(x, 4.0) * scale + texture.size_vec2() * scale * 0.5,
-                Align2::CENTER_CENTER,
+                canvas.min
+                    + (Vec2::new(x, 4.0) + hud_counter_text_offset(texture.size_vec2(), value))
+                        * scale,
+                Align2::LEFT_TOP,
                 value.to_string(),
                 FontId::proportional(14.0 * scale),
                 Color32::BLACK,
@@ -2832,6 +2834,13 @@ fn texture_uv(texture: &TextureHandle, size: Vec2) -> Rect {
     )
 }
 
+fn hud_counter_text_offset(texture_size: Vec2, value: i32) -> Vec2 {
+    Vec2::new(
+        texture_size.x * 0.5 - if value < 10 { 5.0 } else { 10.0 },
+        texture_size.y * 0.5 + 5.0,
+    )
+}
+
 fn textured_button(
     ui: &mut egui::Ui,
     scale: f32,
@@ -2988,6 +2997,18 @@ mod tests {
         assert_eq!(
             changed_hud_counters(previous, current),
             [false, false, false, true]
+        );
+    }
+
+    #[test]
+    fn hud_counter_numbers_use_the_authored_base_item_offsets() {
+        assert_eq!(
+            hud_counter_text_offset(Vec2::new(64.0, 64.0), 9),
+            Vec2::new(27.0, 37.0)
+        );
+        assert_eq!(
+            hud_counter_text_offset(Vec2::new(64.0, 64.0), 10),
+            Vec2::new(22.0, 37.0)
         );
     }
 
