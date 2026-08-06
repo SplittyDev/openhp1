@@ -373,11 +373,11 @@ fn synthetic_config_package() -> Vec<u8> {
         class_payload(2, 0),
         class_payload(3, 11),
         class_payload(0, 0),
-        property_payload(1, PROPERTY_CONFIG, &[]),
+        property_payload(1, PROPERTY_CONFIG | PROPERTY_TRAVEL, &[]),
         property_payload(1, PROPERTY_CONFIG, &[]),
         property_payload(1, PROPERTY_CONFIG, &[]),
         property_payload(1, PROPERTY_GLOBAL_CONFIG, &[]),
-        property_payload(1, PROPERTY_CONFIG, &[15]),
+        property_payload(1, PROPERTY_CONFIG | PROPERTY_TRAVEL, &[15]),
         property_payload(1, PROPERTY_CONFIG, &[]),
         property_payload(1, PROPERTY_CONFIG, &[]),
         property_payload(1, PROPERTY_CONFIG, &[16]),
@@ -858,6 +858,63 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
             } if sequence == "Wave" && *phase == 0.375
         )
     }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn player_travel_state_copies_only_compiled_travel_properties() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-player-travel-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    fs::write(system.join("Test.u"), synthetic_config_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load("Test").unwrap();
+    runtime.player_actor = Some(7);
+    runtime.actor_classes.insert(7, object_id(&package, 1));
+    runtime.instances.insert(
+        7,
+        [
+            (object_id(&package, 3), StoredValue::Value(Value::Int(41))),
+            (object_id(&package, 4), StoredValue::Value(Value::Int(99))),
+            (
+                object_id(&package, 7),
+                StoredValue::Object(Some(object_id(&package, 15))),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let travel = runtime.player_travel_state().unwrap();
+
+    runtime.instances.insert(
+        7,
+        [
+            (object_id(&package, 3), StoredValue::Value(Value::Int(0))),
+            (object_id(&package, 4), StoredValue::Value(Value::Int(0))),
+            (object_id(&package, 7), StoredValue::Object(None)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.restore_player_travel_state(&travel).unwrap();
+    assert_eq!(
+        runtime.instances[&7][&object_id(&package, 3)],
+        StoredValue::Value(Value::Int(41))
+    );
+    assert_eq!(
+        runtime.instances[&7][&object_id(&package, 4)],
+        StoredValue::Value(Value::Int(0))
+    );
+    assert_eq!(
+        runtime.instances[&7][&object_id(&package, 7)],
+        StoredValue::Object(None)
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

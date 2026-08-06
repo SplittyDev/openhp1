@@ -33,7 +33,7 @@ pub use action::{
     ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind,
     PlayerMusic, RuntimeObject, WeaponAttachment,
 };
-pub use actor::PlayerUiState;
+pub use actor::{PlayerTravelState, PlayerUiState};
 pub use error::{DispatchError, DispatchResult};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -129,6 +129,7 @@ const PROPERTY_PARAMETER: u32 = 0x80;
 const PROPERTY_OUTPUT: u32 = 0x100;
 const PROPERTY_RETURN: u32 = 0x400;
 const PROPERTY_CONFIG: u32 = 0x0000_4000;
+const PROPERTY_TRAVEL: u32 = 0x0001_0000;
 const PROPERTY_GLOBAL_CONFIG: u32 = 0x0004_0000;
 const FUNCTION_NATIVE: u32 = 0x0000_0400;
 const STATE_AUTO: u32 = 0x0000_0002;

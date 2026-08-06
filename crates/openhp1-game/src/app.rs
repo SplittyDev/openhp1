@@ -15,7 +15,7 @@ use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, DisplaySettings, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::{
     ActorAction, ConsoleCommandAction, ConsoleCommandHost, ConsoleCommands, PlayerInput,
-    PlayerView, ScriptRuntime,
+    PlayerTravelState, PlayerView, ScriptRuntime,
 };
 use openhp1_scene::{
     LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
@@ -134,11 +134,19 @@ impl ApplicationHandler for GameApp {
                         }
                     }
                 }
-                RenderOutcome::LoadLevel(path, save_slot) => {
+                RenderOutcome::LoadLevel(path, save_slot, travel) => {
                     let window = Arc::clone(&graphics.window);
                     match LoadedScene::load(path.clone())
                         .and_then(|scene| Graphics::new(window, scene, self.renderer_settings))
-                    {
+                        .and_then(|mut replacement| {
+                            if let Some(travel) = &travel {
+                                replacement
+                                    .runtime
+                                    .restore_player_travel_state(travel)
+                                    .context("could not restore player travel properties")?;
+                            }
+                            Ok(replacement)
+                        }) {
                         Ok(mut replacement) => {
                             replacement.last_save_slot = save_slot;
                             if let Some(slot) = save_slot
@@ -271,7 +279,7 @@ enum RenderOutcome {
     Continue,
     Exit,
     Load(SavedGame),
-    LoadLevel(PathBuf, Option<u32>),
+    LoadLevel(PathBuf, Option<u32>, Option<PlayerTravelState>),
 }
 
 struct SavedGame {
@@ -551,7 +559,6 @@ impl Graphics {
         })() {
             last_error = Some(format!("player initialization deferred: {error}"));
         }
-
         let player_actor = scene
             .actors
             .get(player)
@@ -734,7 +741,7 @@ impl Graphics {
 
     fn render(&mut self) -> RenderOutcome {
         if let Some(path) = self.pending_level_load.take() {
-            return RenderOutcome::LoadLevel(path, None);
+            return RenderOutcome::LoadLevel(path, None, None);
         }
         let now = Instant::now();
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
@@ -767,7 +774,16 @@ impl Graphics {
         }
         if let Some(url) = self.pending_level_travel.take() {
             match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
-                Ok(path) => return RenderOutcome::LoadLevel(path, self.last_save_slot),
+                Ok(path) => match self.runtime.player_travel_state() {
+                    Ok(travel) => {
+                        return RenderOutcome::LoadLevel(path, self.last_save_slot, Some(travel));
+                    }
+                    Err(error) => {
+                        self.last_error = Some(format!(
+                            "could not preserve player state while travelling: {error}"
+                        ));
+                    }
+                },
                 Err(error) => {
                     self.last_error = Some(format!("could not travel to {url}: {error:#}"))
                 }
@@ -906,6 +922,7 @@ impl Graphics {
                     .expect("loaded map has a parent directory")
                     .join(level),
                 None,
+                None,
             ),
             Some(ui::Action::NewGame(slot)) => RenderOutcome::LoadLevel(
                 self.scene
@@ -914,6 +931,7 @@ impl Graphics {
                     .expect("loaded map has a parent directory")
                     .join("Lev_Tut1.unr"),
                 Some(slot),
+                None,
             ),
             Some(ui::Action::PlayUiSound(clip)) => {
                 if let Some(audio) = self.audio.as_mut()

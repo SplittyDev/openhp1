@@ -16,7 +16,7 @@ pub use value::Value;
 pub use world::{
     ActorAction, ConsoleCommandHost, ConsoleCommandResponse, DispatchError, DispatchResult,
     ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind, PlayerMusic,
-    PlayerUiState, RuntimeObject, ScriptRuntime, WeaponAttachment,
+    PlayerTravelState, PlayerUiState, RuntimeObject, ScriptRuntime, WeaponAttachment,
 };
 
 pub(crate) use frame::{

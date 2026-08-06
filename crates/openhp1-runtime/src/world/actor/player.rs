@@ -16,7 +16,86 @@ pub struct PlayerUiState {
     pub house_points_ravenclaw: i32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlayerTravelState {
+    properties: Vec<(String, StoredValue)>,
+}
+
+fn portable_travel_value(value: &StoredValue) -> bool {
+    match value {
+        StoredValue::Value(value) => portable_value(value),
+        StoredValue::Array(values) => values.iter().all(portable_travel_value),
+        StoredValue::Name(_) => true,
+        StoredValue::Object(_) | StoredValue::UnresolvedObject(_) | StoredValue::SelfObject => {
+            false
+        }
+    }
+}
+
+fn portable_value(value: &Value) -> bool {
+    match value {
+        Value::Object(_) => false,
+        Value::Struct(values) => values.values().all(portable_value),
+        Value::Array(values) => values.iter().all(portable_value),
+        _ => true,
+    }
+}
+
 impl ScriptRuntime {
+    pub fn player_travel_state(&mut self) -> DispatchResult<PlayerTravelState> {
+        let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mut properties = Vec::new();
+        for property in self.class_properties_with_flags(&class, PROPERTY_TRAVEL)? {
+            if let Some(value) = self.instance_property(&class, &instance, &property.name)?
+                && portable_travel_value(&value)
+            {
+                // ponytail: HP1's persistent counters and cards are value-only. Add travel-object
+                // graph remapping if shipped gameplay proves inventory actors must cross maps.
+                properties.push((property.name, value));
+            }
+        }
+        Ok(PlayerTravelState { properties })
+    }
+
+    pub fn restore_player_travel_state(
+        &mut self,
+        travel: &PlayerTravelState,
+    ) -> DispatchResult<()> {
+        let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let targets = self.class_properties_with_flags(&class, PROPERTY_TRAVEL)?;
+        let instance = self
+            .instances
+            .get_mut(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        for property in targets {
+            if let Some((_, value)) = travel
+                .properties
+                .iter()
+                .find(|(source, _)| source.eq_ignore_ascii_case(&property.name))
+            {
+                instance.insert(property.field, value.clone());
+            }
+        }
+        Ok(())
+    }
+
     pub fn player_ui_state(&mut self) -> DispatchResult<PlayerUiState> {
         let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self

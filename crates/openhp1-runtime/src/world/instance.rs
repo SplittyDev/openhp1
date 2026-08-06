@@ -22,11 +22,11 @@ fn config_component<'a>(value: &'a str, name: &str) -> Option<&'a str> {
         })
 }
 
-struct ConfigProperty {
-    declaring: ObjectId,
-    field: ObjectId,
-    name: String,
-    metadata: PropertyMetadata,
+pub(super) struct ClassProperty {
+    pub(super) declaring: ObjectId,
+    pub(super) field: ObjectId,
+    pub(super) name: String,
+    pub(super) metadata: PropertyMetadata,
 }
 
 impl ScriptRuntime {
@@ -124,7 +124,7 @@ impl ScriptRuntime {
 
     fn apply_config_property(
         &mut self,
-        property: &ConfigProperty,
+        property: &ClassProperty,
         target: &(String, String),
         defaults: &mut InstanceState,
     ) -> DispatchResult<()> {
@@ -423,7 +423,15 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    fn config_properties(&mut self, class: &ResolvedObject) -> DispatchResult<Vec<ConfigProperty>> {
+    fn config_properties(&mut self, class: &ResolvedObject) -> DispatchResult<Vec<ClassProperty>> {
+        self.class_properties_with_flags(class, PROPERTY_CONFIG | PROPERTY_GLOBAL_CONFIG)
+    }
+
+    pub(super) fn class_properties_with_flags(
+        &mut self,
+        class: &ResolvedObject,
+        flags: u32,
+    ) -> DispatchResult<Vec<ClassProperty>> {
         let mut properties = Vec::new();
         let mut seen = HashSet::default();
         let mut current = ResolvedObject {
@@ -453,10 +461,10 @@ impl ScriptRuntime {
                     continue;
                 }
                 let metadata = PropertyMetadata::decode(&current.package, export_index)?;
-                if metadata.flags & (PROPERTY_CONFIG | PROPERTY_GLOBAL_CONFIG) == 0 {
+                if metadata.flags & flags == 0 {
                     continue;
                 }
-                properties.push(ConfigProperty {
+                properties.push(ClassProperty {
                     declaring: declaring.clone(),
                     field: ObjectId {
                         package: Arc::clone(&current.package.summary().source),
@@ -529,7 +537,7 @@ impl ScriptRuntime {
 
     fn config_entries(
         &mut self,
-        property: &ConfigProperty,
+        property: &ClassProperty,
         value: &StoredValue,
     ) -> DispatchResult<Vec<ConfigEntry>> {
         if property.metadata.array_dimension > 1 {

@@ -493,7 +493,13 @@ load.
 
 `PlayerPawn.ClientTravel` emits a host action with its URL, raw UE1 travel-type
 byte, and `bItems` flag; the script runtime neither parses nor opens the next
-map. `PlayerPawn.UpdateURL` emits a host action carrying the option/value for
+map. Before the game host opens that map, it captures the player's compiled
+`0x00010000` (`travel`) value properties and restores matching properties on
+the destination player before the automatic slot save. This preserves HP1's
+beans, house points, wizard-card array, health, and quest flags. Actor-valued
+travel properties are omitted until the runtime can remap the complete travel
+object graph; stale source-map object identities are never copied.
+`PlayerPawn.UpdateURL` emits a host action carrying the option/value for
 case-insensitive replacement and an optional `User.DefaultPlayer` persistence
 request; the runtime never mutates map packages. OpenHP1 is a local-only host, so
 `PlayerPawn.GetPlayerNetworkAddress` intentionally returns an empty string
