@@ -135,6 +135,7 @@ impl ApplicationHandler for GameApp {
                     {
                         Ok(mut replacement) => {
                             replacement.last_save_slot = save_slot;
+                            replacement.game_ui.preserve_session_from(&graphics.game_ui);
                             std::mem::swap(
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
@@ -1265,6 +1266,7 @@ impl Graphics {
         let audio = &mut self.audio;
         let game_ui = &mut self.game_ui;
         let pending_level_travel = &mut self.pending_level_travel;
+        let mut opened_quidditch = false;
         match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
             match action {
                 ActorAction::ClientTravel { url, .. } => {
@@ -1272,6 +1274,15 @@ impl Graphics {
                     Ok(())
                 }
                 ActorAction::UnlockQuidditch { level, .. } => game_ui.unlock_quidditch(level),
+                ActorAction::FinishQuidditchMatch {
+                    team0_score,
+                    opponent_score,
+                    ..
+                } => {
+                    game_ui.finish_quidditch_match(team0_score, opponent_score);
+                    opened_quidditch = true;
+                    Ok(())
+                }
                 action => play_audio_action(audio.as_mut(), action),
             }
         }) {
@@ -1282,6 +1293,9 @@ impl Graphics {
                 }
             }
             Err(error) => self.last_error = Some(format!("runtime action failed: {error:#}")),
+        }
+        if opened_quidditch {
+            self.release_input();
         }
     }
 

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +12,16 @@ use openhp1_runtime::PlayerUiState;
 use openhp1_texture::{Palette, Texture};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
+const QUIDDITCH_FIXTURES: [QuidditchFixture; 6] = [
+    QuidditchFixture::new(0, 3, 1, 2, "Quid_SlythA.unr"),
+    QuidditchFixture::new(0, 1, 2, 3, "Quid_RavenA.unr"),
+    QuidditchFixture::new(0, 2, 1, 3, "Quid_HuffleA.unr"),
+    QuidditchFixture::new(3, 0, 2, 1, "Quid_SlythB.unr"),
+    QuidditchFixture::new(1, 0, 3, 2, "Quid_RavenB.unr"),
+    QuidditchFixture::new(2, 0, 3, 1, "Quid_HuffleB.unr"),
+];
+const QUIDDITCH_FINAL_LEVELS: [&str; 4] =
+    ["", "Quid_RavenC.unr", "Quid_HuffleC.unr", "Quid_SlythC.unr"];
 const WIZARD_CARDS: [(i32, &str, &str); 25] = [
     (101, "Dumbledore", "wizard_card_new_04b"),
     (2, "Cornelius", "wizard_card_new_10"),
@@ -70,6 +80,206 @@ enum Page {
     Folio,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QuidditchScreen {
+    Start,
+    Instructions,
+    Matchup,
+    Results,
+    FinalResults,
+}
+
+#[derive(Clone, Copy)]
+struct QuidditchFixture {
+    home: usize,
+    visitor: usize,
+    other_home: usize,
+    other_visitor: usize,
+    level: &'static str,
+}
+
+impl QuidditchFixture {
+    const fn new(
+        home: usize,
+        visitor: usize,
+        other_home: usize,
+        other_visitor: usize,
+        level: &'static str,
+    ) -> Self {
+        Self {
+            home,
+            visitor,
+            other_home,
+            other_visitor,
+            level,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct QuidditchScore {
+    home: i32,
+    visitor: i32,
+    other_home: i32,
+    other_visitor: i32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct QuidditchTeam {
+    wins: i32,
+    losses: i32,
+    points: i32,
+}
+
+#[derive(Clone)]
+struct QuidditchLeague {
+    screen: QuidditchScreen,
+    current_game: usize,
+    finals: bool,
+    final_teams: [usize; 2],
+    scores: [QuidditchScore; 7],
+    teams: [QuidditchTeam; 4],
+    random: u64,
+}
+
+impl Default for QuidditchLeague {
+    fn default() -> Self {
+        Self {
+            screen: QuidditchScreen::Start,
+            current_game: 0,
+            finals: false,
+            final_teams: [0, 1],
+            scores: [QuidditchScore::default(); 7],
+            teams: [QuidditchTeam::default(); 4],
+            random: 1,
+        }
+    }
+}
+
+impl QuidditchLeague {
+    fn restart(&mut self) {
+        *self = Self {
+            screen: QuidditchScreen::Instructions,
+            random: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(1, |duration| duration.as_nanos() as u64)
+                .max(1),
+            ..Self::default()
+        };
+    }
+
+    fn fixture(&self) -> QuidditchFixture {
+        if !self.finals {
+            return QUIDDITCH_FIXTURES[self.current_game];
+        }
+        let [home, visitor] = self.final_teams;
+        let opponent = if home == 0 { visitor } else { home };
+        QuidditchFixture::new(
+            home,
+            visitor,
+            home,
+            visitor,
+            if home == 0 || visitor == 0 {
+                QUIDDITCH_FINAL_LEVELS[opponent]
+            } else {
+                ""
+            },
+        )
+    }
+
+    fn finish(&mut self, team0_score: i32, opponent_score: i32) {
+        let fixture = self.fixture();
+        let score_index = self.current_game;
+        let team0_played = fixture.home == 0 || fixture.visitor == 0;
+        if team0_played {
+            let (home, visitor) = if fixture.home == 0 {
+                (team0_score, opponent_score)
+            } else {
+                (opponent_score, team0_score)
+            };
+            self.scores[score_index].home = home;
+            self.scores[score_index].visitor = visitor;
+            self.record_result(fixture.home, fixture.visitor, home, visitor);
+        }
+        if !self.finals || !team0_played {
+            let mut home = (6 + self.rand8()) * 10;
+            let mut visitor = (6 + self.rand8()) * 10;
+            if home == visitor {
+                home += 10;
+            }
+            if home > visitor {
+                home += 150;
+            } else {
+                visitor += 150;
+            }
+            self.scores[score_index].other_home = home;
+            self.scores[score_index].other_visitor = visitor;
+            self.record_result(fixture.other_home, fixture.other_visitor, home, visitor);
+        }
+        if self.finals {
+            self.screen = QuidditchScreen::FinalResults;
+        } else {
+            self.current_game += 1;
+            if self.current_game == QUIDDITCH_FIXTURES.len() {
+                self.finals = true;
+                let standings = self.sort_teams();
+                self.final_teams = [standings[0], standings[1]];
+            }
+            self.screen = QuidditchScreen::Results;
+        }
+    }
+
+    fn record_result(&mut self, home: usize, visitor: usize, home_score: i32, visitor_score: i32) {
+        if home_score > visitor_score {
+            self.teams[home].wins += 1;
+            self.teams[visitor].losses += 1;
+        } else {
+            self.teams[visitor].wins += 1;
+            self.teams[home].losses += 1;
+        }
+        self.teams[home].points += home_score;
+        self.teams[visitor].points += visitor_score;
+    }
+
+    fn sort_teams(&mut self) -> [usize; 4] {
+        let mut standings = [usize::MAX; 4];
+        for team in 0..self.teams.len() {
+            let mut position = 0;
+            for other in 0..self.teams.len() {
+                if team == other {
+                    continue;
+                }
+                if self.teams[team].wins < self.teams[other].wins
+                    || (self.teams[team].wins == self.teams[other].wins
+                        && self.teams[team].points < self.teams[other].points)
+                {
+                    position += 1;
+                } else if self.teams[team].wins == self.teams[other].wins
+                    && self.teams[team].points == self.teams[other].points
+                {
+                    self.teams[team].points += 10;
+                }
+            }
+            standings[position] = team;
+        }
+        for team in 0..self.teams.len() {
+            if !standings.contains(&team)
+                && let Some(empty) = standings.iter_mut().find(|place| **place == usize::MAX)
+            {
+                *empty = team;
+            }
+        }
+        standings
+    }
+
+    fn rand8(&mut self) -> i32 {
+        self.random ^= self.random << 13;
+        self.random ^= self.random >> 7;
+        self.random ^= self.random << 17;
+        (self.random % 8) as i32
+    }
+}
+
 struct CardTextures {
     big: TextureHandle,
     small: TextureHandle,
@@ -95,6 +305,9 @@ struct UiTextures {
     quidditch_league: TextureHandle,
     quidditch_back: TextureHandle,
     quidditch_back_hover: TextureHandle,
+    quidditch_team_logos: [[TextureHandle; 3]; 4],
+    quidditch_vs: TextureHandle,
+    quidditch_vs_small: TextureHandle,
     report_background: Vec<TextureHandle>,
     report_badges: [TextureHandle; 3],
     report_sand: [TextureHandle; 4],
@@ -147,6 +360,7 @@ pub(super) struct GameUi {
     game_root: PathBuf,
     settings_dir: PathBuf,
     quidditch_unlocked: u8,
+    quidditch: QuidditchLeague,
     player: PlayerUiState,
     player_seen: bool,
     hud_until: [Option<Instant>; 4],
@@ -176,6 +390,16 @@ struct OptionLabels {
     invert_broom: String,
     broomstick_practice: String,
     quidditch_league: String,
+    quidditch_instructions_title: String,
+    quidditch_instructions: String,
+    quidditch_round: String,
+    quidditch_round_results: String,
+    quidditch_wins: String,
+    quidditch_losses: String,
+    quidditch_points: String,
+    quidditch_final: String,
+    quidditch_final_results: String,
+    quidditch_champion: String,
 }
 
 struct Labels {
@@ -329,6 +553,35 @@ impl GameUi {
                 context,
                 &mut packages,
                 "HPMenu.Icons.FELeftArrowOverIcon",
+                true,
+            )?,
+            quidditch_team_logos: [
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEGrifLogoMed", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEGrifLogoSmall", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEGrifLogoTiny", true)?,
+                ],
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.FERaveLogoMed", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FERaveLogoSmall", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FERaveLogoTiny", true)?,
+                ],
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEHuffLogoMed", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEHuffLogoSmall", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FEHuffLogoTiny", true)?,
+                ],
+                [
+                    load_texture(context, &mut packages, "HPMenu.Icons.FESlytLogoMed", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FESlytLogoSmall", true)?,
+                    load_texture(context, &mut packages, "HPMenu.Icons.FESlytLogoTiny", true)?,
+                ],
+            ],
+            quidditch_vs: load_texture(context, &mut packages, "HPMenu.Icons.FEVSTexture", true)?,
+            quidditch_vs_small: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FESmallVSTexture",
                 true,
             )?,
             report_background: (1..=6)
@@ -602,6 +855,16 @@ impl GameUi {
             invert_broom: localized("flying_04")?,
             broomstick_practice: localized("quidditch_02")?,
             quidditch_league: localized("quidditch_03")?,
+            quidditch_instructions_title: localized("quidditch_07")?,
+            quidditch_instructions: localized("quidditch_08")?,
+            quidditch_round: localized("quidditch_09")?,
+            quidditch_round_results: localized("quidditch_10")?,
+            quidditch_wins: localized("quidditch_11")?,
+            quidditch_losses: localized("quidditch_12")?,
+            quidditch_points: localized("quidditch_13")?,
+            quidditch_final: localized("quidditch_14")?,
+            quidditch_final_results: localized("quidditch_15")?,
+            quidditch_champion: localized("quidditch_16")?,
         };
         let card_descriptions = WIZARD_CARDS
             .iter()
@@ -660,6 +923,7 @@ impl GameUi {
             game_root: game_root.to_path_buf(),
             settings_dir: save_dir.to_path_buf(),
             quidditch_unlocked,
+            quidditch: QuidditchLeague::default(),
             player: PlayerUiState::default(),
             player_seen: false,
             hud_until: [None; 4],
@@ -734,6 +998,16 @@ impl GameUi {
             )?;
         self.quidditch_unlocked = level;
         Ok(())
+    }
+
+    pub(super) fn preserve_session_from(&mut self, previous: &Self) {
+        self.quidditch = previous.quidditch.clone();
+    }
+
+    pub(super) fn finish_quidditch_match(&mut self, team0_score: i32, opponent_score: i32) {
+        self.quidditch.finish(team0_score, opponent_score);
+        self.open = true;
+        self.page = Page::Quidditch;
     }
 
     pub(super) fn ui(&mut self, context: &egui::Context) {
@@ -1199,6 +1473,142 @@ impl GameUi {
     }
 
     fn quidditch_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        match self.quidditch.screen {
+            QuidditchScreen::Start => self.quidditch_start(ui, scale),
+            QuidditchScreen::Instructions => {
+                page_title(
+                    ui,
+                    scale,
+                    85.0,
+                    &self.option_labels.quidditch_instructions_title,
+                    Color32::WHITE,
+                );
+                let galley = ui.painter().layout(
+                    self.option_labels.quidditch_instructions.clone(),
+                    FontId::proportional(16.0 * scale),
+                    Color32::WHITE,
+                    400.0 * scale,
+                );
+                ui.painter().galley(
+                    ui.min_rect().min + Vec2::new(120.0, 130.0) * scale,
+                    galley,
+                    Color32::WHITE,
+                );
+            }
+            QuidditchScreen::Matchup => {
+                let title = if self.quidditch.finals {
+                    self.option_labels.quidditch_final.clone()
+                } else {
+                    self.option_labels.quidditch_round.replacen(
+                        '#',
+                        &(self.quidditch.current_game + 1).to_string(),
+                        1,
+                    )
+                };
+                page_title(ui, scale, 85.0, &title, Color32::WHITE);
+                self.draw_quidditch_matchup(ui, scale);
+            }
+            QuidditchScreen::Results => {
+                let title = format!(
+                    "{} {}",
+                    self.option_labels.quidditch_round_results,
+                    self.quidditch.current_game + 1
+                );
+                page_title(ui, scale, 85.0, &title, Color32::WHITE);
+                self.draw_quidditch_results(ui, scale);
+            }
+            QuidditchScreen::FinalResults => {
+                page_title(
+                    ui,
+                    scale,
+                    85.0,
+                    &self.option_labels.quidditch_final_results,
+                    Color32::WHITE,
+                );
+                let fixture = self.quidditch.fixture();
+                let score = self.quidditch.scores[self.quidditch.current_game];
+                let winner = if score.home > score.visitor {
+                    fixture.home
+                } else {
+                    fixture.visitor
+                };
+                draw_centered_texture(
+                    ui.painter(),
+                    ui.min_rect().min,
+                    scale,
+                    &self.textures.quidditch_team_logos[winner][0],
+                    320.0,
+                    175.0,
+                );
+                page_title(
+                    ui,
+                    scale,
+                    240.0,
+                    &self.option_labels.quidditch_champion,
+                    Color32::WHITE,
+                );
+                self.draw_quidditch_standings(ui, scale);
+            }
+        }
+
+        let screen = self.quidditch.screen;
+        if screen != QuidditchScreen::Results && screen != QuidditchScreen::FinalResults {
+            if textured_button(
+                ui,
+                scale,
+                4.0,
+                436.0,
+                &self.textures.quidditch_back,
+                &self.textures.quidditch_back_hover,
+                "",
+            ) {
+                self.quidditch.screen = match screen {
+                    QuidditchScreen::Start => {
+                        self.page = Page::Main;
+                        QuidditchScreen::Start
+                    }
+                    QuidditchScreen::Instructions => QuidditchScreen::Start,
+                    QuidditchScreen::Matchup if self.quidditch.current_game == 0 => {
+                        QuidditchScreen::Start
+                    }
+                    QuidditchScreen::Matchup => QuidditchScreen::Results,
+                    _ => screen,
+                };
+            }
+        }
+        if screen != QuidditchScreen::Start {
+            let forward_clicked = textured_button(
+                ui,
+                scale,
+                572.0,
+                436.0,
+                &self.textures.folio_right,
+                &self.textures.folio_right_hover,
+                "",
+            );
+            if forward_clicked {
+                match screen {
+                    QuidditchScreen::Instructions | QuidditchScreen::Results => {
+                        self.quidditch.screen = QuidditchScreen::Matchup;
+                    }
+                    QuidditchScreen::Matchup => {
+                        let level = self.quidditch.fixture().level;
+                        if level.is_empty() {
+                            self.finish_quidditch_match(0, 0);
+                        } else {
+                            self.action = Some(Action::LoadLevel(level.to_owned()));
+                        }
+                    }
+                    QuidditchScreen::FinalResults => {
+                        self.quidditch.screen = QuidditchScreen::Start;
+                    }
+                    QuidditchScreen::Start => {}
+                }
+            }
+        }
+    }
+
+    fn quidditch_start(&mut self, ui: &mut egui::Ui, scale: f32) {
         let practice = if self.quidditch_unlocked >= 1 {
             &self.textures.broomstick_practice
         } else {
@@ -1223,7 +1633,7 @@ impl GameUi {
             &self.textures.quidditch_league_locked
         };
         let league_size = league.size_vec2();
-        let _ = textured_button(
+        if textured_button(
             ui,
             scale,
             448.0 - league_size.x * 0.5,
@@ -1231,7 +1641,10 @@ impl GameUi {
             league,
             league,
             "",
-        );
+        ) && self.quidditch_unlocked >= 2
+        {
+            self.quidditch.restart();
+        }
         for (x, label) in [
             (192.0, &self.option_labels.broomstick_practice),
             (448.0, &self.option_labels.quidditch_league),
@@ -1244,16 +1657,139 @@ impl GameUi {
                 Color32::WHITE,
             );
         }
-        if textured_button(
-            ui,
+    }
+
+    fn draw_quidditch_matchup(&self, ui: &egui::Ui, scale: f32) {
+        let fixture = self.quidditch.fixture();
+        for (team, x) in [(fixture.home, 192.0), (fixture.visitor, 448.0)] {
+            draw_centered_texture(
+                ui.painter(),
+                ui.min_rect().min,
+                scale,
+                &self.textures.quidditch_team_logos[team][0],
+                x,
+                185.0,
+            );
+        }
+        draw_centered_texture(
+            ui.painter(),
+            ui.min_rect().min,
             scale,
-            4.0,
-            436.0,
-            &self.textures.quidditch_back,
-            &self.textures.quidditch_back_hover,
-            "",
-        ) {
-            self.page = Page::Main;
+            &self.textures.quidditch_vs,
+            320.0,
+            185.0,
+        );
+        if !self.quidditch.finals {
+            for (team, x) in [(fixture.other_home, 192.0), (fixture.other_visitor, 448.0)] {
+                draw_centered_texture(
+                    ui.painter(),
+                    ui.min_rect().min,
+                    scale,
+                    &self.textures.quidditch_team_logos[team][0],
+                    x,
+                    335.0,
+                );
+            }
+            draw_centered_texture(
+                ui.painter(),
+                ui.min_rect().min,
+                scale,
+                &self.textures.quidditch_vs,
+                320.0,
+                335.0,
+            );
+        }
+    }
+
+    fn draw_quidditch_results(&mut self, ui: &egui::Ui, scale: f32) {
+        let game = self.quidditch.current_game - 1;
+        let fixture = QUIDDITCH_FIXTURES[game];
+        let score = self.quidditch.scores[game];
+        for (team, x, value) in [
+            (fixture.home, 192.0, score.home),
+            (fixture.visitor, 448.0, score.visitor),
+            (fixture.other_home, 192.0, score.other_home),
+            (fixture.other_visitor, 448.0, score.other_visitor),
+        ] {
+            let y = if team == fixture.home || team == fixture.visitor {
+                140.0
+            } else {
+                200.0
+            };
+            draw_centered_texture(
+                ui.painter(),
+                ui.min_rect().min,
+                scale,
+                &self.textures.quidditch_team_logos[team][1],
+                x,
+                y,
+            );
+            ui.painter().text(
+                ui.min_rect().min + Vec2::new(if x < 320.0 { 246.0 } else { 394.0 }, y) * scale,
+                Align2::CENTER_CENTER,
+                value,
+                FontId::proportional(16.0 * scale),
+                Color32::WHITE,
+            );
+        }
+        for y in [140.0, 200.0] {
+            draw_centered_texture(
+                ui.painter(),
+                ui.min_rect().min,
+                scale,
+                &self.textures.quidditch_vs_small,
+                320.0,
+                y,
+            );
+        }
+        self.draw_quidditch_standings(ui, scale);
+    }
+
+    fn draw_quidditch_standings(&mut self, ui: &egui::Ui, scale: f32) {
+        let standings = self.quidditch.sort_teams();
+        let origin = ui.min_rect().min;
+        ui.painter().line_segment(
+            [
+                origin + Vec2::new(250.0, 248.0) * scale,
+                origin + Vec2::new(490.0, 248.0) * scale,
+            ],
+            egui::Stroke::new(scale, Color32::WHITE),
+        );
+        for (x, label) in [
+            (370.0, &self.option_labels.quidditch_wins),
+            (410.0, &self.option_labels.quidditch_losses),
+            (450.0, &self.option_labels.quidditch_points),
+        ] {
+            ui.painter().text(
+                origin + Vec2::new(x, 245.0) * scale,
+                Align2::LEFT_TOP,
+                label,
+                FontId::proportional(12.0 * scale),
+                Color32::WHITE,
+            );
+        }
+        for (row, team) in standings.into_iter().enumerate() {
+            draw_centered_texture(
+                ui.painter(),
+                origin,
+                scale,
+                &self.textures.quidditch_team_logos[team][2],
+                192.0,
+                285.0 + row as f32 * 35.0,
+            );
+            for (x, value) in [
+                (370.0, self.quidditch.teams[team].wins),
+                (410.0, self.quidditch.teams[team].losses),
+                (450.0, self.quidditch.teams[team].points),
+            ] {
+                ui.painter().text(
+                    origin + Vec2::new(x, 270.0 + row as f32 * 35.0) * scale,
+                    Align2::LEFT_TOP,
+                    value,
+                    FontId::proportional(12.0 * scale),
+                    Color32::WHITE,
+                );
+            }
         }
     }
 
@@ -1572,6 +2108,24 @@ fn draw_texture(
         Rect::from_min_size(position, size),
         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
         Color32::WHITE,
+    );
+}
+
+fn draw_centered_texture(
+    painter: &egui::Painter,
+    origin: Pos2,
+    scale: f32,
+    texture: &TextureHandle,
+    x: f32,
+    y: f32,
+) {
+    let size = texture.size_vec2();
+    draw_texture(
+        painter,
+        origin,
+        scale,
+        texture,
+        Pos2::new(x - size.x * 0.5, y - size.y * 0.5),
     );
 }
 
@@ -1992,5 +2546,38 @@ mod tests {
             changed_hud_counters(previous, current),
             [false, false, false, true]
         );
+    }
+
+    #[test]
+    fn quidditch_league_uses_the_compiled_six_match_schedule_and_final() {
+        assert_eq!(
+            QUIDDITCH_FIXTURES.map(|game| (
+                game.home,
+                game.visitor,
+                game.other_home,
+                game.other_visitor
+            )),
+            [
+                (0, 3, 1, 2),
+                (0, 1, 2, 3),
+                (0, 2, 1, 3),
+                (3, 0, 2, 1),
+                (1, 0, 3, 2),
+                (2, 0, 3, 1),
+            ]
+        );
+
+        let mut league = QuidditchLeague::default();
+        league.restart();
+        league.random = 1;
+        for _ in 0..QUIDDITCH_FIXTURES.len() {
+            league.finish(200, 100);
+        }
+        assert!(league.finals);
+        assert_eq!(league.current_game, 6);
+        assert_eq!(league.final_teams[0], 0);
+        assert!(!league.fixture().level.is_empty());
+        league.finish(200, 100);
+        assert_eq!(league.screen, QuidditchScreen::FinalResults);
     }
 }
