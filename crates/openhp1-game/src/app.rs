@@ -15,7 +15,7 @@ use openhp1_audio::AudioPlayer;
 use openhp1_render::{Camera, DisplaySettings, RenderStats, Renderer, RendererSettings};
 use openhp1_runtime::{
     ActorAction, ConsoleCommandAction, ConsoleCommandHost, ConsoleCommands, PlayerInput,
-    PlayerTravelState, PlayerView, ScriptRuntime,
+    PlayerTravelState, PlayerView, ScriptRuntime, Value,
 };
 use openhp1_scene::{
     LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
@@ -64,9 +64,13 @@ impl ApplicationHandler for GameApp {
         let Some(scene) = self.scene.take() else {
             return;
         };
+        let window_size = configured_window_size(&scene).unwrap_or((1280, 800));
         let attributes = WindowAttributes::default()
             .with_title("OpenHP1")
-            .with_inner_size(Size::Logical(LogicalSize::new(1280.0, 800.0)));
+            .with_inner_size(Size::Logical(LogicalSize::new(
+                f64::from(window_size.0),
+                f64::from(window_size.1),
+            )));
         let result = event_loop
             .create_window(attributes)
             .context("failed to create the game window")
@@ -960,6 +964,15 @@ impl Graphics {
                     "PlayerPawn",
                     &format!("SetRes {width}x{height}"),
                 );
+                for (key, value) in [("WindowedViewportX", width), ("WindowedViewportY", height)] {
+                    self.console.console_command(
+                        self.player,
+                        "PlayerPawn",
+                        &format!("set ini:Engine.Engine.ViewportManager {key} {value}"),
+                    );
+                }
+                self.console
+                    .console_command(self.player, "PlayerPawn", "FLUSH");
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetBrightness(brightness)) => {
@@ -986,6 +999,47 @@ impl Graphics {
                     .console_command(self.player, "PlayerPawn", "FLUSH");
                 RenderOutcome::Continue
             }
+            Some(ui::Action::SetMouseSensitivity(sensitivity)) => {
+                self.dispatch_player_option("SetSensitivity", &[Value::Float(sensitivity)]);
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetTextureDetail(detail)) => {
+                let value = ["High", "Medium", "Low"][detail];
+                self.console.console_command(
+                    self.player,
+                    "PlayerPawn",
+                    &format!("set ini:Engine.Engine.ViewportManager TextureDetail {value}"),
+                );
+                self.console
+                    .console_command(self.player, "PlayerPawn", "FLUSH");
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetObjectDetail(detail)) => {
+                let value = [
+                    "ObjectDetailVeryHigh",
+                    "ObjectDetailHigh",
+                    "ObjectDetailMedium",
+                    "ObjectDetailLow",
+                    "ObjectDetailVeryLow",
+                ][detail];
+                if let Err(error) = self.console.save_config_value(
+                    "User",
+                    "Engine.PlayerPawn",
+                    "ObjectDetail",
+                    value,
+                ) {
+                    self.last_error = Some(format!("could not save object detail: {error}"));
+                }
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetAutoJump(enabled)) => {
+                self.dispatch_player_option("AutoJump", &[Value::Bool(enabled)]);
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SetInvertBroom(enabled)) => {
+                self.dispatch_player_option("InvertBroomPitch", &[Value::Bool(enabled)]);
+                RenderOutcome::Continue
+            }
             Some(ui::Action::SetSoundVolume(volume)) => {
                 self.console.console_command(
                     self.player,
@@ -1004,6 +1058,23 @@ impl Graphics {
         for input in self.debug_console.take_submitted() {
             let result = console::commands::execute(self, &input);
             self.debug_console.record_result(result);
+        }
+    }
+
+    fn dispatch_player_option(&mut self, function: &str, arguments: &[Value]) {
+        let result = (|| -> Result<()> {
+            let actions = self.runtime.dispatch_player_event(function, arguments)?;
+            self.deferred_calls += apply_runtime_actions_with(
+                &mut self.scene,
+                &mut self.runtime,
+                actions,
+                |action| play_audio_action(self.audio.as_mut(), action),
+            )?
+            .1;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.last_error = Some(format!("could not apply {function}: {error:#}"));
         }
     }
 
@@ -1539,6 +1610,22 @@ fn horizontal_to_vertical_fov(horizontal: f32, aspect: f32) -> f32 {
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+fn configured_window_size(scene: &LoadedScene) -> Option<(u32, u32)> {
+    let client = scene
+        .config_value("Engine.Engine", "ViewportManager")
+        .unwrap_or_else(|| "WinDrv.WindowsClient".to_owned());
+    let dimension = |key| {
+        scene
+            .config_value(&client, key)
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+    };
+    Some((
+        dimension("WindowedViewportX")?,
+        dimension("WindowedViewportY")?,
+    ))
 }
 
 fn map_identifier(map: &Path, game_root: &Path) -> Result<String> {

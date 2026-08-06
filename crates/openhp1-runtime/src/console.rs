@@ -66,6 +66,30 @@ impl ConsoleCommands {
         std::mem::take(&mut self.state.borrow_mut().actions)
     }
 
+    pub fn save_config_value(
+        &self,
+        config: &str,
+        section: &str,
+        key: &str,
+        value: impl Into<String>,
+    ) -> io::Result<()> {
+        let state = self.state.borrow();
+        if !state.persist {
+            return Ok(());
+        }
+        state
+            .packages
+            .save_config(
+                config,
+                &[ConfigEntry {
+                    section: section.to_owned(),
+                    key: key.to_owned(),
+                    values: vec![value.into()],
+                }],
+            )
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
     fn from_game_root(
         game_root: &Path,
         resolution: (u32, u32),
@@ -695,6 +719,19 @@ mod tests {
         assert_eq!(
             fs::read_to_string(settings.join("User.ini")).unwrap(),
             "[Engine.Input]\nw=Jump\n",
+        );
+        commands
+            .save_config_value(
+                "User",
+                "Engine.PlayerPawn",
+                "ObjectDetail",
+                "ObjectDetailHigh",
+            )
+            .unwrap();
+        assert!(
+            fs::read_to_string(settings.join("User.ini"))
+                .unwrap()
+                .contains("[Engine.PlayerPawn]\nObjectDetail=ObjectDetailHigh")
         );
         commands.console_command(0, "Console", "exit");
         assert_eq!(

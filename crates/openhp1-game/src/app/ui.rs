@@ -79,9 +79,14 @@ pub(super) enum Action {
     PlayUiSound(AudioClip),
     Resume,
     SetBrightness(f32),
+    SetMouseSensitivity(f32),
     SetMusicVolume(u8),
+    SetObjectDetail(usize),
     SetResolution(u32, u32),
     SetSoundVolume(u8),
+    SetTextureDetail(usize),
+    SetAutoJump(bool),
+    SetInvertBroom(bool),
 }
 
 pub(super) struct OptionsState {
@@ -962,17 +967,41 @@ impl GameUi {
             .iter()
             .position(|candidate| *candidate == options.resolution)
             .unwrap_or_default();
+        let viewport_manager = packages
+            .config_value("Engine.Engine", "ViewportManager")
+            .unwrap_or_else(|| "WinDrv.WindowsClient".to_owned());
+        let mouse_sensitivity =
+            config_value(&packages, "User", "Engine.PlayerPawn", "MouseSensitivity")
+                .and_then(|value| value.parse::<f32>().ok())
+                .unwrap_or(5.1);
+        let texture_detail = config_value(&packages, "System", &viewport_manager, "TextureDetail")
+            .and_then(|value| detail_index(&value, &["High", "Medium", "Low"]))
+            .unwrap_or_default();
+        let object_detail = config_value(&packages, "User", "Engine.PlayerPawn", "ObjectDetail")
+            .and_then(|value| {
+                detail_index(
+                    &value,
+                    &[
+                        "ObjectDetailVeryHigh",
+                        "ObjectDetailHigh",
+                        "ObjectDetailMedium",
+                        "ObjectDetailLow",
+                        "ObjectDetailVeryLow",
+                    ],
+                )
+            })
+            .unwrap_or_default();
         let options = OptionValues {
             resolution,
             resolutions,
             brightness: ((options.brightness - 0.2) / 0.8).clamp(0.0, 1.0),
-            mouse_speed: 0.5,
+            mouse_speed: ((mouse_sensitivity - 0.2) / 9.8).clamp(0.0, 1.0),
             music_volume: options.music_volume,
             sound_volume: options.sound_volume,
-            texture_detail: 0,
-            object_detail: 0,
-            auto_jump: false,
-            invert_broom: false,
+            texture_detail,
+            object_detail,
+            auto_jump: config_bool(&packages, "User", "Engine.PlayerPawn", "bAutoJump"),
+            invert_broom: config_bool(&packages, "User", "HPBase.baseHarry", "bInvertBroomPitch"),
         };
         let save_slots = std::array::from_fn(|slot| {
             fs::metadata(save_dir.join(format!("save{slot}.usa")))
@@ -1451,7 +1480,7 @@ impl GameUi {
             &self.option_labels.mouse_speed,
             PURPLE,
         );
-        option_slider(
+        if option_slider(
             ui,
             scale,
             159.0,
@@ -1459,7 +1488,11 @@ impl GameUi {
             &self.textures.slider_track,
             &self.textures.slider_knob,
             &mut self.options.mouse_speed,
-        );
+        ) {
+            self.action = Some(Action::SetMouseSensitivity(
+                0.2 + self.options.mouse_speed * 9.8,
+            ));
+        }
         option_text(
             ui,
             scale,
@@ -1546,6 +1579,7 @@ impl GameUi {
             self.options.auto_jump,
         ) {
             self.options.auto_jump = !self.options.auto_jump;
+            self.action = Some(Action::SetAutoJump(self.options.auto_jump));
         }
         if option_checkbox(
             ui,
@@ -1558,6 +1592,7 @@ impl GameUi {
             self.options.invert_broom,
         ) {
             self.options.invert_broom = !self.options.invert_broom;
+            self.action = Some(Action::SetInvertBroom(self.options.invert_broom));
         }
         if textured_button(
             ui,
@@ -1609,8 +1644,14 @@ impl GameUi {
                         self.action = Some(Action::SetResolution(width, height));
                     }
                     1 => {}
-                    2 => self.options.texture_detail = selection,
-                    3 => self.options.object_detail = selection,
+                    2 => {
+                        self.options.texture_detail = selection;
+                        self.action = Some(Action::SetTextureDetail(selection));
+                    }
+                    3 => {
+                        self.options.object_detail = selection;
+                        self.action = Some(Action::SetObjectDetail(selection));
+                    }
                     _ => unreachable!(),
                 }
                 self.open_combo = None;
@@ -2527,6 +2568,24 @@ fn combo_list_height(item_count: usize) -> f32 {
     if item_count > 3 { 89.0 } else { 54.0 }
 }
 
+fn config_value(packages: &PackageStore, config: &str, section: &str, key: &str) -> Option<String> {
+    packages
+        .config_values(config, section, key)
+        .into_iter()
+        .next()
+}
+
+fn config_bool(packages: &PackageStore, config: &str, section: &str, key: &str) -> bool {
+    config_value(packages, config, section, key)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
+}
+
+fn detail_index(value: &str, choices: &[&str]) -> Option<usize> {
+    choices
+        .iter()
+        .position(|choice| choice.eq_ignore_ascii_case(value))
+}
+
 fn option_resolutions(available: Vec<(u32, u32)>, current: (u32, u32)) -> Vec<(u32, u32)> {
     let mut resolutions = available
         .into_iter()
@@ -2733,6 +2792,18 @@ mod tests {
                 (2560, 1600),
             ),
             vec![(640, 480), (800, 600), (2560, 1600)]
+        );
+    }
+
+    #[test]
+    fn option_detail_values_follow_the_authored_config_names() {
+        assert_eq!(detail_index("low", &["High", "Medium", "Low"]), Some(2));
+        assert_eq!(
+            detail_index(
+                "ObjectDetailVeryHigh",
+                &["ObjectDetailVeryHigh", "ObjectDetailHigh"]
+            ),
+            Some(0)
         );
     }
 
