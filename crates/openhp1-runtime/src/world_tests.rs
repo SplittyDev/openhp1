@@ -1093,6 +1093,25 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
     else {
         panic!("FEBook cast rejected the host bridge");
     };
+    let save_source = runtime.packages.load_path(system.join("Save.u")).unwrap();
+    runtime
+        .dispatch_context_call(
+            7,
+            &player_class,
+            book,
+            &save_source,
+            FunctionCall::Virtual(1),
+            &[],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        console.take_actions(),
+        [ConsoleCommandAction::SaveGame { slot: 99 }]
+    );
+
     let page = runtime
         .context_field_value(7, book, &page_source, 2, &instance)
         .unwrap();

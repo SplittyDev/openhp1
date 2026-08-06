@@ -123,13 +123,13 @@ show no assignment to either property. A context call through a null
 body. This matches the observed state: the authored faint completes, input is
 still ignored by `stateDead`, and its reload call has no effective receiver.
 
-OpenHP1 now supplies narrow host-backed `Player` and `Console` identities for
-the player pawn. They survive the authored `baseConsole` cast and route
-`SaveSelectedSlot` and `LoadSelectedSlot` into the existing console-command
-host. Until the frontend supplies an explicit selected slot, this uses the
-shipped `FESlotPage` fallback slot 99. Building the entire legacy UWindow
-object graph, adding a death timer, or resetting the map would bypass the
-authored selected-slot behavior.
+OpenHP1 now supplies narrow host-backed `Player`, `Console`, and `MenuBook`
+identities for the player pawn. They survive the authored casts and route
+`SaveSelectedSlot` and `LoadSelectedSlot` from either the console or its menu
+book into the existing console-command host. Until the frontend supplies an
+explicit selected slot, this uses the shipped `FESlotPage` fallback slot 99.
+Building the entire legacy UWindow object graph, adding a death timer, or
+resetting the map would bypass the authored selected-slot behavior.
 
 ## End-of-level travel
 

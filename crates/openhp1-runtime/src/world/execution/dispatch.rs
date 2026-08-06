@@ -446,7 +446,7 @@ impl ScriptRuntime {
             );
         }
         let object = self.object_for_handle(receiver)?;
-        if object == host_console_id() {
+        if object == host_console_id() || object == host_menu_book_id() {
             let name = match call {
                 FunctionCall::Virtual(name) | FunctionCall::Global(name) => usize::try_from(name)
                     .ok()
@@ -466,7 +466,7 @@ impl ScriptRuntime {
                     }
                 }
                 (Some(name), [Value::String(url), Value::Bool(transfer_items)])
-                    if name.eq_ignore_ascii_case("ChangeLevel") =>
+                    if object == host_console_id() && name.eq_ignore_ascii_case("ChangeLevel") =>
                 {
                     actions.push(ActorAction::ClientTravel {
                         actor: current_actor,
