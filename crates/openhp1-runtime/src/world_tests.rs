@@ -712,6 +712,14 @@ fn save_snapshot_runtime(root: &std::path::Path, value: i32) -> ScriptRuntime {
         .actor_states
         .insert(7, Some("SavedState".to_owned()));
     runtime.state_revisions.insert(7, 9);
+    set_event_disabled(&mut runtime.disabled_events, 7, None, "Touch", true);
+    set_event_disabled(
+        &mut runtime.disabled_events,
+        7,
+        Some("SavedState"),
+        "Tick",
+        true,
+    );
     runtime.state_frames.insert(
         7,
         StateFrame {
@@ -816,6 +824,13 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
     );
     assert_eq!(restored.actor_states[&7].as_deref(), Some("SavedState"));
     assert_eq!(restored.state_revisions[&7], 9);
+    assert!(event_disabled(&restored.disabled_events, 7, None, "Touch"));
+    assert!(event_disabled(
+        &restored.disabled_events,
+        7,
+        Some("SavedState"),
+        "Tick"
+    ));
     assert_eq!(
         restored.timers[&7],
         ActorTimer {

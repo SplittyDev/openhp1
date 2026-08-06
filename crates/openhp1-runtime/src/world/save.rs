@@ -124,10 +124,27 @@ impl ScriptRuntime {
         if self.active_state_actor.is_some() || self.pending_latent.is_some() {
             return Err(save_error("active script execution cannot be snapshotted"));
         }
+        let mut disabled_events = BTreeMap::<usize, Vec<(Option<String>, String)>>::new();
+        for ((actor, state), events) in &self.disabled_events {
+            disabled_events.entry(*actor).or_default().extend(
+                events
+                    .iter()
+                    .map(|event| ((!state.is_empty()).then_some(state.clone()), event.clone())),
+            );
+        }
+        for events in disabled_events.values_mut() {
+            events.sort();
+        }
         let mut actors = self
             .actor_objects
             .iter()
-            .map(|(&actor, object)| self.save_actor(actor, object))
+            .map(|(&actor, object)| {
+                self.save_actor(
+                    actor,
+                    object,
+                    disabled_events.get(&actor).map_or(&[], Vec::as_slice),
+                )
+            })
             .collect::<DispatchResult<Vec<_>>>()?;
         actors.sort_by_key(|actor| actor.actor);
         let mut object_instances = self
@@ -227,7 +244,12 @@ impl ScriptRuntime {
         Ok(read_runtime(bytes)?.map)
     }
 
-    fn save_actor(&self, actor: usize, object: &ObjectId) -> DispatchResult<SavedActor> {
+    fn save_actor(
+        &self,
+        actor: usize,
+        object: &ObjectId,
+        disabled_events: &[(Option<String>, String)],
+    ) -> DispatchResult<SavedActor> {
         let class = self
             .actor_classes
             .get(&actor)
@@ -244,20 +266,6 @@ impl ScriptRuntime {
             Some(frame) => Some(saved_frame(self, frame)?),
             None => None,
         };
-        let mut disabled_events = self
-            .disabled_events
-            .iter()
-            .filter_map(|((event_actor, state), events)| {
-                (*event_actor == actor).then_some(
-                    events
-                        .iter()
-                        .map(|event| ((!state.is_empty()).then_some(state.clone()), event.clone()))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-        disabled_events.sort();
         Ok(SavedActor {
             actor,
             object: saved_object(object)?,
@@ -276,7 +284,7 @@ impl ScriptRuntime {
                 looping: timer.looping,
             }),
             destroyed: self.destroyed.contains(&actor),
-            disabled_events,
+            disabled_events: disabled_events.to_vec(),
         })
     }
 
