@@ -11,7 +11,7 @@ impl FromStr for RendererMode {
     type Err = RendererSettingError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "classic" => Ok(Self::Classic),
             "modern" => Ok(Self::Modern),
             _ => Err(RendererSettingError::new(
@@ -35,7 +35,7 @@ impl FromStr for ToneMapper {
     type Err = RendererSettingError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "agx" => Ok(Self::AgX),
             "reinhard" | "classic" => Ok(Self::Reinhard),
             "aces" => Ok(Self::Aces),
@@ -59,7 +59,7 @@ impl FromStr for AmbientOcclusion {
     type Err = RendererSettingError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "off" => Ok(Self::Off),
             "ssao" => Ok(Self::Ssao),
             _ => Err(RendererSettingError::new(
@@ -154,10 +154,13 @@ mod tests {
     fn parses_renderer_choices() {
         assert_eq!(ToneMapper::default(), ToneMapper::Reinhard);
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
+        assert_eq!("cLaSsIc".parse(), Ok(RendererMode::Classic));
         assert_eq!("agx".parse(), Ok(ToneMapper::AgX));
+        assert_eq!("ReInHaRd".parse(), Ok(ToneMapper::Reinhard));
         assert_eq!("classic".parse(), Ok(ToneMapper::Reinhard));
         assert_eq!("aces".parse(), Ok(ToneMapper::Aces));
         assert_eq!("off".parse(), Ok(AmbientOcclusion::Off));
+        assert_eq!("sSaO".parse(), Ok(AmbientOcclusion::Ssao));
         assert!("filmic".parse::<ToneMapper>().is_err());
     }
 

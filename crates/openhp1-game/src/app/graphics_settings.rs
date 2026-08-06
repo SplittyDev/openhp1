@@ -4,12 +4,17 @@ use openhp1_render::{
     AmbientOcclusion, DisplaySettings, RendererMode, RendererSettings, ToneMapper,
 };
 use openhp1_runtime::ConsoleCommands;
+use openhp1_scene::LoadedScene;
 
 const CONFIG: &str = "OpenHP1";
-const SECTION: &str = "OpenHP1.Graphics";
+const RENDERER_SECTION: &str = "OpenHP1.Renderer";
+const CLASSIC_SECTION: &str = "OpenHP1.Renderer.Classic";
+const MODERN_SECTION: &str = "OpenHP1.Renderer.Modern";
+const LEGACY_SECTION: &str = "OpenHP1.Graphics";
 const MAX_RENDER_PIXELS: u64 = 3840 * 2160;
 
 pub(super) const DEFAULT_RESOLUTION: [u32; 2] = [1024, 768];
+pub(super) const DEFAULT_WINDOW_SIZE: [u32; 2] = [1280, 800];
 
 pub(super) const RESOLUTION_PRESETS: [([u32; 2], &str); 12] = [
     ([512, 384], "512x384 (Classic)"),
@@ -45,6 +50,7 @@ impl ColorDepth {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GraphicsSettings {
     pub(super) resolution: [u32; 2],
+    window_size: [u32; 2],
     pub(super) renderer: RendererSettings,
     pub(super) color_depth: ColorDepth,
     pub(super) classic_display: DisplaySettings,
@@ -55,6 +61,7 @@ impl Default for GraphicsSettings {
     fn default() -> Self {
         Self {
             resolution: DEFAULT_RESOLUTION,
+            window_size: DEFAULT_WINDOW_SIZE,
             renderer: RendererSettings::default(),
             color_depth: ColorDepth::default(),
             classic_display: DisplaySettings::for_mode(RendererMode::Classic),
@@ -70,40 +77,76 @@ impl GraphicsSettings {
     ) -> Self {
         let defaults = Self::default();
         let mut renderer = defaults.renderer;
-        renderer.mode = config(console, "Renderer")
+        renderer.mode = config(console, RENDERER_SECTION, "Renderer", "Renderer")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.mode);
-        renderer.tone_mapper = config(console, "ToneMapper")
+        renderer.tone_mapper = config(console, MODERN_SECTION, "ToneMapper", "ToneMapper")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.tone_mapper);
-        renderer.ambient_occlusion = config(console, "AmbientOcclusion")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(renderer.ambient_occlusion);
-        renderer.bloom = config(console, "Bloom")
+        renderer.ambient_occlusion = config(
+            console,
+            MODERN_SECTION,
+            "AmbientOcclusion",
+            "AmbientOcclusion",
+        )
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(renderer.ambient_occlusion);
+        renderer.bloom = config(console, MODERN_SECTION, "Bloom", "Bloom")
             .and_then(|value| parse_bool(&value))
             .unwrap_or(renderer.bloom);
         if let Some(override_settings) = renderer_override {
             renderer = override_settings;
         }
 
-        let width = config(console, "ResolutionX").and_then(|value| dimension(&value));
-        let height = config(console, "ResolutionY").and_then(|value| dimension(&value));
+        let width = config(console, RENDERER_SECTION, "ResolutionX", "ResolutionX")
+            .and_then(|value| dimension(&value));
+        let height = config(console, RENDERER_SECTION, "ResolutionY", "ResolutionY")
+            .and_then(|value| dimension(&value));
+        let window_width = config(console, RENDERER_SECTION, "WindowSizeX", "WindowSizeX")
+            .and_then(|value| dimension(&value));
+        let window_height = config(console, RENDERER_SECTION, "WindowSizeY", "WindowSizeY")
+            .and_then(|value| dimension(&value));
         let classic = DisplaySettings::for_mode(RendererMode::Classic);
         let modern = DisplaySettings::for_mode(RendererMode::Modern);
         Self {
             resolution: resolution(width, height).unwrap_or(defaults.resolution),
+            window_size: resolution(window_width, window_height).unwrap_or(defaults.window_size),
             renderer,
-            color_depth: match config(console, "ColorDepth").as_deref() {
-                Some("rgb565") => ColorDepth::Rgb565,
-                _ => ColorDepth::TrueColor,
-            },
+            color_depth: config(console, CLASSIC_SECTION, "ColorMode", "ColorDepth")
+                .as_deref()
+                .and_then(color_depth)
+                .unwrap_or(defaults.color_depth),
             classic_display: DisplaySettings {
-                brightness: setting(console, "ClassicBrightness", classic.brightness, 0.2, 1.0),
+                brightness: setting(
+                    console,
+                    CLASSIC_SECTION,
+                    "Brightness",
+                    "ClassicBrightness",
+                    classic.brightness,
+                    0.2,
+                    1.0,
+                ),
                 ..classic
             },
             modern_display: DisplaySettings {
-                brightness: setting(console, "ModernBrightness", modern.brightness, 0.2, 1.0),
-                contrast: setting(console, "ModernContrast", modern.contrast, 0.5, 2.0),
+                brightness: setting(
+                    console,
+                    MODERN_SECTION,
+                    "Brightness",
+                    "ModernBrightness",
+                    modern.brightness,
+                    0.2,
+                    1.0,
+                ),
+                contrast: setting(
+                    console,
+                    MODERN_SECTION,
+                    "Contrast",
+                    "ModernContrast",
+                    modern.contrast,
+                    0.5,
+                    2.0,
+                ),
             },
         }
     }
@@ -118,66 +161,103 @@ impl GraphicsSettings {
     pub(super) fn save(self, console: &ConsoleCommands) -> io::Result<()> {
         console.save_config_values(
             CONFIG,
-            SECTION,
+            RENDERER_SECTION,
             &[
                 ("ResolutionX", self.resolution[0].to_string()),
                 ("ResolutionY", self.resolution[1].to_string()),
+                ("WindowSizeX", self.window_size[0].to_string()),
+                ("WindowSizeY", self.window_size[1].to_string()),
                 ("Renderer", renderer_name(self.renderer.mode).to_owned()),
+            ],
+        )?;
+        console.save_config_values(
+            CONFIG,
+            CLASSIC_SECTION,
+            &[
+                ("Brightness", self.classic_display.brightness.to_string()),
+                ("ColorMode", color_depth_name(self.color_depth).to_owned()),
+            ],
+        )?;
+        console.save_config_values(
+            CONFIG,
+            MODERN_SECTION,
+            &[
                 (
                     "ToneMapper",
                     tone_mapper_name(self.renderer.tone_mapper).to_owned(),
                 ),
+                ("Brightness", self.modern_display.brightness.to_string()),
+                ("Contrast", self.modern_display.contrast.to_string()),
                 (
                     "AmbientOcclusion",
                     ambient_occlusion_name(self.renderer.ambient_occlusion).to_owned(),
                 ),
                 ("Bloom", self.renderer.bloom.to_string()),
-                (
-                    "ColorDepth",
-                    match self.color_depth {
-                        ColorDepth::TrueColor => "truecolor",
-                        ColorDepth::Rgb565 => "rgb565",
-                    }
-                    .to_owned(),
-                ),
-                (
-                    "ClassicBrightness",
-                    self.classic_display.brightness.to_string(),
-                ),
-                (
-                    "ModernBrightness",
-                    self.modern_display.brightness.to_string(),
-                ),
-                ("ModernContrast", self.modern_display.contrast.to_string()),
             ],
-        )
+        )?;
+        console.remove_config_section(CONFIG, LEGACY_SECTION)
     }
+}
+
+pub(super) fn window_size(scene: &LoadedScene) -> [u32; 2] {
+    let width = scene
+        .config_value_in(CONFIG, RENDERER_SECTION, "WindowSizeX")
+        .and_then(|value| dimension(&value));
+    let height = scene
+        .config_value_in(CONFIG, RENDERER_SECTION, "WindowSizeY")
+        .and_then(|value| dimension(&value));
+    resolution(width, height).unwrap_or(DEFAULT_WINDOW_SIZE)
 }
 
 pub(super) const fn renderer_name(mode: RendererMode) -> &'static str {
     match mode {
-        RendererMode::Classic => "classic",
-        RendererMode::Modern => "modern",
+        RendererMode::Classic => "Classic",
+        RendererMode::Modern => "Modern",
     }
 }
 
 pub(super) const fn tone_mapper_name(tone_mapper: ToneMapper) -> &'static str {
     match tone_mapper {
-        ToneMapper::AgX => "agx",
-        ToneMapper::Reinhard => "reinhard",
-        ToneMapper::Aces => "aces",
+        ToneMapper::AgX => "AgX",
+        ToneMapper::Reinhard => "Reinhard",
+        ToneMapper::Aces => "ACES",
     }
 }
 
 fn ambient_occlusion_name(ambient_occlusion: AmbientOcclusion) -> &'static str {
     match ambient_occlusion {
-        AmbientOcclusion::Off => "off",
-        AmbientOcclusion::Ssao => "ssao",
+        AmbientOcclusion::Off => "Off",
+        AmbientOcclusion::Ssao => "SSAO",
     }
 }
 
-fn config(console: &ConsoleCommands, key: &str) -> Option<String> {
-    console.config_value(CONFIG, SECTION, key)
+fn color_depth_name(color_depth: ColorDepth) -> &'static str {
+    match color_depth {
+        ColorDepth::TrueColor => "32Bit",
+        ColorDepth::Rgb565 => "RGB565",
+    }
+}
+
+fn color_depth(value: &str) -> Option<ColorDepth> {
+    if ["32", "32bit", "truecolor", "rgba8888"]
+        .iter()
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
+    {
+        Some(ColorDepth::TrueColor)
+    } else if ["16", "16bit", "rgb565"]
+        .iter()
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
+    {
+        Some(ColorDepth::Rgb565)
+    } else {
+        None
+    }
+}
+
+fn config(console: &ConsoleCommands, section: &str, key: &str, legacy_key: &str) -> Option<String> {
+    console
+        .config_value(CONFIG, section, key)
+        .or_else(|| console.config_value(CONFIG, LEGACY_SECTION, legacy_key))
 }
 
 fn dimension(value: &str) -> Option<u32> {
@@ -194,8 +274,16 @@ fn resolution(width: Option<u32>, height: Option<u32>) -> Option<[u32; 2]> {
         .map(|(width, height)| [width, height])
 }
 
-fn setting(console: &ConsoleCommands, key: &str, default: f32, min: f32, max: f32) -> f32 {
-    config(console, key)
+fn setting(
+    console: &ConsoleCommands,
+    section: &str,
+    key: &str,
+    legacy_key: &str,
+    default: f32,
+    min: f32,
+    max: f32,
+) -> f32 {
+    config(console, section, key, legacy_key)
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite())
         .map_or(default, |value| value.clamp(min, max))
@@ -219,6 +307,7 @@ mod tests {
             GraphicsSettings::default(),
             GraphicsSettings {
                 resolution: [1024, 768],
+                window_size: [1280, 800],
                 renderer: RendererSettings::default(),
                 color_depth: ColorDepth::TrueColor,
                 classic_display: DisplaySettings {
@@ -228,6 +317,14 @@ mod tests {
                 modern_display: DisplaySettings::for_mode(RendererMode::Modern),
             }
         );
+    }
+
+    #[test]
+    fn color_modes_accept_readable_and_legacy_spellings() {
+        assert_eq!(color_depth("32Bit"), Some(ColorDepth::TrueColor));
+        assert_eq!(color_depth("TRUECOLOR"), Some(ColorDepth::TrueColor));
+        assert_eq!(color_depth("rGb565"), Some(ColorDepth::Rgb565));
+        assert_eq!(color_depth("unknown"), None);
     }
 
     #[test]

@@ -101,6 +101,14 @@ impl LoadedScene {
         self.actor_render.packages.config_value(section, key)
     }
 
+    pub fn config_value_in(&self, config: &str, section: &str, key: &str) -> Option<String> {
+        self.actor_render
+            .packages
+            .config_values(config, section, key)
+            .into_iter()
+            .next()
+    }
+
     pub fn load(path: PathBuf) -> Result<Self> {
         let path = path
             .canonicalize()

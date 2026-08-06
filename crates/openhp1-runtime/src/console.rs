@@ -111,6 +111,17 @@ impl ConsoleCommands {
             .map_err(|error| io::Error::other(error.to_string()))
     }
 
+    pub fn remove_config_section(&self, config: &str, section: &str) -> io::Result<()> {
+        let state = self.state.borrow();
+        if !state.persist {
+            return Ok(());
+        }
+        state
+            .packages
+            .remove_config_section(config, section)
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+
     fn from_game_root(
         game_root: &Path,
         resolution: (u32, u32),

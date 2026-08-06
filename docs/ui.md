@@ -63,11 +63,16 @@ because the OpenHP1 renderer does not currently consume those configuration
 values.
 
 Graphics changes preview immediately and are persisted together under
-`[OpenHP1.Graphics]` in the writable `OpenHP1.ini` overlay. OpenHP1 writes the
-complete section on first launch so it can also be edited directly, then saves
-changes when the page closes. The defaults are a 1024x768 internal frame, the
-Classic renderer, 32-bit colour, and the midpoint Classic brightness. They
-survive authored level travel and save loading. The resolution list keeps the
+the `[OpenHP1.Renderer]`, `[OpenHP1.Renderer.Classic]`, and
+`[OpenHP1.Renderer.Modern]` sections in the writable `OpenHP1.ini` overlay.
+OpenHP1 writes every setting on first launch so the internal resolution, window
+size, and renderer options can also be edited directly. Named values are
+case-insensitive. `ColorMode=32Bit` selects the unfiltered output and
+`ColorMode=RGB565` selects the current 16-bit emulation, leaving distinct names
+available for future colour filters. Changes are saved when the page closes.
+The defaults are a 1024x768 internal frame, a 1280x800 window, the Classic
+renderer, 32-bit colour, and the midpoint Classic brightness. They survive
+authored level travel and save loading. The resolution list keeps the
 four shipped 4:3 sizes, adds enhanced 4:3 and 16:9 presets, and retains an active
 non-preset value as Custom. This setting controls the composed internal frame
 rather than the independently resizable winit window, which starts at 1280x800.

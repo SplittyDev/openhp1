@@ -34,7 +34,7 @@ use winit::{
 
 use self::{
     console::DeveloperConsole,
-    graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS},
+    graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS, window_size},
     presentation::Presentation,
     ui::GameUi,
 };
@@ -46,7 +46,6 @@ mod ui;
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
 const DEBUG_FAST_FORWARD_TICKS: usize = 16;
-const DEFAULT_WINDOW_SIZE: (u32, u32) = (1280, 800);
 
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
@@ -72,12 +71,12 @@ impl ApplicationHandler for GameApp {
         let Some(scene) = self.scene.take() else {
             return;
         };
-        let window_size = DEFAULT_WINDOW_SIZE;
+        let window_size = window_size(&scene);
         let attributes = WindowAttributes::default()
             .with_title("OpenHP1")
             .with_inner_size(Size::Logical(LogicalSize::new(
-                f64::from(window_size.0),
-                f64::from(window_size.1),
+                f64::from(window_size[0]),
+                f64::from(window_size[1]),
             )));
         let result = event_loop
             .create_window(attributes)

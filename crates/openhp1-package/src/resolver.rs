@@ -147,6 +147,24 @@ impl PackageStore {
         )
     }
 
+    pub fn remove_config_section(&self, config_name: &str, section: &str) -> ResolveResult<()> {
+        let destination = self.config_files(config_name)?.destination;
+        let contents = match fs::read_to_string(&destination) {
+            Ok(contents) => contents,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(ResolveError::Io {
+                    path: destination,
+                    source,
+                });
+            }
+        };
+        let Some(contents) = remove_ini_section(&contents, section) else {
+            return Ok(());
+        };
+        write_ini_atomically(&destination, contents)
+    }
+
     pub fn package_path(&self, name: &str) -> Option<&Path> {
         self.paths
             .get(&name.to_ascii_lowercase())
@@ -783,6 +801,29 @@ fn update_ini(contents: &str, entries: &[ConfigEntry]) -> String {
     updated
 }
 
+fn remove_ini_section(contents: &str, section: &str) -> Option<String> {
+    let mut found = false;
+    let mut removing = false;
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            removing = trimmed[1..trimmed.len() - 1].eq_ignore_ascii_case(section);
+            found |= removing;
+        }
+        if !removing {
+            lines.push(line);
+        }
+    }
+    found.then(|| {
+        let mut updated = lines.join("\n");
+        if !updated.is_empty() {
+            updated.push('\n');
+        }
+        updated
+    })
+}
+
 fn append_missing_ini_entries(
     lines: &mut Vec<String>,
     section: &str,
@@ -1015,6 +1056,7 @@ mod tests {
         Export, Import, NameEntry, ObjectReference, PackageHeader, PackageSummary,
         resolver::{
             core_system_paths, find_export, find_import_export, import_target, localization_value,
+            remove_ini_section,
         },
     };
 
@@ -1040,6 +1082,17 @@ mod tests {
             Some("Welcome".to_owned())
         );
         assert_eq!(localization_value(contents, "all", "missing"), None);
+    }
+
+    #[test]
+    fn removes_one_ini_section_case_insensitively() {
+        let contents =
+            "[Keep]\nValue=1\n\n[OpenHP1.Graphics]\nRenderer=classic\n\n[Later]\nValue=2\n";
+        assert_eq!(
+            remove_ini_section(contents, "openhp1.graphics"),
+            Some("[Keep]\nValue=1\n\n[Later]\nValue=2\n".to_owned())
+        );
+        assert_eq!(remove_ini_section(contents, "Missing"), None);
     }
 
     #[test]
