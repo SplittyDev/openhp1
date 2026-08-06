@@ -490,11 +490,12 @@ instance fields through the ordinary scene-property path, and resumes saved
 animations at their saved phase. Platform mixer voices are intentionally
 transient: they are omitted from a save and an empty audio host is used after
 load.
-Actors created by script `Spawn` are transient too: they are omitted along
-with their animation state, and saved references to them become `None`.
-Restore applies the same rule to existing version-1 snapshots so old OpenHP1
-saves cannot turn temporary spell, impact, and audio-effect actors into
-permanent ticking actors.
+Actors created by script `Spawn` are transient too: they and their animation
+state are omitted. On load, the host first reconstructs the normal game and
+player apparatus (including the wand, camera target, animation channel, and
+HUD), then overlays authored actor state while preserving those fresh
+references. Existing version-1 snapshots use the same rule, so old temporary
+spell, impact, and audio-effect actors do not become permanent ticking actors.
 
 `PlayerPawn.ClientTravel` emits a host action with its URL, raw UE1 travel-type
 byte, and `bItems` flag; the script runtime neither parses nor opens the next

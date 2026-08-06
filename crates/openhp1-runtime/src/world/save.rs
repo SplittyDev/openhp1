@@ -154,13 +154,14 @@ impl ScriptRuntime {
         let mut object_instances = self
             .object_instances
             .iter()
-            .map(|(object, (class, instance))| {
-                let mut instance = instance
-                    .iter()
-                    .map(|(field, value)| {
-                        Ok((saved_object(field)?, saved_stored_value(self, value)?))
-                    })
-                    .collect::<DispatchResult<Vec<_>>>()?;
+            .map(|(object, (class, values))| {
+                let mut instance = Vec::new();
+                for (field, value) in values {
+                    if stored_value_has_runtime_reference(self, value)? {
+                        continue;
+                    }
+                    instance.push((saved_object(field)?, saved_stored_value(self, value)?));
+                }
                 instance.sort_by(|(left, _), (right, _)| left.cmp(right));
                 Ok(SavedObjectInstance {
                     object: saved_object(object)?,
@@ -240,8 +241,8 @@ impl ScriptRuntime {
         Ok(writer.bytes)
     }
 
-    /// Restores a snapshot only into a runtime that has registered the
-    /// authored map but has not yet started game or actor events.
+    /// Restores authored snapshot state over a registered map and any freshly
+    /// reconstructed runtime actors.
     pub fn restore_game(&mut self, map: &str, bytes: &[u8]) -> DispatchResult<Vec<ActorAction>> {
         let snapshot = read_runtime(bytes)?;
         if !snapshot.map.eq_ignore_ascii_case(map) {
@@ -269,13 +270,17 @@ impl ScriptRuntime {
             .actor_classes
             .get(&actor)
             .ok_or(DispatchError::UnregisteredActor { actor })?;
-        let mut instance = self
+        let values = self
             .instances
             .get(&actor)
-            .ok_or(DispatchError::ActiveActorContext { actor })?
-            .iter()
-            .map(|(field, value)| Ok((saved_object(field)?, saved_stored_value(self, value)?)))
-            .collect::<DispatchResult<Vec<_>>>()?;
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mut instance = Vec::new();
+        for (field, value) in values {
+            if stored_value_has_runtime_reference(self, value)? {
+                continue;
+            }
+            instance.push((saved_object(field)?, saved_stored_value(self, value)?));
+        }
         instance.sort_by(|(left, _), (right, _)| left.cmp(right));
         let frame = match self.state_frames.get(&actor) {
             Some(frame) => Some(saved_frame(self, frame)?),
@@ -306,15 +311,17 @@ impl ScriptRuntime {
     fn restore_snapshot(&mut self, snapshot: SavedRuntime) -> DispatchResult<Vec<ActorAction>> {
         let mut snapshot = snapshot;
         discard_transient_actors(&mut snapshot);
-        if self
+        let transient = self
             .actor_objects
-            .values()
-            .any(|object| object.package.as_ref() == "<runtime>")
-        {
-            return Err(save_error("runtime already has spawned actors"));
-        }
+            .iter()
+            .filter(|(_, object)| object.package.as_ref() == "<runtime>")
+            .map(|(&actor, _)| actor)
+            .collect::<BTreeSet<_>>();
         let mut authored = BTreeMap::new();
         for (&actor, object) in &self.actor_objects {
+            if transient.contains(&actor) {
+                continue;
+            }
             authored.insert(saved_object(object)?, actor);
         }
         let mut targets = BTreeMap::new();
@@ -339,18 +346,21 @@ impl ScriptRuntime {
         if !authored.is_empty() {
             return Err(save_error("snapshot is missing authored actors"));
         }
-        self.instances.clear();
         self.object_instances.clear();
-        self.actor_states.clear();
-        self.state_frames.clear();
-        self.state_revisions.clear();
+        self.actor_states
+            .retain(|actor, _| transient.contains(actor));
+        self.state_frames
+            .retain(|actor, _| transient.contains(actor));
+        self.state_revisions
+            .retain(|actor, _| transient.contains(actor));
         self.tick_functions.clear();
         self.failed_ticks.clear();
         self.failed_physics.clear();
         self.physics_ticked.clear();
-        self.disabled_events.clear();
-        self.destroyed.clear();
-        self.timers.clear();
+        self.disabled_events
+            .retain(|(actor, _), _| transient.contains(actor));
+        self.destroyed.retain(|actor| transient.contains(actor));
+        self.timers.retain(|actor, _| transient.contains(actor));
         self.actor_bases.clear();
         self.base_children.clear();
         self.touching.clear();
@@ -371,7 +381,7 @@ impl ScriptRuntime {
                     "snapshot dynamic actor class changed during restore",
                 ));
             }
-            let mut instance = InstanceState::default();
+            let mut instance = self.instances.remove(&actor).unwrap_or_default();
             for (field, value) in &saved.instance {
                 instance.insert(
                     self.resolve_saved_object_id(field)?,
@@ -444,7 +454,8 @@ impl ScriptRuntime {
         self.random_state = snapshot.random_state;
         self.player_alt_fire_pressed = snapshot.player_alt_fire_pressed;
         self.player_space_pressed = false;
-        self.animation_commands.clear();
+        self.animation_commands
+            .retain(|actor, _| transient.contains(actor));
         for command in &snapshot.animation_commands {
             let actor = saved_actor_target(&targets, command.actor)?;
             self.animation_commands.insert(
@@ -459,7 +470,10 @@ impl ScriptRuntime {
                 },
             );
         }
-        self.animation_channels.clear();
+        self.animation_channels.retain(|actor, channels| {
+            channels.retain(|channel| transient.contains(&channel.actor));
+            transient.contains(actor) || !channels.is_empty()
+        });
         for channel in &snapshot.animation_channels {
             self.animation_channels
                 .entry(saved_actor_target(&targets, channel.actor)?)
@@ -469,11 +483,10 @@ impl ScriptRuntime {
                     actor: saved_actor_target(&targets, channel.target)?,
                 });
         }
-        self.animating = snapshot
-            .animating
-            .iter()
-            .map(|&actor| saved_actor_target(&targets, actor))
-            .collect::<DispatchResult<_>>()?;
+        self.animating.retain(|actor| transient.contains(actor));
+        for &actor in &snapshot.animating {
+            self.animating.insert(saved_actor_target(&targets, actor)?);
+        }
         self.player_probe_touching = snapshot
             .player_probe_touching
             .iter()
@@ -710,9 +723,9 @@ fn discard_transient_actors(snapshot: &mut SavedRuntime) {
         .actors
         .retain(|actor| !transient.contains(&actor.actor));
     for actor in &mut snapshot.actors {
-        for (_, value) in &mut actor.instance {
-            discard_transient_reference(value);
-        }
+        actor
+            .instance
+            .retain(|(_, value)| !saved_value_has_runtime_reference(value));
         if let Some(frame) = &mut actor.frame {
             for (_, value) in &mut frame.locals {
                 discard_transient_reference(value);
@@ -723,9 +736,9 @@ fn discard_transient_actors(snapshot: &mut SavedRuntime) {
         }
     }
     for instance in &mut snapshot.object_instances {
-        for (_, value) in &mut instance.instance {
-            discard_transient_reference(value);
-        }
+        instance
+            .instance
+            .retain(|(_, value)| !saved_value_has_runtime_reference(value));
     }
     snapshot
         .animation_commands
@@ -739,6 +752,17 @@ fn discard_transient_actors(snapshot: &mut SavedRuntime) {
     snapshot
         .player_probe_touching
         .retain(|actor| !transient.contains(actor));
+}
+
+fn saved_value_has_runtime_reference(value: &SavedValue) -> bool {
+    match value {
+        SavedValue::Object(Some(object)) => object.package == "<runtime>",
+        SavedValue::Struct(fields) => fields
+            .iter()
+            .any(|(_, value)| saved_value_has_runtime_reference(value)),
+        SavedValue::Array(values) => values.iter().any(saved_value_has_runtime_reference),
+        _ => false,
+    }
 }
 
 fn discard_transient_reference(value: &mut SavedValue) {
@@ -794,6 +818,57 @@ fn saved_object_reference(object: &ObjectId) -> DispatchResult<Option<SavedObjec
         Ok(None)
     } else {
         saved_object(object).map(Some)
+    }
+}
+
+fn stored_value_has_runtime_reference(
+    runtime: &ScriptRuntime,
+    value: &StoredValue,
+) -> DispatchResult<bool> {
+    match value {
+        StoredValue::Object(Some(object)) => Ok(object.package.as_ref() == "<runtime>"),
+        StoredValue::Array(values) => {
+            for value in values {
+                if stored_value_has_runtime_reference(runtime, value)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        StoredValue::Value(value) => plain_value_has_runtime_reference(runtime, value),
+        _ => Ok(false),
+    }
+}
+
+fn plain_value_has_runtime_reference(
+    runtime: &ScriptRuntime,
+    value: &Value,
+) -> DispatchResult<bool> {
+    match value {
+        Value::Object(handle) if *handle > 0 => {
+            let index = usize::try_from(*handle - 1)
+                .ok()
+                .filter(|index| *index < runtime.handle_objects.len())
+                .ok_or(DispatchError::InvalidObjectHandle { handle: *handle })?;
+            Ok(runtime.handle_objects[index].package.as_ref() == "<runtime>")
+        }
+        Value::Struct(fields) => {
+            for value in fields.values() {
+                if plain_value_has_runtime_reference(runtime, value)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Value::Array(values) => {
+            for value in values {
+                if plain_value_has_runtime_reference(runtime, value)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
     }
 }
 
@@ -1578,7 +1653,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_snapshots_discard_transient_actors_and_references() {
+    fn legacy_snapshots_omit_transient_fields_for_reconstruction() {
         let transient = SavedObject {
             package: "<runtime>".to_owned(),
             export_index: 9,
@@ -1628,17 +1703,11 @@ mod tests {
         discard_transient_actors(&mut snapshot);
 
         assert_eq!(snapshot.actors.len(), 1);
-        assert!(matches!(
-            snapshot.actors[0].instance[0].1,
-            SavedValue::Object(None)
-        ));
+        assert!(snapshot.actors[0].instance.is_empty());
         let frame = snapshot.actors[0].frame.as_ref().unwrap();
         assert!(matches!(frame.locals[0].1, SavedValue::Object(None)));
         assert!(matches!(frame.latent, SavedLatent::Continue));
-        assert!(matches!(
-            snapshot.object_instances[0].instance[0].1,
-            SavedValue::Object(None)
-        ));
+        assert!(snapshot.object_instances[0].instance.is_empty());
         assert!(snapshot.animation_commands.is_empty());
         assert!(snapshot.animation_channels.is_empty());
         assert!(snapshot.animating.is_empty());

@@ -808,6 +808,24 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
     );
     let snapshot = source.save_game("Maps/Test.unr").unwrap();
     let mut restored = save_snapshot_runtime(&root, -1);
+    let package = restored.packages.load("Test").unwrap();
+    let transient = runtime_actor_id(99);
+    restored.actor_objects.insert(99, transient.clone());
+    restored.object_actors.insert(transient.clone(), 99);
+    restored.actor_classes.insert(99, object_id(&package, 0));
+    restored.instances.insert(
+        99,
+        [
+            (object_id(&package, 5), StoredValue::Object(None)),
+            (object_id(&package, 6), StoredValue::Object(None)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    restored.instances.get_mut(&7).unwrap().insert(
+        object_id(&package, 12),
+        StoredValue::Object(Some(transient.clone())),
+    );
     let actions = restored.restore_game("maps/test.unr", &snapshot).unwrap();
     let package = restored.packages.load("Test").unwrap();
     let property = object_id(&package, 3);
@@ -821,9 +839,9 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
     );
     assert_eq!(
         restored.instances[&7][&object_id(&package, 12)],
-        StoredValue::Object(None),
+        StoredValue::Object(Some(transient)),
     );
-    assert!(!restored.actor_objects.contains_key(&99));
+    assert!(restored.actor_objects.contains_key(&99));
     let StoredValue::Value(Value::Struct(target)) =
         &restored.instances[&7][&object_id(&package, 10)]
     else {
