@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -105,6 +106,10 @@ struct UiTextures {
     folio_missing_small: TextureHandle,
     folio_right: TextureHandle,
     folio_right_hover: TextureHandle,
+    hud_health_full: TextureHandle,
+    hud_health_empty: TextureHandle,
+    hud_counters: [TextureHandle; 4],
+    hud_bean_piles: [TextureHandle; 4],
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -143,6 +148,8 @@ pub(super) struct GameUi {
     settings_dir: PathBuf,
     quidditch_unlocked: u8,
     player: PlayerUiState,
+    player_seen: bool,
+    hud_until: [Option<Instant>; 4],
     folio_page: usize,
     selected_card: Option<i32>,
     card_descriptions: HashMap<i32, String>,
@@ -470,6 +477,30 @@ impl GameUi {
                 "HPMenu.Icons.FERightArrowOverIcon",
                 true,
             )?,
+            hud_health_full: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.HarryBarFull",
+                true,
+            )?,
+            hud_health_empty: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.HarryBarEmpty",
+                true,
+            )?,
+            hud_counters: [
+                load_texture(context, &mut packages, "HPMenu.Icons.FireSeedIcon", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.StarIcon", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.pointsIcon", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.beancounter", true)?,
+            ],
+            hud_bean_piles: [
+                load_texture(context, &mut packages, "HPMenu.Icons.beans1", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.beans2", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.beans3", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.beans4", true)?,
+            ],
             slider_track: load_texture(
                 context,
                 &mut packages,
@@ -630,6 +661,8 @@ impl GameUi {
             settings_dir: save_dir.to_path_buf(),
             quidditch_unlocked,
             player: PlayerUiState::default(),
+            player_seen: false,
+            hud_until: [None; 4],
             folio_page: 0,
             selected_card: None,
             card_descriptions,
@@ -671,7 +704,18 @@ impl GameUi {
     }
 
     pub(super) fn set_player_state(&mut self, player: PlayerUiState) {
+        if self.player_seen {
+            for (index, changed) in changed_hud_counters(self.player, player)
+                .into_iter()
+                .enumerate()
+            {
+                if changed {
+                    self.hud_until[index] = Some(Instant::now() + Duration::from_secs(5));
+                }
+            }
+        }
         self.player = player;
+        self.player_seen = true;
     }
 
     pub(super) fn unlock_quidditch(&mut self, level: u8) -> Result<()> {
@@ -694,6 +738,9 @@ impl GameUi {
 
     pub(super) fn ui(&mut self, context: &egui::Context) {
         if !self.open {
+            if !self.startup {
+                self.hud(context);
+            }
             return;
         }
         let screen = context.content_rect();
@@ -753,6 +800,72 @@ impl GameUi {
                     self.quit_game_confirmation(ui, scale);
                 }
             });
+    }
+
+    fn hud(&self, context: &egui::Context) {
+        let screen = context.content_rect();
+        let scale = (screen.width() / REFERENCE_SIZE.x)
+            .min(screen.height() / REFERENCE_SIZE.y)
+            .max(0.01);
+        let canvas = Rect::from_center_size(screen.center(), REFERENCE_SIZE * scale);
+        let painter = context.layer_painter(LayerId::new(Order::Middle, Id::new("game hud")));
+        draw_texture(
+            &painter,
+            canvas.min,
+            scale,
+            &self.textures.hud_health_full,
+            Pos2::ZERO,
+        );
+        let empty_height = self.textures.hud_health_empty.size_vec2().y
+            * (1.0 - self.player.health.clamp(0.0, 1.0));
+        if empty_height > 0.0 {
+            let texture_height = self.textures.hud_health_empty.size_vec2().y;
+            painter.image(
+                self.textures.hud_health_empty.id(),
+                Rect::from_min_size(
+                    canvas.min,
+                    Vec2::new(self.textures.hud_health_empty.size_vec2().x, empty_height) * scale,
+                ),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, empty_height / texture_height)),
+                Color32::WHITE,
+            );
+        }
+
+        let now = Instant::now();
+        let values = [
+            self.player.fire_seeds,
+            self.player.stars,
+            self.player.house_points_harry,
+            self.player.beans,
+        ];
+        for (index, (x, value)) in [160.0, 320.0, 480.0, 480.0]
+            .into_iter()
+            .zip(values)
+            .enumerate()
+        {
+            if !self.hud_until[index].is_some_and(|until| until > now) {
+                continue;
+            }
+            let texture = &self.textures.hud_counters[index];
+            draw_texture(&painter, canvas.min, scale, texture, Pos2::new(x, 4.0));
+            painter.text(
+                canvas.min + Vec2::new(x, 4.0) * scale + texture.size_vec2() * scale * 0.5,
+                Align2::CENTER_CENTER,
+                value.to_string(),
+                FontId::proportional(14.0 * scale),
+                Color32::BLACK,
+            );
+            if index == 3 {
+                let mut remaining = value.min(15) - 3;
+                for pile in &self.textures.hud_bean_piles {
+                    if remaining <= 0 {
+                        break;
+                    }
+                    draw_texture(&painter, canvas.min, scale, pile, Pos2::new(x, 4.0));
+                    remaining -= 3;
+                }
+            }
+        }
     }
 
     fn main_page(&mut self, ui: &mut egui::Ui, scale: f32) {
@@ -1662,6 +1775,20 @@ fn combo_list_height(item_count: usize) -> f32 {
     if item_count > 3 { 89.0 } else { 54.0 }
 }
 
+fn changed_hud_counters(previous: PlayerUiState, current: PlayerUiState) -> [bool; 4] {
+    let values = |player: PlayerUiState| {
+        [
+            player.fire_seeds,
+            player.stars,
+            player.house_points_harry,
+            player.beans,
+        ]
+    };
+    let previous = values(previous);
+    let current = values(current);
+    std::array::from_fn(|index| previous[index] != current[index])
+}
+
 fn option_slider(
     ui: &mut egui::Ui,
     scale: f32,
@@ -1845,6 +1972,25 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             25
+        );
+    }
+
+    #[test]
+    fn hud_only_reveals_the_counter_whose_authored_value_changed() {
+        let previous = PlayerUiState {
+            beans: 4,
+            stars: 2,
+            fire_seeds: 1,
+            house_points_harry: 10,
+            ..PlayerUiState::default()
+        };
+        let current = PlayerUiState {
+            beans: 5,
+            ..previous
+        };
+        assert_eq!(
+            changed_hud_counters(previous, current),
+            [false, false, false, true]
         );
     }
 }

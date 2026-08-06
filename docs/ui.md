@@ -61,3 +61,10 @@ come from `HPMenu.u`; collected IDs select the matching shipped art and
 localized `wizard_card_new_*` description. The original `FEBook.ShowTabs`
 returns before enabling its dormant side tabs, so OpenHP1 follows the active
 Report button and return-arrow navigation instead of displaying them.
+
+The gameplay overlay uses the compiled `HPHud`/`baseHudItem` defaults: Harry's
+full/empty health art remains at the upper left, while fire seeds, stars, house
+points, and beans use the shipped counter textures at x=160, 320, 480, and 480
+on the 640-wide reference canvas. The counters appear for five seconds when
+their corresponding live Harry field changes, matching each authored `Show()`
+call; bean totals also layer the four original bean-pile textures.
