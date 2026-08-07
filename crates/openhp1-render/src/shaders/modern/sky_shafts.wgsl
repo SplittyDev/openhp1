@@ -28,16 +28,13 @@ struct PortalVertex {
 };
 
 fn portal_direction(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
-    var normal = normalize(cross(b - a, c - a));
-    if dot(normal, settings.camera_position.xyz - a) < 0.0 {
-        normal = -normal;
-    }
+    let normal = normalize(cross(b - a, c - a));
     var direction = settings.direction_density.xyz;
     if dot(normal, direction) < 0.0 {
         direction = -direction;
     }
-    // Keep authored sun direction, but prevent a grazing angle from collapsing
-    // a vertical window's shaft into its wall plane.
+    // BSP surface winding gives the stable playable side of the aperture.
+    // Keep the sun direction on that side without involving the camera.
     return normalize(direction + normal * max(0.35 - dot(normal, direction), 0.0));
 }
 
@@ -96,13 +93,6 @@ fn vertex_fullscreen(
     return output;
 }
 
-fn hash(pixel: vec2<u32>) -> f32 {
-    var value = pixel.x * 1597334677u ^ pixel.y * 3812015801u;
-    value = (value ^ (value >> 16u)) * 2246822519u;
-    value = (value ^ (value >> 13u)) * 3266489917u;
-    return f32(value ^ (value >> 16u)) / 4294967295.0;
-}
-
 fn inside_portal_volume(world: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> bool {
     let edge_ab = b - a;
     let edge_ac = c - a;
@@ -151,15 +141,14 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     const STEP_COUNT = 24u;
     let ray_direction = normalize(ray);
     let step_length = ray_length / f32(STEP_COUNT);
-    let jitter = hash(vec2<u32>(pixel));
     var path_length = 0.0;
     for (var step = 0u; step < STEP_COUNT; step++) {
-        let distance = (f32(step) + jitter) * step_length;
+        let distance = (f32(step) + 0.5) * step_length;
         let sample_position = settings.camera_position.xyz + ray_direction * distance;
         if inside_portal_volume(sample_position, input.a.xyz, input.b.xyz, input.c.xyz) {
             path_length += step_length;
         }
     }
     let beam = 1.0 - exp(-path_length * 0.004);
-    return vec4(input.color.rgb * beam * 0.8, 0.0);
+    return vec4(input.color.rgb * beam * 0.18, 0.0);
 }
