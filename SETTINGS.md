@@ -40,6 +40,7 @@ ToneMapper=Reinhard
 Brightness=0.33
 Contrast=1.24
 AmbientOcclusion=SSAO
+AntiAliasing=SMAA
 Bloom=true
 ```
 
@@ -86,6 +87,7 @@ These settings apply when `Renderer=Modern`.
 | `Brightness` | `0.33` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
 | `Contrast` | `1.24` | `0.5` to `2.0` | Adjusts the difference between dark and bright parts of the image. Values outside this range are moved to the nearest limit. |
 | `AmbientOcclusion` | `SSAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
+| `AntiAliasing` | `SMAA` | `Off`, `FXAA`, `SMAA` | Chooses the Modern renderer's edge-smoothing method, or disables it. |
 | `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |
 
 `Bloom` also accepts `1`, `on`, `0`, and `off`. `ToneMapper=Classic` is accepted

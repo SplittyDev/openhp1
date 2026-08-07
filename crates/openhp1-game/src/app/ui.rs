@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
-use openhp1_render::{AmbientOcclusion, RendererMode, ToneMapper};
+use openhp1_render::{AmbientOcclusion, Antialiasing, RendererMode, ToneMapper};
 use openhp1_runtime::{PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
@@ -1633,11 +1633,22 @@ impl GameUi {
                 ) {
                     self.open_combo = (self.open_combo != Some(4)).then_some(4);
                 }
+                option_label(ui, scale, 72.0, 320.0, "Anti-Aliasing", LABEL);
+                if graphics_button(
+                    ui,
+                    scale,
+                    205.0,
+                    320.0,
+                    330.0,
+                    self.graphics.renderer.antialiasing.label(),
+                ) {
+                    self.open_combo = (self.open_combo != Some(5)).then_some(5);
+                }
                 if option_checkbox(
                     ui,
                     scale,
                     205.0,
-                    313.0,
+                    355.0,
                     &self.textures.checkbox_off,
                     &self.textures.checkbox_on,
                     "Bloom",
@@ -1702,6 +1713,15 @@ impl GameUi {
                     },
                     296.0,
                 ),
+                5 => (
+                    vec!["Off".to_owned(), "FXAA".to_owned(), "SMAA".to_owned()],
+                    match self.graphics.renderer.antialiasing {
+                        Antialiasing::Off => 0,
+                        Antialiasing::Fxaa => 1,
+                        Antialiasing::Smaa => 2,
+                    },
+                    338.0,
+                ),
                 _ => unreachable!(),
             };
             if let Some(selection) =
@@ -1727,6 +1747,10 @@ impl GameUi {
                             AmbientOcclusion::Ssao,
                             AmbientOcclusion::XeGtao,
                         ][selection]
+                    }
+                    5 => {
+                        self.graphics.renderer.antialiasing =
+                            [Antialiasing::Off, Antialiasing::Fxaa, Antialiasing::Smaa][selection]
                     }
                     _ => unreachable!(),
                 }

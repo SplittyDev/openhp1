@@ -91,6 +91,9 @@ impl GraphicsSettings {
         )
         .and_then(|value| value.parse().ok())
         .unwrap_or(renderer.ambient_occlusion);
+        renderer.antialiasing = config(console, MODERN_SECTION, "AntiAliasing", "AntiAliasing")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(renderer.antialiasing);
         renderer.bloom = config(console, MODERN_SECTION, "Bloom", "Bloom")
             .and_then(|value| parse_bool(&value))
             .unwrap_or(renderer.bloom);
@@ -191,6 +194,10 @@ impl GraphicsSettings {
                 (
                     "AmbientOcclusion",
                     ambient_occlusion_name(self.renderer.ambient_occlusion).to_owned(),
+                ),
+                (
+                    "AntiAliasing",
+                    self.renderer.antialiasing.label().to_owned(),
                 ),
                 ("Bloom", self.renderer.bloom.to_string()),
             ],
@@ -300,6 +307,8 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use openhp1_render::Antialiasing;
+
     use super::*;
 
     #[test]
@@ -329,8 +338,9 @@ mod tests {
     }
 
     #[test]
-    fn writes_the_canonical_xegtao_name() {
+    fn writes_canonical_modern_effect_names() {
         assert_eq!(ambient_occlusion_name(AmbientOcclusion::XeGtao), "XeGTAO");
+        assert_eq!(Antialiasing::Smaa.label(), "SMAA");
     }
 
     #[test]

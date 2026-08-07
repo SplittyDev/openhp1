@@ -73,6 +73,41 @@ impl FromStr for AmbientOcclusion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Antialiasing {
+    Off,
+    Fxaa,
+    #[default]
+    Smaa,
+}
+
+impl Antialiasing {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Fxaa => "FXAA",
+            Self::Smaa => "SMAA",
+        }
+    }
+}
+
+impl FromStr for Antialiasing {
+    type Err = RendererSettingError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "fxaa" => Ok(Self::Fxaa),
+            "smaa" => Ok(Self::Smaa),
+            _ => Err(RendererSettingError::new(
+                "anti-aliasing",
+                value,
+                "off, fxaa, smaa",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplaySettings {
     pub brightness: f32,
@@ -105,6 +140,7 @@ pub struct RendererSettings {
     pub mode: RendererMode,
     pub tone_mapper: ToneMapper,
     pub ambient_occlusion: AmbientOcclusion,
+    pub antialiasing: Antialiasing,
     pub bloom: bool,
 }
 
@@ -114,6 +150,7 @@ impl Default for RendererSettings {
             mode: RendererMode::Classic,
             tone_mapper: ToneMapper::default(),
             ambient_occlusion: AmbientOcclusion::Ssao,
+            antialiasing: Antialiasing::Smaa,
             bloom: true,
         }
     }
@@ -169,6 +206,12 @@ mod tests {
         assert_eq!("sSaO".parse(), Ok(AmbientOcclusion::Ssao));
         assert_eq!("XeGTAO".parse(), Ok(AmbientOcclusion::XeGtao));
         assert_eq!("gtao".parse(), Ok(AmbientOcclusion::XeGtao));
+        assert_eq!(Antialiasing::default(), Antialiasing::Smaa);
+        assert_eq!("off".parse(), Ok(Antialiasing::Off));
+        assert_eq!("FxAa".parse(), Ok(Antialiasing::Fxaa));
+        assert_eq!("SMAA".parse(), Ok(Antialiasing::Smaa));
+        assert_eq!(Antialiasing::Smaa.label(), "SMAA");
+        assert!("taa".parse::<Antialiasing>().is_err());
         assert!("filmic".parse::<ToneMapper>().is_err());
     }
 

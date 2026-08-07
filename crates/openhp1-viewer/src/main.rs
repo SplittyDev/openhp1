@@ -52,10 +52,13 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
             options.renderer.tone_mapper = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--ambient-occlusion=") {
             options.renderer.ambient_occlusion = value.parse()?;
+        } else if let Some(value) = argument.strip_prefix("--anti-aliasing=") {
+            options.renderer.antialiasing = value.parse()?;
         } else if argument.starts_with('-') || has_path {
             bail!(
                 "usage: openhp1-viewer [map path] [--renderer=classic|modern] \
-                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao]"
+                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao] \
+                 [--anti-aliasing=off|fxaa|smaa]"
             );
         } else {
             options.path = PathBuf::from(argument);
@@ -68,7 +71,9 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhp1_render::{AmbientOcclusion, RendererMode, RendererSettings, ToneMapper};
+    use openhp1_render::{
+        AmbientOcclusion, Antialiasing, RendererMode, RendererSettings, ToneMapper,
+    };
 
     #[test]
     fn parses_map_and_modern_renderer_options() {
@@ -81,11 +86,13 @@ mod tests {
             OsString::from("--renderer=modern"),
             OsString::from("--tone-mapper=reinhard"),
             OsString::from("--ambient-occlusion=xegtao"),
+            OsString::from("--anti-aliasing=smaa"),
         ])
         .unwrap();
         assert_eq!(options.path, PathBuf::from("res/Maps/Lev5_Chess.unr"));
         assert_eq!(options.renderer.mode, RendererMode::Modern);
         assert_eq!(options.renderer.tone_mapper, ToneMapper::Reinhard);
         assert_eq!(options.renderer.ambient_occlusion, AmbientOcclusion::XeGtao);
+        assert_eq!(options.renderer.antialiasing, Antialiasing::Smaa);
     }
 }

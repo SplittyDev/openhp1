@@ -4,14 +4,16 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    AmbientOcclusion, Camera, RenderScene, RendererSettings, SurfaceMode, ToneMapper,
+    AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode, ToneMapper,
     unreal_to_render,
 };
 
 use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
 
+mod aa;
 mod ao;
 
+use aa::AaRenderer;
 use ao::AoRenderer;
 
 pub(super) const COMPOSITE_SHADER: &str = concat!(
@@ -74,6 +76,7 @@ struct BloomTarget {
 pub(super) struct ModernRenderer {
     coronas: Option<CoronaRenderer>,
     ao: AoRenderer,
+    aa: Option<AaRenderer>,
     _scene_texture: wgpu::Texture,
     scene_view: wgpu::TextureView,
     bloom_a: BloomTarget,
@@ -98,7 +101,7 @@ pub(super) struct ModernRenderer {
 
 impl ModernRenderer {
     pub(super) fn new(
-        device: &wgpu::Device,
+        gpu: (&wgpu::Device, &wgpu::Queue),
         output_format: wgpu::TextureFormat,
         size: [u32; 2],
         settings: RendererSettings,
@@ -106,6 +109,7 @@ impl ModernRenderer {
         scene: &RenderScene,
         texture_layout: &wgpu::BindGroupLayout,
     ) -> Self {
+        let (device, queue) = gpu;
         let size = valid_size(size);
         let (scene_texture, scene_view) = scene_target(device, size);
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
@@ -125,6 +129,8 @@ impl ModernRenderer {
             mapped_at_creation: false,
         });
         let ao = AoRenderer::new(device, size, depth_view);
+        let aa = (settings.antialiasing != Antialiasing::Off)
+            .then(|| AaRenderer::new(device, queue, size, output_format, settings.antialiasing));
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 modern composite layout"),
             entries: &[
@@ -262,6 +268,7 @@ impl ModernRenderer {
         Self {
             coronas,
             ao,
+            aa,
             _scene_texture: scene_texture,
             scene_view,
             bloom_a,
@@ -299,6 +306,9 @@ impl ModernRenderer {
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
         let bloom_b = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom B");
         self.ao.resize(device, size, depth_view);
+        if let Some(aa) = &mut self.aa {
+            aa.resize(device, size);
+        }
         self.composite_bind_group = composite_bind_group(
             device,
             &self.composite_layout,
@@ -400,14 +410,16 @@ impl ModernRenderer {
                 "OpenHP1 bloom vertical pass",
             );
         }
+        let composite_target = self.aa.as_ref().map_or(output, AaRenderer::input_view);
         draw_fullscreen(
             encoder,
-            output,
+            composite_target,
             &self.composite_pipeline,
             &self.composite_bind_group,
             "OpenHP1 modern composite pass",
         );
-        ao_passes + if self.bloom { 4 } else { 1 }
+        let aa_passes = self.aa.as_ref().map_or(0, |aa| aa.render(encoder, output));
+        ao_passes + (if self.bloom { 4 } else { 1 }) + aa_passes
     }
 }
 

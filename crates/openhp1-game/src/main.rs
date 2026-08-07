@@ -108,10 +108,13 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
             renderer.tone_mapper = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--ambient-occlusion=") {
             renderer.ambient_occlusion = value.parse()?;
+        } else if let Some(value) = argument.strip_prefix("--anti-aliasing=") {
+            renderer.antialiasing = value.parse()?;
         } else {
             bail!(
                 "usage: openhp1-game [--level <map path>] [--renderer=classic|modern] \
-                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao]"
+                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao] \
+                 [--anti-aliasing=off|fxaa|smaa]"
             );
         }
     }
@@ -121,7 +124,7 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openhp1_render::{AmbientOcclusion, RendererMode, ToneMapper};
+    use openhp1_render::{AmbientOcclusion, Antialiasing, RendererMode, ToneMapper};
 
     #[test]
     fn parses_renderer_and_level_options() {
@@ -133,6 +136,7 @@ mod tests {
             OsString::from("--renderer=modern"),
             OsString::from("--tone-mapper=aces"),
             OsString::from("--ambient-occlusion=xegtao"),
+            OsString::from("--anti-aliasing=fxaa"),
             OsString::from("--level"),
             OsString::from("/game/Maps/Lev2_HogFront.unr"),
         ])
@@ -142,5 +146,6 @@ mod tests {
         assert_eq!(renderer.mode, RendererMode::Modern);
         assert_eq!(renderer.tone_mapper, ToneMapper::Aces);
         assert_eq!(renderer.ambient_occlusion, AmbientOcclusion::XeGtao);
+        assert_eq!(renderer.antialiasing, Antialiasing::Fxaa);
     }
 }

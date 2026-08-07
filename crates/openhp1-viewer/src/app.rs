@@ -7,7 +7,7 @@ use eframe::{
 };
 use glam::Vec3;
 use openhp1_render::{
-    AmbientOcclusion, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
+    AmbientOcclusion, Antialiasing, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
     RendererSettings, ToneMapper,
 };
 use openhp1_runtime::ScriptRuntime;
@@ -256,6 +256,28 @@ impl ViewerApp {
                                     &mut self.renderer_settings.ambient_occlusion,
                                     AmbientOcclusion::XeGtao,
                                     "XeGTAO",
+                                );
+                            });
+                        ui.end_row();
+
+                        ui.label("Anti-aliasing");
+                        egui::ComboBox::from_id_salt("anti-aliasing selector")
+                            .selected_text(self.renderer_settings.antialiasing.label())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.antialiasing,
+                                    Antialiasing::Off,
+                                    "Off",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.antialiasing,
+                                    Antialiasing::Fxaa,
+                                    "FXAA",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.antialiasing,
+                                    Antialiasing::Smaa,
+                                    "SMAA",
                                 );
                             });
                         ui.end_row();

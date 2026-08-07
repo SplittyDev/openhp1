@@ -162,6 +162,7 @@ fn report_text(graphics: &Graphics, issue: &str, captured: Duration) -> String {
         settings.ambient_occlusion
     )
     .unwrap();
+    writeln!(report, "- Anti-aliasing: `{:?}`", settings.antialiasing).unwrap();
     writeln!(report, "- Bloom: `{}`", settings.bloom).unwrap();
     writeln!(
         report,

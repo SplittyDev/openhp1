@@ -447,7 +447,7 @@ impl Renderer {
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
         let modern = modern_enabled.then(|| {
             ModernRenderer::new(
-                device,
+                (device, queue),
                 target_format,
                 viewport_size,
                 settings,

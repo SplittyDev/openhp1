@@ -78,6 +78,8 @@ post pass provides:
 - selectable SSAO or XeGTAO reconstructed from the scene depth buffer, with a
   full-resolution intermediate visibility texture and two edge-aware spatial
   denoise passes;
+- selectable FXAA or three-pass SMAA 1x after tone mapping, with SMAA enabled
+  by default;
 - authored UE1 coronas drawn as HDR screen-space sprites;
 - quarter-resolution HDR bright extraction with separable bloom blur that
   excludes ordinary sub-white texture detail; and
@@ -101,6 +103,11 @@ reprojection is intentionally not part of either path. Both methods remain
 screen-space effects: an occluder that has left the depth buffer cannot keep
 contributing AO even when the receiving surface remains visible.
 
+FXAA uses a single fullscreen pass. SMAA uses separate color-edge detection,
+blend-weight, and neighborhood-blending shaders with the reference area and
+search lookup textures. Both operate on the final display-encoded image; SMAA
+uses its medium preset without temporal or multisample accumulation.
+
 Shader sources live under `src/shaders`. The shared scene shader stays outside
 the `modern` directory because Classic and Modern use the same scene/material
 path. Focused Modern WGSL fragments are concatenated into complete shader
@@ -111,20 +118,22 @@ Modern brightness values, and provides a Modern-only contrast control. The game
 and viewer share the same per-mode display defaults: Modern starts at brightness
 `0.33` and contrast `1.24`, while Classic retains brightness `0.625` and neutral
 contrast. Reinhard is the default tone mapper.
-Renderer mode, tone mapper, and ambient occlusion are also available on the
-command line:
+Renderer mode, tone mapper, ambient occlusion, and anti-aliasing are also
+available on the command line:
 
 ```sh
 cargo run --release -p openhp1-viewer -- \
   res/Maps/Lev5_Chess.unr \
   --renderer=modern \
   --tone-mapper=agx \
-  --ambient-occlusion=ssao
+  --ambient-occlusion=ssao \
+  --anti-aliasing=smaa
 ```
 
 `--tone-mapper` accepts `agx`, `reinhard` (or `classic`), and `aces`.
 `--ambient-occlusion` accepts `off`, `ssao`, and `xegtao` (or `gtao`). These
-settings have no effect on the classic renderer.
+settings have no effect on the classic renderer. `--anti-aliasing` accepts
+`off`, `fxaa`, and `smaa`.
 
 The in-game Graphics Settings page edits the same `RendererSettings` used by
 the viewer and command line. Its Classic-only 16-bit option keeps the actual
