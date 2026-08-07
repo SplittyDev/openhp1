@@ -12,8 +12,10 @@ use crate::Camera;
 
 use super::HDR_FORMAT;
 
+mod point_shadow;
 mod shadow;
 
+use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer};
 use shadow::DirectionalShadow;
 
 const SHADER: &str = include_str!("../../shaders/modern/volumetric.wgsl");
@@ -38,12 +40,15 @@ struct VolumetricInstance {
 
 pub(super) struct VolumetricRenderer {
     shadow: DirectionalShadow,
+    point_shadows: PointShadowRenderer,
     uniform: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
     instance_count: usize,
+    point_volume_buffer: wgpu::Buffer,
+    point_volume_count: usize,
 }
 
 impl VolumetricRenderer {
@@ -53,6 +58,7 @@ impl VolumetricRenderer {
         scene: &RenderScene,
     ) -> Self {
         let shadow = DirectionalShadow::new(device, depth_view, scene);
+        let point_shadows = PointShadowRenderer::new(device, scene);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -82,9 +88,32 @@ impl VolumetricRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::CubeArray,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
             ],
         });
-        let bind_group = bind_group(device, &layout, depth_view, &uniform);
+        let bind_group = bind_group(
+            device,
+            &layout,
+            depth_view,
+            &uniform,
+            &point_shadows.view,
+            &point_shadows.sampler,
+        );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("OpenHP1 volumetric lighting shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -97,23 +126,39 @@ impl VolumetricRenderer {
         let pipeline = pipeline(device, &pipeline_layout, &shader);
         let instances = instances(scene);
         let instance_buffer = instance_buffer(device, &instances);
+        let point_volume_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 shadowed point volume instances"),
+            size: (MAX_POINT_SHADOWS * size_of::<VolumetricInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             shadow,
+            point_shadows,
             uniform,
             layout,
             bind_group,
             pipeline,
             instance_buffer,
             instance_count: instances.len(),
+            point_volume_buffer,
+            point_volume_count: 0,
         }
     }
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
-        self.bind_group = bind_group(device, &self.layout, depth_view, &self.uniform);
+        self.bind_group = bind_group(
+            device,
+            &self.layout,
+            depth_view,
+            &self.uniform,
+            &self.point_shadows.view,
+            &self.point_shadows.sampler,
+        );
         self.shadow.resize(device, depth_view);
     }
 
-    pub(super) fn update(&self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
+    pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         let instances = instances(scene);
         if instances.len() != self.instance_count {
             return false;
@@ -121,11 +166,12 @@ impl VolumetricRenderer {
         if !instances.is_empty() {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
+        self.point_shadows.update(scene);
         self.shadow.update(queue, scene)
     }
 
     pub(super) fn prepare_frame(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport_size: [u32; 2],
@@ -145,6 +191,15 @@ impl VolumetricRenderer {
             }),
         );
         self.shadow.prepare(queue, camera, aspect);
+        let point_volumes = self.point_shadows.prepare(queue, camera);
+        self.point_volume_count = point_volumes.len();
+        if !point_volumes.is_empty() {
+            queue.write_buffer(
+                &self.point_volume_buffer,
+                0,
+                bytemuck::cast_slice(&point_volumes),
+            );
+        }
     }
 
     pub(super) fn render(
@@ -153,9 +208,10 @@ impl VolumetricRenderer {
         target: &wgpu::TextureView,
     ) -> usize {
         let shadow_passes = self.shadow.render(encoder);
+        let point_shadow_passes = self.point_shadows.render(encoder, &self.shadow);
         let shaft_passes = self.shadow.render_shafts(encoder, target);
-        if self.instance_count == 0 {
-            return shadow_passes + shaft_passes;
+        if self.instance_count == 0 && self.point_volume_count == 0 {
+            return shadow_passes + point_shadow_passes + shaft_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 volumetric lighting pass"),
@@ -175,9 +231,15 @@ impl VolumetricRenderer {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        pass.draw(0..6, 0..self.instance_count as u32);
-        shadow_passes + shaft_passes + 1
+        if self.instance_count != 0 {
+            pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+            pass.draw(0..6, 0..self.instance_count as u32);
+        }
+        if self.point_volume_count != 0 {
+            pass.set_vertex_buffer(0, self.point_volume_buffer.slice(..));
+            pass.draw(0..6, 0..self.point_volume_count as u32);
+        }
+        shadow_passes + point_shadow_passes + shaft_passes + 1
     }
 }
 
@@ -286,6 +348,8 @@ fn bind_group(
     layout: &wgpu::BindGroupLayout,
     depth_view: &wgpu::TextureView,
     uniform: &wgpu::Buffer,
+    point_shadows: &wgpu::TextureView,
+    point_shadow_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("OpenHP1 volumetric lighting bind group"),
@@ -298,6 +362,14 @@ fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(point_shadows),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(point_shadow_sampler),
             },
         ],
     })

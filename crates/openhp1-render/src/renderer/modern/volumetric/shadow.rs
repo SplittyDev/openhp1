@@ -43,7 +43,7 @@ pub(super) struct ShadowUniform {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct ShadowVertex {
+pub(super) struct ShadowVertex {
     position: [f32; 3],
 }
 
@@ -65,6 +65,14 @@ pub(super) struct DirectionalShadow {
 }
 
 impl DirectionalShadow {
+    pub(super) fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<ShadowVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+        }
+    }
+
     pub(super) fn new(
         device: &wgpu::Device,
         scene_depth: &wgpu::TextureView,
@@ -160,11 +168,7 @@ impl DirectionalShadow {
                 module: &shader,
                 entry_point: Some("vertex_shadow"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: size_of::<ShadowVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                }],
+                buffers: &[Self::vertex_layout()],
             },
             primitive: wgpu::PrimitiveState {
                 front_face: wgpu::FrontFace::Cw,
@@ -314,10 +318,18 @@ impl DirectionalShadow {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        self.draw_geometry(&mut pass);
+        1
+    }
+
+    pub(super) fn has_geometry(&self) -> bool {
+        self.index_count != 0
+    }
+
+    pub(super) fn draw_geometry<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
-        1
     }
 
     pub(super) fn render_shafts(

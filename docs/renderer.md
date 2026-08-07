@@ -128,6 +128,13 @@ shadow sealed areas within a sky-enabled map. The accumulation is additive HDR
 scattering with no scene-wide extinction, avoiding a uniform fog veil while
 retaining values for bloom and tone mapping.
 
+Local volumetric sources retain their compact HDR halos. Up to four nearest
+visible emitters or explicitly authored fog lights additionally receive
+renderer-owned cube shadow maps and a bounded world-space scattering march.
+This budget keeps candles and chandeliers responsive without turning invisible
+level-lighting helpers into disembodied fog or rendering a shadow cube for every
+light in a room.
+
 SSAO uses a stable 16-sample screen-space kernel instead of rotating that
 kernel independently at every pixel. XeGTAO uses a five-level positive
 view-depth pyramid, depth-derived normals, three horizon slices with three
@@ -178,11 +185,10 @@ Modern BSP lighting follows runtime light brightness, position, and spotlight
 rotation changes through `RenderScene`; the volumetric instances follow those
 same runtime changes. Mesh actors retain the existing CPU vertex-lighting path.
 The volumetric pass is camera-depth-aware and sunlight shafts use an opaque BSP
-shadow map. Local point lights do not yet have per-light shadow maps, so their
-compact source volumes cannot form shadowed shafts through off-screen or hidden
-occluders. Dynamic shadow maps for lights that move away from their authored
-masks, diffuse GI, DDGI volumes, specular materials, and reflection probes are
-not yet implemented. Future GI and reflection captures should remain
+shadow map. A bounded set of nearby local lights uses cube shadow maps over the
+same opaque BSP geometry. Mesh actors and animated characters do not yet cast
+volumetric shadows. Diffuse GI, DDGI volumes, specular materials, and reflection
+probes are not yet implemented. Future GI and reflection captures should remain
 renderer-owned resources built from `RenderScene`; package references and BSP
 serialization details must not cross into the renderer.
 

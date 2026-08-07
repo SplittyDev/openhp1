@@ -352,7 +352,7 @@ impl ModernRenderer {
     }
 
     pub(super) fn prepare_frame(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport_size: [u32; 2],

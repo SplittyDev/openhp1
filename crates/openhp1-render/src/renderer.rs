@@ -724,7 +724,7 @@ impl Renderer {
     }
 
     pub fn render(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
@@ -755,7 +755,7 @@ impl Renderer {
                 auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
             }),
         );
-        if let Some(modern) = &self.modern {
+        if let Some(modern) = &mut self.modern {
             modern.prepare_frame(queue, camera, viewport_size);
         }
         let (blended_indices, blended_batches) =

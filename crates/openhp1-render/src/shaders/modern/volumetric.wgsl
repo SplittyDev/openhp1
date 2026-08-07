@@ -12,6 +12,12 @@ var scene_depth: texture_depth_2d;
 @group(0) @binding(1)
 var<uniform> settings: VolumetricSettings;
 
+@group(0) @binding(2)
+var point_shadows: texture_depth_cube_array;
+
+@group(0) @binding(3)
+var point_shadow_sampler: sampler_comparison;
+
 struct VolumeOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) position_radius: vec4<f32>,
@@ -57,6 +63,23 @@ fn vertex_volume(
     return output;
 }
 
+fn point_visibility(position: vec3<f32>, center: vec3<f32>, far_plane: f32, shadow_index: i32) -> f32 {
+    let offset = position - center;
+    let distance = max(max(abs(offset.x), abs(offset.y)), abs(offset.z));
+    if distance <= 1.0 {
+        return 1.0;
+    }
+    let reference = far_plane / (far_plane - 1.0)
+        - far_plane / ((far_plane - 1.0) * distance);
+    return textureSampleCompareLevel(
+        point_shadows,
+        point_shadow_sampler,
+        offset,
+        shadow_index,
+        reference - 0.002,
+    );
+}
+
 @fragment
 fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<i32>(textureDimensions(scene_depth));
@@ -91,7 +114,23 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     end = min(end, normalized_depth);
 
     var density = 0.0;
-    if input.profile.x > 0.5 {
+    if input.profile.y > 0.5 {
+        const STEP_COUNT = 20;
+        let step_length = (end - start) / f32(STEP_COUNT);
+        let shadow_index = i32(input.profile.y - 1.0);
+        for (var index = 0; index < STEP_COUNT; index += 1) {
+            let distance = start + (f32(index) + 0.5) * step_length;
+            let normalized_position = ray_origin + ray_direction * distance;
+            let world_position = input.position_radius.xyz + normalized_position * radius;
+            let local_density = 1.0 / (dot(normalized_position, normalized_position) + 0.0036);
+            density += local_density * point_visibility(
+                world_position,
+                input.position_radius.xyz,
+                input.profile.z,
+                shadow_index,
+            ) * step_length;
+        }
+    } else if input.profile.x > 0.5 {
         let perpendicular_squared = max(dot(ray_origin, ray_origin) - b * b, 0.0);
         let softened_distance = sqrt(perpendicular_squared + 0.0036);
         density = max(
