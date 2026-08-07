@@ -127,9 +127,23 @@ impl DisplaySettings {
                 brightness: 0.6,
                 contrast: 1.0,
             },
-            RendererMode::Modern => Self {
-                brightness: 0.33,
-                contrast: 1.24,
+            RendererMode::Modern => Self::for_tone_mapper(ToneMapper::Reinhard),
+        }
+    }
+
+    pub const fn for_tone_mapper(tone_mapper: ToneMapper) -> Self {
+        match tone_mapper {
+            ToneMapper::AgX => Self {
+                brightness: 0.24,
+                contrast: 1.35,
+            },
+            ToneMapper::Reinhard => Self {
+                brightness: 0.28,
+                contrast: 1.05,
+            },
+            ToneMapper::Aces => Self {
+                brightness: 0.25,
+                contrast: 0.9,
             },
         }
     }
@@ -216,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_independent_display_defaults_for_each_mode() {
+    fn keeps_independent_display_defaults_for_each_pipeline_and_tone_mapper() {
         assert_eq!(
             DisplaySettings::for_mode(RendererMode::Classic),
             DisplaySettings {
@@ -231,8 +245,22 @@ mod tests {
         assert_eq!(
             DisplaySettings::for_mode(RendererMode::Modern),
             DisplaySettings {
-                brightness: 0.33,
-                contrast: 1.24,
+                brightness: 0.28,
+                contrast: 1.05,
+            }
+        );
+        assert_eq!(
+            DisplaySettings::for_tone_mapper(ToneMapper::AgX),
+            DisplaySettings {
+                brightness: 0.24,
+                contrast: 1.35,
+            }
+        );
+        assert_eq!(
+            DisplaySettings::for_tone_mapper(ToneMapper::Aces),
+            DisplaySettings {
+                brightness: 0.25,
+                contrast: 0.9,
             }
         );
     }

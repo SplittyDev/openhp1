@@ -57,8 +57,8 @@ one Graphics Settings button while retaining the authored controls, audio,
 navigation, and book layout around it. The separate OpenHP1-owned page exposes
 the internal render resolution and Classic/Modern renderer selection. Classic
 adds brightness and optional final-frame RGB565 emulation; Modern adds its own
-brightness and contrast values, tone mapper, Off/SSAO/XeGTAO selection, and
-bloom plus Off/FXAA/SMAA anti-aliasing. Classic remains
+brightness and contrast values for each tone mapper, Off/SSAO/XeGTAO
+selection, and bloom plus Off/FXAA/SMAA anti-aliasing. Classic remains
 the default. The original texture and object detail controls are omitted
 because the OpenHP1 renderer does not currently consume those configuration
 values.

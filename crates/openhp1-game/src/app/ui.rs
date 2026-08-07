@@ -1594,7 +1594,7 @@ impl GameUi {
                     LABEL,
                 );
                 let mut brightness =
-                    ((self.graphics.modern_display.brightness - 0.2) / 0.8).clamp(0.0, 1.0);
+                    ((self.graphics.modern_display().brightness - 0.2) / 0.8).clamp(0.0, 1.0);
                 if graphics_slider(
                     ui,
                     scale,
@@ -1604,12 +1604,12 @@ impl GameUi {
                     &self.textures.slider_knob,
                     &mut brightness,
                 ) {
-                    self.graphics.modern_display.brightness = 0.2 + brightness * 0.8;
+                    self.graphics.modern_display_mut().brightness = 0.2 + brightness * 0.8;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
                 option_label(ui, scale, 72.0, 236.0, "Contrast", LABEL);
                 let mut contrast =
-                    ((self.graphics.modern_display.contrast - 0.5) / 1.5).clamp(0.0, 1.0);
+                    ((self.graphics.modern_display().contrast - 0.5) / 1.5).clamp(0.0, 1.0);
                 if graphics_slider(
                     ui,
                     scale,
@@ -1619,7 +1619,7 @@ impl GameUi {
                     &self.textures.slider_knob,
                     &mut contrast,
                 ) {
-                    self.graphics.modern_display.contrast = 0.5 + contrast * 1.5;
+                    self.graphics.modern_display_mut().contrast = 0.5 + contrast * 1.5;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
                 option_label(ui, scale, 72.0, 278.0, "Ambient Occlusion", LABEL);

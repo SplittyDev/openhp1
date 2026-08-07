@@ -54,7 +54,9 @@ pub(super) struct GraphicsSettings {
     pub(super) renderer: RendererSettings,
     pub(super) color_depth: ColorDepth,
     pub(super) classic_display: DisplaySettings,
-    pub(super) modern_display: DisplaySettings,
+    modern_agx_display: DisplaySettings,
+    modern_reinhard_display: DisplaySettings,
+    modern_aces_display: DisplaySettings,
 }
 
 impl Default for GraphicsSettings {
@@ -65,7 +67,9 @@ impl Default for GraphicsSettings {
             renderer: RendererSettings::default(),
             color_depth: ColorDepth::default(),
             classic_display: DisplaySettings::for_mode(RendererMode::Classic),
-            modern_display: DisplaySettings::for_mode(RendererMode::Modern),
+            modern_agx_display: DisplaySettings::for_tone_mapper(ToneMapper::AgX),
+            modern_reinhard_display: DisplaySettings::for_tone_mapper(ToneMapper::Reinhard),
+            modern_aces_display: DisplaySettings::for_tone_mapper(ToneMapper::Aces),
         }
     }
 }
@@ -110,7 +114,6 @@ impl GraphicsSettings {
         let window_height = config(console, RENDERER_SECTION, "WindowSizeY", "WindowSizeY")
             .and_then(|value| dimension(&value));
         let classic = DisplaySettings::for_mode(RendererMode::Classic);
-        let modern = DisplaySettings::for_mode(RendererMode::Modern);
         Self {
             resolution: resolution(width, height).unwrap_or(defaults.resolution),
             window_size: resolution(window_width, window_height).unwrap_or(defaults.window_size),
@@ -131,33 +134,36 @@ impl GraphicsSettings {
                 ),
                 ..classic
             },
-            modern_display: DisplaySettings {
-                brightness: setting(
-                    console,
-                    MODERN_SECTION,
-                    "Brightness",
-                    "ModernBrightness",
-                    modern.brightness,
-                    0.2,
-                    1.0,
-                ),
-                contrast: setting(
-                    console,
-                    MODERN_SECTION,
-                    "Contrast",
-                    "ModernContrast",
-                    modern.contrast,
-                    0.5,
-                    2.0,
-                ),
-            },
+            modern_agx_display: modern_display(console, renderer.tone_mapper, ToneMapper::AgX),
+            modern_reinhard_display: modern_display(
+                console,
+                renderer.tone_mapper,
+                ToneMapper::Reinhard,
+            ),
+            modern_aces_display: modern_display(console, renderer.tone_mapper, ToneMapper::Aces),
+        }
+    }
+
+    pub(super) fn modern_display(&self) -> DisplaySettings {
+        match self.renderer.tone_mapper {
+            ToneMapper::AgX => self.modern_agx_display,
+            ToneMapper::Reinhard => self.modern_reinhard_display,
+            ToneMapper::Aces => self.modern_aces_display,
+        }
+    }
+
+    pub(super) fn modern_display_mut(&mut self) -> &mut DisplaySettings {
+        match self.renderer.tone_mapper {
+            ToneMapper::AgX => &mut self.modern_agx_display,
+            ToneMapper::Reinhard => &mut self.modern_reinhard_display,
+            ToneMapper::Aces => &mut self.modern_aces_display,
         }
     }
 
     pub(super) fn display(self) -> DisplaySettings {
         match self.renderer.mode {
             RendererMode::Classic => self.classic_display,
-            RendererMode::Modern => self.modern_display,
+            RendererMode::Modern => self.modern_display(),
         }
     }
 
@@ -189,8 +195,27 @@ impl GraphicsSettings {
                     "ToneMapper",
                     tone_mapper_name(self.renderer.tone_mapper).to_owned(),
                 ),
-                ("Brightness", self.modern_display.brightness.to_string()),
-                ("Contrast", self.modern_display.contrast.to_string()),
+                (
+                    "ReinhardBrightness",
+                    self.modern_reinhard_display.brightness.to_string(),
+                ),
+                (
+                    "ReinhardContrast",
+                    self.modern_reinhard_display.contrast.to_string(),
+                ),
+                (
+                    "ACESBrightness",
+                    self.modern_aces_display.brightness.to_string(),
+                ),
+                (
+                    "ACESContrast",
+                    self.modern_aces_display.contrast.to_string(),
+                ),
+                (
+                    "AgXBrightness",
+                    self.modern_agx_display.brightness.to_string(),
+                ),
+                ("AgXContrast", self.modern_agx_display.contrast.to_string()),
                 (
                     "AmbientOcclusion",
                     ambient_occlusion_name(self.renderer.ambient_occlusion).to_owned(),
@@ -291,7 +316,46 @@ fn setting(
     min: f32,
     max: f32,
 ) -> f32 {
-    config(console, section, key, legacy_key)
+    setting_value(config(console, section, key, legacy_key), default, min, max)
+}
+
+fn modern_display(
+    console: &ConsoleCommands,
+    selected: ToneMapper,
+    tone_mapper: ToneMapper,
+) -> DisplaySettings {
+    let defaults = DisplaySettings::for_tone_mapper(tone_mapper);
+    let value = |suffix, legacy_key| {
+        console
+            .config_value(
+                CONFIG,
+                MODERN_SECTION,
+                &format!("{}{suffix}", tone_mapper_name(tone_mapper)),
+            )
+            .or_else(|| {
+                (selected == tone_mapper)
+                    .then(|| config(console, MODERN_SECTION, suffix, legacy_key))
+                    .flatten()
+            })
+    };
+    DisplaySettings {
+        brightness: setting_value(
+            value("Brightness", "ModernBrightness"),
+            defaults.brightness,
+            0.2,
+            1.0,
+        ),
+        contrast: setting_value(
+            value("Contrast", "ModernContrast"),
+            defaults.contrast,
+            0.5,
+            2.0,
+        ),
+    }
+}
+
+fn setting_value(value: Option<String>, default: f32, min: f32, max: f32) -> f32 {
+    value
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite())
         .map_or(default, |value| value.clamp(min, max))
@@ -324,9 +388,26 @@ mod tests {
                     brightness: 0.6,
                     contrast: 1.0,
                 },
-                modern_display: DisplaySettings::for_mode(RendererMode::Modern),
+                modern_agx_display: DisplaySettings::for_tone_mapper(ToneMapper::AgX),
+                modern_reinhard_display: DisplaySettings::for_tone_mapper(ToneMapper::Reinhard),
+                modern_aces_display: DisplaySettings::for_tone_mapper(ToneMapper::Aces),
             }
         );
+    }
+
+    #[test]
+    fn tone_mappers_keep_independent_display_values() {
+        let mut settings = GraphicsSettings::default();
+        settings.renderer.mode = RendererMode::Modern;
+        settings.modern_display_mut().brightness = 0.42;
+
+        settings.renderer.tone_mapper = ToneMapper::AgX;
+        assert_eq!(
+            settings.display(),
+            DisplaySettings::for_tone_mapper(ToneMapper::AgX)
+        );
+        settings.renderer.tone_mapper = ToneMapper::Reinhard;
+        assert_eq!(settings.display().brightness, 0.42);
     }
 
     #[test]

@@ -25,8 +25,9 @@ pub(crate) struct ViewerApp {
     camera: Camera,
     movement_speed: f32,
     classic_brightness: f32,
-    modern_brightness: f32,
-    modern_contrast: f32,
+    modern_agx_display: DisplaySettings,
+    modern_reinhard_display: DisplaySettings,
+    modern_aces_display: DisplaySettings,
     animations_playing: bool,
     animation_speed: f32,
     actor_filter: String,
@@ -65,7 +66,6 @@ impl ViewerApp {
         let radius = bounds.radius().max(100.0);
         let center = bounds.center();
         let classic_display = DisplaySettings::for_mode(RendererMode::Classic);
-        let modern_display = DisplaySettings::for_mode(RendererMode::Modern);
         // UE1 levels are commonly subtractive: the playable space is carved
         // inside solid BSP, so an exterior overview only sees the outer hull.
         let camera = Camera::looking_at(center, center - Vec3::Z, (radius * 10.0).max(10_000.0));
@@ -76,8 +76,9 @@ impl ViewerApp {
             camera,
             movement_speed: (radius * 0.35).max(200.0),
             classic_brightness: classic_display.brightness,
-            modern_brightness: modern_display.brightness,
-            modern_contrast: modern_display.contrast,
+            modern_agx_display: DisplaySettings::for_tone_mapper(ToneMapper::AgX),
+            modern_reinhard_display: DisplaySettings::for_tone_mapper(ToneMapper::Reinhard),
+            modern_aces_display: DisplaySettings::for_tone_mapper(ToneMapper::Aces),
             animations_playing: true,
             animation_speed: 1.0,
             actor_filter: String::new(),
@@ -98,10 +99,23 @@ impl ViewerApp {
                 brightness: self.classic_brightness,
                 ..DisplaySettings::for_mode(RendererMode::Classic)
             },
-            RendererMode::Modern => DisplaySettings {
-                brightness: self.modern_brightness,
-                contrast: self.modern_contrast,
-            },
+            RendererMode::Modern => self.modern_display(),
+        }
+    }
+
+    fn modern_display(&self) -> DisplaySettings {
+        match self.renderer_settings.tone_mapper {
+            ToneMapper::AgX => self.modern_agx_display,
+            ToneMapper::Reinhard => self.modern_reinhard_display,
+            ToneMapper::Aces => self.modern_aces_display,
+        }
+    }
+
+    fn modern_display_mut(&mut self) -> &mut DisplaySettings {
+        match self.renderer_settings.tone_mapper {
+            ToneMapper::AgX => &mut self.modern_agx_display,
+            ToneMapper::Reinhard => &mut self.modern_reinhard_display,
+            ToneMapper::Aces => &mut self.modern_aces_display,
         }
     }
 
@@ -224,14 +238,17 @@ impl ViewerApp {
                     ui.label("Brightness");
                     let brightness = match self.renderer_settings.mode {
                         RendererMode::Classic => &mut self.classic_brightness,
-                        RendererMode::Modern => &mut self.modern_brightness,
+                        RendererMode::Modern => &mut self.modern_display_mut().brightness,
                     };
                     ui.add(egui::Slider::new(brightness, 0.2..=1.0));
                     ui.end_row();
 
                     if self.renderer_settings.mode == RendererMode::Modern {
                         ui.label("Contrast");
-                        ui.add(egui::Slider::new(&mut self.modern_contrast, 0.5..=2.0));
+                        ui.add(egui::Slider::new(
+                            &mut self.modern_display_mut().contrast,
+                            0.5..=2.0,
+                        ));
                         ui.end_row();
 
                         ui.label("Ambient occlusion");

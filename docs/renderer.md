@@ -115,10 +115,11 @@ path. Focused Modern WGSL fragments are concatenated into complete shader
 modules in Rust because WGSL has no source-include directive.
 
 The viewer exposes these choices in its sidebar, keeps independent Classic and
-Modern brightness values, and provides a Modern-only contrast control. The game
-and viewer share the same per-mode display defaults: Modern starts at brightness
-`0.33` and contrast `1.24`, while Classic retains brightness `0.625` and neutral
-contrast. Reinhard is the default tone mapper.
+per-tone-mapper Modern display values, and provides a Modern-only contrast
+control. The game and viewer share the same Modern defaults: Reinhard uses
+brightness `0.28` and contrast `1.05`, ACES uses `0.25` and `0.90`, and AgX uses
+`0.24` and `1.35`. Classic retains brightness `0.6` and neutral contrast.
+Reinhard is the default tone mapper.
 Renderer mode, tone mapper, ambient occlusion, and anti-aliasing are also
 available on the command line:
 
