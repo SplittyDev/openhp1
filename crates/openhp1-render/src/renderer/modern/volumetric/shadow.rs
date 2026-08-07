@@ -16,6 +16,7 @@ const SHAFT_SHADER: &str = include_str!("../../../shaders/modern/sky_shafts.wgsl
 const SHADER: &str = r#"
 struct ShadowSettings {
     light_view_projection: mat4x4<f32>,
+    view_projection: mat4x4<f32>,
     inverse_view_projection: mat4x4<f32>,
     camera_position: vec4<f32>,
     direction_density: vec4<f32>,
@@ -35,6 +36,7 @@ fn vertex_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f3
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct ShadowUniform {
     pub(super) light_view_projection: [[f32; 4]; 4],
+    pub(super) view_projection: [[f32; 4]; 4],
     pub(super) inverse_view_projection: [[f32; 4]; 4],
     pub(super) camera_position: [f32; 4],
     pub(super) direction_density: [f32; 4],
@@ -47,6 +49,15 @@ pub(super) struct ShadowVertex {
     position: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PortalTriangle {
+    a: [f32; 4],
+    b: [f32; 4],
+    c: [f32; 4],
+    color: [f32; 4],
+}
+
 pub(super) struct DirectionalShadow {
     pub(super) uniform: wgpu::Buffer,
     pub(super) view: wgpu::TextureView,
@@ -57,6 +68,8 @@ pub(super) struct DirectionalShadow {
     shaft_bind_group: wgpu::BindGroup,
     shaft_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
+    portal_buffer: wgpu::Buffer,
+    portal_count: usize,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     vertex_count: usize,
@@ -73,6 +86,15 @@ impl DirectionalShadow {
         }
     }
 
+    fn portal_layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<PortalTriangle>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &ATTRIBUTES,
+        }
+    }
+
     pub(super) fn new(
         device: &wgpu::Device,
         scene_depth: &wgpu::TextureView,
@@ -81,6 +103,7 @@ impl DirectionalShadow {
         let enabled = sky_exposed(scene);
         let vertices = shadow_vertices(scene);
         let indices = shadow_caster_indices(scene);
+        let portals = shaft_portals(scene);
         let fallback_vertex = ShadowVertex::zeroed();
         let fallback_index = 0_u32;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -107,6 +130,7 @@ impl DirectionalShadow {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let portal_buffer = portal_buffer(device, &portals);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 volumetric sun shadow layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -217,7 +241,7 @@ impl DirectionalShadow {
                 module: &shaft_shader,
                 entry_point: Some("vertex_fullscreen"),
                 compilation_options: Default::default(),
-                buffers: &[],
+                buffers: &[Self::portal_layout()],
             },
             primitive: Default::default(),
             depth_stencil: None,
@@ -256,6 +280,8 @@ impl DirectionalShadow {
             shaft_bind_group,
             shaft_pipeline,
             shadow_sampler,
+            portal_buffer,
+            portal_count: portals.len(),
             vertex_buffer,
             index_buffer,
             vertex_count: vertices.len(),
@@ -277,11 +303,18 @@ impl DirectionalShadow {
 
     pub(super) fn update(&self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         let vertices = shadow_vertices(scene);
-        if vertices.len() != self.vertex_count || sky_exposed(scene) != self.enabled {
+        let portals = shaft_portals(scene);
+        if vertices.len() != self.vertex_count
+            || portals.len() != self.portal_count
+            || sky_exposed(scene) != self.enabled
+        {
             return false;
         }
         if !vertices.is_empty() {
             queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        }
+        if !portals.is_empty() {
+            queue.write_buffer(&self.portal_buffer, 0, bytemuck::cast_slice(&portals));
         }
         true
     }
@@ -298,7 +331,7 @@ impl DirectionalShadow {
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
-        if !self.enabled || self.index_count == 0 {
+        if !self.enabled || self.index_count == 0 || self.portal_count == 0 {
             return 0;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -337,7 +370,7 @@ impl DirectionalShadow {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
-        if !self.enabled || self.index_count == 0 {
+        if !self.enabled || self.index_count == 0 || self.portal_count == 0 {
             return 0;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -358,7 +391,8 @@ impl DirectionalShadow {
         });
         pass.set_pipeline(&self.shaft_pipeline);
         pass.set_bind_group(0, &self.shaft_bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        pass.set_vertex_buffer(0, self.portal_buffer.slice(..));
+        pass.draw(0..6, 0..self.portal_count as u32);
         1
     }
 }
@@ -439,12 +473,24 @@ fn shaft_bind_group(
     })
 }
 
+fn portal_buffer(device: &wgpu::Device, portals: &[PortalTriangle]) -> wgpu::Buffer {
+    let fallback = PortalTriangle::zeroed();
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("OpenHP1 volumetric shaft apertures"),
+        contents: if portals.is_empty() {
+            bytemuck::bytes_of(&fallback)
+        } else {
+            bytemuck::cast_slice(portals)
+        },
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+    })
+}
+
 fn sky_exposed(scene: &RenderScene) -> bool {
-    scene.sky_zone.is_some()
-        && scene
-            .surface_materials
-            .iter()
-            .any(|material| material.mode == SurfaceMode::Backdrop)
+    scene
+        .surface_materials
+        .iter()
+        .any(|material| material.volumetric_source)
 }
 
 fn shadow_vertices(scene: &RenderScene) -> Vec<ShadowVertex> {
@@ -468,10 +514,63 @@ fn shadow_caster_indices(scene: &RenderScene) -> Vec<u32> {
             scene
                 .surface_materials
                 .get(**surface)
-                .is_some_and(|material| material.mode == SurfaceMode::Opaque)
+                .is_some_and(|material| {
+                    material.mode == SurfaceMode::Opaque && !material.volumetric_source
+                })
         })
         .flat_map(|(triangle, _)| triangle.iter().copied())
         .collect()
+}
+
+fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
+    scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+        .filter_map(|(triangle, surface)| {
+            let material = scene.surface_materials.get(*surface)?;
+            if !material.volumetric_source {
+                return None;
+            }
+            let &[a, b, c] = triangle else { return None };
+            Some(PortalTriangle {
+                a: unreal_to_render(*scene.mesh.positions.get(a as usize)?)
+                    .extend(1.0)
+                    .to_array(),
+                b: unreal_to_render(*scene.mesh.positions.get(b as usize)?)
+                    .extend(1.0)
+                    .to_array(),
+                c: unreal_to_render(*scene.mesh.positions.get(c as usize)?)
+                    .extend(1.0)
+                    .to_array(),
+                color: shaft_color(scene, material.texture).extend(1.0).to_array(),
+            })
+        })
+        .collect()
+}
+
+fn shaft_color(scene: &RenderScene, texture: Option<usize>) -> Vec3 {
+    let Some(texture) = texture.and_then(|index| scene.textures.get(index)) else {
+        return Vec3::new(1.0, 0.82, 0.62);
+    };
+    let (sum, weight) =
+        texture
+            .rgba
+            .chunks_exact(4)
+            .fold((Vec3::ZERO, 0.0), |(sum, weight), pixel| {
+                let alpha = f32::from(pixel[3]) / 255.0;
+                (
+                    sum + Vec3::new(
+                        f32::from(pixel[0]),
+                        f32::from(pixel[1]),
+                        f32::from(pixel[2]),
+                    ) * alpha,
+                    weight + alpha,
+                )
+            });
+    let color = sum / (weight.max(1.0) * 255.0);
+    color.max(Vec3::splat(0.15))
 }
 
 fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
@@ -487,6 +586,7 @@ fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
     let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 1.0, radius * 4.0);
     ShadowUniform {
         light_view_projection: (projection * view).to_cols_array_2d(),
+        view_projection: camera.view_projection(aspect).to_cols_array_2d(),
         inverse_view_projection: camera.view_projection(aspect).inverse().to_cols_array_2d(),
         camera_position: camera.position.extend(1.0).to_array(),
         direction_density: [direction.x, direction.y, direction.z, 0.00008],
@@ -529,6 +629,7 @@ mod tests {
             coronas: Vec::new(),
             surface_materials: vec![SurfaceMaterial {
                 mode,
+                volumetric_source: mode == SurfaceMode::Backdrop,
                 ..Default::default()
             }],
             sky_zone: sky.then_some(openhp1_scene::SkyZone {
@@ -539,10 +640,27 @@ mod tests {
     }
 
     #[test]
-    fn sky_shafts_require_a_real_backdrop_portal() {
+    fn sky_shafts_require_an_authored_or_classified_aperture() {
         assert!(!sky_exposed(&scene(SurfaceMode::Opaque, true)));
-        assert!(!sky_exposed(&scene(SurfaceMode::Backdrop, false)));
+        assert!(sky_exposed(&scene(SurfaceMode::Backdrop, false)));
         assert!(sky_exposed(&scene(SurfaceMode::Backdrop, true)));
+
+        let mut window = scene(SurfaceMode::Opaque, false);
+        window.surface_materials[0].volumetric_source = true;
+        assert!(sky_exposed(&window));
+        assert_eq!(shaft_portals(&window).len(), 1);
+        assert!(shadow_caster_indices(&window).is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires local original game files"]
+    fn tut1_windows_feed_a_finite_number_of_shaft_prisms() {
+        let level =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res/Maps/Lev_Tut1.unr");
+        let scene = openhp1_scene::LoadedScene::load(level).unwrap();
+        let portals = shaft_portals(&scene.render);
+        assert!(!portals.is_empty());
+        assert!(portals.len() < 1_024, "{} shaft triangles", portals.len());
     }
 
     #[test]
@@ -564,7 +682,7 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
-        assert_eq!(size_of::<ShadowUniform>(), 176);
+        assert_eq!(size_of::<ShadowUniform>(), 240);
     }
 
     #[test]

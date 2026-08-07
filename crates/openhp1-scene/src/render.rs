@@ -77,6 +77,9 @@ pub struct SurfaceMaterial {
     pub masked: bool,
     pub two_sided: bool,
     pub unlit: bool,
+    /// Authored sky or corpus-identified window surface that can admit a
+    /// directional volumetric shaft.
+    pub volumetric_source: bool,
     /// Derive texture coordinates from the reflected view direction.
     pub environment_map: bool,
     /// HP1-specific multiplier for blended source color.
@@ -93,6 +96,7 @@ impl Default for SurfaceMaterial {
             masked: false,
             two_sided: false,
             unlit: false,
+            volumetric_source: false,
             environment_map: false,
             opacity: 1.0,
             texture_pan_speed: [0.0; 2],

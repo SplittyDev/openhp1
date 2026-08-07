@@ -120,13 +120,16 @@ and tone mapping. This avoids fixed-step ray-march banding and extra draw calls
 per sampling step. The classic scene shader, uniform layout, target format,
 depth usage, draw order, and display-gamma path remain unchanged.
 
-Sky shafts use a renderer-owned directional shadow map over opaque scene
-geometry and a jittered world-space march through a deliberately thin medium.
-They are not enabled merely because a level is indoors: both the decoded sky
-zone and at least one actual fake-backdrop opening must exist. Opaque walls then
-shadow sealed areas within a sky-enabled map. The accumulation is additive HDR
-scattering with no scene-wide extinction, avoiding a uniform fog veil while
-retaining values for bloom and tone mapping.
+Directional shafts use a renderer-owned shadow map over opaque scene geometry
+and a jittered world-space march through prisms extruded from actual opening
+triangles. Fake-backdrop surfaces are authored sky openings. The fixed shipped
+maps do not mark indoor stained-glass windows, so the scene loader also marks
+surface texture names containing `win`, excluding known frame and non-aperture
+tokens `arch`, `column`, `wood`, `wallwindow`, and `furnace`. This corpus-backed
+fallback finds the `Lev_Tut1` windows while finding none in `Lev3_Dungeon`.
+Opaque walls and props shadow the resulting volumes. The accumulation is
+additive HDR scattering with no scene-wide extinction, retaining values for
+bloom and tone mapping without tinting the whole room.
 
 Local volumetric sources retain their compact HDR halos. Up to four nearest
 visible emitters or explicitly authored fog lights additionally receive
@@ -136,14 +139,11 @@ level-lighting helpers into disembodied fog or rendering a shadow cube for every
 light in a room.
 
 The directional shadow projection is snapped to shadow-map texels so subtle
-shafts do not crawl when the camera moves. Both directional and local
-raymarchers reject paths that are uniformly lit or uniformly shadowed; only a
-meaningful mixture of the two contributes, preventing open air and whole rooms
-from becoming a source-colored fog layer. Local corpus inspection confirms the
-authored sky boundary: exterior/castle maps such as `Lev2_HogFront`, `Lev_Tut2`,
-and `Lev_Tut3` expose fake-backdrop sky surfaces, while `Lev3_Dungeon`,
-`Lev3_DungeonB`, `Lev3_PreDungeon`, and `Snapes_Office` expose none. The latter
-therefore never receive synthesized window shafts.
+shafts do not crawl when the camera moves. Local raymarchers reject paths that
+are uniformly lit or uniformly shadowed; directional rays are instead bounded
+by opening prisms. Local corpus inspection confirms `Lev_Tut1`, `Lev_Tut2`, and
+`Lev_Tut3` contain classified window apertures, while `Lev3_Dungeon` contains
+none; `Furnacewindow` in `Lev3_DungeonB` is explicitly excluded.
 
 SSAO uses a stable 16-sample screen-space kernel instead of rotating that
 kernel independently at every pixel. XeGTAO uses a five-level positive

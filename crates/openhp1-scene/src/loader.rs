@@ -3658,6 +3658,7 @@ fn load_materials(
         if surface.poly_flags.contains(PolyFlags::FAKE_BACKDROP) {
             materials.push(SurfaceMaterial {
                 mode: SurfaceMode::Backdrop,
+                volumetric_source: true,
                 ..Default::default()
             });
             continue;
@@ -3710,6 +3711,15 @@ fn load_materials(
         let texture_flags = decoded_texture.texture.render_flags;
         let material =
             bsp_surface_material(surface.poly_flags, None, Some(texture_flags), pan_speed);
+        let volumetric_source = is_window_texture(
+            resolved
+                .package
+                .summary()
+                .exports
+                .get(resolved.export_index)
+                .map(|export| resolved.package.summary().name(export.object_name))
+                .unwrap_or_default(),
+        );
         let image_key = (key.0.clone(), key.1, material.masked);
         let texture_index = if let Some(index) = images.get(&image_key) {
             *index
@@ -3732,11 +3742,20 @@ fn load_materials(
         };
         materials.push(SurfaceMaterial {
             texture: Some(texture_index),
+            volumetric_source,
             ..material
         });
     }
 
     (textures, materials)
+}
+
+fn is_window_texture(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains("win")
+        && !["arch", "column", "wood", "wallwindow", "furnace"]
+            .iter()
+            .any(|token| name.contains(token))
 }
 
 fn load_zone_pan_speeds(
@@ -3918,6 +3937,7 @@ fn surface_material(
         masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
         unlit: flags.contains(PolyFlags::UNLIT),
+        volumetric_source: false,
         environment_map: false,
         opacity: 1.0,
         texture_pan_speed: [0.0; 2],
@@ -5242,6 +5262,17 @@ mod tests {
         );
         assert_eq!(modulated.mode, SurfaceMode::Modulated);
         assert!(modulated.masked);
+    }
+
+    #[test]
+    fn identifies_fixed_game_window_materials_without_frames_or_furnaces() {
+        assert!(super::is_window_texture("StainedGlassWind"));
+        assert!(super::is_window_texture("Topwindow13_B"));
+        assert!(super::is_window_texture("bottomBRWind"));
+        assert!(!super::is_window_texture("WindowArch"));
+        assert!(!super::is_window_texture("Win9_Wood_3"));
+        assert!(!super::is_window_texture("Furnacewindow"));
+        assert!(!super::is_window_texture("CastleWall"));
     }
 
     #[test]
