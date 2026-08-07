@@ -46,6 +46,7 @@ AgXContrast=0.9
 AmbientOcclusion=SSAO
 AntiAliasing=SMAA
 Bloom=true
+VolumetricLighting=true
 ```
 
 ## `[OpenHP1.Renderer]`
@@ -97,11 +98,13 @@ These settings apply when `Renderer=Modern`.
 | `AmbientOcclusion` | `SSAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
 | `AntiAliasing` | `SMAA` | `Off`, `FXAA`, `SMAA` | Chooses the Modern renderer's edge-smoothing method, or disables it. |
 | `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |
+| `VolumetricLighting` | `true` | `true`, `false` | Turns depth-aware atmospheric scattering around authored lights off or on. |
 
-`Bloom` also accepts `1`, `on`, `0`, and `off`. `ToneMapper=Classic` is accepted
-as an older name for `Reinhard`, and `AmbientOcclusion=GTAO` is accepted as a
-shorter name for `XeGTAO`. Older shared `Brightness` and `Contrast` values are
-used for the selected tone mapper when its named values are not present.
+`Bloom` and `VolumetricLighting` also accept `1`, `on`, `0`, and `off`.
+`ToneMapper=Classic` is accepted as an older name for `Reinhard`, and
+`AmbientOcclusion=GTAO` is accepted as a shorter name for `XeGTAO`. Older shared
+`Brightness` and `Contrast` values are used for the selected tone mapper when
+its named values are not present.
 
 ## Recovering from a bad setting
 

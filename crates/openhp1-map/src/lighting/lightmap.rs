@@ -37,6 +37,9 @@ pub struct AuthoredLight {
     pub saturation: u8,
     pub radius: u8,
     pub cone: u8,
+    pub volume_brightness: u8,
+    pub volume_fog: u8,
+    pub volume_radius: u8,
     pub visibility: LightVisibility,
 }
 
@@ -88,6 +91,9 @@ impl Model {
                         saturation: light.saturation,
                         radius: light.radius,
                         cone: light.cone,
+                        volume_brightness: light.volume_brightness,
+                        volume_fog: light.volume_fog,
+                        volume_radius: light.volume_radius,
                         visibility: LightVisibility {
                             width: width as u32,
                             height: height as u32,

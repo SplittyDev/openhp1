@@ -156,6 +156,7 @@ pub struct RendererSettings {
     pub ambient_occlusion: AmbientOcclusion,
     pub antialiasing: Antialiasing,
     pub bloom: bool,
+    pub volumetric_lighting: bool,
 }
 
 impl Default for RendererSettings {
@@ -166,6 +167,7 @@ impl Default for RendererSettings {
             ambient_occlusion: AmbientOcclusion::Ssao,
             antialiasing: Antialiasing::Smaa,
             bloom: true,
+            volumetric_lighting: true,
         }
     }
 }
@@ -210,6 +212,7 @@ mod tests {
             RendererSettings::default().tone_mapper,
             ToneMapper::Reinhard
         );
+        assert!(RendererSettings::default().volumetric_lighting);
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
         assert_eq!("cLaSsIc".parse(), Ok(RendererMode::Classic));
         assert_eq!("agx".parse(), Ok(ToneMapper::AgX));

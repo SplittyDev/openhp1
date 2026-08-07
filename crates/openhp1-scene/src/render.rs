@@ -24,6 +24,8 @@ pub struct Corona {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderLight {
     pub actor_index: usize,
+    /// Texture used by a visible authored light sprite, such as a flame.
+    pub source_texture: Option<usize>,
     pub location: Vec3,
     pub direction: Vec3,
     pub effect: u8,
@@ -32,12 +34,19 @@ pub struct RenderLight {
     pub saturation: u8,
     pub radius: u8,
     pub cone: u8,
+    pub volume_brightness: u8,
+    pub volume_fog: u8,
+    pub volume_radius: u8,
     pub visibility: LightVisibility,
 }
 
 impl RenderLight {
     pub fn color(&self) -> Vec3 {
         hsb_to_rgb(self.hue, self.saturation, self.brightness)
+    }
+
+    pub fn source_color(&self) -> Vec3 {
+        hsb_to_rgb(self.hue, self.saturation, 255)
     }
 }
 
@@ -167,6 +176,7 @@ mod tests {
     fn runtime_light_changes_update_every_surface_copy() {
         let light = RenderLight {
             actor_index: 7,
+            source_texture: None,
             location: Vec3::ZERO,
             direction: Vec3::X,
             effect: 0,
@@ -175,6 +185,9 @@ mod tests {
             saturation: 255,
             radius: 64,
             cone: 128,
+            volume_brightness: 64,
+            volume_fog: 0,
+            volume_radius: 0,
             visibility: LightVisibility {
                 width: 1,
                 height: 1,

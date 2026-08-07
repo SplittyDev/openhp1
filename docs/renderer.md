@@ -87,7 +87,10 @@ modern post pass provides:
   receive ambient occlusion;
 - selectable FXAA or three-pass SMAA 1x after tone mapping, with SMAA enabled
   by default;
-- authored UE1 coronas drawn as HDR screen-space sprites;
+- authored UE1 coronas drawn as HDR screen-space sprites when volumetric
+  lighting is disabled;
+- depth-clipped HDR volumetric scattering for authored UE1 fog volumes,
+  visible `bCorona` sources, and textured light sprites such as candle flames;
 - quarter-resolution HDR bright extraction with separable bloom blur that
   excludes ordinary sub-white texture detail; and
 - sRGB output encoding followed by hue-preserving display-space contrast and
@@ -99,10 +102,21 @@ recreates that display-space response from the original lights, and then
 decodes the potentially overbright result to linear HDR. Values above one
 remain available to tone mapping and bloom.
 
-Modern-only HDR, sampleable-depth, post-processing, bloom, AO, and corona
-resources are created only for `RendererMode::Modern`. Coronas use their own
-shader and camera uniform; the classic scene shader, uniform layout, target
-format, depth usage, draw order, and display-gamma path remain unchanged.
+Modern-only HDR, sampleable-depth, post-processing, bloom, AO, corona, and
+volumetric resources are created only for `RendererMode::Modern`. Each unique
+eligible light draws one projected sphere. Authored UE1 volumes use UE1's
+analytic fog-sphere density integral; visible corona and textured light sources
+use a compact, low-energy inverse-square profile concentrated near the source.
+Textured sources use the sprite's chroma and a smaller profile so multi-flame
+fixtures do not stack into a white fog volume.
+Invisible fill lights used only to shape baked illumination do not become
+visible fog orbs.
+Enabling volumetric lighting suppresses the legacy corona sprites so the two
+source-glow treatments do not stack.
+Scene depth terminates the ray, and the result enters the HDR scene before bloom
+and tone mapping. This avoids fixed-step ray-march banding and extra draw calls
+per sampling step. The classic scene shader, uniform layout, target format,
+depth usage, draw order, and display-gamma path remain unchanged.
 
 SSAO uses a stable 16-sample screen-space kernel instead of rotating that
 kernel independently at every pixel. XeGTAO uses a five-level positive
@@ -151,12 +165,15 @@ presentation shader; it is an output emulation rather than a claim that every
 texture and blend operation ran through a historical 16-bit framebuffer.
 
 Modern BSP lighting follows runtime light brightness, position, and spotlight
-rotation changes through `RenderScene`. Mesh actors retain the existing CPU
-vertex-lighting path. Dynamic shadow maps for lights that move away from their
-authored masks, diffuse GI, DDGI volumes, specular materials, and reflection
-probes are not yet implemented. Future GI and reflection captures should
-remain renderer-owned resources built from `RenderScene`; package references
-and BSP serialization details must not cross into the renderer.
+rotation changes through `RenderScene`; the volumetric instances follow those
+same runtime changes. Mesh actors retain the existing CPU vertex-lighting path.
+The volumetric pass is camera-depth-aware but does not have per-light shadow
+maps, so it does not produce shadowed shafts through off-screen or hidden
+occluders. Dynamic shadow maps for lights that move away from their authored
+masks, diffuse GI, DDGI volumes, specular materials, and reflection probes are
+not yet implemented. Future GI and reflection captures should remain
+renderer-owned resources built from `RenderScene`; package references and BSP
+serialization details must not cross into the renderer.
 
 ## Verified maps
 

@@ -240,6 +240,11 @@ impl LoadedScene {
             .filter(|(_, actor)| actor.id.package == package.summary().source.as_ref())
             .map(|(index, actor)| (actor.id.export_index, index))
             .collect::<HashMap<_, _>>();
+        let visible_light_sources = sprites
+            .iter()
+            .filter(|sprite| actor_states[sprite.actor_index].is_light)
+            .map(|sprite| (sprite.actor_index, sprite.texture))
+            .collect::<HashMap<_, _>>();
         let realtime_lightmaps = actor_render
             .model
             .authored_lightmaps(&package)
@@ -255,6 +260,10 @@ impl LoadedScene {
                             .get(&light.export_index)
                             .copied()
                             .unwrap_or(usize::MAX),
+                        source_texture: actor_indices
+                            .get(&light.export_index)
+                            .and_then(|index| visible_light_sources.get(index))
+                            .copied(),
                         location: unreal_to_render(light.location),
                         direction: unreal_to_render(light_direction(light.rotation))
                             .normalize_or_zero(),
@@ -264,6 +273,9 @@ impl LoadedScene {
                         saturation: light.saturation,
                         radius: light.radius,
                         cone: light.cone,
+                        volume_brightness: light.volume_brightness,
+                        volume_fog: light.volume_fog,
+                        volume_radius: light.volume_radius,
                         visibility: light.visibility,
                     })
                     .collect(),
@@ -1812,6 +1824,7 @@ struct AnimatedWaterTexture {
 struct SpriteActor {
     actor_index: usize,
     half_size: Vec2,
+    texture: usize,
 }
 
 struct ParticleSystem {
@@ -2930,6 +2943,7 @@ fn append_scene_actor_sprite(
     sprites.push(SpriteActor {
         actor_index,
         half_size,
+        texture: texture_index,
     });
 }
 

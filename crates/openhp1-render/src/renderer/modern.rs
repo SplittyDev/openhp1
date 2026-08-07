@@ -12,9 +12,11 @@ use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
 
 mod aa;
 mod ao;
+mod volumetric;
 
 use aa::AaRenderer;
 use ao::AoRenderer;
+use volumetric::VolumetricRenderer;
 
 pub(super) const COMPOSITE_SHADER: &str = concat!(
     include_str!("../shaders/modern/fullscreen.wgsl"),
@@ -75,6 +77,7 @@ struct BloomTarget {
 
 pub(super) struct ModernRenderer {
     coronas: Option<CoronaRenderer>,
+    volumetrics: VolumetricRenderer,
     ao: AoRenderer,
     aa: Option<AaRenderer>,
     _scene_texture: wgpu::Texture,
@@ -97,6 +100,7 @@ pub(super) struct ModernRenderer {
     tone_mapper: ToneMapper,
     ambient_occlusion: AmbientOcclusion,
     bloom: bool,
+    volumetric_lighting: bool,
 }
 
 impl ModernRenderer {
@@ -264,9 +268,11 @@ impl ModernRenderer {
         );
         let coronas =
             (!scene.coronas.is_empty()).then(|| CoronaRenderer::new(device, scene, texture_layout));
+        let volumetrics = VolumetricRenderer::new(device, depth_view, scene);
 
         Self {
             coronas,
+            volumetrics,
             ao,
             aa,
             _scene_texture: scene_texture,
@@ -289,6 +295,7 @@ impl ModernRenderer {
             tone_mapper: settings.tone_mapper,
             ambient_occlusion: settings.ambient_occlusion,
             bloom: settings.bloom,
+            volumetric_lighting: settings.volumetric_lighting,
         }
     }
 
@@ -306,6 +313,7 @@ impl ModernRenderer {
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
         let bloom_b = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom B");
         self.ao.resize(device, size, depth_view);
+        self.volumetrics.resize(device, depth_view);
         if let Some(aa) = &mut self.aa {
             aa.resize(device, size);
         }
@@ -336,10 +344,11 @@ impl ModernRenderer {
     }
 
     pub(super) fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        match self.coronas.as_mut() {
+        let coronas_updated = match self.coronas.as_mut() {
             Some(coronas) => coronas.update(queue, scene),
             None => scene.coronas.is_empty(),
-        }
+        };
+        coronas_updated && self.volumetrics.update(queue, scene)
     }
 
     pub(super) fn prepare_frame(
@@ -351,6 +360,7 @@ impl ModernRenderer {
         if let Some(coronas) = &self.coronas {
             coronas.prepare_frame(queue, camera, viewport_size);
         }
+        self.volumetrics.prepare_frame(queue, camera, viewport_size);
     }
 
     pub(super) fn draw_scene_effects<'pass>(
@@ -358,6 +368,9 @@ impl ModernRenderer {
         pass: &mut wgpu::RenderPass<'pass>,
         texture_bind_groups: &'pass [wgpu::BindGroup],
     ) -> usize {
+        if self.volumetric_lighting {
+            return 0;
+        }
         self.coronas
             .as_ref()
             .map_or(0, |coronas| coronas.draw(pass, texture_bind_groups))
@@ -384,6 +397,11 @@ impl ModernRenderer {
                 _padding: [0; 3],
             }),
         );
+        let volumetric_passes = if self.volumetric_lighting {
+            self.volumetrics.render(encoder, &self.scene_view)
+        } else {
+            0
+        };
         let ao_passes = self
             .ao
             .render(queue, encoder, camera, self.ambient_occlusion);
@@ -419,7 +437,7 @@ impl ModernRenderer {
             "OpenHP1 modern composite pass",
         );
         let aa_passes = self.aa.as_ref().map_or(0, |aa| aa.render(encoder, output));
-        ao_passes + (if self.bloom { 4 } else { 1 }) + aa_passes
+        volumetric_passes + ao_passes + (if self.bloom { 4 } else { 1 }) + aa_passes
     }
 }
 

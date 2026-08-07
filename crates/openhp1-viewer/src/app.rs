@@ -300,7 +300,13 @@ impl ViewerApp {
                         ui.end_row();
 
                         ui.label("Effects");
-                        ui.checkbox(&mut self.renderer_settings.bloom, "Bloom");
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.renderer_settings.bloom, "Bloom");
+                            ui.checkbox(
+                                &mut self.renderer_settings.volumetric_lighting,
+                                "Volumetrics",
+                            );
+                        });
                         ui.end_row();
                     }
                 });

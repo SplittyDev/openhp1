@@ -275,6 +275,7 @@ mod tests {
                 ambient: Vec3::splat(1.5),
                 lights: vec![RenderLight {
                     actor_index: 3,
+                    source_texture: None,
                     location: Vec3::new(1.0, 2.0, 3.0),
                     direction: -Vec3::Z,
                     effect: 8,
@@ -283,6 +284,9 @@ mod tests {
                     saturation: 20,
                     radius: 7,
                     cone: 128,
+                    volume_brightness: 64,
+                    volume_fog: 0,
+                    volume_radius: 0,
                     visibility: LightVisibility {
                         width: 4,
                         height: 2,

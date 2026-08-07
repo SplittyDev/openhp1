@@ -1691,6 +1691,21 @@ impl GameUi {
                     self.graphics.renderer.bloom = !self.graphics.renderer.bloom;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
+                if option_checkbox(
+                    ui,
+                    scale,
+                    365.0,
+                    355.0,
+                    &self.textures.checkbox_off,
+                    &self.textures.checkbox_on,
+                    "Volumetrics",
+                    LABEL,
+                    self.graphics.renderer.volumetric_lighting,
+                ) {
+                    self.graphics.renderer.volumetric_lighting =
+                        !self.graphics.renderer.volumetric_lighting;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
             }
         }
 

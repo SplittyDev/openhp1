@@ -101,6 +101,14 @@ impl GraphicsSettings {
         renderer.bloom = config(console, MODERN_SECTION, "Bloom", "Bloom")
             .and_then(|value| parse_bool(&value))
             .unwrap_or(renderer.bloom);
+        renderer.volumetric_lighting = config(
+            console,
+            MODERN_SECTION,
+            "VolumetricLighting",
+            "VolumetricLighting",
+        )
+        .and_then(|value| parse_bool(&value))
+        .unwrap_or(renderer.volumetric_lighting);
         if let Some(override_settings) = renderer_override {
             renderer = override_settings;
         }
@@ -225,6 +233,10 @@ impl GraphicsSettings {
                     self.renderer.antialiasing.label().to_owned(),
                 ),
                 ("Bloom", self.renderer.bloom.to_string()),
+                (
+                    "VolumetricLighting",
+                    self.renderer.volumetric_lighting.to_string(),
+                ),
             ],
         )?;
         console.remove_config_section(CONFIG, LEGACY_SECTION)
