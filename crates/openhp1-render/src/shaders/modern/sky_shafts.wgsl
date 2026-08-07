@@ -28,12 +28,17 @@ struct PortalVertex {
 };
 
 fn portal_direction(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
-    let normal = cross(b - a, c - a);
+    var normal = normalize(cross(b - a, c - a));
+    if dot(normal, settings.camera_position.xyz - a) < 0.0 {
+        normal = -normal;
+    }
     var direction = settings.direction_density.xyz;
-    if dot(normal, direction) * dot(normal, settings.camera_position.xyz - a) < 0.0 {
+    if dot(normal, direction) < 0.0 {
         direction = -direction;
     }
-    return direction;
+    // Keep authored sun direction, but prevent a grazing angle from collapsing
+    // a vertical window's shaft into its wall plane.
+    return normalize(direction + normal * max(0.35 - dot(normal, direction), 0.0));
 }
 
 @vertex
@@ -98,22 +103,6 @@ fn hash(pixel: vec2<u32>) -> f32 {
     return f32(value ^ (value >> 16u)) / 4294967295.0;
 }
 
-fn phase_henyey_greenstein(cosine: f32, anisotropy: f32) -> f32 {
-    let g2 = anisotropy * anisotropy;
-    let denominator = pow(max(1.0 + g2 - 2.0 * anisotropy * cosine, 0.001), 1.5);
-    return (1.0 - g2) / (12.5663706 * denominator);
-}
-
-fn sun_visibility(world: vec3<f32>) -> f32 {
-    let clip = settings.light_view_projection * vec4(world, 1.0);
-    let ndc = clip.xyz / clip.w;
-    if any(ndc.xy < vec2(-1.0)) || any(ndc.xy > vec2(1.0)) || ndc.z <= 0.0 || ndc.z >= 1.0 {
-        return 0.0;
-    }
-    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5);
-    return textureSampleCompareLevel(sun_shadow, shadow_sampler, uv, ndc.z - 0.0008);
-}
-
 fn inside_portal_volume(world: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> bool {
     let edge_ab = b - a;
     let edge_ac = c - a;
@@ -163,20 +152,14 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     let ray_direction = normalize(ray);
     let step_length = ray_length / f32(STEP_COUNT);
     let jitter = hash(vec2<u32>(pixel));
-    let direction = portal_direction(input.a.xyz, input.b.xyz, input.c.xyz);
-    let phase = phase_henyey_greenstein(
-        dot(ray_direction, -direction),
-        settings.distance_intensity_phase.z,
-    );
-    var scattering = vec3(0.0);
+    var path_length = 0.0;
     for (var step = 0u; step < STEP_COUNT; step++) {
         let distance = (f32(step) + jitter) * step_length;
         let sample_position = settings.camera_position.xyz + ray_direction * distance;
         if inside_portal_volume(sample_position, input.a.xyz, input.b.xyz, input.c.xyz) {
-            let visibility = mix(0.35, 1.0, sun_visibility(sample_position));
-            scattering += input.color.rgb * visibility * step_length;
+            path_length += step_length;
         }
     }
-    scattering *= settings.direction_density.w * settings.distance_intensity_phase.y * phase;
-    return vec4(scattering, 0.0);
+    let beam = 1.0 - exp(-path_length * 0.004);
+    return vec4(input.color.rgb * beam * 0.8, 0.0);
 }
