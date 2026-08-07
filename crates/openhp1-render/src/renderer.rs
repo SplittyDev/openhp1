@@ -1024,6 +1024,7 @@ mod tests {
     #[test]
     fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
         let shader = modern::COMPOSITE_SHADER;
+        let scene_shader = include_str!("shaders/scene.wgsl");
         assert!(shader.contains("const WHITE = 1.25;"));
         assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
@@ -1034,7 +1035,10 @@ mod tests {
         assert!(modern::BLOOM_SHADER.contains("const KNEE = 0.1;"));
         assert!(shader.contains("textureLoad(ao_texture"));
         assert!(shader.contains("scene.a >= 0.5"));
-        assert!(include_str!("shaders/scene.wgsl").contains("vec4(color.rgb, 0.0)"));
+        assert!(scene_shader.contains("vec4(color.rgb, 0.0)"));
+        assert!(scene_shader.contains("min(light.color.rgb * strength, vec3(1.0))"));
+        assert!(scene_shader.contains("srgb_to_linear(color.rgb * illumination * 2.0)"));
+        assert!(scene_shader.contains("srgb_to_linear(color.rgb * input.vertex_color.rgb)"));
 
         let white = 1.25_f32;
         let mapped_white = white * (1.0 + white / (white * white)) / (1.0 + white);

@@ -213,7 +213,7 @@ fn apply_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_modern_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
-    return vec4(srgb_to_linear(color.rgb) * input.vertex_color.rgb, color.a);
+    return vec4(srgb_to_linear(color.rgb * input.vertex_color.rgb), color.a);
 }
 
 fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
@@ -267,9 +267,9 @@ fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
                 }
             }
         }
-        illumination += light.color.rgb * strength;
+        illumination += min(light.color.rgb * strength, vec3(1.0));
     }
-    return vec4(srgb_to_linear(color.rgb) * illumination * 2.0, color.a);
+    return vec4(srgb_to_linear(color.rgb * illumination * 2.0), color.a);
 }
 
 fn ue1_distance_falloff(distance_squared: f32) -> f32 {

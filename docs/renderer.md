@@ -68,13 +68,15 @@ lightmap-less surfaces bypass that multiply.
 ## Modern rendering
 
 Classic rendering remains the default. `--renderer=modern` keeps the decoded
-UE1 textures, materials, batching, sky, and animation path, but decodes base
-textures to linear RGB and evaluates the original light actors per fragment in
-an `Rgba16Float` target. Per-surface light lists and the original blurred
-one-bit masks retain authored visibility without reusing the precomposited
-colored lightmaps. Zone ambient and UE1 radius, spotlight, radial, shell, and
-cylinder falloff remain authored inputs; illumination is not clamped before HDR
-post-processing. The modern post pass provides:
+UE1 textures, materials, batching, sky, and animation path, but evaluates the
+original light actors per fragment in the same display-space modulation domain
+as Classic before decoding the combined overbright result into an `Rgba16Float`
+target. Per-surface light lists and the original blurred one-bit masks retain
+authored visibility without reusing the precomposited colored lightmaps. Zone
+ambient and UE1 radius, spotlight, radial, shell, and cylinder falloff remain
+authored inputs. Individual light contributions use Classic's bound, while the
+accumulated 2x-modulated result remains unclamped for HDR post-processing. The
+modern post pass provides:
 
 - selectable AgX, default luminance-preserving Reinhard Equation 4 with a
   `1.25` white point that retains a short UE1 overbright shoulder, and ACES tone
@@ -92,10 +94,10 @@ post-processing. The modern post pass provides:
   the existing brightness adjustment after tone mapping.
 
 Classic base textures and lightmaps remain `Rgba8Unorm`, preserving UE1's
-display-space 2x modulation. Modern decodes base textures to linear RGB and
-uses the authored masks only as visibility; its direct-light sum retains the
-same UE1 2x intensity convention while preserving values above one for tone
-mapping and bloom.
+display-space 2x modulation. Modern uses the authored masks only as visibility,
+recreates that display-space response from the original lights, and then
+decodes the potentially overbright result to linear HDR. Values above one
+remain available to tone mapping and bloom.
 
 Modern-only HDR, sampleable-depth, post-processing, bloom, AO, and corona
 resources are created only for `RendererMode::Modern`. Coronas use their own
