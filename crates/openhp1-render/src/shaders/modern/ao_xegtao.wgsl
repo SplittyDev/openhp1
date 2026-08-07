@@ -9,6 +9,8 @@ const FALLOFF_RANGE = 0.615;
 const SAMPLE_DISTRIBUTION_POWER = 2.0;
 const FINAL_VALUE_POWER = 2.2;
 const DEPTH_MIP_SAMPLING_OFFSET = 3.30;
+const SLICE_COUNT = 9u;
+const STEPS_PER_SLICE = 3u;
 
 @fragment
 fn fragment_xegtao(input: FullscreenVertex) -> AoOutput {
@@ -34,8 +36,8 @@ fn fragment_xegtao(input: FullscreenVertex) -> AoOutput {
     let falloff_add = falloff_from / max(falloff_length, 0.0001) + 1.0;
 
     var visibility = clamp((10.0 - screen_radius) / 100.0, 0.0, 1.0) * 0.5;
-    for (var slice = 0u; slice < 3u; slice += 1u) {
-        let phi = (f32(slice) + noise.x) / 3.0 * PI;
+    for (var slice = 0u; slice < SLICE_COUNT; slice += 1u) {
+        let phi = (f32(slice) + noise.x) / f32(SLICE_COUNT) * PI;
         let cos_phi = cos(phi);
         let sin_phi = sin(phi);
         let direction = vec3(cos_phi, sin_phi, 0.0);
@@ -52,10 +54,10 @@ fn fragment_xegtao(input: FullscreenVertex) -> AoOutput {
         var horizon0 = low_horizon0;
         var horizon1 = low_horizon1;
 
-        for (var step = 0u; step < 3u; step += 1u) {
-            let base_noise = f32(slice + step * 3u) * 0.6180339887498948;
+        for (var step = 0u; step < STEPS_PER_SLICE; step += 1u) {
+            let base_noise = f32(slice + step * STEPS_PER_SLICE) * 0.6180339887498948;
             let step_noise = fract(noise.y + base_noise);
-            var sample_fraction = (f32(step) + step_noise) / 3.0;
+            var sample_fraction = (f32(step) + step_noise) / f32(STEPS_PER_SLICE);
             sample_fraction = pow(sample_fraction, SAMPLE_DISTRIBUTION_POWER) + minimum_sample;
             let sample_offset = sample_fraction * slice_offset;
             let offset_length = max(length(sample_offset), 1.0);
@@ -97,7 +99,7 @@ fn fragment_xegtao(input: FullscreenVertex) -> AoOutput {
         visibility += projected_length * (integral0 + integral1);
     }
 
-    visibility = max(0.03, pow(visibility / 3.0, FINAL_VALUE_POWER));
+    visibility = max(0.03, pow(visibility / f32(SLICE_COUNT), FINAL_VALUE_POWER));
     return ao_output(visibility, edges);
 }
 

@@ -662,6 +662,7 @@ mod tests {
         assert!(AO_COMMON_SHADER.contains("struct AoSettings"));
         assert!(AO_MAIN_SHADER.contains("fragment_ssao"));
         assert!(AO_MAIN_SHADER.contains("fragment_xegtao"));
+        assert!(AO_MAIN_SHADER.contains("const SLICE_COUNT = 9u;"));
         assert!(AO_MAIN_SHADER.contains("Copyright (C) 2016-2021, Intel Corporation"));
         assert!(AO_DENOISE_SHADER.contains("fragment_denoise_final"));
     }

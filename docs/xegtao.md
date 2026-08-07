@@ -45,9 +45,11 @@ normal full-resolution preset; Medium is its lower-cost preset
 ([Intel overview, Resolution and sampling](https://github.com/GameTechDev/XeGTAO/tree/e7698f874e90f2516fca26c696ec3cd2c70e505a#resolution-and-sampling),
 [Intel integration shader entry points](https://github.com/GameTechDev/XeGTAO/blob/e7698f874e90f2516fca26c696ec3cd2c70e505a/Source/Rendering/Shaders/vaGTAO.hlsl#L94-L123)).
 
-For OpenHP1, start with High at full resolution. Do not add a half-resolution
-path until measurement justifies the bilateral upsample it would require;
-Intel lists that as an explicit lower-quality optimization
+OpenHP1 originally started with High at full resolution, then moved to Ultra's
+nine slices after motion testing exposed distracting spatial-pattern crawl in
+the absence of TAA. The threefold main-pass sample cost is intentional; do not
+add a half-resolution path until measurement justifies the bilateral upsample
+it would require. Intel lists that as an explicit lower-quality optimization
 ([Intel FAQ](https://github.com/GameTechDev/XeGTAO/tree/e7698f874e90f2516fca26c696ec3cd2c70e505a#faq)).
 
 ## Depth and normals
