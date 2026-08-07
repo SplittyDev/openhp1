@@ -12,6 +12,10 @@ use crate::Camera;
 
 use super::HDR_FORMAT;
 
+mod shadow;
+
+use shadow::DirectionalShadow;
+
 const SHADER: &str = include_str!("../../shaders/modern/volumetric.wgsl");
 
 #[repr(C)]
@@ -33,6 +37,7 @@ struct VolumetricInstance {
 }
 
 pub(super) struct VolumetricRenderer {
+    shadow: DirectionalShadow,
     uniform: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
@@ -47,6 +52,7 @@ impl VolumetricRenderer {
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
+        let shadow = DirectionalShadow::new(device, scene);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -92,6 +98,7 @@ impl VolumetricRenderer {
         let instances = instances(scene);
         let instance_buffer = instance_buffer(device, &instances);
         Self {
+            shadow,
             uniform,
             layout,
             bind_group,
@@ -113,7 +120,7 @@ impl VolumetricRenderer {
         if !instances.is_empty() {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
-        true
+        self.shadow.update(queue, scene)
     }
 
     pub(super) fn prepare_frame(
@@ -136,6 +143,7 @@ impl VolumetricRenderer {
                 projection: [tan_half_fov * aspect, tan_half_fov, camera.near, 0.0],
             }),
         );
+        self.shadow.prepare(queue, camera);
     }
 
     pub(super) fn render(
@@ -143,8 +151,9 @@ impl VolumetricRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
+        let shadow_passes = self.shadow.render(encoder);
         if self.instance_count == 0 {
-            return 0;
+            return shadow_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 volumetric lighting pass"),
@@ -166,7 +175,7 @@ impl VolumetricRenderer {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
         pass.draw(0..6, 0..self.instance_count as u32);
-        1
+        shadow_passes + 1
     }
 }
 
