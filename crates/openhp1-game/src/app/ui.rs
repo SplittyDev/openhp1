@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, TextureHandle, Vec2};
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
-use openhp1_render::{AmbientOcclusion, Antialiasing, RendererMode, ToneMapper};
+use openhp1_render::{AmbientOcclusion, Antialiasing, DisplaySettings, RendererMode, ToneMapper};
 use openhp1_runtime::{PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
@@ -1494,6 +1494,7 @@ impl GameUi {
     fn graphics_page(&mut self, ui: &mut egui::Ui, scale: f32) {
         const GOLD: Color32 = Color32::from_rgb(221, 190, 91);
         const LABEL: Color32 = Color32::from_rgb(236, 217, 156);
+        const SLIDER_WIDTH: f32 = 245.0;
         let panel = scaled_rect(ui.min_rect().min, scale, 25.0, 39.0, 590.0, 390.0);
         ui.painter().rect_filled(
             panel,
@@ -1563,17 +1564,29 @@ impl GameUi {
                     scale,
                     205.0,
                     199.0,
-                    330.0,
+                    SLIDER_WIDTH,
                     &self.textures.slider_knob,
                     &mut brightness,
                 ) {
                     self.graphics.classic_display.brightness = 0.2 + brightness * 0.8;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
+                if graphics_slider_reset(
+                    ui,
+                    scale,
+                    199.0,
+                    self.graphics.classic_display.brightness,
+                    LABEL,
+                ) {
+                    self.graphics.classic_display.brightness =
+                        DisplaySettings::for_mode(RendererMode::Classic).brightness;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
                 option_text(ui, scale, 205.0, 226.0, "Darker", LABEL);
                 option_text(ui, scale, 535.0, 226.0, "Brighter", LABEL);
             }
             RendererMode::Modern => {
+                let defaults = DisplaySettings::for_tone_mapper(self.graphics.renderer.tone_mapper);
                 option_label(ui, scale, 72.0, 152.0, "Tone Mapper", LABEL);
                 if graphics_button(
                     ui,
@@ -1600,11 +1613,21 @@ impl GameUi {
                     scale,
                     205.0,
                     194.0,
-                    330.0,
+                    SLIDER_WIDTH,
                     &self.textures.slider_knob,
                     &mut brightness,
                 ) {
                     self.graphics.modern_display_mut().brightness = 0.2 + brightness * 0.8;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                if graphics_slider_reset(
+                    ui,
+                    scale,
+                    194.0,
+                    self.graphics.modern_display().brightness,
+                    LABEL,
+                ) {
+                    self.graphics.modern_display_mut().brightness = defaults.brightness;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
                 option_label(ui, scale, 72.0, 236.0, "Contrast", LABEL);
@@ -1615,11 +1638,21 @@ impl GameUi {
                     scale,
                     205.0,
                     236.0,
-                    330.0,
+                    SLIDER_WIDTH,
                     &self.textures.slider_knob,
                     &mut contrast,
                 ) {
                     self.graphics.modern_display_mut().contrast = 0.5 + contrast * 1.5;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
+                if graphics_slider_reset(
+                    ui,
+                    scale,
+                    236.0,
+                    self.graphics.modern_display().contrast,
+                    LABEL,
+                ) {
+                    self.graphics.modern_display_mut().contrast = defaults.contrast;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
                 option_label(ui, scale, 72.0, 278.0, "Ambient Occlusion", LABEL);
@@ -3055,6 +3088,17 @@ fn graphics_slider(
         Color32::WHITE,
     );
     changed
+}
+
+fn graphics_slider_reset(
+    ui: &mut egui::Ui,
+    scale: f32,
+    y: f32,
+    value: f32,
+    color: Color32,
+) -> bool {
+    option_text(ui, scale, 478.0, y + 12.5, &format!("{value:.2}"), color);
+    graphics_button(ui, scale, 505.0, y + 1.5, 30.0, "↶")
 }
 
 fn option_checkbox(

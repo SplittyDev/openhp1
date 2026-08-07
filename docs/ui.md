@@ -59,7 +59,9 @@ the internal render resolution and Classic/Modern renderer selection. Classic
 adds brightness and optional final-frame RGB565 emulation; Modern adds its own
 brightness and contrast values for each tone mapper, Off/SSAO/XeGTAO
 selection, and bloom plus Off/FXAA/SMAA anti-aliasing. Classic remains
-the default. The original texture and object detail controls are omitted
+the default. Brightness and contrast sliders show their numeric value and a
+reset arrow that restores the active renderer or tone mapper's default. The
+original texture and object detail controls are omitted
 because the OpenHP1 renderer does not currently consume those configuration
 values.
 
