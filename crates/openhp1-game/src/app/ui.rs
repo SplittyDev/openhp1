@@ -3098,7 +3098,7 @@ fn graphics_slider_reset(
     color: Color32,
 ) -> bool {
     option_text(ui, scale, 478.0, y + 12.5, &format!("{value:.2}"), color);
-    graphics_button(ui, scale, 505.0, y + 1.5, 30.0, "↶")
+    graphics_button(ui, scale, 505.0, y + 1.5, 30.0, "<-")
 }
 
 fn option_checkbox(
