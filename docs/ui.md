@@ -84,6 +84,8 @@ unlocks broomstick practice, and `2` unlocks the league. The authored `Tut2`
 lesson pass. The non-league `Hub2` `GameWinning` path calls
 `UnlockQuidditch("League")`. These calls cross the host UI bridge and persist
 the same value; map names and save-slot progress are not used as proxies.
+The value belongs in the main OpenHP1 settings directory, not its `Saves`
+subdirectory. Builds that wrote it there are detected and migrated on startup.
 At level `2`, `FEQuidMatchPage` starts the compiled six-round schedule against
 Slytherin, Ravenclaw, and Hufflepuff on the shipped A maps and then the three B
 return fixtures. The in-game `FinishGame` call reports Gryffindor's score back

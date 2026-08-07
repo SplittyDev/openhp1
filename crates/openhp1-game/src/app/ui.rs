@@ -939,12 +939,14 @@ impl GameUi {
                 .then(|| load_save_thumbnail(context, game_root, save_dir, slot))
                 .flatten()
         });
-        let quidditch_unlocked = packages
-            .config_values("HP", "HPMenu.FEQuidMatchPage", "unlocked")
-            .first()
-            .and_then(|value| value.parse::<u8>().ok())
-            .unwrap_or_default()
-            .min(2);
+        let mut quidditch_unlocked = quidditch_unlock(&packages);
+        let misplaced_quidditch_unlocked = quidditch_unlock(
+            &PackageStore::scan_game_root_with_settings_dir(game_root, save_dir)?,
+        );
+        if misplaced_quidditch_unlocked > quidditch_unlocked {
+            quidditch_unlocked = misplaced_quidditch_unlocked;
+            save_quidditch_unlock(&packages, quidditch_unlocked)?;
+        }
         let startup = is_startup_map(map);
         Ok(Self {
             open: startup,
@@ -964,7 +966,7 @@ impl GameUi {
             graphics,
             open_combo: None,
             game_root: game_root.to_path_buf(),
-            settings_dir: save_dir.to_path_buf(),
+            settings_dir: settings_dir.to_path_buf(),
             quidditch_unlocked,
             quidditch: QuidditchLeague::default(),
             player: PlayerUiState::default(),
@@ -1048,15 +1050,10 @@ impl GameUi {
         if level <= self.quidditch_unlocked {
             return Ok(());
         }
-        PackageStore::scan_game_root_with_settings_dir(&self.game_root, &self.settings_dir)?
-            .save_config(
-                "HP",
-                &[ConfigEntry {
-                    section: "HPMenu.FEQuidMatchPage".to_owned(),
-                    key: "unlocked".to_owned(),
-                    values: vec![level.to_string()],
-                }],
-            )?;
+        save_quidditch_unlock(
+            &PackageStore::scan_game_root_with_settings_dir(&self.game_root, &self.settings_dir)?,
+            level,
+        )?;
         self.quidditch_unlocked = level;
         Ok(())
     }
@@ -2887,6 +2884,27 @@ fn config_bool(packages: &PackageStore, config: &str, section: &str, key: &str) 
         .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
 }
 
+fn quidditch_unlock(packages: &PackageStore) -> u8 {
+    packages
+        .config_values("HP", "HPMenu.FEQuidMatchPage", "unlocked")
+        .first()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or_default()
+        .min(2)
+}
+
+fn save_quidditch_unlock(packages: &PackageStore, level: u8) -> Result<()> {
+    packages.save_config(
+        "HP",
+        &[ConfigEntry {
+            section: "HPMenu.FEQuidMatchPage".to_owned(),
+            key: "unlocked".to_owned(),
+            values: vec![level.to_string()],
+        }],
+    )?;
+    Ok(())
+}
+
 fn changed_hud_counters(previous: PlayerUiState, current: PlayerUiState) -> [bool; 4] {
     let values = |player: PlayerUiState| {
         [
@@ -3123,6 +3141,47 @@ mod tests {
         assert!(is_startup_map(Path::new("game/Maps/STARTUP.unr")));
         assert!(!is_startup_map(Path::new("game/Maps/Entry.unr")));
         assert!(!is_startup_map(Path::new("game/Maps/Lev_Tut1.unr")));
+    }
+
+    #[test]
+    #[ignore = "requires local original game files"]
+    fn quidditch_unlock_migrates_from_the_misplaced_save_config() {
+        let game_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res");
+        let settings_dir = std::env::temp_dir().join(format!(
+            "openhp1-quidditch-unlock-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let save_dir = settings_dir.join("Saves");
+        fs::create_dir_all(&save_dir).unwrap();
+        let misplaced =
+            PackageStore::scan_game_root_with_settings_dir(&game_root, &save_dir).unwrap();
+        save_quidditch_unlock(&misplaced, 1).unwrap();
+
+        let mut ui = GameUi::load(
+            &egui::Context::default(),
+            &game_root,
+            &game_root.join("Maps/startup.unr"),
+            &settings_dir,
+            &save_dir,
+            OptionsState {
+                graphics: GraphicsSettings::default(),
+                music_volume: 1.0,
+                sound_volume: 1.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(ui.quidditch_unlocked, 1);
+        ui.unlock_quidditch(2).unwrap();
+        let settings =
+            PackageStore::scan_game_root_with_settings_dir(&game_root, &settings_dir).unwrap();
+        assert_eq!(quidditch_unlock(&settings), 2);
+        assert_eq!(quidditch_unlock(&misplaced), 1);
+        fs::remove_dir_all(settings_dir).unwrap();
     }
 
     #[test]
