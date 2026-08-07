@@ -160,8 +160,12 @@ Keep the focused notes in
   guards to individual callers.
 - Preserve unsupported data and diagnostics instead of hiding incomplete
   support.
-- Prefix Cargo commands with `env RUSTC_WRAPPER=` to avoid sccache privilege
-  issues.
+- Preserve the configured `sccache` wrapper for fast iteration. In sandboxed
+  agent environments, run Cargo compilation and test commands outside the
+  sandbox with the narrow reusable Cargo approval; never clear or override
+  `RUSTC_WRAPPER` to work around sandbox permissions.
+- Run test binaries with `cargo nextest run --release`; use `cargo test --doc`
+  only when doctests are relevant because nextest does not execute them.
 - Run targets with `--release` unless the task specifically requires a debug
   build.
 - Run focused formatting, compilation, and tests for touched crates. State
