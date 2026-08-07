@@ -978,6 +978,8 @@ mod tests {
         assert!(modern::BLOOM_SHADER.contains("const THRESHOLD = 1.0;"));
         assert!(modern::BLOOM_SHADER.contains("const KNEE = 0.1;"));
         assert!(shader.contains("textureLoad(ao_texture"));
+        assert!(shader.contains("scene.a >= 0.5"));
+        assert!(include_str!("shaders/scene.wgsl").contains("vec4(color.rgb, 0.0)"));
 
         let white = 1.25_f32;
         let mapped_white = white * (1.0 + white / (white * white)) / (1.0 + white);

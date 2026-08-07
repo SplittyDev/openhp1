@@ -77,7 +77,8 @@ post pass provides:
   mapping;
 - selectable SSAO or XeGTAO reconstructed from the scene depth buffer, with a
   full-resolution intermediate visibility texture and two edge-aware spatial
-  denoise passes;
+  denoise passes; fake-backdrop pixels are excluded so sky-box seams do not
+  receive ambient occlusion;
 - selectable FXAA or three-pass SMAA 1x after tone mapping, with SMAA enabled
   by default;
 - authored UE1 coronas drawn as HDR screen-space sprites;
