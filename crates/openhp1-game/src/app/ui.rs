@@ -1622,24 +1622,16 @@ impl GameUi {
                     self.graphics.modern_display.contrast = 0.5 + contrast * 1.5;
                     self.action = Some(Action::ApplyGraphics(self.graphics));
                 }
-                let ssao = self.graphics.renderer.ambient_occlusion == AmbientOcclusion::Ssao;
-                if option_checkbox(
+                option_label(ui, scale, 72.0, 278.0, "Ambient Occlusion", LABEL);
+                if graphics_button(
                     ui,
                     scale,
                     205.0,
-                    282.0,
-                    &self.textures.checkbox_off,
-                    &self.textures.checkbox_on,
-                    "Ambient Occlusion (SSAO)",
-                    LABEL,
-                    ssao,
+                    278.0,
+                    330.0,
+                    ambient_occlusion_label(self.graphics.renderer.ambient_occlusion),
                 ) {
-                    self.graphics.renderer.ambient_occlusion = if ssao {
-                        AmbientOcclusion::Off
-                    } else {
-                        AmbientOcclusion::Ssao
-                    };
-                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                    self.open_combo = (self.open_combo != Some(4)).then_some(4);
                 }
                 if option_checkbox(
                     ui,
@@ -1701,6 +1693,15 @@ impl GameUi {
                     },
                     170.0,
                 ),
+                4 => (
+                    vec!["Off".to_owned(), "SSAO".to_owned(), "XeGTAO".to_owned()],
+                    match self.graphics.renderer.ambient_occlusion {
+                        AmbientOcclusion::Off => 0,
+                        AmbientOcclusion::Ssao => 1,
+                        AmbientOcclusion::XeGtao => 2,
+                    },
+                    296.0,
+                ),
                 _ => unreachable!(),
             };
             if let Some(selection) =
@@ -1719,6 +1720,13 @@ impl GameUi {
                     3 => {
                         self.graphics.renderer.tone_mapper =
                             [ToneMapper::AgX, ToneMapper::Reinhard, ToneMapper::Aces][selection]
+                    }
+                    4 => {
+                        self.graphics.renderer.ambient_occlusion = [
+                            AmbientOcclusion::Off,
+                            AmbientOcclusion::Ssao,
+                            AmbientOcclusion::XeGtao,
+                        ][selection]
                     }
                     _ => unreachable!(),
                 }
@@ -2869,6 +2877,14 @@ fn tone_mapper_label(tone_mapper: ToneMapper) -> &'static str {
         ToneMapper::AgX => "AgX",
         ToneMapper::Reinhard => "Reinhard",
         ToneMapper::Aces => "ACES",
+    }
+}
+
+fn ambient_occlusion_label(ambient_occlusion: AmbientOcclusion) -> &'static str {
+    match ambient_occlusion {
+        AmbientOcclusion::Off => "Off",
+        AmbientOcclusion::Ssao => "SSAO",
+        AmbientOcclusion::XeGtao => "XeGTAO",
     }
 }
 

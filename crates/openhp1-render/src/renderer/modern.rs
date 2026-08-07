@@ -1,4 +1,4 @@
-use std::{mem::size_of, ops::Range};
+use std::{borrow::Cow, mem::size_of, ops::Range};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -10,19 +10,31 @@ use crate::{
 
 use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
 
+mod ao;
+
+use ao::AoRenderer;
+
+pub(super) const COMPOSITE_SHADER: &str = concat!(
+    include_str!("../shaders/modern/fullscreen.wgsl"),
+    include_str!("../shaders/modern/composite.wgsl"),
+    include_str!("../shaders/modern/tone_mapping.wgsl"),
+);
+pub(super) const BLOOM_SHADER: &str = concat!(
+    include_str!("../shaders/modern/fullscreen.wgsl"),
+    include_str!("../shaders/modern/bloom.wgsl"),
+);
+
 pub(super) const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ModernUniform {
-    inverse_viewport: [f32; 2],
     brightness_gamma: f32,
     bloom_strength: f32,
     contrast: f32,
     tone_mapper: u32,
-    ssao: u32,
-    _padding: u32,
-    projection: [f32; 4],
+    ambient_occlusion: u32,
+    _padding: [u32; 3],
 }
 
 #[repr(C)]
@@ -61,13 +73,15 @@ struct BloomTarget {
 
 pub(super) struct ModernRenderer {
     coronas: Option<CoronaRenderer>,
+    ao: AoRenderer,
     _scene_texture: wgpu::Texture,
     scene_view: wgpu::TextureView,
     bloom_a: BloomTarget,
     bloom_b: BloomTarget,
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
-    bind_group_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::BindGroupLayout,
+    bloom_layout: wgpu::BindGroupLayout,
     composite_bind_group: wgpu::BindGroup,
     extract_bind_group: wgpu::BindGroup,
     horizontal_bind_group: wgpu::BindGroup,
@@ -110,8 +124,9 @@ impl ModernRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("OpenHP1 modern post-process layout"),
+        let ao = AoRenderer::new(device, size, depth_view);
+        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("OpenHP1 modern composite layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -133,7 +148,7 @@ impl ModernRenderer {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -142,6 +157,16 @@ impl ModernRenderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -149,8 +174,13 @@ impl ModernRenderer {
                     },
                     count: None,
                 },
+            ],
+        });
+        let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("OpenHP1 bloom layout"),
+            entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -159,78 +189,69 @@ impl ModernRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
-        let composite_bind_group = bind_group(
+        let composite_bind_group = composite_bind_group(
             device,
-            &bind_group_layout,
+            &composite_layout,
             &scene_view,
             &bloom_a.view,
+            ao.view(),
             &sampler,
-            depth_view,
             &uniform,
         );
-        let extract_bind_group = bind_group(
-            device,
-            &bind_group_layout,
-            &scene_view,
-            &scene_view,
-            &sampler,
-            depth_view,
-            &uniform,
-        );
-        let horizontal_bind_group = bind_group(
-            device,
-            &bind_group_layout,
-            &bloom_a.view,
-            &scene_view,
-            &sampler,
-            depth_view,
-            &uniform,
-        );
-        let vertical_bind_group = bind_group(
-            device,
-            &bind_group_layout,
-            &bloom_b.view,
-            &scene_view,
-            &sampler,
-            depth_view,
-            &uniform,
-        );
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../modern.wgsl"));
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("OpenHP1 modern post-process pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
+        let extract_bind_group = bloom_bind_group(device, &bloom_layout, &scene_view, &sampler);
+        let horizontal_bind_group =
+            bloom_bind_group(device, &bloom_layout, &bloom_a.view, &sampler);
+        let vertical_bind_group = bloom_bind_group(device, &bloom_layout, &bloom_b.view, &sampler);
+        let composite_shader = shader(device, "OpenHP1 modern composite shader", COMPOSITE_SHADER);
+        let bloom_shader = shader(device, "OpenHP1 bloom shader", BLOOM_SHADER);
+        let composite_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("OpenHP1 modern composite pipeline layout"),
+                bind_group_layouts: &[Some(&composite_layout)],
+                immediate_size: 0,
+            });
+        let bloom_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("OpenHP1 bloom pipeline layout"),
+                bind_group_layouts: &[Some(&bloom_layout)],
+                immediate_size: 0,
+            });
         let composite_pipeline = pipeline(
             device,
-            &pipeline_layout,
-            &shader,
+            &composite_pipeline_layout,
+            &composite_shader,
             "OpenHP1 modern composite pipeline",
-            "fragment_post_process",
+            "fragment_composite",
             output_format,
         );
         let extract_pipeline = pipeline(
             device,
-            &pipeline_layout,
-            &shader,
+            &bloom_pipeline_layout,
+            &bloom_shader,
             "OpenHP1 bloom extract pipeline",
             "fragment_bloom_extract",
             HDR_FORMAT,
         );
         let horizontal_pipeline = pipeline(
             device,
-            &pipeline_layout,
-            &shader,
+            &bloom_pipeline_layout,
+            &bloom_shader,
             "OpenHP1 bloom horizontal pipeline",
             "fragment_bloom_horizontal",
             HDR_FORMAT,
         );
         let vertical_pipeline = pipeline(
             device,
-            &pipeline_layout,
-            &shader,
+            &bloom_pipeline_layout,
+            &bloom_shader,
             "OpenHP1 bloom vertical pipeline",
             "fragment_bloom_vertical",
             HDR_FORMAT,
@@ -240,13 +261,15 @@ impl ModernRenderer {
 
         Self {
             coronas,
+            ao,
             _scene_texture: scene_texture,
             scene_view,
             bloom_a,
             bloom_b,
             sampler,
             uniform,
-            bind_group_layout,
+            composite_layout,
+            bloom_layout,
             composite_bind_group,
             extract_bind_group,
             horizontal_bind_group,
@@ -275,42 +298,22 @@ impl ModernRenderer {
         let (scene_texture, scene_view) = scene_target(device, size);
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
         let bloom_b = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom B");
-        self.composite_bind_group = bind_group(
+        self.ao.resize(device, size, depth_view);
+        self.composite_bind_group = composite_bind_group(
             device,
-            &self.bind_group_layout,
+            &self.composite_layout,
             &scene_view,
             &bloom_a.view,
+            self.ao.view(),
             &self.sampler,
-            depth_view,
             &self.uniform,
         );
-        self.extract_bind_group = bind_group(
-            device,
-            &self.bind_group_layout,
-            &scene_view,
-            &scene_view,
-            &self.sampler,
-            depth_view,
-            &self.uniform,
-        );
-        self.horizontal_bind_group = bind_group(
-            device,
-            &self.bind_group_layout,
-            &bloom_a.view,
-            &scene_view,
-            &self.sampler,
-            depth_view,
-            &self.uniform,
-        );
-        self.vertical_bind_group = bind_group(
-            device,
-            &self.bind_group_layout,
-            &bloom_b.view,
-            &scene_view,
-            &self.sampler,
-            depth_view,
-            &self.uniform,
-        );
+        self.extract_bind_group =
+            bloom_bind_group(device, &self.bloom_layout, &scene_view, &self.sampler);
+        self.horizontal_bind_group =
+            bloom_bind_group(device, &self.bloom_layout, &bloom_a.view, &self.sampler);
+        self.vertical_bind_group =
+            bloom_bind_group(device, &self.bloom_layout, &bloom_b.view, &self.sampler);
         self._scene_texture = scene_texture;
         self.scene_view = scene_view;
         self.bloom_a = bloom_a;
@@ -363,21 +366,17 @@ impl ModernRenderer {
             &self.uniform,
             0,
             bytemuck::bytes_of(&ModernUniform {
-                inverse_viewport: [1.0 / self.size[0] as f32, 1.0 / self.size[1] as f32],
                 brightness_gamma: display_gamma(brightness),
                 bloom_strength: if self.bloom { 1.5 } else { 0.0 },
                 contrast,
                 tone_mapper: tone_mapper_id(self.tone_mapper),
-                ssao: u32::from(matches!(self.ambient_occlusion, AmbientOcclusion::Ssao)),
-                _padding: 0,
-                projection: [
-                    camera.near,
-                    camera.far,
-                    (camera.vertical_fov * 0.5).tan(),
-                    self.size[0] as f32 / self.size[1] as f32,
-                ],
+                ambient_occlusion: u32::from(self.ambient_occlusion != AmbientOcclusion::Off),
+                _padding: [0; 3],
             }),
         );
+        let ao_passes = self
+            .ao
+            .render(queue, encoder, camera, self.ambient_occlusion);
         if self.bloom {
             draw_fullscreen(
                 encoder,
@@ -408,7 +407,7 @@ impl ModernRenderer {
             &self.composite_bind_group,
             "OpenHP1 modern composite pass",
         );
-        if self.bloom { 4 } else { 1 }
+        ao_passes + if self.bloom { 4 } else { 1 }
     }
 }
 
@@ -450,7 +449,8 @@ impl CoronaRenderer {
             bind_group_layouts: &[Some(&camera_layout), Some(texture_layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../corona.wgsl"));
+        let shader =
+            device.create_shader_module(wgpu::include_wgsl!("../shaders/modern/corona.wgsl"));
         let pipeline = corona_pipeline(device, &pipeline_layout, &shader);
         let (instances, batches) = corona_instances(scene);
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -639,17 +639,17 @@ fn scene_target(device: &wgpu::Device, size: [u32; 2]) -> (wgpu::Texture, wgpu::
     (texture, view)
 }
 
-fn bind_group(
+fn composite_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     scene_view: &wgpu::TextureView,
     bloom_view: &wgpu::TextureView,
+    ao_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
-    depth_view: &wgpu::TextureView,
     uniform: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("OpenHP1 modern post-process bind group"),
+        label: Some("OpenHP1 modern composite bind group"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -662,17 +662,46 @@ fn bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(depth_view),
+                resource: wgpu::BindingResource::TextureView(bloom_view),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: uniform.as_entire_binding(),
+                resource: wgpu::BindingResource::TextureView(ao_view),
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: wgpu::BindingResource::TextureView(bloom_view),
+                resource: uniform.as_entire_binding(),
             },
         ],
+    })
+}
+
+fn bloom_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    texture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("OpenHP1 bloom bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(texture),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+fn shader(device: &wgpu::Device, label: &'static str, source: &'static str) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
     })
 }
 
@@ -762,11 +791,24 @@ mod tests {
 
     #[test]
     fn modern_uniform_matches_shader_layout() {
-        assert_eq!(size_of::<ModernUniform>(), 48);
-        assert_eq!(std::mem::offset_of!(ModernUniform, contrast), 16);
-        assert_eq!(std::mem::offset_of!(ModernUniform, projection), 32);
+        assert_eq!(size_of::<ModernUniform>(), 32);
+        assert_eq!(std::mem::offset_of!(ModernUniform, contrast), 8);
+        assert_eq!(std::mem::offset_of!(ModernUniform, ambient_occlusion), 16);
         assert_eq!(size_of::<CoronaCameraUniform>(), 80);
         assert_eq!(std::mem::offset_of!(CoronaCameraUniform, viewport), 64);
+    }
+
+    #[test]
+    fn modern_post_process_shaders_are_valid_wgsl() {
+        for shader in [COMPOSITE_SHADER, BLOOM_SHADER] {
+            let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
     }
 
     #[test]

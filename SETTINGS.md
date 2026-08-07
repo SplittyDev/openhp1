@@ -17,7 +17,7 @@ mainly useful for portable installations and troubleshooting.
 
 Close OpenHP1 before editing the file. Your changes are read the next time the
 game starts. Section names, key names, and named values are not case-sensitive,
-so `SSAO`, `ssao`, and `sSaO` all mean the same thing.
+so `XeGTAO`, `xegtao`, and `XeGtAo` all mean the same thing.
 
 ## Default file
 
@@ -85,11 +85,12 @@ These settings apply when `Renderer=Modern`.
 | `ToneMapper` | `Reinhard` | `AgX`, `Reinhard`, `ACES` | Chooses how the Modern renderer turns its brighter image into colours your display can show. |
 | `Brightness` | `0.33` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
 | `Contrast` | `1.24` | `0.5` to `2.0` | Adjusts the difference between dark and bright parts of the image. Values outside this range are moved to the nearest limit. |
-| `AmbientOcclusion` | `SSAO` | `Off`, `SSAO` | Turns contact shadows in corners and around objects off or on. |
+| `AmbientOcclusion` | `SSAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
 | `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |
 
 `Bloom` also accepts `1`, `on`, `0`, and `off`. `ToneMapper=Classic` is accepted
-as an older name for `Reinhard`.
+as an older name for `Reinhard`, and `AmbientOcclusion=GTAO` is accepted as a
+shorter name for `XeGTAO`.
 
 ## Recovering from a bad setting
 

@@ -111,7 +111,7 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
         } else {
             bail!(
                 "usage: openhp1-game [--level <map path>] [--renderer=classic|modern] \
-                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao]"
+                 [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao]"
             );
         }
     }
@@ -132,7 +132,7 @@ mod tests {
         let options = options_from([
             OsString::from("--renderer=modern"),
             OsString::from("--tone-mapper=aces"),
-            OsString::from("--ambient-occlusion=off"),
+            OsString::from("--ambient-occlusion=xegtao"),
             OsString::from("--level"),
             OsString::from("/game/Maps/Lev2_HogFront.unr"),
         ])
@@ -141,6 +141,6 @@ mod tests {
         let renderer = options.renderer.unwrap();
         assert_eq!(renderer.mode, RendererMode::Modern);
         assert_eq!(renderer.tone_mapper, ToneMapper::Aces);
-        assert_eq!(renderer.ambient_occlusion, AmbientOcclusion::Off);
+        assert_eq!(renderer.ambient_occlusion, AmbientOcclusion::XeGtao);
     }
 }

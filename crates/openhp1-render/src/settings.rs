@@ -53,6 +53,7 @@ pub enum AmbientOcclusion {
     Off,
     #[default]
     Ssao,
+    XeGtao,
 }
 
 impl FromStr for AmbientOcclusion {
@@ -62,10 +63,11 @@ impl FromStr for AmbientOcclusion {
         match value.to_ascii_lowercase().as_str() {
             "off" => Ok(Self::Off),
             "ssao" => Ok(Self::Ssao),
+            "xegtao" | "gtao" => Ok(Self::XeGtao),
             _ => Err(RendererSettingError::new(
                 "ambient occlusion",
                 value,
-                "off, ssao",
+                "off, ssao, xegtao",
             )),
         }
     }
@@ -165,6 +167,8 @@ mod tests {
         assert_eq!("aces".parse(), Ok(ToneMapper::Aces));
         assert_eq!("off".parse(), Ok(AmbientOcclusion::Off));
         assert_eq!("sSaO".parse(), Ok(AmbientOcclusion::Ssao));
+        assert_eq!("XeGTAO".parse(), Ok(AmbientOcclusion::XeGtao));
+        assert_eq!("gtao".parse(), Ok(AmbientOcclusion::XeGtao));
         assert!("filmic".parse::<ToneMapper>().is_err());
     }
 

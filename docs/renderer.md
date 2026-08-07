@@ -75,7 +75,9 @@ post pass provides:
 - selectable AgX, default luminance-preserving Reinhard Equation 4 with a
   `1.25` white point that retains a short UE1 overbright shoulder, and ACES tone
   mapping;
-- view-space SSAO reconstructed from the scene depth buffer;
+- selectable SSAO or XeGTAO reconstructed from the scene depth buffer, with a
+  full-resolution intermediate visibility texture and two edge-aware spatial
+  denoise passes;
 - authored UE1 coronas drawn as HDR screen-space sprites;
 - quarter-resolution HDR bright extraction with separable bloom blur that
   excludes ordinary sub-white texture detail; and
@@ -86,10 +88,23 @@ Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
 display-space 2x modulation does not change. The modern HDR target preserves
 values above one produced by that modulation for tone mapping and bloom.
 
-Modern-only HDR, sampleable-depth, post-processing, bloom, SSAO, and corona
+Modern-only HDR, sampleable-depth, post-processing, bloom, AO, and corona
 resources are created only for `RendererMode::Modern`. Coronas use their own
 shader and camera uniform; the classic scene shader, uniform layout, target
 format, depth usage, draw order, and display-gamma path remain unchanged.
+
+SSAO uses a stable 16-sample screen-space kernel instead of rotating that
+kernel independently at every pixel. XeGTAO uses a five-level positive
+view-depth pyramid, depth-derived normals, three horizon slices with three
+steps per side, fixed spatial noise, and the same denoiser. Temporal
+reprojection is intentionally not part of either path. Both methods remain
+screen-space effects: an occluder that has left the depth buffer cannot keep
+contributing AO even when the receiving surface remains visible.
+
+Shader sources live under `src/shaders`. The shared scene shader stays outside
+the `modern` directory because Classic and Modern use the same scene/material
+path. Focused Modern WGSL fragments are concatenated into complete shader
+modules in Rust because WGSL has no source-include directive.
 
 The viewer exposes these choices in its sidebar, keeps independent Classic and
 Modern brightness values, and provides a Modern-only contrast control. The game
@@ -108,8 +123,8 @@ cargo run --release -p openhp1-viewer -- \
 ```
 
 `--tone-mapper` accepts `agx`, `reinhard` (or `classic`), and `aces`.
-`--ambient-occlusion` accepts `ssao` and `off`. These settings have no effect
-on the classic renderer.
+`--ambient-occlusion` accepts `off`, `ssao`, and `xegtao` (or `gtao`). These
+settings have no effect on the classic renderer.
 
 The in-game Graphics Settings page edits the same `RendererSettings` used by
 the viewer and command line. Its Classic-only 16-bit option keeps the actual

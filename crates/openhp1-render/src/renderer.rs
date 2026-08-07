@@ -403,7 +403,7 @@ impl Renderer {
                 )
             })
             .collect();
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("OpenHP1 BSP pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout), Some(&texture_layout)],
@@ -953,9 +953,8 @@ mod tests {
     #[test]
     fn shaders_are_valid_wgsl() {
         for shader in [
-            include_str!("shader.wgsl"),
-            include_str!("modern.wgsl"),
-            include_str!("corona.wgsl"),
+            include_str!("shaders/scene.wgsl"),
+            include_str!("shaders/modern/corona.wgsl"),
         ] {
             let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
             wgpu::naga::valid::Validator::new(
@@ -969,16 +968,16 @@ mod tests {
 
     #[test]
     fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
-        let shader = include_str!("modern.wgsl");
+        let shader = modern::COMPOSITE_SHADER;
         assert!(shader.contains("const WHITE = 1.25;"));
         assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
         assert!(shader.contains("return color * (mapped_luminance / luminance);"));
         assert!(shader.contains("let encoded = srgb_encode(clamp(mapped"));
         assert!(shader.contains("let contrasted = display_contrast(encoded);"));
-        assert!(shader.contains("const THRESHOLD = 1.0;"));
-        assert!(shader.contains("const KNEE = 0.1;"));
-        assert!(shader.contains("rotation * SSAO_KERNEL[index]"));
+        assert!(modern::BLOOM_SHADER.contains("const THRESHOLD = 1.0;"));
+        assert!(modern::BLOOM_SHADER.contains("const KNEE = 0.1;"));
+        assert!(shader.contains("textureLoad(ao_texture"));
 
         let white = 1.25_f32;
         let mapped_white = white * (1.0 + white / (white * white)) / (1.0 + white);

@@ -228,6 +228,7 @@ fn ambient_occlusion_name(ambient_occlusion: AmbientOcclusion) -> &'static str {
     match ambient_occlusion {
         AmbientOcclusion::Off => "Off",
         AmbientOcclusion::Ssao => "SSAO",
+        AmbientOcclusion::XeGtao => "XeGTAO",
     }
 }
 
@@ -325,6 +326,11 @@ mod tests {
         assert_eq!(color_depth("TRUECOLOR"), Some(ColorDepth::TrueColor));
         assert_eq!(color_depth("rGb565"), Some(ColorDepth::Rgb565));
         assert_eq!(color_depth("unknown"), None);
+    }
+
+    #[test]
+    fn writes_the_canonical_xegtao_name() {
+        assert_eq!(ambient_occlusion_name(AmbientOcclusion::XeGtao), "XeGTAO");
     }
 
     #[test]

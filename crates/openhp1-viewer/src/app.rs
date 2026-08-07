@@ -234,19 +234,34 @@ impl ViewerApp {
                         ui.add(egui::Slider::new(&mut self.modern_contrast, 0.5..=2.0));
                         ui.end_row();
 
+                        ui.label("Ambient occlusion");
+                        egui::ComboBox::from_id_salt("ambient occlusion selector")
+                            .selected_text(match self.renderer_settings.ambient_occlusion {
+                                AmbientOcclusion::Off => "Off",
+                                AmbientOcclusion::Ssao => "SSAO",
+                                AmbientOcclusion::XeGtao => "XeGTAO",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.ambient_occlusion,
+                                    AmbientOcclusion::Off,
+                                    "Off",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.ambient_occlusion,
+                                    AmbientOcclusion::Ssao,
+                                    "SSAO",
+                                );
+                                ui.selectable_value(
+                                    &mut self.renderer_settings.ambient_occlusion,
+                                    AmbientOcclusion::XeGtao,
+                                    "XeGTAO",
+                                );
+                            });
+                        ui.end_row();
+
                         ui.label("Effects");
-                        ui.horizontal(|ui| {
-                            let mut ssao =
-                                self.renderer_settings.ambient_occlusion == AmbientOcclusion::Ssao;
-                            if ui.checkbox(&mut ssao, "SSAO").changed() {
-                                self.renderer_settings.ambient_occlusion = if ssao {
-                                    AmbientOcclusion::Ssao
-                                } else {
-                                    AmbientOcclusion::Off
-                                };
-                            }
-                            ui.checkbox(&mut self.renderer_settings.bloom, "Bloom");
-                        });
+                        ui.checkbox(&mut self.renderer_settings.bloom, "Bloom");
                         ui.end_row();
                     }
                 });
