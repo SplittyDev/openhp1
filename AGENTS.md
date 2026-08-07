@@ -15,6 +15,9 @@ committed copies.
   Record important discoveries about formats, runtime behavior, coordinates,
   compatibility, or validation there instead of leaving them only in chat,
   commit messages, or temporary notes.
+- Keep the top-level [`SETTINGS.md`](SETTINGS.md) user reference aligned with
+  `OpenHP1.ini`. Update it in the same logical change whenever a section, key,
+  default, accepted value, validation rule, or settings-file location changes.
 - Keep progress reports, completed milestones, corpus counts, and dependency
   version snapshots out of this file.
 
