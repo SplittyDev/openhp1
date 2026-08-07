@@ -166,6 +166,8 @@ Keep the focused notes in
   `RUSTC_WRAPPER` to work around sandbox permissions.
 - Run test binaries with `cargo nextest run`; use `cargo test --doc`
   only when doctests are relevant because nextest does not execute them.
+- Use `cargo check` for compilation verification. Run `cargo build` only when
+  the task actually needs a runnable binary or another build artifact.
 - Do not pass `--release` to agent-run tests or verification builds. The user
   owns optimized release builds for live testing unless they explicitly ask
   the agent to run one.
