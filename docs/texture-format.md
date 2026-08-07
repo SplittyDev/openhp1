@@ -54,3 +54,18 @@ The lazy-array end equals the absolute stream position immediately after the
 palette indices. OpenHP1 validates this instead of treating it as padding.
 For the uncompressed P8 textures decoded so far, the index count equals
 `width * height`.
+
+## WetTexture source scaling
+
+`WetTexture` renders its water refraction over the paletted image named by
+`SourceTexture`. The shipped `Fire.dll` creates a target-sized
+`LocalSourceBitmap` when the wet texture is at least as large as its source in
+both dimensions. Each source texel is expanded by the power-of-two size ratio;
+for example, `HP_Water.Water.water2` expands its 128x128 `TBwater1` source to
+256x256. If either source dimension is larger than the wet texture, the engine
+discards the source instead. An accepted source also supplies the wet texture's
+palette.
+
+OpenHP1 performs the same nearest-neighbor expansion on palette indices before
+starting the water simulation. Resizing RGBA output instead would bypass the
+palette-index refraction performed by the original engine.

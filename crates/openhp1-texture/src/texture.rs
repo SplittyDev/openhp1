@@ -239,8 +239,10 @@ impl WetTexture {
         &self,
         width: u32,
         height: u32,
+        source_width: u32,
+        source_height: u32,
         source_indices: &[u8],
-    ) -> Result<WaterAnimation> {
+    ) -> Result<Option<WaterAnimation>> {
         for drop in &self.drops {
             if !matches!(drop.kind, 0 | 1 | 2 | 3 | 6 | 7 | 12 | 16) {
                 return Err(Error::UnsupportedWaterDropType(drop.kind));
@@ -249,19 +251,42 @@ impl WetTexture {
         if width == 0 || height == 0 {
             return Err(Error::InvalidWaterDimensions { width, height });
         }
-        let count = pixel_count(width, height)?;
-        if source_indices.len() != count {
+        if source_width == 0 || source_height == 0 {
+            return Err(Error::InvalidWaterDimensions {
+                width: source_width,
+                height: source_height,
+            });
+        }
+        let source_count = pixel_count(source_width, source_height)?;
+        if source_indices.len() != source_count {
             return Err(Error::InvalidWaterSourceLength {
-                width,
-                height,
+                width: source_width,
+                height: source_height,
                 actual: source_indices.len(),
             });
         }
-        Ok(WaterAnimation {
+
+        // Fire.dll builds a target-sized LocalSourceBitmap only when both
+        // WetTexture dimensions are at least as large as SourceTexture.
+        if source_width > width || source_height > height {
+            return Ok(None);
+        }
+
+        let count = pixel_count(width, height)?;
+        let mut source = Vec::with_capacity(count);
+        for y in 0..height {
+            let source_y = u64::from(y) * u64::from(source_height) / u64::from(height);
+            for x in 0..width {
+                let source_x = u64::from(x) * u64::from(source_width) / u64::from(width);
+                let source_index = source_x + source_y * u64::from(source_width);
+                source.push(source_indices[source_index as usize]);
+            }
+        }
+        Ok(Some(WaterAnimation {
             width: width as usize,
             height: height as usize,
-            source: source_indices.to_vec(),
-            indices: source_indices.to_vec(),
+            indices: source.clone(),
+            source,
             fields: [
                 vec![WaterCell::default(); count],
                 vec![WaterCell::default(); count],
@@ -270,7 +295,7 @@ impl WetTexture {
             accumulator: 0.0,
             random: 0x6d2b_79f5,
             drops: self.drops.clone(),
-        })
+        }))
     }
 }
 
@@ -769,11 +794,26 @@ mod tests {
         let source = (0..2048)
             .map(|index| (index % 256) as u8)
             .collect::<Vec<_>>();
-        let mut animation = wet.animate(256, 8, &source).unwrap();
+        let mut animation = wet.animate(256, 8, 256, 8, &source).unwrap().unwrap();
 
         assert!(!animation.tick(1.0 / 60.0));
         assert!(animation.tick(1.0 / 60.0));
         assert_ne!(animation.indices, source);
         assert_eq!(animation.indices.len(), source.len());
+    }
+
+    #[test]
+    fn wet_texture_expands_smaller_source_like_fire_dll() {
+        let wet = super::WetTexture {
+            source_texture: ObjectReference::None,
+            drops: vec![],
+        };
+        let animation = wet.animate(4, 4, 2, 2, &[1, 2, 3, 4]).unwrap().unwrap();
+
+        assert_eq!(
+            animation.indices,
+            [1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
+        );
+        assert!(wet.animate(2, 2, 4, 4, &[0; 16]).unwrap().is_none());
     }
 }

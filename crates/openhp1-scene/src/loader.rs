@@ -3762,25 +3762,30 @@ fn decode_texture(
     let palette = packages
         .resolve(&resolved.package, texture.palette)?
         .context("texture has no palette reference")?;
-    let palette = Palette::decode(&palette.package, palette.export_index)?;
+    let mut palette = Palette::decode(&palette.package, palette.export_index)?;
     let water = if let Some(wet) = &texture.wet {
-        let source = packages
+        let source_object = packages
             .resolve(&resolved.package, wet.source_texture)?
             .context("wet texture has no source texture")?;
-        let source = Texture::decode(&source.package, source.export_index)?;
-        let source = source
+        let source_texture = Texture::decode(&source_object.package, source_object.export_index)?;
+        let source = source_texture
             .mips
             .first()
             .context("wet texture source has no mip levels")?;
-        ensure!(
-            source.width == mip.width && source.height == mip.height,
-            "wet texture source is {}x{}, expected {}x{}",
-            source.width,
-            source.height,
+        let water = wet.animate(
             mip.width,
             mip.height,
-        );
-        Some(wet.animate(mip.width, mip.height, &source.indices)?)
+            source.width,
+            source.height,
+            &source.indices,
+        )?;
+        if water.is_some() {
+            let source_palette = packages
+                .resolve(&source_object.package, source_texture.palette)?
+                .context("wet texture source has no palette reference")?;
+            palette = Palette::decode(&source_palette.package, source_palette.export_index)?;
+        }
+        water
     } else {
         None
     };
