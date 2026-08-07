@@ -511,6 +511,9 @@ impl ScriptRuntime {
                 .cloned()
                 .ok_or(DispatchError::UnregisteredActor { actor })?;
             let class = self.resolved_object(&class)?;
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
             self.refresh_tick_actor(actor, &class)?;
             let instance = self
                 .instances

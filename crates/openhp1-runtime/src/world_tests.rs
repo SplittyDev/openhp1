@@ -894,6 +894,44 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
 }
 
 #[test]
+fn destroyed_saved_actor_does_not_resume_tick() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-destroyed-save-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    fs::write(system.join("Test.u"), synthetic_config_package()).unwrap();
+
+    let mut source = save_snapshot_runtime(&root, 99);
+    source.destroyed.insert(7);
+    source.state_frames.remove(&7);
+    source.timers.remove(&7);
+    set_event_disabled(
+        &mut source.disabled_events,
+        7,
+        Some("SavedState"),
+        "Tick",
+        false,
+    );
+    let snapshot = source.save_game("Maps/Test.unr").unwrap();
+
+    let mut restored = save_snapshot_runtime(&root, -1);
+    let package = restored.packages.load("Test").unwrap();
+    restored.function_lookups.insert(
+        FunctionLookup::new(object_id(&package, 0), Some("SavedState"), "Tick", 0),
+        Some(object_id(&package, 0)),
+    );
+    restored.restore_game("Maps/Test.unr", &snapshot).unwrap();
+
+    assert!(restored.destroyed.contains(&7));
+    assert!(!restored.tick_functions.contains_key(&7));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_travel_state_copies_only_compiled_travel_properties() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-travel-{}-{}",

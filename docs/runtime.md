@@ -493,6 +493,8 @@ instance fields through the ordinary scene-property path, and resumes saved
 animations at their saved phase. Platform mixer voices are intentionally
 transient: they are omitted from a save and an empty audio host is used after
 load.
+Destroyed actors retain their saved identity for references but are excluded
+from rebuilt tick, collision, and attachment caches.
 Actors created by script `Spawn` are transient too: they and their animation
 state are omitted. On load, the host first reconstructs the normal game and
 player apparatus (including the wand, camera target, animation channel, and
@@ -677,3 +679,5 @@ script execution before write, rebuilds runtime caches after loading the
 authored map, projects restored fields through the normal scene-property path,
 and resumes animation at its saved phase. Platform mixer voices are transient:
 they are omitted and the new host starts empty after load.
+Destroyed actors retain their saved identity for references but are excluded
+from rebuilt tick, collision, and attachment caches.
