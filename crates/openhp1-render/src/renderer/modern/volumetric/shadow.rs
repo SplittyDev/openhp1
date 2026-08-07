@@ -477,7 +477,11 @@ fn shadow_caster_indices(scene: &RenderScene) -> Vec<u32> {
 fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
     let radius = camera.far.clamp(500.0, 3_000.0);
     let direction = SUN_DIRECTION.normalize();
-    let center = camera.position + camera.forward() * radius * 0.35;
+    let center = snap_shadow_center(
+        camera.position + camera.forward() * radius * 0.35,
+        direction,
+        radius,
+    );
     let eye = center - direction * radius * 2.0;
     let view = Mat4::look_at_rh(eye, center, Vec3::Z);
     let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 1.0, radius * 4.0);
@@ -488,6 +492,15 @@ fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
         direction_density: [direction.x, direction.y, direction.z, 0.00008],
         distance_intensity_phase: [radius, 0.35, 0.45, 0.0],
     }
+}
+
+fn snap_shadow_center(center: Vec3, direction: Vec3, radius: f32) -> Vec3 {
+    let texel = radius * 2.0 / SHADOW_SIZE as f32;
+    let light_rotation = Mat4::look_to_rh(Vec3::ZERO, direction, Vec3::Z);
+    let mut light_center = light_rotation.transform_point3(center);
+    light_center.x = (light_center.x / texel).round() * texel;
+    light_center.y = (light_center.y / texel).round() * texel;
+    light_rotation.inverse().transform_point3(light_center)
 }
 
 #[cfg(test)]
@@ -552,5 +565,22 @@ mod tests {
         .validate(&module)
         .unwrap();
         assert_eq!(size_of::<ShadowUniform>(), 176);
+    }
+
+    #[test]
+    fn sun_shadow_center_is_stable_within_one_texel() {
+        let direction = SUN_DIRECTION.normalize();
+        let radius = 1_000.0;
+        let first = snap_shadow_center(Vec3::new(20.0, 30.0, 40.0), direction, radius);
+        let second = snap_shadow_center(Vec3::new(20.1, 30.1, 40.0), direction, radius);
+        let rotation = Mat4::look_to_rh(Vec3::ZERO, direction, Vec3::Z);
+        let first_light = rotation.transform_point3(first);
+        let second_light = rotation.transform_point3(second);
+        assert!(
+            (first_light.truncate() - second_light.truncate())
+                .abs()
+                .max_element()
+                < 0.0001
+        );
     }
 }

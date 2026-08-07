@@ -135,6 +135,16 @@ This budget keeps candles and chandeliers responsive without turning invisible
 level-lighting helpers into disembodied fog or rendering a shadow cube for every
 light in a room.
 
+The directional shadow projection is snapped to shadow-map texels so subtle
+shafts do not crawl when the camera moves. Both directional and local
+raymarchers reject paths that are uniformly lit or uniformly shadowed; only a
+meaningful mixture of the two contributes, preventing open air and whole rooms
+from becoming a source-colored fog layer. Local corpus inspection confirms the
+authored sky boundary: exterior/castle maps such as `Lev2_HogFront`, `Lev_Tut2`,
+and `Lev_Tut3` expose fake-backdrop sky surfaces, while `Lev3_Dungeon`,
+`Lev3_DungeonB`, `Lev3_PreDungeon`, and `Snapes_Office` expose none. The latter
+therefore never receive synthesized window shafts.
+
 SSAO uses a stable 16-sample screen-space kernel instead of rotating that
 kernel independently at every pixel. XeGTAO uses a five-level positive
 view-depth pyramid, depth-derived normals, three horizon slices with three

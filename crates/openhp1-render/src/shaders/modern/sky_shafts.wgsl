@@ -82,11 +82,17 @@ fn fragment_sky_shafts(input: FullscreenVertex) -> @location(0) vec4<f32> {
         settings.distance_intensity_phase.z,
     );
     var scattering = 0.0;
+    var visible_steps = 0.0;
     for (var step = 0u; step < STEP_COUNT; step++) {
         let distance = (f32(step) + jitter) * step_length;
         let sample_position = settings.camera_position.xyz + ray_direction * distance;
-        scattering += sun_visibility(sample_position) * step_length;
+        let visibility = sun_visibility(sample_position);
+        visible_steps += visibility;
+        scattering += visibility * step_length;
     }
+    let lit_fraction = visible_steps / f32(STEP_COUNT);
+    let occlusion_contrast = 4.0 * lit_fraction * (1.0 - lit_fraction);
+    scattering *= occlusion_contrast * occlusion_contrast;
     scattering *= settings.direction_density.w * settings.distance_intensity_phase.y * phase;
     let sunlight = vec3(1.0, 0.82, 0.62);
     return vec4(sunlight * scattering, 0.0);
