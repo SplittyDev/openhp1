@@ -8,13 +8,18 @@ use wgpu::util::DeviceExt;
 use crate::{Camera, unreal_to_render};
 
 use super::super::super::DEPTH_FORMAT;
+use super::super::HDR_FORMAT;
 
 const SHADOW_SIZE: u32 = 1024;
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
+const SHAFT_SHADER: &str = include_str!("../../../shaders/modern/sky_shafts.wgsl");
 const SHADER: &str = r#"
 struct ShadowSettings {
     light_view_projection: mat4x4<f32>,
-    direction: vec4<f32>,
+    inverse_view_projection: mat4x4<f32>,
+    camera_position: vec4<f32>,
+    direction_density: vec4<f32>,
+    distance_intensity_phase: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -30,7 +35,10 @@ fn vertex_shadow(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f3
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct ShadowUniform {
     pub(super) light_view_projection: [[f32; 4]; 4],
-    pub(super) direction: [f32; 4],
+    pub(super) inverse_view_projection: [[f32; 4]; 4],
+    pub(super) camera_position: [f32; 4],
+    pub(super) direction_density: [f32; 4],
+    pub(super) distance_intensity_phase: [f32; 4],
 }
 
 #[repr(C)]
@@ -45,6 +53,10 @@ pub(super) struct DirectionalShadow {
     _texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
+    shaft_layout: wgpu::BindGroupLayout,
+    shaft_bind_group: wgpu::BindGroup,
+    shaft_pipeline: wgpu::RenderPipeline,
+    shadow_sampler: wgpu::Sampler,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     vertex_count: usize,
@@ -53,7 +65,11 @@ pub(super) struct DirectionalShadow {
 }
 
 impl DirectionalShadow {
-    pub(super) fn new(device: &wgpu::Device, scene: &RenderScene) -> Self {
+    pub(super) fn new(
+        device: &wgpu::Device,
+        scene_depth: &wgpu::TextureView,
+        scene: &RenderScene,
+    ) -> Self {
         let enabled = sky_exposed(scene);
         let vertices = shadow_vertices(scene);
         let indices = shadow_caster_indices(scene);
@@ -119,6 +135,15 @@ impl DirectionalShadow {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("OpenHP1 volumetric sun shadow sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("OpenHP1 volumetric sun shadow shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -162,18 +187,88 @@ impl DirectionalShadow {
             multiview_mask: None,
             cache: None,
         });
+        let shaft_layout = shaft_layout(device);
+        let shaft_bind_group = shaft_bind_group(
+            device,
+            &shaft_layout,
+            scene_depth,
+            &view,
+            &shadow_sampler,
+            &uniform,
+        );
+        let shaft_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("OpenHP1 volumetric sky shaft shader"),
+            source: wgpu::ShaderSource::Wgsl(SHAFT_SHADER.into()),
+        });
+        let shaft_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("OpenHP1 volumetric sky shaft pipeline layout"),
+                bind_group_layouts: &[Some(&shaft_layout)],
+                immediate_size: 0,
+            });
+        let shaft_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("OpenHP1 volumetric sky shaft pipeline"),
+            layout: Some(&shaft_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shaft_shader,
+                entry_point: Some("vertex_fullscreen"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shaft_shader,
+                entry_point: Some("fragment_sky_shafts"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             uniform,
             view,
             _texture: texture,
             bind_group,
             pipeline,
+            shaft_layout,
+            shaft_bind_group,
+            shaft_pipeline,
+            shadow_sampler,
             vertex_buffer,
             index_buffer,
             vertex_count: vertices.len(),
             index_count: indices.len() as u32,
             enabled,
         }
+    }
+
+    pub(super) fn resize(&mut self, device: &wgpu::Device, scene_depth: &wgpu::TextureView) {
+        self.shaft_bind_group = shaft_bind_group(
+            device,
+            &self.shaft_layout,
+            scene_depth,
+            &self.view,
+            &self.shadow_sampler,
+            &self.uniform,
+        );
     }
 
     pub(super) fn update(&self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
@@ -187,14 +282,14 @@ impl DirectionalShadow {
         true
     }
 
-    pub(super) fn prepare(&self, queue: &wgpu::Queue, camera: &Camera) {
+    pub(super) fn prepare(&self, queue: &wgpu::Queue, camera: &Camera, aspect: f32) {
         if !self.enabled {
             return;
         }
         queue.write_buffer(
             &self.uniform,
             0,
-            bytemuck::bytes_of(&shadow_uniform(camera)),
+            bytemuck::bytes_of(&shadow_uniform(camera, aspect)),
         );
     }
 
@@ -224,6 +319,112 @@ impl DirectionalShadow {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
         1
     }
+
+    pub(super) fn render_shafts(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) -> usize {
+        if !self.enabled || self.index_count == 0 {
+            return 0;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("OpenHP1 volumetric sky shaft pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.shaft_pipeline);
+        pass.set_bind_group(0, &self.shaft_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        1
+    }
+}
+
+fn shaft_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("OpenHP1 volumetric sky shaft layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+fn shaft_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    scene_depth: &wgpu::TextureView,
+    shadow: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniform: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("OpenHP1 volumetric sky shaft bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(scene_depth),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(shadow),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: uniform.as_entire_binding(),
+            },
+        ],
+    })
 }
 
 fn sky_exposed(scene: &RenderScene) -> bool {
@@ -261,7 +462,7 @@ fn shadow_caster_indices(scene: &RenderScene) -> Vec<u32> {
         .collect()
 }
 
-fn shadow_uniform(camera: &Camera) -> ShadowUniform {
+fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
     let radius = camera.far.clamp(500.0, 3_000.0);
     let direction = SUN_DIRECTION.normalize();
     let center = camera.position + camera.forward() * radius * 0.35;
@@ -270,7 +471,10 @@ fn shadow_uniform(camera: &Camera) -> ShadowUniform {
     let projection = Mat4::orthographic_rh(-radius, radius, -radius, radius, 1.0, radius * 4.0);
     ShadowUniform {
         light_view_projection: (projection * view).to_cols_array_2d(),
-        direction: direction.extend(0.0).to_array(),
+        inverse_view_projection: camera.view_projection(aspect).inverse().to_cols_array_2d(),
+        camera_position: camera.position.extend(1.0).to_array(),
+        direction_density: [direction.x, direction.y, direction.z, 0.00008],
+        distance_intensity_phase: [radius, 0.35, 0.45, 0.0],
     }
 }
 
@@ -324,5 +528,17 @@ mod tests {
         );
         assert!(shadow_caster_indices(&scene(SurfaceMode::Backdrop, true)).is_empty());
         assert!(shadow_caster_indices(&scene(SurfaceMode::Translucent, true)).is_empty());
+    }
+
+    #[test]
+    fn sky_shaft_shader_and_uniform_layout_are_valid() {
+        let module = wgpu::naga::front::wgsl::parse_str(SHAFT_SHADER).unwrap();
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        assert_eq!(size_of::<ShadowUniform>(), 176);
     }
 }

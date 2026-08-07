@@ -91,6 +91,8 @@ modern post pass provides:
   lighting is disabled;
 - depth-clipped HDR volumetric scattering for authored UE1 fog volumes,
   visible `bCorona` sources, and textured light sprites such as candle flames;
+- shadowed world-space sunlight shafts on maps that contain both a
+  `SkyZoneInfo` and fake-backdrop portal surfaces;
 - quarter-resolution HDR bright extraction with separable bloom blur that
   excludes ordinary sub-white texture detail; and
 - sRGB output encoding followed by hue-preserving display-space contrast and
@@ -117,6 +119,14 @@ Scene depth terminates the ray, and the result enters the HDR scene before bloom
 and tone mapping. This avoids fixed-step ray-march banding and extra draw calls
 per sampling step. The classic scene shader, uniform layout, target format,
 depth usage, draw order, and display-gamma path remain unchanged.
+
+Sky shafts use a renderer-owned directional shadow map over opaque scene
+geometry and a jittered world-space march through a deliberately thin medium.
+They are not enabled merely because a level is indoors: both the decoded sky
+zone and at least one actual fake-backdrop opening must exist. Opaque walls then
+shadow sealed areas within a sky-enabled map. The accumulation is additive HDR
+scattering with no scene-wide extinction, avoiding a uniform fog veil while
+retaining values for bloom and tone mapping.
 
 SSAO uses a stable 16-sample screen-space kernel instead of rotating that
 kernel independently at every pixel. XeGTAO uses a five-level positive
@@ -167,8 +177,9 @@ texture and blend operation ran through a historical 16-bit framebuffer.
 Modern BSP lighting follows runtime light brightness, position, and spotlight
 rotation changes through `RenderScene`; the volumetric instances follow those
 same runtime changes. Mesh actors retain the existing CPU vertex-lighting path.
-The volumetric pass is camera-depth-aware but does not have per-light shadow
-maps, so it does not produce shadowed shafts through off-screen or hidden
+The volumetric pass is camera-depth-aware and sunlight shafts use an opaque BSP
+shadow map. Local point lights do not yet have per-light shadow maps, so their
+compact source volumes cannot form shadowed shafts through off-screen or hidden
 occluders. Dynamic shadow maps for lights that move away from their authored
 masks, diffuse GI, DDGI volumes, specular materials, and reflection probes are
 not yet implemented. Future GI and reflection captures should remain

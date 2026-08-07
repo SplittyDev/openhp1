@@ -52,7 +52,7 @@ impl VolumetricRenderer {
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
-        let shadow = DirectionalShadow::new(device, scene);
+        let shadow = DirectionalShadow::new(device, depth_view, scene);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -110,6 +110,7 @@ impl VolumetricRenderer {
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
         self.bind_group = bind_group(device, &self.layout, depth_view, &self.uniform);
+        self.shadow.resize(device, depth_view);
     }
 
     pub(super) fn update(&self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
@@ -143,7 +144,7 @@ impl VolumetricRenderer {
                 projection: [tan_half_fov * aspect, tan_half_fov, camera.near, 0.0],
             }),
         );
-        self.shadow.prepare(queue, camera);
+        self.shadow.prepare(queue, camera, aspect);
     }
 
     pub(super) fn render(
@@ -152,8 +153,9 @@ impl VolumetricRenderer {
         target: &wgpu::TextureView,
     ) -> usize {
         let shadow_passes = self.shadow.render(encoder);
+        let shaft_passes = self.shadow.render_shafts(encoder, target);
         if self.instance_count == 0 {
-            return shadow_passes;
+            return shadow_passes + shaft_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 volumetric lighting pass"),
@@ -175,7 +177,7 @@ impl VolumetricRenderer {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
         pass.draw(0..6, 0..self.instance_count as u32);
-        shadow_passes + 1
+        shadow_passes + shaft_passes + 1
     }
 }
 
