@@ -1,0 +1,57 @@
+# Formatting, building, and testing.
+prefix_rule(
+    pattern = ["cargo", ["fmt", "build", "check", "test", "clippy"]],
+    decision = "allow",
+)
+
+# OpenHP1's required sccache-bypass forms.
+prefix_rule(
+    pattern = ["env", "RUSTC_WRAPPER=", "cargo", ["build", "check", "test", "clippy"]],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["env", "-u", "RUSTC_WRAPPER", "cargo", ["build", "check", "test", "clippy"]],
+    decision = "allow",
+)
+
+# Launch only OpenHP1's game and viewer through Cargo.
+prefix_rule(
+    pattern = ["cargo", "run", "--release", "-p", ["openhp1-game", "openhp1-viewer"]],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["env", "RUSTC_WRAPPER=", "cargo", "run", "--release", "-p", ["openhp1-game", "openhp1-viewer"]],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["cargo", "run", "-q", "-p", "openhp1-viewer"],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = ["env", "RUSTC_WRAPPER=", "cargo", "run", "-q", "-p", "openhp1-viewer"],
+    decision = "allow",
+)
+
+# Launch rebuilt debug/release binaries directly.
+prefix_rule(
+    pattern = [[
+        "target/debug/openhp1-game",
+        "./target/debug/openhp1-game",
+        "target/debug/openhp1-viewer",
+        "./target/debug/openhp1-viewer",
+        "target/release/openhp1-game",
+        "./target/release/openhp1-game",
+        "target/release/openhp1-viewer",
+        "./target/release/openhp1-viewer",
+    ]],
+    decision = "allow",
+)
+
+# Normal Git workflow.
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+prefix_rule(pattern = ["git", "commit", "-m"], decision = "allow")
+prefix_rule(pattern = ["git", "merge", "--ff-only"], decision = "allow")
+prefix_rule(pattern = ["git", "switch", "-c"], decision = "allow")
+
+# Optional: rebase caused 73 prompts, but rewrites history.
+prefix_rule(pattern = ["git", "rebase"], decision = "allow")
