@@ -164,10 +164,11 @@ Keep the focused notes in
   agent environments, run Cargo compilation and test commands outside the
   sandbox with the narrow reusable Cargo approval; never clear or override
   `RUSTC_WRAPPER` to work around sandbox permissions.
-- Run test binaries with `cargo nextest run --release`; use `cargo test --doc`
+- Run test binaries with `cargo nextest run`; use `cargo test --doc`
   only when doctests are relevant because nextest does not execute them.
-- Run targets with `--release` unless the task specifically requires a debug
-  build.
+- Do not pass `--release` to agent-run tests or verification builds. The user
+  owns optimized release builds for live testing unless they explicitly ask
+  the agent to run one.
 - Run focused formatting, compilation, and tests for touched crates. State
   exactly what ran and whether tests used the local copyrighted corpus.
 - Run `cargo fmt --all` before each commit; format rather than using `--check`.
