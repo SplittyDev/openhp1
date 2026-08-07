@@ -1025,6 +1025,7 @@ mod tests {
     fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
         let shader = modern::COMPOSITE_SHADER;
         let scene_shader = include_str!("shaders/scene.wgsl");
+        let corona_shader = include_str!("shaders/modern/corona.wgsl");
         assert!(shader.contains("const WHITE = 1.25;"));
         assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
@@ -1039,6 +1040,10 @@ mod tests {
         assert!(scene_shader.contains("min(light.color.rgb * strength, vec3(1.0))"));
         assert!(scene_shader.contains("srgb_to_linear(color.rgb * illumination * 2.0)"));
         assert!(scene_shader.contains("srgb_to_linear(color.rgb * input.vertex_color.rgb)"));
+        assert!(corona_shader.contains("corner * vec2(1.6, 1.6 * aspect) * color_and_scale.w;"));
+        assert!(corona_shader.contains("srgb_to_linear(lit) * CORONA_HDR_GAIN"));
+        assert!(!corona_shader.contains("distance_scale"));
+        assert!(!corona_shader.contains("color.a * CORONA_HDR_GAIN"));
 
         let white = 1.25_f32;
         let mapped_white = white * (1.0 + white / (white * white)) / (1.0 + white);

@@ -214,10 +214,11 @@ package are editor viewport icons, not runtime sprites, and are excluded from
 that path. Particle actors use their live `ParticleFX` emitter state. In modern
 mode, coronas use their authored `Skin`, `DrawScale`, hue, and saturation; a
 fixed HDR gain supplies the luminance that UE1 did not author so they feed the
-bloom pass. Modern mode applies bounded distance falloff instead of UE1's fixed
-viewport size, and corona positions and lifetimes follow their actors. Their
-quads are depth-tested rather than using UE1's center-point BSP visibility
-trace.
+bloom pass. Their display-space texture and tint are decoded to HDR after UE1's
+translucent RGB modulation; P8 palette alpha does not attenuate the glow.
+Corona size uses UE1's fixed `0.8 * DrawScale` viewport-width fraction, and
+positions and lifetimes follow their actors. Their quads are depth-tested
+rather than using UE1's center-point BSP visibility trace.
 Water-backed `WetTexture` exports animate independently of actor scripts.
 Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
 `TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.

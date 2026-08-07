@@ -40,11 +40,7 @@ fn vertex_corona(
     var output: CoronaOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
     let aspect = camera.viewport.x / max(camera.viewport.y, 1.0);
-    // ponytail: UE1 used a fixed viewport fraction. Modern mode attenuates
-    // after 512 units and clamps the near size until physical emitters exist.
-    let distance_scale = clamp(512.0 / max(output.clip_position.w, 1.0), 0.1, 1.25);
-    let screen_offset =
-        corner * vec2(1.6, 1.6 * aspect) * color_and_scale.w * distance_scale;
+    let screen_offset = corner * vec2(1.6, 1.6 * aspect) * color_and_scale.w;
     output.clip_position.x += screen_offset.x * output.clip_position.w;
     output.clip_position.y += screen_offset.y * output.clip_position.w;
     output.texture_coordinates = corner + vec2(0.5);
@@ -55,5 +51,12 @@ fn vertex_corona(
 @fragment
 fn fragment_corona(input: CoronaOutput) -> @location(0) vec4<f32> {
     let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    return vec4(color.rgb * input.color * color.a * CORONA_HDR_GAIN, color.a);
+    let lit = color.rgb * input.color;
+    return vec4(srgb_to_linear(lit) * CORONA_HDR_GAIN, color.a);
+}
+
+fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    let low = color / 12.92;
+    let high = pow((color + vec3(0.055)) / 1.055, vec3(2.4));
+    return select(high, low, color <= vec3(0.04045));
 }
