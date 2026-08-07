@@ -36,7 +36,7 @@ Brightness=0.6
 ColorMode=32Bit
 
 [OpenHP1.Renderer.Modern]
-ToneMapper=AgX
+ToneMapper=Reinhard
 Brightness=0.33
 Contrast=1.24
 AmbientOcclusion=SSAO
@@ -82,7 +82,7 @@ These settings apply when `Renderer=Modern`.
 
 | Key | Default | Accepted values | What it does |
 | --- | --- | --- | --- |
-| `ToneMapper` | `AgX` | `AgX`, `Reinhard`, `ACES` | Chooses how the Modern renderer turns its brighter image into colours your display can show. |
+| `ToneMapper` | `Reinhard` | `AgX`, `Reinhard`, `ACES` | Chooses how the Modern renderer turns its brighter image into colours your display can show. |
 | `Brightness` | `0.33` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
 | `Contrast` | `1.24` | `0.5` to `2.0` | Adjusts the difference between dark and bright parts of the image. Values outside this range are moved to the nearest limit. |
 | `AmbientOcclusion` | `SSAO` | `Off`, `SSAO` | Turns contact shadows in corners and around objects off or on. |

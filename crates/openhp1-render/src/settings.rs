@@ -110,7 +110,7 @@ impl Default for RendererSettings {
     fn default() -> Self {
         Self {
             mode: RendererMode::Classic,
-            tone_mapper: ToneMapper::AgX,
+            tone_mapper: ToneMapper::default(),
             ambient_occlusion: AmbientOcclusion::Ssao,
             bloom: true,
         }
@@ -153,6 +153,10 @@ mod tests {
     #[test]
     fn parses_renderer_choices() {
         assert_eq!(ToneMapper::default(), ToneMapper::Reinhard);
+        assert_eq!(
+            RendererSettings::default().tone_mapper,
+            ToneMapper::Reinhard
+        );
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
         assert_eq!("cLaSsIc".parse(), Ok(RendererMode::Classic));
         assert_eq!("agx".parse(), Ok(ToneMapper::AgX));

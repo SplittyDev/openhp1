@@ -72,8 +72,9 @@ UE1 textures, lightmaps, materials, batching, sky, and animation path, but draws
 the scene into an `Rgba16Float` target before post-processing it. The modern
 post pass provides:
 
-- selectable AgX, luminance-preserving Reinhard Equation 4 with a `1.25` white
-  point that retains a short UE1 overbright shoulder, and ACES tone mapping;
+- selectable AgX, default luminance-preserving Reinhard Equation 4 with a
+  `1.25` white point that retains a short UE1 overbright shoulder, and ACES tone
+  mapping;
 - view-space SSAO reconstructed from the scene depth buffer;
 - authored UE1 coronas drawn as HDR screen-space sprites;
 - quarter-resolution HDR bright extraction with separable bloom blur that
