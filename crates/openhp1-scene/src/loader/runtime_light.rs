@@ -14,10 +14,13 @@ impl LoadedScene {
             return Ok(false);
         }
         self.actor_states[actor_index].actor.light_brightness = light_brightness;
+        let realtime_changed = self
+            .render
+            .set_light_brightness(actor_index, light_brightness);
         if !self.actor_states[actor_index].is_light
             || actor.id.package != self.actor_render.map.summary().source.as_ref()
         {
-            return Ok(false);
+            return Ok(realtime_changed);
         }
 
         let light_export = actor.id.export_index;
@@ -50,7 +53,7 @@ impl LoadedScene {
             lightmaps_changed = true;
         }
         let actors_changed = vertex_lighting_changed && self.relight_actor_vertices()?;
-        Ok(lightmaps_changed || actors_changed)
+        Ok(realtime_changed || lightmaps_changed || actors_changed)
     }
 
     pub fn take_changed_lightmaps(&mut self) -> Vec<usize> {

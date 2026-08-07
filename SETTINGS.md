@@ -37,12 +37,12 @@ ColorMode=32Bit
 
 [OpenHP1.Renderer.Modern]
 ToneMapper=Reinhard
-ReinhardBrightness=0.28
-ReinhardContrast=1.05
-ACESBrightness=0.25
-ACESContrast=0.9
-AgXBrightness=0.24
-AgXContrast=1.35
+ReinhardBrightness=0.5
+ReinhardContrast=1.0
+ACESBrightness=0.5
+ACESContrast=1.0
+AgXBrightness=0.5
+AgXContrast=1.0
 AmbientOcclusion=SSAO
 AntiAliasing=SMAA
 Bloom=true
@@ -88,12 +88,12 @@ These settings apply when `Renderer=Modern`.
 | Key | Default | Accepted values | What it does |
 | --- | --- | --- | --- |
 | `ToneMapper` | `Reinhard` | `AgX`, `Reinhard`, `ACES` | Chooses how the Modern renderer turns its brighter image into colours your display can show. |
-| `ReinhardBrightness` | `0.28` | `0.2` to `1.0` | Sets brightness when using Reinhard. Values outside this range are moved to the nearest limit. |
-| `ReinhardContrast` | `1.05` | `0.5` to `2.0` | Sets contrast when using Reinhard. Values outside this range are moved to the nearest limit. |
-| `ACESBrightness` | `0.25` | `0.2` to `1.0` | Sets brightness when using ACES. Values outside this range are moved to the nearest limit. |
-| `ACESContrast` | `0.9` | `0.5` to `2.0` | Sets contrast when using ACES. Values outside this range are moved to the nearest limit. |
-| `AgXBrightness` | `0.24` | `0.2` to `1.0` | Sets brightness when using AgX. Values outside this range are moved to the nearest limit. |
-| `AgXContrast` | `1.35` | `0.5` to `2.0` | Sets contrast when using AgX. Values outside this range are moved to the nearest limit. |
+| `ReinhardBrightness` | `0.5` | `0.2` to `1.0` | Sets brightness when using Reinhard. Values outside this range are moved to the nearest limit. |
+| `ReinhardContrast` | `1.0` | `0.5` to `2.0` | Sets contrast when using Reinhard. Values outside this range are moved to the nearest limit. |
+| `ACESBrightness` | `0.5` | `0.2` to `1.0` | Sets brightness when using ACES. Values outside this range are moved to the nearest limit. |
+| `ACESContrast` | `1.0` | `0.5` to `2.0` | Sets contrast when using ACES. Values outside this range are moved to the nearest limit. |
+| `AgXBrightness` | `0.5` | `0.2` to `1.0` | Sets brightness when using AgX. Values outside this range are moved to the nearest limit. |
+| `AgXContrast` | `1.0` | `0.5` to `2.0` | Sets contrast when using AgX. Values outside this range are moved to the nearest limit. |
 | `AmbientOcclusion` | `SSAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
 | `AntiAliasing` | `SMAA` | `Off`, `FXAA`, `SMAA` | Chooses the Modern renderer's edge-smoothing method, or disables it. |
 | `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |

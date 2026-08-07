@@ -11,6 +11,7 @@ use crate::{
 
 mod atlas;
 mod batch;
+mod lighting;
 mod modern;
 mod pipeline;
 mod target;
@@ -20,6 +21,7 @@ use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
     sorted_blended_batches, texture_batches, update_blended_centers,
 };
+use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
@@ -49,6 +51,8 @@ struct Vertex {
     vertex_color: [u8; 4],
     normal: [f32; 3],
     environment_map: f32,
+    lighting_coordinates: [f32; 2],
+    lighting_index: u32,
 }
 
 #[repr(C)]
@@ -81,6 +85,7 @@ pub struct Renderer {
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
     modern: Option<ModernRenderer>,
+    lighting: Option<ModernLighting>,
     sky_target: Option<SkyTarget>,
     bounds: SceneBounds,
     sky_zone: Option<openhp1_scene::SkyZone>,
@@ -132,8 +137,14 @@ impl Renderer {
         } else {
             target_format
         };
-        let lightmap_atlas =
-            build_lightmap_atlas(&scene.lightmaps, device.limits().max_texture_dimension_2d);
+        let lightmap_atlas = build_lightmap_atlas(
+            if modern_enabled {
+                &[]
+            } else {
+                &scene.lightmaps
+            },
+            device.limits().max_texture_dimension_2d,
+        );
         let fallback_texture = scene.textures.len();
         let vertices: Vec<_> = scene
             .mesh
@@ -154,7 +165,7 @@ impl Renderer {
                     [texture.width as f32, texture.height as f32]
                 });
                 let coordinates = scene.mesh.texture_coordinates[vertex_index];
-                let lightmap_rectangle = scene
+                let lightmap_index = scene
                     .surface_materials
                     .get(surface)
                     .filter(|material| !material.unlit)
@@ -165,7 +176,8 @@ impl Renderer {
                             .get(vertex_index)
                             .copied()
                             .flatten()
-                    })
+                    });
+                let lightmap_rectangle = lightmap_index
                     .and_then(|lightmap| lightmap_atlas.rectangles.get(lightmap))
                     .copied();
                 let lightmap_coordinates =
@@ -176,6 +188,15 @@ impl Renderer {
                                 / lightmap_atlas.image.width as f32,
                             (rectangle.y as f32 + coordinates.y)
                                 / lightmap_atlas.image.height as f32,
+                        ]
+                    });
+                let lighting_coordinates = lightmap_index
+                    .and_then(|index| scene.lightmaps.get(index))
+                    .map_or([0.0; 2], |lightmap| {
+                        let coordinates = scene.mesh.lightmap_coordinates[vertex_index];
+                        [
+                            coordinates.x / lightmap.width as f32,
+                            coordinates.y / lightmap.height as f32,
                         ]
                     });
                 Vertex {
@@ -210,6 +231,11 @@ impl Renderer {
                     .normalize_or_zero()
                     .to_array(),
                     environment_map: f32::from(material.environment_map),
+                    lighting_coordinates,
+                    lighting_index: lightmap_index
+                        .filter(|&index| index < scene.realtime_lightmaps.len())
+                        .and_then(|index| u32::try_from(index).ok())
+                        .unwrap_or(u32::MAX),
                 }
             })
             .collect();
@@ -373,7 +399,7 @@ impl Renderer {
         );
         let lightmap_view = lightmap_texture.create_view(&Default::default());
         let checkerboard = checkerboard();
-        let stats = RenderStats {
+        let mut stats = RenderStats {
             draw_calls: 0,
             texture_memory_bytes: scene
                 .textures
@@ -404,9 +430,14 @@ impl Renderer {
             })
             .collect();
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
+        let lighting_layout = modern_enabled.then(|| ModernLighting::layout(device));
+        let mut bind_group_layouts = vec![Some(&camera_layout), Some(&texture_layout)];
+        if let Some(layout) = &lighting_layout {
+            bind_group_layouts.push(Some(layout));
+        }
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("OpenHP1 BSP pipeline layout"),
-            bind_group_layouts: &[Some(&camera_layout), Some(&texture_layout)],
+            bind_group_layouts: &bind_group_layouts,
             immediate_size: 0,
         });
         let pipelines = std::array::from_fn(|index| {
@@ -428,10 +459,18 @@ impl Renderer {
                     unlit: index % PIPELINES_PER_MODE >= 4,
                     ..Default::default()
                 },
+                modern_enabled,
             )
         });
         let backdrop_pipelines = std::array::from_fn(|index| {
-            create_backdrop_pipeline(device, scene_format, &pipeline_layout, &shader, index != 0)
+            create_backdrop_pipeline(
+                device,
+                scene_format,
+                &pipeline_layout,
+                &shader,
+                index != 0,
+                modern_enabled,
+            )
         });
         let sky_target = scene.sky_zone.map(|_| {
             SkyTarget::new(
@@ -456,6 +495,12 @@ impl Renderer {
                 &texture_layout,
             )
         });
+        let lighting = lighting_layout
+            .as_ref()
+            .map(|layout| ModernLighting::new(device, queue, layout, scene));
+        if let Some(lighting) = &lighting {
+            stats.lightmap_memory_bytes += lighting.memory_bytes();
+        }
 
         Self {
             pipelines,
@@ -477,6 +522,7 @@ impl Renderer {
             blended_surfaces,
             depth,
             modern,
+            lighting,
             sky_target,
             bounds,
             sky_zone: scene.sky_zone,
@@ -529,10 +575,13 @@ impl Renderer {
         if scene.textures.len() + 1 != self.textures.len() || !self.update_vertices(queue, scene) {
             return false;
         }
-        match self.modern.as_mut() {
-            Some(modern) => modern.update_scene(queue, scene),
-            None => true,
-        }
+        self.lighting
+            .as_ref()
+            .is_none_or(|lighting| lighting.update(queue, scene))
+            && self
+                .modern
+                .as_mut()
+                .is_none_or(|modern| modern.update_scene(queue, scene))
     }
 
     pub fn reload_scene(
@@ -604,6 +653,9 @@ impl Renderer {
         images: &[openhp1_scene::LightmapImage],
         changed: &[usize],
     ) -> bool {
+        if self.lighting.is_some() {
+            return true;
+        }
         if images.len() != self.lightmap_rectangles.len() {
             return false;
         }
@@ -846,6 +898,9 @@ impl Renderer {
     ) -> usize {
         let mut draw_calls = 0;
         pass.set_bind_group(0, camera_bind_group, &[]);
+        if let Some(lighting) = &self.lighting {
+            pass.set_bind_group(2, &lighting.bind_group, &[]);
+        }
         if !self.opaque_batches.is_empty()
             || !blended_batches.is_empty()
             || (backdrop_bind_group.is_some() && !self.backdrop_batches.is_empty())
@@ -998,6 +1053,8 @@ mod tests {
                 vertex_color: [255; 4],
                 normal: [0.0, 1.0, 0.0],
                 environment_map: 0.0,
+                lighting_coordinates: [0.0; 2],
+                lighting_index: u32::MAX,
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
@@ -1008,6 +1065,8 @@ mod tests {
                 vertex_color: [255; 4],
                 normal: [0.0, 1.0, 0.0],
                 environment_map: 0.0,
+                lighting_coordinates: [0.0; 2],
+                lighting_index: u32::MAX,
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -1025,6 +1084,7 @@ mod tests {
             },
             textures: vec![checkerboard(), checkerboard()],
             lightmaps: vec![],
+            realtime_lightmaps: vec![],
             coronas: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
@@ -1074,6 +1134,7 @@ mod tests {
             },
             textures: vec![checkerboard(), checkerboard()],
             lightmaps: vec![],
+            realtime_lightmaps: vec![],
             coronas: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
@@ -1112,11 +1173,11 @@ mod tests {
         assert_eq!(modulated.color.src_factor, wgpu::BlendFactor::Dst);
         assert_eq!(modulated.color.dst_factor, wgpu::BlendFactor::Src);
         assert_eq!(
-            fragment_entry(SurfaceMode::Modulated, true, false),
+            fragment_entry(SurfaceMode::Modulated, true, false, false),
             "fragment_blended_masked"
         );
         assert_eq!(
-            fragment_entry(SurfaceMode::Opaque, false, true),
+            fragment_entry(SurfaceMode::Opaque, false, true, false),
             "fragment_unlit"
         );
     }
@@ -1208,6 +1269,7 @@ mod tests {
             },
             textures: vec![],
             lightmaps: vec![],
+            realtime_lightmaps: vec![],
             coronas: vec![],
             surface_materials: vec![
                 SurfaceMaterial::default(),
@@ -1240,6 +1302,8 @@ mod tests {
             vertex_color: [255; 4],
             normal: [0.0, 1.0, 0.0],
             environment_map: 0.0,
+            lighting_coordinates: [0.0; 2],
+            lighting_index: u32::MAX,
         }
     }
 }

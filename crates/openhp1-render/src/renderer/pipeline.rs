@@ -12,6 +12,7 @@ pub(super) fn create_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     material: SurfaceMaterial,
+    modern: bool,
 ) -> wgpu::RenderPipeline {
     let blended = matches!(
         material.mode,
@@ -35,7 +36,9 @@ pub(super) fn create_pipeline(
                     4 => Float32,
                     5 => Unorm8x4,
                     6 => Float32x3,
-                    7 => Float32
+                    7 => Float32,
+                    8 => Float32x2,
+                    9 => Uint32
                 ],
             }],
         },
@@ -60,6 +63,7 @@ pub(super) fn create_pipeline(
                 material.mode,
                 material.masked,
                 material.unlit,
+                modern,
             )),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -79,6 +83,7 @@ pub(super) fn create_backdrop_pipeline(
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     two_sided: bool,
+    modern: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 fake-backdrop pipeline"),
@@ -98,7 +103,9 @@ pub(super) fn create_backdrop_pipeline(
                     4 => Float32,
                     5 => Unorm8x4,
                     6 => Float32x3,
-                    7 => Float32
+                    7 => Float32,
+                    8 => Float32x2,
+                    9 => Uint32
                 ],
             }],
         },
@@ -120,7 +127,11 @@ pub(super) fn create_backdrop_pipeline(
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fragment_backdrop"),
+            entry_point: Some(if modern {
+                "fragment_backdrop_modern"
+            } else {
+                "fragment_backdrop"
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -133,7 +144,27 @@ pub(super) fn create_backdrop_pipeline(
     })
 }
 
-pub(super) fn fragment_entry(mode: SurfaceMode, masked: bool, unlit: bool) -> &'static str {
+pub(super) fn fragment_entry(
+    mode: SurfaceMode,
+    masked: bool,
+    unlit: bool,
+    modern: bool,
+) -> &'static str {
+    if modern {
+        return match (mode, masked, unlit) {
+            (SurfaceMode::Opaque, false, false) => "fragment_modern",
+            (SurfaceMode::Opaque, true, false) => "fragment_modern_masked",
+            (SurfaceMode::Opaque, false, true) => "fragment_modern_unlit",
+            (SurfaceMode::Opaque, true, true) => "fragment_modern_unlit_masked",
+            (SurfaceMode::Translucent | SurfaceMode::Modulated, false, _) => {
+                "fragment_modern_blended"
+            }
+            (SurfaceMode::Translucent | SurfaceMode::Modulated, true, _) => {
+                "fragment_modern_blended_masked"
+            }
+            (SurfaceMode::Backdrop | SurfaceMode::Hidden, _, _) => unreachable!(),
+        };
+    }
     match (mode, masked, unlit) {
         (SurfaceMode::Opaque, false, false) => "fragment_main",
         (SurfaceMode::Opaque, true, false) => "fragment_masked",

@@ -829,6 +829,7 @@ mod tests {
             mesh: TriangleMesh::default(),
             textures: vec![super::super::checkerboard(), super::super::checkerboard()],
             lightmaps: vec![],
+            realtime_lightmaps: vec![],
             coronas: vec![
                 Corona {
                     actor_index: 1,

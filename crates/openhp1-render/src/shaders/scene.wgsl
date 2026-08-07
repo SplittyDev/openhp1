@@ -21,12 +21,41 @@ var lightmap_texture: texture_2d<f32>;
 @group(1) @binding(3)
 var lightmap_sampler: sampler;
 
+struct RealtimeLightmap {
+    ambient: vec4<f32>,
+    light_range: vec4<u32>,
+};
+
+struct RealtimeLight {
+    position_radius: vec4<f32>,
+    direction_outer: vec4<f32>,
+    color: vec4<f32>,
+    visibility: vec4<f32>,
+    effect: vec4<u32>,
+};
+
+@group(2) @binding(0)
+var<storage, read> realtime_lightmaps: array<RealtimeLightmap>;
+
+@group(2) @binding(1)
+var<storage, read> realtime_lights: array<RealtimeLight>;
+
+@group(2) @binding(2)
+var visibility_texture: texture_2d<f32>;
+
+@group(2) @binding(3)
+var visibility_sampler: sampler;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) texture_coordinates: vec2<f32>,
     @location(1) lightmap_coordinates: vec2<f32>,
     @location(2) has_lightmap: f32,
     @location(3) vertex_color: vec4<f32>,
+    @location(4) world_position: vec3<f32>,
+    @location(5) world_normal: vec3<f32>,
+    @location(6) @interpolate(flat) lighting_index: u32,
+    @location(7) lighting_coordinates: vec2<f32>,
 };
 
 @vertex
@@ -39,6 +68,8 @@ fn vertex_main(
     @location(5) vertex_color: vec4<f32>,
     @location(6) normal: vec3<f32>,
     @location(7) environment_map: f32,
+    @location(8) lighting_coordinates: vec2<f32>,
+    @location(9) lighting_index: u32,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
@@ -60,6 +91,10 @@ fn vertex_main(
     output.lightmap_coordinates = lightmap_coordinates;
     output.has_lightmap = has_lightmap;
     output.vertex_color = vertex_color;
+    output.world_position = position;
+    output.world_normal = normal;
+    output.lighting_index = lighting_index;
+    output.lighting_coordinates = lighting_coordinates;
     return output;
 }
 
@@ -114,6 +149,56 @@ fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4(color.rgb, 0.0);
 }
 
+@fragment
+fn fragment_modern(input: VertexOutput) -> @location(0) vec4<f32> {
+    return apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+}
+
+@fragment
+fn fragment_modern_masked(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    if color.a < 0.5 {
+        discard;
+    }
+    return apply_realtime_light(input, color);
+}
+
+@fragment
+fn fragment_modern_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
+    return apply_modern_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+}
+
+@fragment
+fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    if color.a < 0.5 {
+        discard;
+    }
+    return apply_modern_vertex_light(input, color);
+}
+
+@fragment
+fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return apply_opacity(input, color);
+}
+
+@fragment
+fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    if color.a < 0.5 {
+        discard;
+    }
+    return apply_opacity(input, apply_realtime_light(input, color));
+}
+
+@fragment
+fn fragment_backdrop_modern(input: VertexOutput) -> @location(0) vec4<f32> {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let color = textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
+    return vec4(srgb_to_linear(color.rgb), 0.0);
+}
+
 fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     let light = textureSample(
         lightmap_texture,
@@ -125,6 +210,77 @@ fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
 
 fn apply_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     return vec4(color.rgb * input.vertex_color.rgb, color.a);
+}
+
+fn apply_modern_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    return vec4(srgb_to_linear(color.rgb) * input.vertex_color.rgb, color.a);
+}
+
+fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    if input.lighting_index == 0xffffffffu {
+        return apply_modern_vertex_light(input, color);
+    }
+    let lightmap = realtime_lightmaps[input.lighting_index];
+    var illumination = lightmap.ambient.rgb;
+    let normal = normalize(input.world_normal);
+    let end = lightmap.light_range.x + lightmap.light_range.y;
+    for (var index = lightmap.light_range.x; index < end; index++) {
+        let light = realtime_lights[index];
+        let offset = light.position_radius.xyz - input.world_position;
+        let distance_squared = dot(offset, offset);
+        let distance = sqrt(distance_squared);
+        let radius_squared = light.position_radius.w * light.position_radius.w;
+        let visibility_uv = input.lighting_coordinates * light.visibility.xy + light.visibility.zw;
+        let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
+        var strength = 0.0;
+        switch light.effect.x {
+            case 13u: {
+                strength = visibility * max(1.0 - distance / light.position_radius.w, 0.0);
+            }
+            case 14u: {
+                let normalized = distance / light.position_radius.w;
+                if normalized >= 0.8 && normalized < 1.0 {
+                    strength = visibility * (1.0 - 10.0 * abs(normalized - 0.9));
+                }
+            }
+            case 17u: {
+                let planar = offset.x * offset.x + offset.z * offset.z;
+                strength = visibility * max(1.0 - planar / radius_squared, 0.0);
+            }
+            case 8u, 12u: {
+                let normalized_distance = distance_squared / radius_squared;
+                if normalized_distance < 1.0 && light.direction_outer.w < 1.0 && distance > 0.0 {
+                    let cosine = dot(offset / distance, light.direction_outer.xyz);
+                    let spot = max(1.0 - min((1.0 - cosine) / (1.0 - light.direction_outer.w), 1.0), 0.0);
+                    strength = visibility
+                        * ue1_distance_falloff(normalized_distance)
+                        * abs(dot(offset / distance, normal))
+                        * spot * spot;
+                }
+            }
+            case 4u: {}
+            default: {
+                if distance_squared < radius_squared && distance > 0.0 {
+                    strength = visibility
+                        * ue1_distance_falloff(distance_squared / radius_squared)
+                        * abs(dot(offset / distance, normal));
+                }
+            }
+        }
+        illumination += light.color.rgb * strength;
+    }
+    return vec4(srgb_to_linear(color.rgb) * illumination * 2.0, color.a);
+}
+
+fn ue1_distance_falloff(distance_squared: f32) -> f32 {
+    let value = sqrt(distance_squared + 0.0001);
+    return min((1.0 + 2.0 * value * value * value - 3.0 * value * value) / value, 1.0);
+}
+
+fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    let low = color / 12.92;
+    let high = pow((color + vec3(0.055)) / 1.055, vec3(2.4));
+    return select(high, low, color <= vec3(0.04045));
 }
 
 fn apply_opacity(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {

@@ -22,8 +22,9 @@ use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
 
 use crate::{
-    Corona, RenderScene, Rotator, SceneActor, SceneActorAnimation, SceneActorRenderRange,
-    SceneObjectId, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal,
+    Corona, RenderLight, RenderLightmap, RenderScene, Rotator, SceneActor, SceneActorAnimation,
+    SceneActorRenderRange, SceneObjectId, SurfaceMaterial, SurfaceMode, TextureImage,
+    render::light_direction, render_to_unreal, unreal_to_render,
 };
 
 mod runtime_display;
@@ -233,6 +234,41 @@ impl LoadedScene {
             &mut sprites,
             &mut water_animations,
         );
+        let actor_indices = actors
+            .iter()
+            .enumerate()
+            .filter(|(_, actor)| actor.id.package == package.summary().source.as_ref())
+            .map(|(index, actor)| (actor.id.export_index, index))
+            .collect::<HashMap<_, _>>();
+        let realtime_lightmaps = actor_render
+            .model
+            .authored_lightmaps(&package)
+            .context("failed to decode authored real-time lighting")?
+            .into_iter()
+            .map(|lightmap| RenderLightmap {
+                ambient: lightmap.ambient,
+                lights: lightmap
+                    .lights
+                    .into_iter()
+                    .map(|light| RenderLight {
+                        actor_index: actor_indices
+                            .get(&light.export_index)
+                            .copied()
+                            .unwrap_or(usize::MAX),
+                        location: unreal_to_render(light.location),
+                        direction: unreal_to_render(light_direction(light.rotation))
+                            .normalize_or_zero(),
+                        effect: light.effect,
+                        brightness: light.brightness,
+                        hue: light.hue,
+                        saturation: light.saturation,
+                        radius: light.radius,
+                        cone: light.cone,
+                        visibility: light.visibility,
+                    })
+                    .collect(),
+            })
+            .collect();
         let mut hidden_actor_positions = HashMap::new();
         for (actor_index, actor) in actors
             .iter()
@@ -285,6 +321,7 @@ impl LoadedScene {
                 mesh,
                 textures,
                 lightmaps,
+                realtime_lightmaps,
                 coronas,
                 surface_materials,
                 sky_zone,
@@ -525,6 +562,7 @@ impl LoadedScene {
 
         self.actors[actor_index].location = location;
         self.actor_states[actor_index].actor.location = location;
+        self.render.set_light_location(actor_index, location);
         for corona in self
             .render
             .coronas
@@ -1025,6 +1063,7 @@ impl LoadedScene {
         let transform = rotation_delta(origin, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
         self.actor_states[actor_index].actor.rotation = rotation;
+        self.render.set_light_rotation(actor_index, rotation);
         if let Some(mesh_transform) = &mut self.actors[actor_index].mesh_transform {
             *mesh_transform = transform * *mesh_transform;
         }
@@ -4465,6 +4504,7 @@ mod tests {
                 },
                 textures: Vec::new(),
                 lightmaps: Vec::new(),
+                realtime_lightmaps: Vec::new(),
                 coronas: Vec::new(),
                 surface_materials: Vec::new(),
                 sky_zone: None,

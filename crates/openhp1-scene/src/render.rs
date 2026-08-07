@@ -1,5 +1,7 @@
 use glam::Vec3;
-use openhp1_map::{LightmapImage, SkyZone, TriangleMesh};
+use openhp1_map::{LightVisibility, LightmapImage, SkyZone, TriangleMesh, hsb_to_rgb};
+
+use crate::{Rotator, unreal_to_render};
 
 #[derive(Clone, Debug)]
 pub struct TextureImage {
@@ -17,6 +19,32 @@ pub struct Corona {
     pub texture: usize,
     pub draw_scale: f32,
     pub color: Vec3,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderLight {
+    pub actor_index: usize,
+    pub location: Vec3,
+    pub direction: Vec3,
+    pub effect: u8,
+    pub brightness: u8,
+    pub hue: u8,
+    pub saturation: u8,
+    pub radius: u8,
+    pub cone: u8,
+    pub visibility: LightVisibility,
+}
+
+impl RenderLight {
+    pub fn color(&self) -> Vec3 {
+        hsb_to_rgb(self.hue, self.saturation, self.brightness)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderLightmap {
+    pub ambient: Vec3,
+    pub lights: Vec<RenderLight>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -68,10 +96,123 @@ pub struct RenderScene {
     pub mesh: TriangleMesh,
     pub textures: Vec<TextureImage>,
     pub lightmaps: Vec<LightmapImage>,
+    /// Authored UE1 lights and visibility masks evaluated by the Modern renderer.
+    pub realtime_lightmaps: Vec<RenderLightmap>,
     pub coronas: Vec<Corona>,
     /// Material for each BSP surface. Missing textures use the renderer's
     /// checkerboard.
     pub surface_materials: Vec<SurfaceMaterial>,
     /// A fixed UE1 sky-box viewpoint rendered behind the main scene.
     pub sky_zone: Option<SkyZone>,
+}
+
+impl RenderScene {
+    pub(crate) fn set_light_brightness(&mut self, actor_index: usize, brightness: u8) -> bool {
+        let mut changed = false;
+        for light in self
+            .realtime_lightmaps
+            .iter_mut()
+            .flat_map(|lightmap| &mut lightmap.lights)
+            .filter(|light| light.actor_index == actor_index)
+        {
+            changed |= light.brightness != brightness;
+            light.brightness = brightness;
+        }
+        changed
+    }
+
+    pub(crate) fn set_light_location(&mut self, actor_index: usize, location: Vec3) -> bool {
+        let location = unreal_to_render(location);
+        let mut changed = false;
+        for light in self
+            .realtime_lightmaps
+            .iter_mut()
+            .flat_map(|lightmap| &mut lightmap.lights)
+            .filter(|light| light.actor_index == actor_index)
+        {
+            changed |= light.location != location;
+            light.location = location;
+        }
+        changed
+    }
+
+    pub(crate) fn set_light_rotation(&mut self, actor_index: usize, rotation: Rotator) -> bool {
+        let direction = unreal_to_render(light_direction(rotation)).normalize_or_zero();
+        let mut changed = false;
+        for light in self
+            .realtime_lightmaps
+            .iter_mut()
+            .flat_map(|lightmap| &mut lightmap.lights)
+            .filter(|light| light.actor_index == actor_index)
+        {
+            changed |= light.direction != direction;
+            light.direction = direction;
+        }
+        changed
+    }
+}
+
+pub(crate) fn light_direction(rotation: Rotator) -> Vec3 {
+    let radians = rotation.radians();
+    let (sin_pitch, cos_pitch) = radians.x.sin_cos();
+    let (sin_yaw, cos_yaw) = radians.y.sin_cos();
+    Vec3::new(-cos_pitch * cos_yaw, cos_pitch * sin_yaw, sin_pitch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_light_changes_update_every_surface_copy() {
+        let light = RenderLight {
+            actor_index: 7,
+            location: Vec3::ZERO,
+            direction: Vec3::X,
+            effect: 0,
+            brightness: 64,
+            hue: 0,
+            saturation: 255,
+            radius: 64,
+            cone: 128,
+            visibility: LightVisibility {
+                width: 1,
+                height: 1,
+                values: vec![255],
+            },
+        };
+        let mut scene = RenderScene {
+            mesh: TriangleMesh::default(),
+            textures: Vec::new(),
+            lightmaps: Vec::new(),
+            realtime_lightmaps: vec![
+                RenderLightmap {
+                    ambient: Vec3::ZERO,
+                    lights: vec![light.clone()],
+                },
+                RenderLightmap {
+                    ambient: Vec3::ZERO,
+                    lights: vec![light],
+                },
+            ],
+            coronas: Vec::new(),
+            surface_materials: Vec::new(),
+            sky_zone: None,
+        };
+
+        assert!(scene.set_light_brightness(7, 128));
+        assert!(
+            scene
+                .realtime_lightmaps
+                .iter()
+                .all(|lightmap| lightmap.lights[0].brightness == 128)
+        );
+        assert!(!scene.set_light_brightness(7, 128));
+        assert!(scene.set_light_location(7, Vec3::new(1.0, 2.0, 3.0)));
+        assert!(scene.set_light_rotation(7, Rotator::default()));
+        assert!(scene.realtime_lightmaps.iter().all(|lightmap| {
+            lightmap.lights[0].location == Vec3::new(2.0, 3.0, -1.0)
+                && lightmap.lights[0].direction == Vec3::Z
+        }));
+    }
 }

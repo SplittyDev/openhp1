@@ -14,8 +14,8 @@ on world BSP geometry.
    exports currently produce static preview frames.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    and lightmap coordinates.
-6. `openhp1-map` reconstructs static lightmap images from zone ambient colors,
-   light actors, and the model's blurred one-bit shadow masks.
+6. `openhp1-map` reconstructs Classic lightmap images and separately preserves
+   zone ambient, light actors, and blurred one-bit shadow masks for Modern.
 7. `openhp1-map` decodes the BSP `SkyZoneInfo` actor's fixed location and
    Unreal rotator.
 8. `openhp1-scene` resolves actor defaults and instance properties, retains
@@ -24,8 +24,8 @@ on world BSP geometry.
    materials and render ranges.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
    backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
-10. `openhp1-render` packs lightmaps with replicated edge gutters into one
-   atlas, normalizes coordinates, batches opaque triangles, sorts blended BSP
+10. `openhp1-render` packs Classic lightmaps or Modern visibility masks with
+   replicated edge gutters, batches opaque triangles, sorts blended BSP
    surfaces, advances `PF_AutoUPan`/`PF_AutoVPan` texture coordinates, and draws
    them with repeat sampling and depth testing. A sky map first renders to a
    separate color/depth target; fake-backdrop polygons sample that target in
@@ -68,9 +68,13 @@ lightmap-less surfaces bypass that multiply.
 ## Modern rendering
 
 Classic rendering remains the default. `--renderer=modern` keeps the decoded
-UE1 textures, lightmaps, materials, batching, sky, and animation path, but draws
-the scene into an `Rgba16Float` target before post-processing it. The modern
-post pass provides:
+UE1 textures, materials, batching, sky, and animation path, but decodes base
+textures to linear RGB and evaluates the original light actors per fragment in
+an `Rgba16Float` target. Per-surface light lists and the original blurred
+one-bit masks retain authored visibility without reusing the precomposited
+colored lightmaps. Zone ambient and UE1 radius, spotlight, radial, shell, and
+cylinder falloff remain authored inputs; illumination is not clamped before HDR
+post-processing. The modern post pass provides:
 
 - selectable AgX, default luminance-preserving Reinhard Equation 4 with a
   `1.25` white point that retains a short UE1 overbright shoulder, and ACES tone
@@ -87,9 +91,11 @@ post pass provides:
 - sRGB output encoding followed by hue-preserving display-space contrast and
   the existing brightness adjustment after tone mapping.
 
-Base textures and lightmaps remain `Rgba8Unorm` so their required UE1
-display-space 2x modulation does not change. The modern HDR target preserves
-values above one produced by that modulation for tone mapping and bloom.
+Classic base textures and lightmaps remain `Rgba8Unorm`, preserving UE1's
+display-space 2x modulation. Modern decodes base textures to linear RGB and
+uses the authored masks only as visibility; its direct-light sum retains the
+same UE1 2x intensity convention while preserving values above one for tone
+mapping and bloom.
 
 Modern-only HDR, sampleable-depth, post-processing, bloom, AO, and corona
 resources are created only for `RendererMode::Modern`. Coronas use their own
@@ -116,10 +122,9 @@ modules in Rust because WGSL has no source-include directive.
 
 The viewer exposes these choices in its sidebar, keeps independent Classic and
 per-tone-mapper Modern display values, and provides a Modern-only contrast
-control. The game and viewer share the same Modern defaults: Reinhard uses
-brightness `0.28` and contrast `1.05`, ACES uses `0.25` and `0.90`, and AgX uses
-`0.24` and `1.35`. Classic retains brightness `0.6` and neutral contrast.
-Reinhard is the default tone mapper.
+control. The game and viewer use neutral Modern display defaults of brightness
+`0.5` and contrast `1.0` for every tone mapper. Classic retains brightness
+`0.6` and neutral contrast. Reinhard is the default tone mapper.
 Renderer mode, tone mapper, ambient occlusion, and anti-aliasing are also
 available on the command line:
 
@@ -143,11 +148,13 @@ wgpu targets at 32-bit and quantizes the final composed frame to RGB565 in the
 presentation shader; it is an output emulation rather than a claim that every
 texture and blend operation ran through a historical 16-bit framebuffer.
 
-The original lightmaps remain the modern renderer's static lighting source.
-Dynamic diffuse GI, DDGI volumes, specular materials, and reflection probes are
-not yet implemented. Future GI and reflection captures should remain
-renderer-owned resources built from `RenderScene`; package references and BSP
-serialization details must not cross into the renderer.
+Modern BSP lighting follows runtime light brightness, position, and spotlight
+rotation changes through `RenderScene`. Mesh actors retain the existing CPU
+vertex-lighting path. Dynamic shadow maps for lights that move away from their
+authored masks, diffuse GI, DDGI volumes, specular materials, and reflection
+probes are not yet implemented. Future GI and reflection captures should
+remain renderer-owned resources built from `RenderScene`; package references
+and BSP serialization details must not cross into the renderer.
 
 ## Verified maps
 

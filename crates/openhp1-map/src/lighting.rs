@@ -6,10 +6,10 @@ use openhp1_package::{ObjectReference, Package, PropertyKind};
 
 use crate::{Error, Level, Result, Rotator, decode::skip_object_stack};
 
-pub use lightmap::LightmapImage;
+pub use lightmap::{AuthoredLight, AuthoredLightmap, LightVisibility, LightmapImage};
 pub use vertex::{ActorVertexLighting, VertexLighting, bsp_zone_at, bsp_zone_at_checked};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct LightActor {
     location: Vec3,
     rotation: Rotator,
