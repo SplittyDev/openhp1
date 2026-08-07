@@ -27,6 +27,15 @@ struct PortalVertex {
     @location(3) @interpolate(flat) color: vec4<f32>,
 };
 
+fn portal_direction(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+    let normal = cross(b - a, c - a);
+    var direction = settings.direction_density.xyz;
+    if dot(normal, direction) * dot(normal, settings.camera_position.xyz - a) < 0.0 {
+        direction = -direction;
+    }
+    return direction;
+}
+
 @vertex
 fn vertex_fullscreen(
     @builtin(vertex_index) vertex_index: u32,
@@ -43,11 +52,7 @@ fn vertex_fullscreen(
         vec2(1.0, -1.0),
         vec2(1.0, 1.0),
     );
-    let normal = cross(b.xyz - a.xyz, c.xyz - a.xyz);
-    var direction = settings.direction_density.xyz;
-    if dot(normal, direction) > 0.0 {
-        direction = -direction;
-    }
+    let direction = portal_direction(a.xyz, b.xyz, c.xyz);
     let extrusion = direction * min(settings.distance_intensity_phase.x * 0.5, 1500.0);
     let points = array<vec3<f32>, 6>(
         a.xyz, b.xyz, c.xyz, a.xyz + extrusion, b.xyz + extrusion, c.xyz + extrusion,
@@ -117,10 +122,7 @@ fn inside_portal_volume(world: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f3
         return false;
     }
 
-    var direction = settings.direction_density.xyz;
-    if dot(normal, direction) > 0.0 {
-        direction = -direction;
-    }
+    let direction = portal_direction(a, b, c);
     let denominator = dot(normal, direction);
     if abs(denominator) < 0.0001 {
         return false;
@@ -161,8 +163,9 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     let ray_direction = normalize(ray);
     let step_length = ray_length / f32(STEP_COUNT);
     let jitter = hash(vec2<u32>(pixel));
+    let direction = portal_direction(input.a.xyz, input.b.xyz, input.c.xyz);
     let phase = phase_henyey_greenstein(
-        dot(ray_direction, -settings.direction_density.xyz),
+        dot(ray_direction, -direction),
         settings.distance_intensity_phase.z,
     );
     var scattering = vec3(0.0);
@@ -170,7 +173,8 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         let distance = (f32(step) + jitter) * step_length;
         let sample_position = settings.camera_position.xyz + ray_direction * distance;
         if inside_portal_volume(sample_position, input.a.xyz, input.b.xyz, input.c.xyz) {
-            scattering += input.color.rgb * sun_visibility(sample_position) * step_length;
+            let visibility = mix(0.35, 1.0, sun_visibility(sample_position));
+            scattering += input.color.rgb * visibility * step_length;
         }
     }
     scattering *= settings.direction_density.w * settings.distance_intensity_phase.y * phase;

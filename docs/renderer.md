@@ -127,9 +127,10 @@ maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface texture names containing `win`, excluding known frame and non-aperture
 tokens `arch`, `column`, `wood`, `wallwindow`, and `furnace`. This corpus-backed
 fallback finds the `Lev_Tut1` windows while finding none in `Lev3_Dungeon`.
-Opaque walls and props shadow the resulting volumes. The accumulation is
-additive HDR scattering with no scene-wide extinction, retaining values for
-bloom and tone mapping without tinting the whole room.
+Only source triangles intersecting the camera frustum are submitted, capped at
+the 128 nearest triangles. Opaque walls and props shadow the resulting volumes.
+The accumulation is additive HDR scattering with no scene-wide extinction,
+retaining values for bloom and tone mapping without tinting the whole room.
 
 Local volumetric sources retain their compact HDR halos. Up to four nearest
 visible emitters or explicitly authored fog lights additionally receive

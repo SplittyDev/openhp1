@@ -11,6 +11,7 @@ use super::super::super::DEPTH_FORMAT;
 use super::super::HDR_FORMAT;
 
 const SHADOW_SIZE: u32 = 1024;
+const MAX_VISIBLE_PORTALS: usize = 128;
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
 const SHAFT_SHADER: &str = include_str!("../../../shaders/modern/sky_shafts.wgsl");
 const SHADER: &str = r#"
@@ -69,7 +70,8 @@ pub(super) struct DirectionalShadow {
     shaft_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
     portal_buffer: wgpu::Buffer,
-    portal_count: usize,
+    portals: Vec<PortalTriangle>,
+    visible_portal_count: usize,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     vertex_count: usize,
@@ -281,7 +283,8 @@ impl DirectionalShadow {
             shaft_pipeline,
             shadow_sampler,
             portal_buffer,
-            portal_count: portals.len(),
+            portals,
+            visible_portal_count: 0,
             vertex_buffer,
             index_buffer,
             vertex_count: vertices.len(),
@@ -301,11 +304,11 @@ impl DirectionalShadow {
         );
     }
 
-    pub(super) fn update(&self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
+    pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         let vertices = shadow_vertices(scene);
         let portals = shaft_portals(scene);
         if vertices.len() != self.vertex_count
-            || portals.len() != self.portal_count
+            || portals.len() != self.portals.len()
             || sky_exposed(scene) != self.enabled
         {
             return false;
@@ -313,13 +316,11 @@ impl DirectionalShadow {
         if !vertices.is_empty() {
             queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
-        if !portals.is_empty() {
-            queue.write_buffer(&self.portal_buffer, 0, bytemuck::cast_slice(&portals));
-        }
+        self.portals = portals;
         true
     }
 
-    pub(super) fn prepare(&self, queue: &wgpu::Queue, camera: &Camera, aspect: f32) {
+    pub(super) fn prepare(&mut self, queue: &wgpu::Queue, camera: &Camera, aspect: f32) {
         if !self.enabled {
             return;
         }
@@ -328,10 +329,15 @@ impl DirectionalShadow {
             0,
             bytemuck::bytes_of(&shadow_uniform(camera, aspect)),
         );
+        let portals = visible_portals(&self.portals, camera, aspect);
+        self.visible_portal_count = portals.len();
+        if !portals.is_empty() {
+            queue.write_buffer(&self.portal_buffer, 0, bytemuck::cast_slice(&portals));
+        }
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
-        if !self.enabled || self.index_count == 0 || self.portal_count == 0 {
+        if !self.enabled || self.index_count == 0 || self.visible_portal_count == 0 {
             return 0;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -370,7 +376,7 @@ impl DirectionalShadow {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
-        if !self.enabled || self.index_count == 0 || self.portal_count == 0 {
+        if !self.enabled || self.index_count == 0 || self.visible_portal_count == 0 {
             return 0;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -392,7 +398,7 @@ impl DirectionalShadow {
         pass.set_pipeline(&self.shaft_pipeline);
         pass.set_bind_group(0, &self.shaft_bind_group, &[]);
         pass.set_vertex_buffer(0, self.portal_buffer.slice(..));
-        pass.draw(0..6, 0..self.portal_count as u32);
+        pass.draw(0..6, 0..self.visible_portal_count as u32);
         1
     }
 }
@@ -550,6 +556,55 @@ fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
         .collect()
 }
 
+fn visible_portals(
+    portals: &[PortalTriangle],
+    camera: &Camera,
+    aspect: f32,
+) -> Vec<PortalTriangle> {
+    let view_projection = camera.view_projection(aspect);
+    let mut visible = portals
+        .iter()
+        .copied()
+        .filter(|portal| portal_in_view(*portal, view_projection))
+        .collect::<Vec<_>>();
+    visible.sort_by(|left, right| {
+        portal_distance_squared(*left, camera.position)
+            .total_cmp(&portal_distance_squared(*right, camera.position))
+    });
+    visible.truncate(MAX_VISIBLE_PORTALS);
+    visible
+}
+
+fn portal_in_view(portal: PortalTriangle, view_projection: Mat4) -> bool {
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let mut front_points = 0;
+    for point in [portal.a, portal.b, portal.c] {
+        let clip = view_projection * Vec3::from_slice(&point).extend(1.0);
+        if clip.w <= 0.001 {
+            continue;
+        }
+        let ndc = clip.truncate() / clip.w;
+        minimum = minimum.min(ndc);
+        maximum = maximum.max(ndc);
+        front_points += 1;
+    }
+    front_points != 0
+        && minimum.x <= 1.0
+        && maximum.x >= -1.0
+        && minimum.y <= 1.0
+        && maximum.y >= -1.0
+        && minimum.z <= 1.0
+        && maximum.z >= 0.0
+}
+
+fn portal_distance_squared(portal: PortalTriangle, camera_position: Vec3) -> f32 {
+    let center =
+        (Vec3::from_slice(&portal.a) + Vec3::from_slice(&portal.b) + Vec3::from_slice(&portal.c))
+            / 3.0;
+    center.distance_squared(camera_position)
+}
+
 fn shaft_color(scene: &RenderScene, texture: Option<usize>) -> Vec3 {
     let Some(texture) = texture.and_then(|index| scene.textures.get(index)) else {
         return Vec3::new(1.0, 0.82, 0.62);
@@ -589,7 +644,7 @@ fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
         view_projection: camera.view_projection(aspect).to_cols_array_2d(),
         inverse_view_projection: camera.view_projection(aspect).inverse().to_cols_array_2d(),
         camera_position: camera.position.extend(1.0).to_array(),
-        direction_density: [direction.x, direction.y, direction.z, 0.00008],
+        direction_density: [direction.x, direction.y, direction.z, 0.00025],
         distance_intensity_phase: [radius, 0.35, 0.45, 0.0],
     }
 }
@@ -650,6 +705,25 @@ mod tests {
         assert!(sky_exposed(&window));
         assert_eq!(shaft_portals(&window).len(), 1);
         assert!(shadow_caster_indices(&window).is_empty());
+    }
+
+    #[test]
+    fn shaft_sources_are_culled_outside_the_camera_view() {
+        let portal = |offset: Vec3| PortalTriangle {
+            a: (Vec3::new(-0.5, -0.5, 0.5) + offset).extend(1.0).to_array(),
+            b: (Vec3::new(0.5, -0.5, 0.5) + offset).extend(1.0).to_array(),
+            c: (Vec3::new(0.0, 0.5, 0.5) + offset).extend(1.0).to_array(),
+            color: [1.0; 4],
+        };
+        assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY));
+        assert!(!portal_in_view(
+            portal(Vec3::new(3.0, 0.0, 0.0)),
+            Mat4::IDENTITY
+        ));
+        assert!(!portal_in_view(
+            portal(Vec3::new(0.0, 0.0, -2.0)),
+            Mat4::IDENTITY
+        ));
     }
 
     #[test]
