@@ -60,10 +60,27 @@ pub(super) struct ShadowUniform {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct ShadowVertex {
     position: [f32; 3],
     transmission: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ShadowChangeBounds {
+    minimum: Vec3,
+    maximum: Vec3,
+}
+
+impl ShadowChangeBounds {
+    pub(super) fn new(minimum: Vec3, maximum: Vec3) -> Self {
+        Self { minimum, maximum }
+    }
+
+    pub(super) fn intersects_cube(self, center: Vec3, radius: f32) -> bool {
+        self.minimum.cmple(center + Vec3::splat(radius)).all()
+            && self.maximum.cmpge(center - Vec3::splat(radius)).all()
+    }
 }
 
 #[repr(C)]
@@ -109,7 +126,7 @@ pub(super) struct DirectionalShadow {
     froxel_portal_count: u32,
     light_view_projections: [[[f32; 4]; 4]; MAX_SHADOW_DIRECTIONS],
     vertex_buffer: wgpu::Buffer,
-    vertex_count: usize,
+    vertices: Vec<ShadowVertex>,
     enabled: bool,
     tuning: VolumetricTuning,
 }
@@ -396,7 +413,7 @@ impl DirectionalShadow {
             froxel_portal_count: 0,
             light_view_projections: [[[0.0; 4]; 4]; MAX_SHADOW_DIRECTIONS],
             vertex_buffer,
-            vertex_count: vertices.len(),
+            vertices,
             enabled,
             tuning: VolumetricTuning::default(),
         }
@@ -420,20 +437,26 @@ impl DirectionalShadow {
         }
     }
 
-    pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
+    pub(super) fn update(
+        &mut self,
+        queue: &wgpu::Queue,
+        scene: &RenderScene,
+    ) -> Option<Vec<ShadowChangeBounds>> {
         let vertices = shadow_vertices(scene);
         let portals = shaft_portals(scene, &self.aperture_layers);
-        if vertices.len() != self.vertex_count
+        if vertices.len() != self.vertices.len()
             || portals.len() != self.portals.len()
             || sky_exposed(scene) != self.enabled
         {
-            return false;
+            return None;
         }
-        if !vertices.is_empty() {
+        let changes = changed_shadow_bounds(&self.vertices, &vertices);
+        if !changes.is_empty() {
             queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
         }
+        self.vertices = vertices;
         self.portals = portals;
-        true
+        Some(changes)
     }
 
     pub(super) fn prepare(
@@ -499,7 +522,7 @@ impl DirectionalShadow {
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
-        if !self.enabled || self.vertex_count == 0 {
+        if !self.enabled || self.vertices.is_empty() {
             return 0;
         }
         let mut pass_count = 0;
@@ -528,12 +551,12 @@ impl DirectionalShadow {
     }
 
     pub(super) fn has_geometry(&self) -> bool {
-        self.vertex_count != 0
+        !self.vertices.is_empty()
     }
 
     pub(super) fn draw_geometry<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..self.vertex_count as u32, 0..1);
+        pass.draw(0..self.vertices.len() as u32, 0..1);
     }
 
     pub(super) fn render_shafts(
@@ -542,7 +565,7 @@ impl DirectionalShadow {
         target: &wgpu::TextureView,
     ) -> usize {
         if !self.enabled
-            || self.vertex_count == 0
+            || self.vertices.is_empty()
             || self.slices.iter().all(|slice| slice.portal_count == 0)
         {
             return 0;
@@ -906,6 +929,29 @@ fn shadow_vertices(scene: &RenderScene) -> Vec<ShadowVertex> {
         }));
     }
     vertices
+}
+
+fn changed_shadow_bounds(
+    previous: &[ShadowVertex],
+    current: &[ShadowVertex],
+) -> Vec<ShadowChangeBounds> {
+    previous
+        .chunks_exact(3)
+        .zip(current.chunks_exact(3))
+        .filter(|(previous, current)| previous != current)
+        .map(|(previous, current)| {
+            previous.iter().chain(current).fold(
+                ShadowChangeBounds::new(Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+                |bounds, vertex| {
+                    let position = Vec3::from_array(vertex.position);
+                    ShadowChangeBounds::new(
+                        bounds.minimum.min(position),
+                        bounds.maximum.max(position),
+                    )
+                },
+            )
+        })
+        .collect()
 }
 
 fn triangle_transmission(scene: &RenderScene, triangle: &[u32], surface: usize) -> f32 {
@@ -1702,5 +1748,20 @@ mod tests {
                 .max_element()
                 < 0.0001
         );
+    }
+
+    #[test]
+    fn changed_shadow_triangles_bound_their_old_and_new_positions() {
+        let vertex = |position: Vec3| ShadowVertex {
+            position: position.to_array(),
+            transmission: 0.0,
+        };
+        let previous = [vertex(Vec3::ZERO), vertex(Vec3::X), vertex(Vec3::Y)];
+        let current = [vertex(-Vec3::X), vertex(Vec3::X), vertex(Vec3::Y * 2.0)];
+        assert_eq!(
+            changed_shadow_bounds(&previous, &current),
+            [ShadowChangeBounds::new(-Vec3::X, Vec3::new(1.0, 2.0, 0.0))]
+        );
+        assert!(changed_shadow_bounds(&current, &current).is_empty());
     }
 }

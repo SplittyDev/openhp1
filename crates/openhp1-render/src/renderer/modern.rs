@@ -386,7 +386,7 @@ impl ModernRenderer {
     }
 
     pub(super) fn render(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         output: &wgpu::TextureView,

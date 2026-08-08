@@ -10,7 +10,11 @@ use openhp1_scene::{RenderLight, RenderScene};
 use crate::Camera;
 
 use super::super::super::DEPTH_FORMAT;
-use super::{VolumetricInstance, shadow::DirectionalShadow, texture_light_color};
+use super::{
+    VolumetricInstance,
+    shadow::{DirectionalShadow, ShadowChangeBounds},
+    texture_light_color,
+};
 
 // ponytail: Fixed local-light budget; make shadow allocation dynamic if authored scenes exceed it.
 pub(super) const MAX_POINT_SHADOWS: usize = 20;
@@ -79,6 +83,21 @@ struct PointSource {
     source_sprite: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PointShadowKey {
+    position: Vec3,
+    radius: f32,
+}
+
+impl From<PointSource> for PointShadowKey {
+    fn from(source: PointSource) -> Self {
+        Self {
+            position: source.position,
+            radius: source.radius,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct PointFixture {
     actor_indices: Vec<usize>,
@@ -99,6 +118,9 @@ pub(super) struct PointShadowRenderer {
     faces: Vec<Face>,
     sources: Vec<PointFixture>,
     selected: Vec<PointSource>,
+    cached: [Option<PointShadowKey>; MAX_POINT_SHADOWS],
+    dirty: [bool; MAX_POINT_SHADOWS],
+    geometry_changes: Vec<ShadowChangeBounds>,
 }
 
 impl PointShadowRenderer {
@@ -229,11 +251,15 @@ impl PointShadowRenderer {
             faces,
             sources: point_fixtures(scene),
             selected: Vec::new(),
+            cached: [None; MAX_POINT_SHADOWS],
+            dirty: [false; MAX_POINT_SHADOWS],
+            geometry_changes: Vec::new(),
         }
     }
 
-    pub(super) fn update(&mut self, scene: &RenderScene) {
+    pub(super) fn update(&mut self, scene: &RenderScene, changes: Vec<ShadowChangeBounds>) {
         self.sources = point_fixtures(scene);
+        self.geometry_changes.extend(changes);
     }
 
     pub(super) fn prepare(
@@ -243,17 +269,31 @@ impl PointShadowRenderer {
         aspect: f32,
     ) -> (Vec<usize>, Vec<VolumetricInstance>) {
         let (shadowed_actor_indices, selected) = select_sources(&self.sources, camera, aspect);
-        self.selected = selected;
-        for (shadow_index, source) in self.selected.iter().enumerate() {
-            for face_index in 0..FACE_COUNT {
-                let face = &self.faces[shadow_index * FACE_COUNT + face_index];
-                queue.write_buffer(
-                    &face.uniform,
-                    0,
-                    bytemuck::bytes_of(&face_uniform(*source, face_index)),
-                );
+        for shadow_index in 0..MAX_POINT_SHADOWS {
+            let Some(source) = selected.get(shadow_index).copied() else {
+                self.cached[shadow_index] = None;
+                self.dirty[shadow_index] = false;
+                continue;
+            };
+            let key = PointShadowKey::from(source);
+            let key_changed = self.cached[shadow_index] != Some(key);
+            let needs_render =
+                shadow_map_needs_render(self.cached[shadow_index], source, &self.geometry_changes);
+            self.dirty[shadow_index] |= needs_render;
+            self.cached[shadow_index] = Some(key);
+            if key_changed {
+                for face_index in 0..FACE_COUNT {
+                    let face = &self.faces[shadow_index * FACE_COUNT + face_index];
+                    queue.write_buffer(
+                        &face.uniform,
+                        0,
+                        bytemuck::bytes_of(&face_uniform(source, face_index)),
+                    );
+                }
             }
         }
+        self.geometry_changes.clear();
+        self.selected = selected;
         let instances = self
             .selected
             .iter()
@@ -268,35 +308,54 @@ impl PointShadowRenderer {
     }
 
     pub(super) fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         geometry: &DirectionalShadow,
     ) -> usize {
         if self.selected.is_empty() || !geometry.has_geometry() {
             return 0;
         }
-        for face in self.faces.iter().take(self.selected.len() * FACE_COUNT) {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("OpenHP1 volumetric point shadow pass"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &face.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+        let mut pass_count = 0;
+        for shadow_index in 0..self.selected.len() {
+            if !self.dirty[shadow_index] {
+                continue;
+            }
+            for face in &self.faces[shadow_index * FACE_COUNT..(shadow_index + 1) * FACE_COUNT] {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("OpenHP1 volumetric point shadow pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &face.view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &face.bind_group, &[]);
-            geometry.draw_geometry(&mut pass);
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &face.bind_group, &[]);
+                geometry.draw_geometry(&mut pass);
+                pass_count += 1;
+            }
+            self.dirty[shadow_index] = false;
         }
-        self.selected.len() * FACE_COUNT
+        pass_count
     }
+}
+
+fn shadow_map_needs_render(
+    cached: Option<PointShadowKey>,
+    source: PointSource,
+    geometry_changes: &[ShadowChangeBounds],
+) -> bool {
+    cached != Some(PointShadowKey::from(source))
+        || geometry_changes
+            .iter()
+            .any(|bounds| bounds.intersects_cube(source.position, source.radius))
 }
 
 fn point_sources(scene: &RenderScene) -> Vec<PointSource> {
@@ -754,5 +813,51 @@ mod tests {
         .validate(&module)
         .unwrap();
         assert_eq!(size_of::<FaceUniform>(), 80);
+    }
+
+    #[test]
+    fn point_shadow_cache_tracks_only_inputs_that_can_change_the_map() {
+        let source = PointSource {
+            actor_index: 1,
+            position: Vec3::ZERO,
+            color: Vec3::ONE,
+            radius: 100.0,
+            fixture_emitter: true,
+            source_sprite: false,
+        };
+        let cached = Some(PointShadowKey::from(source));
+        assert!(!shadow_map_needs_render(cached, source, &[]));
+        assert!(!shadow_map_needs_render(
+            cached,
+            PointSource {
+                color: Vec3::X,
+                ..source
+            },
+            &[]
+        ));
+        assert!(!shadow_map_needs_render(
+            cached,
+            source,
+            &[ShadowChangeBounds::new(
+                Vec3::splat(200.0),
+                Vec3::splat(300.0)
+            )]
+        ));
+        assert!(shadow_map_needs_render(
+            cached,
+            source,
+            &[ShadowChangeBounds::new(
+                Vec3::splat(99.0),
+                Vec3::splat(101.0)
+            )]
+        ));
+        assert!(shadow_map_needs_render(
+            cached,
+            PointSource {
+                position: Vec3::X,
+                ..source
+            },
+            &[]
+        ));
     }
 }

@@ -43,7 +43,35 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bounds = renderer.bounds();
     let radius = bounds.radius().max(100.0);
     let center = bounds.center();
-    let camera = Camera::looking_at(center, center - Vec3::Z, (radius * 10.0).max(10_000.0));
+    let far = (radius * 10.0).max(10_000.0);
+    let corona_actors = scene
+        .render
+        .coronas
+        .iter()
+        .map(|corona| corona.actor_index)
+        .collect::<std::collections::HashSet<_>>();
+    let camera = scene
+        .render
+        .realtime_lightmaps
+        .iter()
+        .flat_map(|lightmap| &lightmap.lights)
+        .find(|light| {
+            light.actor_index != usize::MAX
+                && light.effect != 4
+                && (light.source_texture.is_some()
+                    || corona_actors.contains(&light.actor_index)
+                    || (light.brightness != 0
+                        && light.volume_radius != 0
+                        && light.volume_brightness != 0))
+        })
+        .map(|light| {
+            Camera::looking_at(
+                light.location + Vec3::new(0.0, -250.0, 50.0),
+                light.location,
+                far,
+            )
+        })
+        .unwrap_or_else(|| Camera::looking_at(center, center - Vec3::Z, far));
     let output = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("OpenHP1 Modern benchmark output"),
         size: wgpu::Extent3d {

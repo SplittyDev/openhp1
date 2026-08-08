@@ -1073,7 +1073,7 @@ impl Renderer {
             draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups);
         }
         drop(pass);
-        if let Some(modern) = &self.modern {
+        if let Some(modern) = &mut self.modern {
             draw_calls += modern.render(
                 queue,
                 encoder,

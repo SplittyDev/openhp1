@@ -122,6 +122,13 @@ and tone mapping. Unshadowed fallback volumes retain the analytic integral;
 shadowed sources use a bounded march. The classic scene shader, uniform layout,
 target format, depth usage, draw order, and display-gamma path remain unchanged.
 
+Point-shadow cube faces persist across frames. A slot is redrawn only when its
+selected source position or radius changes, or when an exactly changed opaque
+shadow-caster triangle overlaps that light's cube. Camera motion can change the
+selected slot but does not otherwise invalidate a point shadow. Changed caster
+bounds include both the old and new triangle positions, so moving geometry
+cannot leave stale depth behind.
+
 Directional shafts use a renderer-owned four-layer shadow map over opaque scene
 geometry and a camera-aligned `rgba16float` froxel volume. At the normal
 1024x768 internal resolution the volume is 128x96x64, with exponential depth

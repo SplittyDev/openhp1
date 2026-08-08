@@ -196,8 +196,11 @@ impl VolumetricRenderer {
         }
         self.instance_actor_indices = instance_actor_indices;
         self.instances = instances;
-        self.point_shadows.update(scene);
-        self.shadow.update(queue, scene)
+        let Some(shadow_changes) = self.shadow.update(queue, scene) else {
+            return false;
+        };
+        self.point_shadows.update(scene, shadow_changes);
+        true
     }
 
     pub(super) fn prepare_frame(
@@ -267,7 +270,7 @@ impl VolumetricRenderer {
     }
 
     pub(super) fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
