@@ -9660,7 +9660,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         .unwrap()
         .unwrap();
     moving_brush.insert(
-        key_rot,
+        key_rot.clone(),
         StoredValue::Array(vec![StoredValue::Value(Value::Rotator([0; 3])); 8]),
     );
     runtime.instances.insert(1, rejected_instance.clone());
@@ -9816,7 +9816,72 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             .unwrap(),
         0.0
     );
+
     runtime.instances.remove(&1);
+    for (name, value) in [
+        ("Location", Value::Vector([0.0; 3])),
+        ("Rotation", Value::Rotator([0; 3])),
+        ("CollisionRadius", Value::Float(40.0)),
+        ("CollisionWidth", Value::Float(10.0)),
+        ("CollideType", Value::Byte(2)),
+        ("OldPos", Value::Vector([0.0; 3])),
+        ("BasePos", Value::Vector([0.0; 3])),
+        ("bCollideWorld", Value::Bool(false)),
+        ("bInterpolating", Value::Bool(true)),
+    ] {
+        runtime
+            .set_actor_value(&mover_class, &mut moving_brush, name, value)
+            .unwrap();
+    }
+    assert_eq!(
+        moving_brush.insert(fields["Brush"].clone(), StoredValue::Object(None)),
+        Some(StoredValue::Object(Some(mover_brush)))
+    );
+    let mut key_rotations = vec![StoredValue::Value(Value::Rotator([0; 3])); 8];
+    key_rotations[1] = StoredValue::Value(Value::Rotator([0, 16_384, 0]));
+    moving_brush.insert(key_rot, StoredValue::Array(key_rotations));
+
+    runtime.instances.insert(0, moving_brush);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let mut door_walker = rejected_instance.clone();
+    runtime
+        .set_actor_value(
+            &rejected_class,
+            &mut door_walker,
+            "bCollideWorld",
+            Value::Bool(false),
+        )
+        .unwrap();
+    runtime
+        .set_actor_value(
+            &rejected_class,
+            &mut door_walker,
+            "Location",
+            Value::Vector([30.0, -80.0, 0.0]),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime
+            .test_move_actor(1, &rejected_class, [0.0, 160.0, 0.0], &door_walker,)
+            .unwrap()
+            .actor,
+        Some(0),
+        "the same pawn route must be blocked while the door is closed"
+    );
+    let mut moving_brush = runtime.instances.remove(&0).unwrap();
+    runtime
+        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .unwrap();
+    let doorway_hit = runtime
+        .test_move_actor(1, &rejected_class, [0.0, 160.0, 0.0], &door_walker)
+        .unwrap();
+    assert_eq!(
+        doorway_hit.actor, None,
+        "a pawn must pass the old collision angle after a rotating door opens"
+    );
+    assert_eq!(doorway_hit.fraction, 1.0);
+
     runtime.instances.insert(0, moving_brush);
 
     runtime

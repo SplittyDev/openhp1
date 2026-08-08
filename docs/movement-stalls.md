@@ -151,6 +151,11 @@ For a blocking encroachment mode, its collision path calls
 Those mover rules and the pawn's `MoveSmooth` rules are separate and both must
 be honored.
 
+Moving-brush rotation must use the same runtime mutation path as native
+`SetRotation`. Updating only the serialized `Rotation` value and render action
+leaves the cached collision transform at the previous angle, so an authored
+rotating door can look open while still blocking a scripted pawn as if closed.
+
 ## Harry jump and ledge states are separate
 
 Harry's ordinary jump and ledge-climb flow is not a fallback used by
@@ -180,8 +185,9 @@ A faithful runtime should be checked at these shared boundaries:
    relocation result;
 6. preserve mover collision and `EncroachingOn` semantics independently;
 7. prevent ambient bump emotes while the original HUD cutscene flag is set.
+8. keep a moving brush's rendered and cached collision rotations synchronized.
 
-If all seven hold, a blocked scripted pawn can end at an imperfect visible
+If all eight hold, a blocked scripted pawn can end at an imperfect visible
 location, but it cannot retain player capture forever. A forced scene release,
 actor-specific collision exception, or map-specific teleport would bypass
 the original contract rather than restore it.

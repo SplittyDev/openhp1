@@ -1272,7 +1272,7 @@ impl ScriptRuntime {
         }
     }
 
-    fn set_actor_rotation(
+    pub(super) fn set_actor_rotation(
         &mut self,
         actor: usize,
         actor_class: &ResolvedObject,
