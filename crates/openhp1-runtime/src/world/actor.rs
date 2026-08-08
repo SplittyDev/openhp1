@@ -768,12 +768,11 @@ impl ScriptRuntime {
             let class = self.resolved_object(&class)?;
             let instance = self
                 .instances
-                .get(&pawn)
-                .cloned()
+                .remove(&pawn)
                 .ok_or(DispatchError::ActiveActorContext { actor: pawn })?;
-            let Some(StoredValue::Object(Some(weapon))) =
-                self.instance_property(&class, &instance, "Weapon")?
-            else {
+            let weapon = self.instance_property(&class, &instance, "Weapon");
+            self.instances.insert(pawn, instance);
+            let Some(StoredValue::Object(Some(weapon))) = weapon? else {
                 continue;
             };
             let Some(&weapon) = self.object_actors.get(&weapon) else {
