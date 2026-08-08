@@ -2307,16 +2307,19 @@ impl ScriptRuntime {
                     .map_err(|error| error.to_string())?;
                 self.collision_fields(&class)?
             };
-            let instance = if actor == current_actor {
-                current_instance.clone()
+            let collision_actor = if actor == current_actor {
+                self.collision_actor_from_fields(actor, current_instance, &fields)?
             } else {
-                self.instances
-                    .get(&actor)
-                    .ok_or_else(|| format!("actor {actor} instance is active"))?
-                    .clone()
+                let instance = self
+                    .instances
+                    .remove(&actor)
+                    .ok_or_else(|| format!("actor {actor} instance is active"))?;
+                let result = self.collision_actor_from_fields(actor, &instance, &fields);
+                self.instances.insert(actor, instance);
+                result?
             };
             self.collision_actors[actor] = Some(CachedCollisionActor {
-                actor: self.collision_actor_from_fields(actor, &instance, &fields)?,
+                actor: collision_actor,
                 fields,
             });
         }
@@ -2377,16 +2380,20 @@ impl ScriptRuntime {
         if !fields.contains(field) {
             return Ok(());
         }
-        let instance = match current_instance {
-            Some(instance) => instance.clone(),
-            None => self
-                .instances
-                .get(&actor)
-                .ok_or_else(|| format!("actor {actor} instance is active"))?
-                .clone(),
+        let cached = match current_instance {
+            Some(instance) => self.collision_actor_from_fields(actor, instance, &fields)?,
+            None => {
+                let instance = self
+                    .instances
+                    .remove(&actor)
+                    .ok_or_else(|| format!("actor {actor} instance is active"))?;
+                let result = self.collision_actor_from_fields(actor, &instance, &fields);
+                self.instances.insert(actor, instance);
+                result?
+            }
         };
         self.collision_actors[actor] = Some(CachedCollisionActor {
-            actor: self.collision_actor_from_fields(actor, &instance, &fields)?,
+            actor: cached,
             fields,
         });
         self.reindex_cached_collision_actor(actor);
