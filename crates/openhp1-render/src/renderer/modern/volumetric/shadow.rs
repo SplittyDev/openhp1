@@ -57,6 +57,7 @@ struct PortalTriangle {
     b: [f32; 4],
     c: [f32; 4],
     color: [f32; 4],
+    direction: [f32; 4],
 }
 
 pub(super) struct DirectionalShadow {
@@ -89,7 +90,7 @@ impl DirectionalShadow {
     }
 
     fn portal_layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
+        const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
         wgpu::VertexBufferLayout {
             array_stride: size_of::<PortalTriangle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -540,20 +541,32 @@ fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
                 return None;
             }
             let &[a, b, c] = triangle else { return None };
+            let a = unreal_to_render(*scene.mesh.positions.get(a as usize)?);
+            let b = unreal_to_render(*scene.mesh.positions.get(b as usize)?);
+            let c = unreal_to_render(*scene.mesh.positions.get(c as usize)?);
             Some(PortalTriangle {
-                a: unreal_to_render(*scene.mesh.positions.get(a as usize)?)
-                    .extend(1.0)
-                    .to_array(),
-                b: unreal_to_render(*scene.mesh.positions.get(b as usize)?)
-                    .extend(1.0)
-                    .to_array(),
-                c: unreal_to_render(*scene.mesh.positions.get(c as usize)?)
-                    .extend(1.0)
-                    .to_array(),
+                a: a.extend(1.0).to_array(),
+                b: b.extend(1.0).to_array(),
+                c: c.extend(1.0).to_array(),
                 color: shaft_color(scene, material.texture).extend(1.0).to_array(),
+                direction: portal_direction(a, b, c).extend(0.0).to_array(),
             })
         })
         .collect()
+}
+
+fn portal_direction(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let normal = (b - a).cross(c - a).normalize_or_zero();
+    let horizontal_normal = Vec3::new(normal.x, 0.0, normal.z).normalize_or_zero();
+    let mut direction = SUN_DIRECTION.normalize();
+    if horizontal_normal != Vec3::ZERO {
+        let outward = direction.dot(horizontal_normal);
+        if outward > 0.0 {
+            direction -= horizontal_normal * (2.0 * outward);
+        }
+        direction -= horizontal_normal * (0.35 + direction.dot(horizontal_normal)).max(0.0);
+    }
+    direction.normalize()
 }
 
 fn visible_portals(
@@ -723,6 +736,7 @@ mod tests {
             b: (Vec3::new(0.5, -0.5, 0.5) + offset).extend(1.0).to_array(),
             c: (Vec3::new(0.0, 0.5, 0.5) + offset).extend(1.0).to_array(),
             color: [1.0; 4],
+            direction: [0.0; 4],
         };
         assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY));
         assert!(!portal_in_view(
@@ -742,9 +756,21 @@ mod tests {
             b: Vec3::X.extend(1.0).to_array(),
             c: Vec3::Y.extend(1.0).to_array(),
             color: [1.0; 4],
+            direction: [0.0; 4],
         };
         assert!(camera_on_interior_side(portal, -Vec3::Z));
         assert!(!camera_on_interior_side(portal, Vec3::Z));
+    }
+
+    #[test]
+    fn opposite_wall_shafts_remain_downward_and_point_inward() {
+        let left = portal_direction(Vec3::ZERO, Vec3::Y, Vec3::Z);
+        let right = portal_direction(Vec3::ZERO, Vec3::Z, Vec3::Y);
+
+        assert!(left.y < 0.0);
+        assert!(right.y < 0.0);
+        assert!(left.x < 0.0);
+        assert!(right.x > 0.0);
     }
 
     #[test]

@@ -25,18 +25,8 @@ struct PortalVertex {
     @location(1) @interpolate(flat) b: vec4<f32>,
     @location(2) @interpolate(flat) c: vec4<f32>,
     @location(3) @interpolate(flat) color: vec4<f32>,
+    @location(4) @interpolate(flat) direction: vec4<f32>,
 };
-
-fn portal_direction(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
-    let normal = normalize(cross(b - a, c - a));
-    var direction = settings.direction_density.xyz;
-    if dot(normal, direction) > 0.0 {
-        direction = -direction;
-    }
-    // BSP window normals face out of the playable volume. Keep the shaft on
-    // the opposite side and avoid a grazing direction collapsing into the wall.
-    return normalize(direction - normal * max(0.35 + dot(normal, direction), 0.0));
-}
 
 @vertex
 fn vertex_fullscreen(
@@ -45,6 +35,7 @@ fn vertex_fullscreen(
     @location(1) b: vec4<f32>,
     @location(2) c: vec4<f32>,
     @location(3) color: vec4<f32>,
+    @location(4) direction: vec4<f32>,
 ) -> PortalVertex {
     let corners = array<vec2<f32>, 6>(
         vec2(-1.0, -1.0),
@@ -54,8 +45,7 @@ fn vertex_fullscreen(
         vec2(1.0, -1.0),
         vec2(1.0, 1.0),
     );
-    let direction = portal_direction(a.xyz, b.xyz, c.xyz);
-    let extrusion = direction * min(settings.distance_intensity_phase.x * 0.5, 1500.0);
+    let extrusion = direction.xyz * min(settings.distance_intensity_phase.x * 0.5, 1500.0);
     let points = array<vec3<f32>, 6>(
         a.xyz, b.xyz, c.xyz, a.xyz + extrusion, b.xyz + extrusion, c.xyz + extrusion,
     );
@@ -90,10 +80,17 @@ fn vertex_fullscreen(
     output.b = b;
     output.c = c;
     output.color = color;
+    output.direction = direction;
     return output;
 }
 
-fn inside_portal_volume(world: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> bool {
+fn inside_portal_volume(
+    world: vec3<f32>,
+    a: vec3<f32>,
+    b: vec3<f32>,
+    c: vec3<f32>,
+    direction: vec3<f32>,
+) -> bool {
     let edge_ab = b - a;
     let edge_ac = c - a;
     let normal = cross(edge_ab, edge_ac);
@@ -101,7 +98,6 @@ fn inside_portal_volume(world: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f3
         return false;
     }
 
-    let direction = portal_direction(a, b, c);
     let denominator = dot(normal, direction);
     if abs(denominator) < 0.0001 {
         return false;
@@ -145,7 +141,13 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     for (var step = 0u; step < STEP_COUNT; step++) {
         let distance = (f32(step) + 0.5) * step_length;
         let sample_position = settings.camera_position.xyz + ray_direction * distance;
-        if inside_portal_volume(sample_position, input.a.xyz, input.b.xyz, input.c.xyz) {
+        if inside_portal_volume(
+            sample_position,
+            input.a.xyz,
+            input.b.xyz,
+            input.c.xyz,
+            input.direction.xyz,
+        ) {
             path_length += step_length;
         }
     }
