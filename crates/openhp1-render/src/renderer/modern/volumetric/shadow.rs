@@ -1,7 +1,7 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use openhp1_scene::{RenderScene, SurfaceMode};
 use wgpu::util::DeviceExt;
 
@@ -548,7 +548,9 @@ fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
                 a: a.extend(1.0).to_array(),
                 b: b.extend(1.0).to_array(),
                 c: c.extend(1.0).to_array(),
-                color: shaft_color(scene, material.texture).extend(1.0).to_array(),
+                color: shaft_color(scene, triangle, material.texture)
+                    .extend(1.0)
+                    .to_array(),
                 direction: portal_direction(a, b, c).extend(0.0).to_array(),
             })
         })
@@ -627,7 +629,34 @@ fn portal_distance_squared(portal: PortalTriangle, camera_position: Vec3) -> f32
     center.distance_squared(camera_position)
 }
 
-fn shaft_color(scene: &RenderScene, texture: Option<usize>) -> Vec3 {
+fn shaft_color(scene: &RenderScene, triangle: &[u32], texture: Option<usize>) -> Vec3 {
+    if let Some(lightmap) = triangle
+        .first()
+        .and_then(|&vertex| scene.mesh.vertex_lightmaps.get(vertex as usize))
+        .copied()
+        .flatten()
+        .and_then(|index| scene.lightmaps.get(index))
+    {
+        let coordinates = triangle.iter().fold(Vec2::ZERO, |sum, &vertex| {
+            sum + scene.mesh.lightmap_coordinates[vertex as usize]
+        }) / triangle.len() as f32;
+        let x = coordinates
+            .x
+            .clamp(0.0, lightmap.width.saturating_sub(1) as f32) as usize;
+        let y = coordinates
+            .y
+            .clamp(0.0, lightmap.height.saturating_sub(1) as f32) as usize;
+        let pixel = &lightmap.rgba[(y * lightmap.width as usize + x) * 4..][..3];
+        let color = Vec3::new(
+            f32::from(pixel[0]),
+            f32::from(pixel[1]),
+            f32::from(pixel[2]),
+        ) / 255.0;
+        if color.max_element() > 0.0 {
+            return color / color.max_element() * 0.55;
+        }
+    }
+
     let Some(texture) = texture.and_then(|index| scene.textures.get(index)) else {
         return Vec3::new(1.0, 0.82, 0.62);
     };
@@ -676,7 +705,7 @@ fn snap_shadow_center(center: Vec3, direction: Vec3, radius: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use glam::Vec2;
-    use openhp1_scene::{SurfaceMaterial, TextureImage, TriangleMesh};
+    use openhp1_scene::{LightmapImage, SurfaceMaterial, TextureImage, TriangleMesh};
 
     use super::*;
 
@@ -775,10 +804,26 @@ mod tests {
             rgba: vec![255, 0, 0, 0],
         });
 
-        let color = shaft_color(&scene, Some(0));
+        let color = shaft_color(&scene, &[0, 1, 2], Some(0));
 
         assert!(color.x > color.y * 4.0);
         assert!(color.x > color.z * 4.0);
+    }
+
+    #[test]
+    fn shaft_color_prefers_the_authored_window_lightmap_tint() {
+        let mut scene = scene(SurfaceMode::Opaque, false);
+        scene.mesh.vertex_lightmaps.fill(Some(0));
+        scene.lightmaps.push(LightmapImage {
+            width: 1,
+            height: 1,
+            rgba: vec![8, 16, 64, 255],
+        });
+
+        let color = shaft_color(&scene, &[0, 1, 2], None);
+
+        assert!(color.z > color.x * 4.0);
+        assert!(color.z > color.y * 2.0);
     }
 
     #[test]
