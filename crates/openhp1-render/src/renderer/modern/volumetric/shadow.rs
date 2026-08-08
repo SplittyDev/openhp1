@@ -565,7 +565,10 @@ fn visible_portals(
     let mut visible = portals
         .iter()
         .copied()
-        .filter(|portal| portal_in_view(*portal, view_projection))
+        .filter(|portal| {
+            camera_on_interior_side(*portal, camera.position)
+                && portal_in_view(*portal, view_projection)
+        })
         .collect::<Vec<_>>();
     visible.sort_by(|left, right| {
         portal_distance_squared(*left, camera.position)
@@ -573,6 +576,12 @@ fn visible_portals(
     });
     visible.truncate(MAX_VISIBLE_PORTALS);
     visible
+}
+
+fn camera_on_interior_side(portal: PortalTriangle, camera_position: Vec3) -> bool {
+    let a = Vec3::from_slice(&portal.a);
+    let normal = (Vec3::from_slice(&portal.b) - a).cross(Vec3::from_slice(&portal.c) - a);
+    normal.dot(camera_position - a) < 0.0
 }
 
 fn portal_in_view(portal: PortalTriangle, view_projection: Mat4) -> bool {
@@ -724,6 +733,18 @@ mod tests {
             portal(Vec3::new(0.0, 0.0, -2.0)),
             Mat4::IDENTITY
         ));
+    }
+
+    #[test]
+    fn window_shafts_only_render_from_the_bsp_interior_side() {
+        let portal = PortalTriangle {
+            a: Vec3::ZERO.extend(1.0).to_array(),
+            b: Vec3::X.extend(1.0).to_array(),
+            c: Vec3::Y.extend(1.0).to_array(),
+            color: [1.0; 4],
+        };
+        assert!(camera_on_interior_side(portal, -Vec3::Z));
+        assert!(!camera_on_interior_side(portal, Vec3::Z));
     }
 
     #[test]

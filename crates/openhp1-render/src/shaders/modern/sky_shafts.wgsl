@@ -30,12 +30,12 @@ struct PortalVertex {
 fn portal_direction(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
     let normal = normalize(cross(b - a, c - a));
     var direction = settings.direction_density.xyz;
-    if dot(normal, direction) < 0.0 {
+    if dot(normal, direction) > 0.0 {
         direction = -direction;
     }
-    // BSP surface winding gives the stable playable side of the aperture.
-    // Keep the sun direction on that side without involving the camera.
-    return normalize(direction + normal * max(0.35 - dot(normal, direction), 0.0));
+    // BSP window normals face out of the playable volume. Keep the shaft on
+    // the opposite side and avoid a grazing direction collapsing into the wall.
+    return normalize(direction - normal * max(0.35 + dot(normal, direction), 0.0));
 }
 
 @vertex
