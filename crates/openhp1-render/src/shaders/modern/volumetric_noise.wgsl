@@ -16,6 +16,18 @@ fn volumetric_noise(point: vec3<f32>) -> f32 {
 fn volumetric_dust(position: vec3<f32>, time: f32, settings: vec4<f32>) -> f32 {
     let direction = normalize(vec3(3.2, -1.4, 2.2));
     let drift = direction * time * settings.w;
-    let haze = volumetric_noise((position + drift) / max(settings.x, 0.001));
+    let point = (position + drift) / max(settings.x, 0.001);
+    let haze = volumetric_noise(point) * 0.72
+        + volumetric_noise(point * 2.17 + vec3(19.0, 43.0, 71.0)) * 0.28;
     return mix(1.0, haze * 2.0, settings.z);
+}
+
+fn volumetric_henyey_greenstein(cosine: f32, anisotropy: f32) -> f32 {
+    let g = clamp(anisotropy, -0.95, 0.95);
+    let denominator = max(1.0 + g * g - 2.0 * g * cosine, 0.0001);
+    return (1.0 - g * g) / (12.5663706 * denominator * sqrt(denominator));
+}
+
+fn volumetric_segment_transmittance(extinction: f32, distance: f32) -> f32 {
+    return exp(-max(extinction, 0.0) * max(distance, 0.0));
 }

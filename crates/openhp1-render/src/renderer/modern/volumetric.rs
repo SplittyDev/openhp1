@@ -12,9 +12,11 @@ use crate::{Camera, VolumetricDebugView, VolumetricTuning};
 
 use super::HDR_FORMAT;
 
+mod froxel;
 mod point_shadow;
 mod shadow;
 
+use froxel::FroxelVolume;
 use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer, fixture_energy_scales};
 use shadow::DirectionalShadow;
 
@@ -44,6 +46,7 @@ struct VolumetricInstance {
 
 pub(super) struct VolumetricRenderer {
     shadow: DirectionalShadow,
+    froxel: FroxelVolume,
     point_shadows: PointShadowRenderer,
     uniform: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
@@ -62,10 +65,12 @@ impl VolumetricRenderer {
     pub(super) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        viewport_size: [u32; 2],
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
         let shadow = DirectionalShadow::new(device, queue, depth_view, scene);
+        let froxel = FroxelVolume::new(device, viewport_size, depth_view, &shadow);
         let point_shadows = PointShadowRenderer::new(device, scene);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
@@ -144,6 +149,7 @@ impl VolumetricRenderer {
         let tuning = VolumetricTuning::default();
         Self {
             shadow,
+            froxel,
             point_shadows,
             uniform,
             layout,
@@ -164,7 +170,12 @@ impl VolumetricRenderer {
         self.shadow.set_tuning(tuning);
     }
 
-    pub(super) fn resize(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
+    pub(super) fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        viewport_size: [u32; 2],
+        depth_view: &wgpu::TextureView,
+    ) {
         self.bind_group = bind_group(
             device,
             &self.layout,
@@ -174,6 +185,8 @@ impl VolumetricRenderer {
             &self.point_shadows.sampler,
         );
         self.shadow.resize(device, depth_view);
+        self.froxel
+            .resize(device, viewport_size, depth_view, &self.shadow);
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
@@ -224,6 +237,14 @@ impl VolumetricRenderer {
         );
         self.shadow
             .prepare(queue, camera, aspect, viewport_size, elapsed_time);
+        self.froxel.prepare(
+            queue,
+            camera,
+            aspect,
+            elapsed_time,
+            self.tuning,
+            &self.shadow,
+        );
         let (shadowed_actor_indices, point_volumes) =
             self.point_shadows.prepare(queue, camera, aspect);
         let instances = unshadowed_instances(
@@ -266,13 +287,21 @@ impl VolumetricRenderer {
         } else {
             0
         };
-        let shaft_passes = if directional {
+        let froxel_passes = if matches!(
+            debug_view,
+            VolumetricDebugView::Composite | VolumetricDebugView::Scattering
+        ) {
+            self.froxel.render(encoder, target)
+        } else {
+            0
+        };
+        let effect_passes = if directional {
             self.shadow.render_shafts(encoder, target)
         } else {
             0
         };
         if !local || (self.instance_count == 0 && self.point_volume_count == 0) {
-            return shadow_passes + point_shadow_passes + shaft_passes;
+            return shadow_passes + point_shadow_passes + froxel_passes + effect_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 volumetric lighting pass"),
@@ -305,7 +334,7 @@ impl VolumetricRenderer {
             };
             pass.draw(0..6, 0..count as u32);
         }
-        shadow_passes + point_shadow_passes + shaft_passes + 1
+        shadow_passes + point_shadow_passes + froxel_passes + effect_passes + 1
     }
 }
 

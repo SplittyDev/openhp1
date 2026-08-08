@@ -37,6 +37,8 @@ struct PortalVertex {
     @location(5) @interpolate(flat) uv_a: vec4<f32>,
     @location(6) @interpolate(flat) uv_b: vec4<f32>,
     @location(7) @interpolate(flat) uv_c: vec4<f32>,
+    @location(8) @interpolate(flat) center_scale: vec4<f32>,
+    @location(9) @interpolate(flat) uv_bounds: vec4<f32>,
 };
 
 @vertex
@@ -50,6 +52,8 @@ fn vertex_fullscreen(
     @location(5) uv_a: vec4<f32>,
     @location(6) uv_b: vec4<f32>,
     @location(7) uv_c: vec4<f32>,
+    @location(8) center_scale: vec4<f32>,
+    @location(9) uv_bounds: vec4<f32>,
 ) -> PortalVertex {
     let corners = array<vec2<f32>, 6>(
         vec2(-1.0, -1.0),
@@ -60,8 +64,12 @@ fn vertex_fullscreen(
         vec2(1.0, 1.0),
     );
     let extrusion = direction.xyz * min(settings.distance_intensity_pixel.x * 0.5, 1500.0);
+    let end_scale = max(center_scale.w, 1.0);
+    let end_a = center_scale.xyz + (a.xyz - center_scale.xyz) * end_scale + extrusion;
+    let end_b = center_scale.xyz + (b.xyz - center_scale.xyz) * end_scale + extrusion;
+    let end_c = center_scale.xyz + (c.xyz - center_scale.xyz) * end_scale + extrusion;
     let points = array<vec3<f32>, 6>(
-        a.xyz, b.xyz, c.xyz, a.xyz + extrusion, b.xyz + extrusion, c.xyz + extrusion,
+        a.xyz, b.xyz, c.xyz, end_a, end_b, end_c,
     );
     var minimum = vec2(1.0);
     var maximum = vec2(-1.0);
@@ -98,18 +106,74 @@ fn vertex_fullscreen(
     output.uv_a = uv_a;
     output.uv_b = uv_b;
     output.uv_c = uv_c;
+    output.center_scale = center_scale;
+    output.uv_bounds = uv_bounds;
     return output;
 }
 
-fn aperture_transmission(uv: vec2<f32>, layer: f32) -> f32 {
-    let value = textureSampleLevel(
+@vertex
+fn vertex_projection(
+    @builtin(vertex_index) vertex_index: u32,
+    @location(0) a: vec4<f32>,
+    @location(1) b: vec4<f32>,
+    @location(2) c: vec4<f32>,
+    @location(3) color: vec4<f32>,
+    @location(4) direction: vec4<f32>,
+    @location(5) uv_a: vec4<f32>,
+    @location(6) uv_b: vec4<f32>,
+    @location(7) uv_c: vec4<f32>,
+    @location(8) center_scale: vec4<f32>,
+    @location(9) uv_bounds: vec4<f32>,
+) -> PortalVertex {
+    let corners = array<vec2<f32>, 6>(
+        vec2(-1.0, -1.0),
+        vec2(1.0, -1.0),
+        vec2(-1.0, 1.0),
+        vec2(-1.0, 1.0),
+        vec2(1.0, -1.0),
+        vec2(1.0, 1.0),
+    );
+    var output: PortalVertex;
+    output.position = vec4(corners[vertex_index], 0.0, 1.0);
+    output.a = a;
+    output.b = b;
+    output.c = c;
+    output.color = color;
+    output.direction = direction;
+    output.uv_a = uv_a;
+    output.uv_b = uv_b;
+    output.uv_c = uv_c;
+    output.center_scale = center_scale;
+    output.uv_bounds = uv_bounds;
+    return output;
+}
+
+fn aperture_value(uv: vec2<f32>, layer: f32) -> f32 {
+    return textureSampleLevel(
         aperture_masks,
         aperture_sampler,
         uv,
         i32(layer),
         0.0,
     ).r;
-    return smoothstep(0.1, 0.5, value);
+}
+
+fn aperture_transmission(uv: vec2<f32>, layer: f32) -> f32 {
+    return aperture_value(uv, layer);
+}
+
+fn soft_aperture_transmission(uv: vec2<f32>, layer: f32, blur_texels: f32) -> f32 {
+    let offset = blur_texels / vec2<f32>(textureDimensions(aperture_masks));
+    var value = aperture_value(uv, layer) * 4.0;
+    value += aperture_value(uv + vec2(offset.x, 0.0), layer) * 2.0;
+    value += aperture_value(uv - vec2(offset.x, 0.0), layer) * 2.0;
+    value += aperture_value(uv + vec2(0.0, offset.y), layer) * 2.0;
+    value += aperture_value(uv - vec2(0.0, offset.y), layer) * 2.0;
+    value += aperture_value(uv + offset, layer);
+    value += aperture_value(uv - offset, layer);
+    value += aperture_value(uv + vec2(offset.x, -offset.y), layer);
+    value += aperture_value(uv + vec2(-offset.x, offset.y), layer);
+    return value / 16.0;
 }
 
 fn clip_lower_bound(interval: vec2<f32>, origin: f32, slope: f32) -> vec2<f32> {
@@ -148,6 +212,8 @@ fn portal_interval(
     b: vec3<f32>,
     c: vec3<f32>,
     direction: vec3<f32>,
+    center: vec3<f32>,
+    end_scale: f32,
 ) -> vec2<f32> {
     let edge_ab = b - a;
     let edge_ac = c - a;
@@ -172,10 +238,32 @@ fn portal_interval(
         inverse_determinant,
     );
     let extrusion_length = min(settings.distance_intensity_pixel.x * 0.5, 1500.0);
+    let center_prism = prism_coordinates(
+        center - a,
+        edge_ab,
+        edge_ac,
+        direction,
+        inverse_determinant,
+    );
+    let growth = (max(end_scale, 1.0) - 1.0) / extrusion_length;
     var interval = vec2(0.0, ray_length);
-    interval = clip_lower_bound(interval, origin.x, slope.x);
-    interval = clip_lower_bound(interval, origin.y, slope.y);
-    interval = clip_lower_bound(interval, 1.0 - origin.x - origin.y, -slope.x - slope.y);
+    interval = clip_lower_bound(
+        interval,
+        origin.x + center_prism.x * growth * origin.z,
+        slope.x + center_prism.x * growth * slope.z,
+    );
+    interval = clip_lower_bound(
+        interval,
+        origin.y + center_prism.y * growth * origin.z,
+        slope.y + center_prism.y * growth * slope.z,
+    );
+    interval = clip_lower_bound(
+        interval,
+        1.0 - origin.x - origin.y
+            + (1.0 - center_prism.x - center_prism.y) * growth * origin.z,
+        -slope.x - slope.y
+            + (1.0 - center_prism.x - center_prism.y) * growth * slope.z,
+    );
     interval = clip_lower_bound(interval, origin.z, slope.z);
     interval = clip_lower_bound(interval, extrusion_length - origin.z, -slope.z);
     return interval;
@@ -191,9 +279,103 @@ fn sun_visibility(position: vec3<f32>) -> f32 {
     return textureSampleCompareLevel(sun_shadow, shadow_sampler, uv, ndc.z - 0.001);
 }
 
-fn directional_phase(light_direction: vec3<f32>, view_direction: vec3<f32>) -> f32 {
-    let cosine = dot(light_direction, view_direction);
-    return 0.35 + 0.65 * pow(max(cosine, 0.0), 4.0);
+fn soft_sun_visibility(position: vec3<f32>, radius_texels: f32) -> f32 {
+    let clip = settings.light_view_projection * vec4(position, 1.0);
+    let ndc = clip.xyz / clip.w;
+    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) || ndc.z < 0.0 || ndc.z > 1.0 {
+        return 0.0;
+    }
+    let offset = radius_texels / vec2<f32>(textureDimensions(sun_shadow));
+    let depth = ndc.z - 0.001;
+    var visibility = textureSampleCompareLevel(sun_shadow, shadow_sampler, uv, depth) * 4.0;
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv + vec2(offset.x, 0.0), depth) * 2.0;
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv - vec2(offset.x, 0.0), depth) * 2.0;
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv + vec2(0.0, offset.y), depth) * 2.0;
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv - vec2(0.0, offset.y), depth) * 2.0;
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv + offset, depth);
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv - offset, depth);
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv + vec2(offset.x, -offset.y), depth);
+    visibility += textureSampleCompareLevel(sun_shadow, shadow_sampler, uv + vec2(-offset.x, offset.y), depth);
+    return visibility / 16.0;
+}
+
+@fragment
+fn fragment_window_projection(input: PortalVertex) -> @location(0) vec4<f32> {
+    if input.color.a <= 0.0 {
+        return vec4(0.0);
+    }
+    let dimensions = vec2<i32>(textureDimensions(scene_depth));
+    let pixel = clamp(vec2<i32>(input.position.xy), vec2(0), dimensions - vec2(1));
+    let depth = textureLoad(scene_depth, pixel, 0);
+    if depth >= 1.0 {
+        return vec4(0.0);
+    }
+    let uv = (vec2<f32>(pixel) + vec2(0.5)) / vec2<f32>(dimensions);
+    let clip = vec4(uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), depth, 1.0);
+    let world_h = settings.inverse_view_projection * clip;
+    let world = world_h.xyz / world_h.w;
+    let edge_ab = input.b.xyz - input.a.xyz;
+    let edge_ac = input.c.xyz - input.a.xyz;
+    let determinant = dot(edge_ab, cross(edge_ac, input.direction.xyz));
+    if abs(determinant) < 0.0001 {
+        return vec4(0.0);
+    }
+    let inverse_determinant = 1.0 / determinant;
+    let prism = prism_coordinates(
+        world - input.a.xyz,
+        edge_ab,
+        edge_ac,
+        input.direction.xyz,
+        inverse_determinant,
+    );
+    let extrusion_length = min(settings.distance_intensity_pixel.x * 0.5, 1500.0);
+    if prism.z <= 2.0 || prism.z >= extrusion_length {
+        return vec4(0.0);
+    }
+    let center_prism = prism_coordinates(
+        input.center_scale.xyz - input.a.xyz,
+        edge_ab,
+        edge_ac,
+        input.direction.xyz,
+        inverse_determinant,
+    );
+    let along_shaft = prism.z / extrusion_length;
+    let cross_section_scale = mix(1.0, max(input.center_scale.w, 1.0), along_shaft);
+    let source_coordinates = center_prism.xy
+        + (prism.xy - center_prism.xy) / cross_section_scale;
+    let aperture_uv = input.uv_a.xy
+        + (input.uv_b.xy - input.uv_a.xy) * source_coordinates.x
+        + (input.uv_c.xy - input.uv_a.xy) * source_coordinates.y;
+    let surface_edge = min(
+        min(aperture_uv.x - input.uv_bounds.x, aperture_uv.y - input.uv_bounds.y),
+        min(input.uv_bounds.z - aperture_uv.x, input.uv_bounds.w - aperture_uv.y),
+    );
+    let edge_width = max(fwidth(surface_edge) * mix(3.0, 12.0, along_shaft), 0.00001);
+    let surface_coverage = smoothstep(-edge_width, edge_width, surface_edge);
+    if surface_coverage <= 0.001 {
+        return vec4(0.0);
+    }
+    let shadow_position = input.a.xyz
+        + edge_ab * source_coordinates.x
+        + edge_ac * source_coordinates.y
+        + input.direction.xyz * prism.z;
+    var receiver_normal = normalize(cross(dpdx(world), dpdy(world)));
+    if dot(receiver_normal, settings.camera_position.xyz - world) < 0.0 {
+        receiver_normal = -receiver_normal;
+    }
+    let incidence = max(dot(receiver_normal, -input.direction.xyz), 0.0);
+    let brightness = soft_aperture_transmission(
+        aperture_uv,
+        input.direction.w,
+        mix(1.5, 8.0, along_shaft),
+    )
+        * soft_sun_visibility(shadow_position, mix(2.0, 12.0, along_shaft))
+        * incidence
+        * surface_coverage
+        * input.color.a
+        * 0.04;
+    return vec4(input.color.rgb * brightness, 0.0);
 }
 
 @fragment
@@ -220,6 +402,8 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         input.b.xyz,
         input.c.xyz,
         input.direction.xyz,
+        input.center_scale.xyz,
+        input.center_scale.w,
     );
     if interval.y <= interval.x {
         return vec4(0.0);
@@ -231,9 +415,21 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     let edge_ab = input.b.xyz - input.a.xyz;
     let edge_ac = input.c.xyz - input.a.xyz;
     let inverse_determinant = 1.0 / dot(edge_ab, cross(edge_ac, input.direction.xyz));
-    var lit_length = 0.0;
+    let center_prism = prism_coordinates(
+        input.center_scale.xyz - input.a.xyz,
+        edge_ab,
+        edge_ac,
+        input.direction.xyz,
+        inverse_determinant,
+    );
+    var scattering = 0.0;
+    var path_transmittance = 1.0;
     var aperture_sum = 0.0;
     var visibility_sum = 0.0;
+    let phase = volumetric_henyey_greenstein(
+        dot(input.direction.xyz, -ray_direction),
+        0.25,
+    );
     for (var index = 0; index < STEP_COUNT; index += 1) {
         let distance = interval.x + (f32(index) + 0.5) * step_length;
         let position = settings.camera_position.xyz + ray_direction * distance;
@@ -245,18 +441,37 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
             inverse_determinant,
         );
         let along_shaft = clamp(prism.z / extrusion_length, 0.0, 1.0);
+        let cross_section_scale = mix(1.0, max(input.center_scale.w, 1.0), along_shaft);
+        let source_coordinates = center_prism.xy
+            + (prism.xy - center_prism.xy) / cross_section_scale;
         let end_fade = 1.0 - smoothstep(0.65, 1.0, along_shaft);
         let aperture_uv = input.uv_a.xy
-            + (input.uv_b.xy - input.uv_a.xy) * prism.x
-            + (input.uv_c.xy - input.uv_a.xy) * prism.y;
-        let visibility = sun_visibility(position);
+            + (input.uv_b.xy - input.uv_a.xy) * source_coordinates.x
+            + (input.uv_c.xy - input.uv_a.xy) * source_coordinates.y;
+        let surface_edge = min(
+            min(aperture_uv.x - input.uv_bounds.x, aperture_uv.y - input.uv_bounds.y),
+            min(input.uv_bounds.z - aperture_uv.x, input.uv_bounds.w - aperture_uv.y),
+        );
+        let edge_width = mix(1.5, 5.0, along_shaft) / 128.0;
+        let surface_coverage = smoothstep(0.0, edge_width, surface_edge);
+        let shadow_position = input.a.xyz
+            + edge_ab * source_coordinates.x
+            + edge_ac * source_coordinates.y
+            + input.direction.xyz * prism.z;
+        let visibility = sun_visibility(shadow_position);
         let transmission = aperture_transmission(aperture_uv, input.direction.w);
+        let extinction = settings.direction_density.w
+            * volumetric_dust(position, settings.camera_position.w, settings.haze);
+        let segment_transmittance = volumetric_segment_transmittance(extinction, step_length);
+        let incident_light = visibility * transmission * surface_coverage * end_fade;
         visibility_sum += visibility;
         aperture_sum += transmission;
-        lit_length += visibility
-            * transmission
-            * end_fade
-            * step_length;
+        scattering += path_transmittance
+            * incident_light
+            * phase
+            * 0.92
+            * (1.0 - segment_transmittance);
+        path_transmittance *= segment_transmittance;
     }
     let debug_mode = u32(settings.dust.w + 0.5);
     if debug_mode == 2u {
@@ -267,12 +482,7 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         let visibility = visibility_sum / f32(STEP_COUNT);
         return vec4(1.0 - visibility, visibility, 0.0, 0.0);
     }
-    let beam = 1.0 - exp(-lit_length * settings.direction_density.w);
-    let midpoint = settings.camera_position.xyz
-        + ray_direction * ((interval.x + interval.y) * 0.5);
-    let haze = volumetric_dust(midpoint, settings.camera_position.w, settings.haze);
-    let phase = directional_phase(input.direction.xyz, -ray_direction);
-    return vec4(input.color.rgb * beam * haze * phase * settings.distance_intensity_pixel.y, 0.0);
+    return vec4(input.color.rgb * scattering * settings.distance_intensity_pixel.y, 0.0);
 }
 
 struct DustMoteVertex {
@@ -281,6 +491,7 @@ struct DustMoteVertex {
     @location(1) @interpolate(flat) world_position: vec3<f32>,
     @location(2) @interpolate(flat) color_fade: vec4<f32>,
     @location(3) @interpolate(flat) aperture_uv_layer: vec3<f32>,
+    @location(4) @interpolate(flat) shadow_position: vec3<f32>,
 };
 
 @vertex
@@ -294,6 +505,8 @@ fn vertex_dust_mote(
     @location(5) uv_a: vec4<f32>,
     @location(6) uv_b: vec4<f32>,
     @location(7) uv_c: vec4<f32>,
+    @location(8) center_scale: vec4<f32>,
+    @location(9) uv_bounds: vec4<f32>,
 ) -> DustMoteVertex {
     let corners = array<vec2<f32>, 6>(
         vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
@@ -315,7 +528,10 @@ fn vertex_dust_mote(
         volumetric_hash(seed + vec3(71.0, 83.0, 97.0))
             + settings.camera_position.w * speed / extrusion_length,
     );
-    let world_position = base + direction.xyz * (phase * extrusion_length);
+    let cross_section_scale = mix(1.0, max(center_scale.w, 1.0), phase);
+    let world_position = center_scale.xyz
+        + (base - center_scale.xyz) * cross_section_scale
+        + direction.xyz * (phase * extrusion_length);
     let clip = settings.view_projection * vec4(world_position, 1.0);
     let radius = settings.dust.x
         * mix(0.25, 0.5, volumetric_hash(seed + vec3(101.0, 113.0, 127.0)));
@@ -330,6 +546,7 @@ fn vertex_dust_mote(
     output.position = position;
     output.uv = corner;
     output.world_position = world_position;
+    output.shadow_position = base + direction.xyz * (phase * extrusion_length);
     output.color_fade = vec4(color.rgb, 1.0 - smoothstep(0.65, 1.0, phase));
     output.aperture_uv_layer = vec3(
         uv_a.xy * (1.0 - root)
@@ -350,7 +567,7 @@ fn fragment_dust_mote(input: DustMoteVertex) -> @location(0) vec4<f32> {
     let circle = 1.0 - smoothstep(0.2, 0.5, distance(input.uv, vec2(0.5)));
     let brightness = circle
         * input.color_fade.a
-        * sun_visibility(input.world_position)
+        * sun_visibility(input.shadow_position)
         * aperture_transmission(input.aperture_uv_layer.xy, input.aperture_uv_layer.z)
         * settings.dust.y;
     return vec4(

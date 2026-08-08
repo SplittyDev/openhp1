@@ -82,8 +82,7 @@ fn point_visibility(position: vec3<f32>, center: vec3<f32>, far_plane: f32, shad
 }
 
 fn point_phase(incoming: vec3<f32>, outgoing: vec3<f32>) -> f32 {
-    let cosine = dot(incoming, outgoing);
-    return 0.35 + 0.65 * pow(max(cosine, 0.0), 4.0);
+    return volumetric_henyey_greenstein(dot(incoming, outgoing), 0.25) * 5.0;
 }
 
 @fragment
@@ -124,7 +123,9 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     if input.profile.y > 0.5 {
         const STEP_COUNT = 32;
         let step_length = (end - start) / f32(STEP_COUNT);
+        let world_step_length = step_length * radius;
         let shadow_index = i32(input.profile.y - 1.0);
+        var path_transmittance = 1.0;
         for (var index = 0; index < STEP_COUNT; index += 1) {
             let distance = start + (f32(index) + 0.5) * step_length;
             let normalized_position = ray_origin + ray_direction * distance;
@@ -138,10 +139,19 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
             );
             visibility_sum += visibility;
             let incoming = normalize(world_position - input.position_radius.xyz);
-            density += local_density
+            let haze = volumetric_dust(world_position, settings.projection.w, settings.haze);
+            let extinction = 0.00025 * settings.haze.y * haze;
+            density += path_transmittance
+                * local_density
                 * point_phase(incoming, -ray_direction)
                 * visibility
-                * step_length;
+                * step_length
+                * settings.haze.y
+                * haze;
+            path_transmittance *= volumetric_segment_transmittance(
+                extinction,
+                world_step_length,
+            );
         }
     } else if input.profile.x > 0.5 {
         let perpendicular_squared = max(dot(ray_origin, ray_origin) - b * b, 0.0);
@@ -161,9 +171,11 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
         let visibility = visibility_sum / 32.0;
         return vec4(1.0 - visibility, visibility, 0.0, 0.0);
     }
-    let midpoint = input.position_radius.xyz
-        + (ray_origin + ray_direction * ((start + end) * 0.5)) * radius;
-    density *= settings.haze.y * volumetric_dust(midpoint, settings.projection.w, settings.haze);
+    if input.profile.y <= 0.5 {
+        let midpoint = input.position_radius.xyz
+            + (ray_origin + ray_direction * ((start + end) * 0.5)) * radius;
+        density *= settings.haze.y * volumetric_dust(midpoint, settings.projection.w, settings.haze);
+    }
     return vec4(
         input.color_fog.rgb * density,
         min(density * input.color_fog.a, 1.0),

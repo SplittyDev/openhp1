@@ -19,7 +19,8 @@ const APERTURE_MASK_SIZE: u32 = 128;
 const MAX_SHADOW_DIRECTIONS: usize = 4;
 const MAX_VISIBLE_PORTALS: usize = 128;
 const MAX_MOTES_PER_PORTAL: u32 = 64;
-const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
+const SHAFT_END_SCALE: f32 = 1.5;
+const SUN_DIRECTION: Vec3 = Vec3::new(-0.75, -0.4, -0.55);
 const SHAFT_SHADER: &str = concat!(
     include_str!("../../../shaders/modern/volumetric_noise.wgsl"),
     include_str!("../../../shaders/modern/sky_shafts.wgsl"),
@@ -76,6 +77,8 @@ struct PortalTriangle {
     uv_a: [f32; 4],
     uv_b: [f32; 4],
     uv_c: [f32; 4],
+    center_scale: [f32; 4],
+    uv_bounds: [f32; 4],
 }
 
 struct ShadowSlice {
@@ -89,6 +92,7 @@ struct ShadowSlice {
 
 pub(super) struct DirectionalShadow {
     _texture: wgpu::Texture,
+    shadow_array_view: wgpu::TextureView,
     _aperture_texture: wgpu::Texture,
     aperture_view: wgpu::TextureView,
     aperture_sampler: wgpu::Sampler,
@@ -97,9 +101,13 @@ pub(super) struct DirectionalShadow {
     pipeline: wgpu::RenderPipeline,
     shaft_layout: wgpu::BindGroupLayout,
     shaft_pipeline: wgpu::RenderPipeline,
+    projection_pipeline: wgpu::RenderPipeline,
     mote_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
     portals: Vec<PortalTriangle>,
+    froxel_portal_buffer: wgpu::Buffer,
+    froxel_portal_count: u32,
+    light_view_projections: [[[f32; 4]; 4]; MAX_SHADOW_DIRECTIONS],
     vertex_buffer: wgpu::Buffer,
     vertex_count: usize,
     enabled: bool,
@@ -118,7 +126,7 @@ impl DirectionalShadow {
     }
 
     fn portal_layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
+        const ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
         wgpu::VertexBufferLayout {
             array_stride: size_of::<PortalTriangle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -173,6 +181,13 @@ impl DirectionalShadow {
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
+        });
+        let shadow_array_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("OpenHP1 volumetric sun shadow array"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            base_array_layer: 0,
+            array_layer_count: Some(MAX_SHADOW_DIRECTIONS as u32),
+            ..Default::default()
         });
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("OpenHP1 volumetric sun shadow sampler"),
@@ -298,7 +313,7 @@ impl DirectionalShadow {
             layout: Some(&shaft_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shaft_shader,
-                entry_point: Some("vertex_fullscreen"),
+                entry_point: Some("vertex_projection"),
                 compilation_options: Default::default(),
                 buffers: &[Self::portal_layout()],
             },
@@ -308,6 +323,27 @@ impl DirectionalShadow {
             fragment: Some(wgpu::FragmentState {
                 module: &shaft_shader,
                 entry_point: Some("fragment_sky_shafts"),
+                compilation_options: Default::default(),
+                targets: &[additive_target()],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let projection_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("OpenHP1 window light projection pipeline"),
+            layout: Some(&shaft_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shaft_shader,
+                entry_point: Some("vertex_fullscreen"),
+                compilation_options: Default::default(),
+                buffers: &[Self::portal_layout()],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shaft_shader,
+                entry_point: Some("fragment_window_projection"),
                 compilation_options: Default::default(),
                 targets: &[additive_target()],
             }),
@@ -335,8 +371,15 @@ impl DirectionalShadow {
             multiview_mask: None,
             cache: None,
         });
+        let froxel_portal_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 froxel window portals"),
+            size: (MAX_VISIBLE_PORTALS * size_of::<PortalTriangle>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             _texture: texture,
+            shadow_array_view,
             _aperture_texture: aperture_texture,
             aperture_view,
             aperture_sampler,
@@ -345,9 +388,13 @@ impl DirectionalShadow {
             pipeline,
             shaft_layout,
             shaft_pipeline,
+            projection_pipeline,
             mote_pipeline,
             shadow_sampler,
             portals,
+            froxel_portal_buffer,
+            froxel_portal_count: 0,
+            light_view_projections: [[[0.0; 4]; 4]; MAX_SHADOW_DIRECTIONS],
             vertex_buffer,
             vertex_count: vertices.len(),
             enabled,
@@ -402,26 +449,53 @@ impl DirectionalShadow {
         }
         let visible = visible_portals(&self.portals, camera, aspect);
         let groups = portal_direction_groups(&visible);
+        let mut froxel_portals = Vec::with_capacity(visible.len());
         for slice in &mut self.slices {
             slice.portal_count = 0;
         }
-        for (slice, portals) in self.slices.iter_mut().zip(groups) {
+        for (slice_index, (slice, mut portals)) in self.slices.iter_mut().zip(groups).enumerate() {
             let direction = Vec3::from_slice(&portals[0].direction);
-            queue.write_buffer(
-                &slice.uniform,
-                0,
-                bytemuck::bytes_of(&shadow_uniform(
-                    camera,
-                    aspect,
-                    direction,
-                    viewport_size,
-                    elapsed_time,
-                    self.tuning,
-                )),
+            for portal in &mut portals {
+                portal.uv_a[2] = slice_index as f32;
+            }
+            let uniform = shadow_uniform(
+                camera,
+                aspect,
+                direction,
+                viewport_size,
+                elapsed_time,
+                self.tuning,
             );
+            queue.write_buffer(&slice.uniform, 0, bytemuck::bytes_of(&uniform));
             queue.write_buffer(&slice.portal_buffer, 0, bytemuck::cast_slice(&portals));
             slice.portal_count = portals.len();
+            self.light_view_projections[slice_index] = uniform.light_view_projection;
+            froxel_portals.extend(portals);
         }
+        self.froxel_portal_count = froxel_portals.len() as u32;
+        if !froxel_portals.is_empty() {
+            queue.write_buffer(
+                &self.froxel_portal_buffer,
+                0,
+                bytemuck::cast_slice(&froxel_portals),
+            );
+        }
+    }
+
+    pub(super) fn froxel_portals(&self) -> (&wgpu::Buffer, u32) {
+        (&self.froxel_portal_buffer, self.froxel_portal_count)
+    }
+
+    pub(super) fn froxel_shadow_maps(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
+        (&self.shadow_array_view, &self.shadow_sampler)
+    }
+
+    pub(super) fn froxel_aperture_masks(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
+        (&self.aperture_view, &self.aperture_sampler)
+    }
+
+    pub(super) fn light_view_projections(&self) -> &[[[f32; 4]; 4]; MAX_SHADOW_DIRECTIONS] {
+        &self.light_view_projections
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
@@ -489,11 +563,24 @@ impl DirectionalShadow {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.shaft_pipeline);
-        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
-            pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
-            pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
-            pass.draw(0..6, 0..slice.portal_count as u32);
+        if matches!(
+            self.tuning.debug_view,
+            VolumetricDebugView::ApertureMask | VolumetricDebugView::DirectionalVisibility
+        ) {
+            pass.set_pipeline(&self.shaft_pipeline);
+            for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+                pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
+                pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
+                pass.draw(0..6, 0..slice.portal_count as u32);
+            }
+        }
+        if self.tuning.debug_view == VolumetricDebugView::Composite {
+            pass.set_pipeline(&self.projection_pipeline);
+            for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+                pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
+                pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
+                pass.draw(0..6, 0..slice.portal_count as u32);
+            }
         }
         if matches!(
             self.tuning.debug_view,
@@ -726,20 +813,51 @@ fn aperture_mask(image: &TextureImage) -> Vec<u8> {
             }
         }
     }
-    luminance
-        .into_iter()
-        .zip(wall)
-        .map(|(luminance, wall)| {
-            if wall {
-                0
-            } else {
-                luminance
-                    .saturating_sub(24)
-                    .saturating_mul(8)
-                    .min(136_u8.saturating_sub(luminance).saturating_mul(8))
-            }
-        })
-        .collect()
+    blur_aperture_mask(
+        luminance
+            .into_iter()
+            .zip(wall)
+            .map(|(luminance, wall)| {
+                if wall {
+                    0
+                } else {
+                    luminance
+                        .saturating_sub(24)
+                        .saturating_mul(8)
+                        .min(136_u8.saturating_sub(luminance).saturating_mul(8))
+                }
+            })
+            .collect(),
+    )
+}
+
+fn blur_aperture_mask(mask: Vec<u8>) -> Vec<u8> {
+    let size = APERTURE_MASK_SIZE as usize;
+    const RADIUS: isize = 6;
+    const WEIGHT_SUM: u32 = 49;
+    let mut horizontal = vec![0; mask.len()];
+    let mut blurred = vec![0; mask.len()];
+    for y in 0..size {
+        for x in 0..size {
+            let sum = (-RADIUS..=RADIUS).fold(0_u32, |sum, offset| {
+                let source_x = (x as isize + offset).clamp(0, size as isize - 1) as usize;
+                let weight = (RADIUS + 1 - offset.abs()) as u32;
+                sum + u32::from(mask[y * size + source_x]) * weight
+            });
+            horizontal[y * size + x] = (sum / WEIGHT_SUM) as u8;
+        }
+    }
+    for y in 0..size {
+        for x in 0..size {
+            let sum = (-RADIUS..=RADIUS).fold(0_u32, |sum, offset| {
+                let source_y = (y as isize + offset).clamp(0, size as isize - 1) as usize;
+                let weight = (RADIUS + 1 - offset.abs()) as u32;
+                sum + u32::from(horizontal[source_y * size + x]) * weight
+            });
+            blurred[y * size + x] = (sum / WEIGHT_SUM) as u8;
+        }
+    }
+    blurred
 }
 
 fn portal_buffer(device: &wgpu::Device, portals: &[PortalTriangle]) -> wgpu::Buffer {
@@ -828,6 +946,59 @@ fn shaft_portals(
     scene: &RenderScene,
     aperture_layers: &HashMap<usize, u32>,
 ) -> Vec<PortalTriangle> {
+    let mut bounds = vec![
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        scene.surface_materials.len()
+    ];
+    let mut colors = vec![(Vec3::ZERO, 0_u32); scene.surface_materials.len()];
+    let mut uv_bounds = vec![
+        (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY));
+        scene.surface_materials.len()
+    ];
+    for (triangle, &surface) in scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+    {
+        let Some(material) = scene.surface_materials.get(surface) else {
+            continue;
+        };
+        if !material.volumetric_source {
+            continue;
+        }
+        let &[a_index, b_index, c_index] = triangle else {
+            continue;
+        };
+        let [Some(a), Some(b), Some(c)] = [a_index, b_index, c_index]
+            .map(|vertex| scene.mesh.positions.get(vertex as usize).copied())
+        else {
+            continue;
+        };
+        for position in [a, b, c].map(unreal_to_render) {
+            bounds[surface].0 = bounds[surface].0.min(position);
+            bounds[surface].1 = bounds[surface].1.max(position);
+        }
+        let texture_size = material
+            .texture
+            .and_then(|index| scene.textures.get(index))
+            .map_or(Vec2::ONE, |texture| {
+                Vec2::new(texture.width as f32, texture.height as f32)
+            });
+        for vertex in [a_index, b_index, c_index] {
+            let Some(texture_coordinates) =
+                scene.mesh.texture_coordinates.get(vertex as usize).copied()
+            else {
+                continue;
+            };
+            let uv = texture_coordinates / texture_size;
+            uv_bounds[surface].0 = uv_bounds[surface].0.min(uv);
+            uv_bounds[surface].1 = uv_bounds[surface].1.max(uv);
+        }
+        colors[surface].0 += shaft_color(scene, triangle, material.texture);
+        colors[surface].1 += 1;
+    }
+
     scene
         .mesh
         .indices
@@ -871,13 +1042,26 @@ fn shaft_portals(
                 a: a.extend(1.0).to_array(),
                 b: b.extend(1.0).to_array(),
                 c: c.extend(1.0).to_array(),
-                color: shaft_color(scene, triangle, material.texture)
-                    .extend(1.0)
+                color: (colors[*surface].0 / colors[*surface].1.max(1) as f32)
+                    .extend(if material.mode == SurfaceMode::Backdrop {
+                        0.0
+                    } else {
+                        1.0 / colors[*surface].1.max(1) as f32
+                    })
                     .to_array(),
                 direction: portal_direction(a, b, c).extend(layer as f32).to_array(),
-                uv_a: uv(a_index).extend(0.0).extend(0.0).to_array(),
+                uv_a: uv(a_index).extend(0.0).extend(1.0).to_array(),
                 uv_b: uv(b_index).extend(0.0).extend(0.0).to_array(),
                 uv_c: uv(c_index).extend(0.0).extend(0.0).to_array(),
+                center_scale: ((bounds[*surface].0 + bounds[*surface].1) * 0.5)
+                    .extend(SHAFT_END_SCALE)
+                    .to_array(),
+                uv_bounds: [
+                    uv_bounds[*surface].0.x,
+                    uv_bounds[*surface].0.y,
+                    uv_bounds[*surface].1.x,
+                    uv_bounds[*surface].1.y,
+                ],
             })
         })
         .collect()
@@ -945,16 +1129,7 @@ fn portal_in_view(portal: PortalTriangle, view_projection: Mat4, view_distance: 
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
     let mut front_points = 0;
-    let extrusion = Vec3::from_slice(&portal.direction) * shaft_length(view_distance);
-    for point in [portal.a, portal.b, portal.c]
-        .into_iter()
-        .flat_map(|point| {
-            [
-                Vec3::from_slice(&point),
-                Vec3::from_slice(&point) + extrusion,
-            ]
-        })
-    {
+    for point in portal_volume_points(portal, shaft_length(view_distance)) {
         let clip = view_projection * point.extend(1.0);
         if clip.w <= 0.001 {
             continue;
@@ -971,6 +1146,15 @@ fn portal_in_view(portal: PortalTriangle, view_projection: Mat4, view_distance: 
         && maximum.y >= -1.0
         && minimum.z <= 1.0
         && maximum.z >= 0.0
+}
+
+fn portal_volume_points(portal: PortalTriangle, length: f32) -> [Vec3; 6] {
+    let [a, b, c] = [portal.a, portal.b, portal.c].map(|point| Vec3::from_slice(&point));
+    let center = Vec3::from_slice(&portal.center_scale);
+    let scale = portal.center_scale[3].max(1.0);
+    let extrusion = Vec3::from_slice(&portal.direction) * length;
+    let end = |point| center + (point - center) * scale + extrusion;
+    [a, b, c, end(a), end(b), end(c)]
 }
 
 fn shaft_length(view_distance: f32) -> f32 {
@@ -1058,7 +1242,7 @@ fn shadow_uniform(
         ],
         distance_intensity_pixel: [
             radius,
-            0.35,
+            2.0,
             1.0 / viewport_size[0].max(1) as f32,
             1.0 / viewport_size[1].max(1) as f32,
         ],
@@ -1146,6 +1330,8 @@ mod tests {
             uv_a: [0.0; 4],
             uv_b: [0.0; 4],
             uv_c: [0.0; 4],
+            center_scale: [0.0, 0.0, 0.0, 1.0],
+            uv_bounds: [0.0; 4],
         };
         assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY, 1.0));
         assert!(!portal_in_view(
@@ -1171,6 +1357,8 @@ mod tests {
             uv_a: [0.0; 4],
             uv_b: [0.0; 4],
             uv_c: [0.0; 4],
+            center_scale: [0.0, 0.0, 0.0, 1.0],
+            uv_bounds: [0.0; 4],
         };
 
         assert!(portal_in_view(portal, Mat4::IDENTITY, 4.0));
@@ -1187,6 +1375,8 @@ mod tests {
             uv_a: [0.0; 4],
             uv_b: [0.0; 4],
             uv_c: [0.0; 4],
+            center_scale: [0.0, 0.0, 0.0, 1.0],
+            uv_bounds: [0.0; 4],
         };
         assert!(camera_on_interior_side(portal, -Vec3::Z));
         assert!(!camera_on_interior_side(portal, Vec3::Z));
@@ -1201,6 +1391,52 @@ mod tests {
         assert!(right.y < 0.0);
         assert!(left.x < 0.0);
         assert!(right.x > 0.0);
+        assert!(Vec2::new(left.x, left.z).length() > left.y.abs());
+        assert!(Vec2::new(right.x, right.z).length() > right.y.abs());
+    }
+
+    #[test]
+    fn window_triangles_share_an_area_center_tint_and_widen_from_it() {
+        let mut scene = scene(SurfaceMode::Opaque, false);
+        scene.surface_materials[0].volumetric_source = true;
+        scene.mesh.positions = vec![
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+        ];
+        scene.mesh.indices = vec![0, 1, 2, 2, 3, 0];
+        scene.mesh.triangle_surfaces = vec![0, 0];
+        scene.mesh.texture_coordinates.resize(4, Vec2::ZERO);
+        scene.mesh.lightmap_coordinates.resize(4, Vec2::ZERO);
+        scene.mesh.vertex_lightmaps = vec![Some(0), Some(0), Some(1), Some(1)];
+        scene.lightmaps = vec![
+            LightmapImage {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 0, 0, 255],
+            },
+            LightmapImage {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 255, 255],
+            },
+        ];
+
+        let portals = shaft_portals(&scene, &HashMap::new());
+
+        assert_eq!(portals.len(), 2);
+        assert_eq!(portals[0].center_scale, portals[1].center_scale);
+        assert_eq!(portals[0].color, portals[1].color);
+        assert_eq!(portals[0].uv_bounds, portals[1].uv_bounds);
+        assert_eq!(portals[0].color[3], 0.5);
+        assert!(portals[0].color[0] > 0.2 && portals[0].color[2] > 0.2);
+        let points = portal_volume_points(portals[0], 0.0);
+        let center = Vec3::from_slice(&portals[0].center_scale);
+        assert!(
+            (points[3].distance(center) / points[0].distance(center) - SHAFT_END_SCALE).abs()
+                < 0.0001
+        );
     }
 
     #[test]
@@ -1214,6 +1450,8 @@ mod tests {
             uv_a: [0.0; 4],
             uv_b: [0.0; 4],
             uv_c: [0.0; 4],
+            center_scale: [0.0, 0.0, 0.0, 1.0],
+            uv_bounds: [0.0; 4],
         };
         let nearly_same = (Vec3::X + Vec3::Z * 0.01).normalize();
 
@@ -1262,6 +1500,22 @@ mod tests {
         assert_eq!(mask[0], 0);
         assert_eq!(mask[64 * APERTURE_MASK_SIZE as usize + 32], 0);
         assert!(mask[64 * APERTURE_MASK_SIZE as usize + 64] > 200);
+    }
+
+    #[test]
+    fn aperture_prefilter_preserves_fractional_edges() {
+        let size = APERTURE_MASK_SIZE as usize;
+        let mut mask = vec![0; size * size];
+        for row in mask.chunks_exact_mut(size) {
+            row[size / 2..].fill(255);
+        }
+
+        let blurred = blur_aperture_mask(mask);
+
+        assert_eq!(blurred[size / 2 * size], 0);
+        assert!(blurred[size / 2 * size + size / 2 - 1] > 0);
+        assert!(blurred[size / 2 * size + size / 2] < 255);
+        assert_eq!(blurred[size / 2 * size + size - 1], 255);
     }
 
     #[test]
@@ -1428,7 +1682,7 @@ mod tests {
         .unwrap();
         assert_eq!(size_of::<ShadowUniform>(), 272);
         assert_eq!(size_of::<ShadowVertex>(), 16);
-        assert_eq!(size_of::<PortalTriangle>(), 128);
+        assert_eq!(size_of::<PortalTriangle>(), 160);
     }
 
     #[test]

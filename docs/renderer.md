@@ -121,9 +121,39 @@ shadowed sources use a bounded march. The classic scene shader, uniform layout,
 target format, depth usage, draw order, and display-gamma path remain unchanged.
 
 Directional shafts use a renderer-owned four-layer shadow map over opaque scene
-geometry and a 32-sample world-space march through prisms extruded from actual
-opening triangles. Visible openings are grouped by nearly matching inward shaft
-directions so evenly lit windows on every castle wall illuminate the room.
+geometry and a camera-aligned `rgba16float` froxel volume. At the normal
+1024x768 internal resolution the volume is 128x96x64, with exponential depth
+slices from the camera near plane to the shaft distance. Each froxel evaluates
+the visible window portals, their stained-glass transmission masks, and the
+matching directional shadow layer. Because the original maps provide no sun,
+the renderer uses a shallow synthetic indoor-sun direction and reflects it
+inward for windows on opposing walls; its horizontal travel remains greater
+than its downward travel so high windows illuminate across the room rather than
+falling directly into the nearby floor. It samples a two-octave world-space
+density field and integrates single scattering front-to-back with Beer-Lambert
+transmittance, a moderate Henyey-Greenstein phase function, and fixed high
+scattering albedo. The completed 3D volume is trilinearly sampled at scene depth
+and added to the HDR scene.
+
+The source triangles only bound light injection; Composite and Scattering modes
+never render their extruded faces. All triangles from one authored window
+surface share one averaged tint, while each froxel receives the triangle that
+covers its back-projected source coordinate. This keeps haze anchored in the
+room as the camera moves, lets nearer air attenuate farther scattering, and
+removes the camera-facing translucent-prism appearance. See
+[`research/window-volumetric-lighting.md`](research/window-volumetric-lighting.md)
+for the production-engine comparison and staged design.
+
+In the composite view, each window's affine texture mapping is also projected
+across the complete authored surface rather than clipped to its individual BSP
+triangles, then adds a low-energy, one-sided, shadowed window-shaped footprint
+to the HDR scene.
+The aperture mask is prefiltered with a 13-tap separable tent kernel and retains
+fractional transmission; a nine-tap mask filter then grows from 1.5 to 8 texels
+with distance from the window. A nine-tap shadow filter grows from 2 to 12 shadow
+texels, while the surface-cookie boundary fades from 3 to 12 screen pixels. This
+approximates the softer transmission and penumbra produced by stained glass
+without exposing BSP triangle edges.
 Fake-backdrop surfaces are authored sky openings. The fixed shipped
 maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface texture names containing `win`, excluding known frame and non-aperture
@@ -136,13 +166,14 @@ only mid-luminance glass inside the painted frame. The shaft march projects each
 sample back through the opening's authored texture coordinates, so painted
 mullions split the light even when the original map did not model them as
 geometry. Fake-backdrop sky openings use a fully transmissive mask.
-Only source triangles intersecting the camera frustum are submitted, capped at
-the 128 nearest triangles. Opaque walls and props shadow the resulting volumes.
+Only source triangles whose light volumes intersect the camera frustum are
+injected, capped at the 128 nearest triangles. Opaque walls and props shadow the
+resulting volume.
 The accumulation is forward-weighted along the light-to-camera path and uses
 additive HDR scattering with no scene-wide extinction, retaining values for
 bloom and tone mapping without tinting the whole room.
 Window shafts and local volumetric sources share a slowly drifting world-space
-density field with approximately 40-unit haze cells. Window shafts also carry
+density field with configurable haze cells. Window shafts also carry
 sparse world-space motes inside their authored prisms; camera-facing billboards
 keep them round while scene depth and the sun shadow map clip them to the lit
 volume. Both layers pause with the rest of the scene.

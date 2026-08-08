@@ -172,14 +172,14 @@ impl Default for VolumetricTuning {
     fn default() -> Self {
         Self {
             debug_view: VolumetricDebugView::Composite,
-            dust_size: 4.0,
+            dust_size: 3.0,
             dust_density: 64,
             dust_opacity: 0.05,
             dust_speed: 5.0,
-            haze_size: 60.0,
-            haze_density: 0.75,
-            haze_opacity: 0.5,
-            haze_speed: 25.0,
+            haze_size: 20.0,
+            haze_density: 1.0,
+            haze_opacity: 0.75,
+            haze_speed: 20.0,
         }
     }
 }
@@ -281,14 +281,14 @@ mod tests {
             VolumetricTuning::default(),
             VolumetricTuning {
                 debug_view: VolumetricDebugView::Composite,
-                dust_size: 4.0,
+                dust_size: 3.0,
                 dust_density: 64,
                 dust_opacity: 0.05,
                 dust_speed: 5.0,
-                haze_size: 60.0,
-                haze_density: 0.75,
-                haze_opacity: 0.5,
-                haze_speed: 25.0,
+                haze_size: 20.0,
+                haze_density: 1.0,
+                haze_opacity: 0.75,
+                haze_speed: 20.0,
             }
         );
         assert_eq!(

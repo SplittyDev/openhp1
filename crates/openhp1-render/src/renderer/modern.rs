@@ -269,7 +269,7 @@ impl ModernRenderer {
         );
         let coronas =
             (!scene.coronas.is_empty()).then(|| CoronaRenderer::new(device, scene, texture_layout));
-        let volumetrics = VolumetricRenderer::new(device, queue, depth_view, scene);
+        let volumetrics = VolumetricRenderer::new(device, queue, size, depth_view, scene);
 
         Self {
             coronas,
@@ -315,7 +315,7 @@ impl ModernRenderer {
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
         let bloom_b = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom B");
         self.ao.resize(device, size, depth_view);
-        self.volumetrics.resize(device, depth_view);
+        self.volumetrics.resize(device, size, depth_view);
         if let Some(aa) = &mut self.aa {
             aa.resize(device, size);
         }
