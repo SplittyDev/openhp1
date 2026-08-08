@@ -190,7 +190,7 @@ impl PointShadowRenderer {
         &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
-    ) -> Vec<VolumetricInstance> {
+    ) -> (Vec<usize>, Vec<VolumetricInstance>) {
         self.selected = select_sources(&self.sources, camera.position);
         for (shadow_index, source) in self.selected.iter().enumerate() {
             for face_index in 0..FACE_COUNT {
@@ -202,7 +202,13 @@ impl PointShadowRenderer {
                 );
             }
         }
-        self.selected
+        let actor_indices = self
+            .selected
+            .iter()
+            .map(|source| source.actor_index)
+            .collect();
+        let instances = self
+            .selected
             .iter()
             .enumerate()
             .map(|(shadow_index, source)| VolumetricInstance {
@@ -210,7 +216,8 @@ impl PointShadowRenderer {
                 color_fog: (source.color * 0.00003).extend(0.0).to_array(),
                 profile: [1.0, shadow_index as f32 + 1.0, source.radius, 0.0],
             })
-            .collect()
+            .collect();
+        (actor_indices, instances)
     }
 
     pub(super) fn render(

@@ -119,7 +119,6 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
         const STEP_COUNT = 20;
         let step_length = (end - start) / f32(STEP_COUNT);
         let shadow_index = i32(input.profile.y - 1.0);
-        var visible_steps = 0.0;
         for (var index = 0; index < STEP_COUNT; index += 1) {
             let distance = start + (f32(index) + 0.5) * step_length;
             let normalized_position = ray_origin + ray_direction * distance;
@@ -131,12 +130,8 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
                 input.profile.z,
                 shadow_index,
             );
-            visible_steps += visibility;
             density += local_density * visibility * step_length;
         }
-        let lit_fraction = visible_steps / f32(STEP_COUNT);
-        let occlusion_contrast = 4.0 * lit_fraction * (1.0 - lit_fraction);
-        density *= occlusion_contrast * occlusion_contrast;
     } else if input.profile.x > 0.5 {
         let perpendicular_squared = max(dot(ray_origin, ray_origin) - b * b, 0.0);
         let softened_distance = sqrt(perpendicular_squared + 0.0036);

@@ -50,6 +50,8 @@ pub(super) struct VolumetricRenderer {
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     instance_buffer: wgpu::Buffer,
+    instance_actor_indices: Vec<usize>,
+    instances: Vec<VolumetricInstance>,
     instance_count: usize,
     point_volume_buffer: wgpu::Buffer,
     point_volume_count: usize,
@@ -129,7 +131,8 @@ impl VolumetricRenderer {
             immediate_size: 0,
         });
         let pipeline = pipeline(device, &pipeline_layout, &shader);
-        let instances = instances(scene);
+        let (instance_actor_indices, instances) = instances(scene);
+        let instance_count = instances.len();
         let instance_buffer = instance_buffer(device, &instances);
         let point_volume_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 shadowed point volume instances"),
@@ -146,7 +149,9 @@ impl VolumetricRenderer {
             bind_group,
             pipeline,
             instance_buffer,
-            instance_count: instances.len(),
+            instance_actor_indices,
+            instances,
+            instance_count,
             point_volume_buffer,
             point_volume_count: 0,
             tuning,
@@ -171,13 +176,12 @@ impl VolumetricRenderer {
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        let instances = instances(scene);
-        if instances.len() != self.instance_count {
+        let (instance_actor_indices, instances) = instances(scene);
+        if instances.len() != self.instances.len() {
             return false;
         }
-        if !instances.is_empty() {
-            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        }
+        self.instance_actor_indices = instance_actor_indices;
+        self.instances = instances;
         self.point_shadows.update(scene);
         self.shadow.update(queue, scene)
     }
@@ -216,7 +220,16 @@ impl VolumetricRenderer {
         );
         self.shadow
             .prepare(queue, camera, aspect, viewport_size, elapsed_time);
-        let point_volumes = self.point_shadows.prepare(queue, camera);
+        let (shadowed_actor_indices, point_volumes) = self.point_shadows.prepare(queue, camera);
+        let instances = unshadowed_instances(
+            &self.instance_actor_indices,
+            &self.instances,
+            &shadowed_actor_indices,
+        );
+        self.instance_count = instances.len();
+        if !instances.is_empty() {
+            queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        }
         self.point_volume_count = point_volumes.len();
         if !point_volumes.is_empty() {
             queue.write_buffer(
@@ -268,7 +281,7 @@ impl VolumetricRenderer {
     }
 }
 
-fn instances(scene: &RenderScene) -> Vec<VolumetricInstance> {
+fn instances(scene: &RenderScene) -> (Vec<usize>, Vec<VolumetricInstance>) {
     let mut seen = HashSet::new();
     let corona_lights = scene
         .coronas
@@ -296,7 +309,21 @@ fn instances(scene: &RenderScene) -> Vec<VolumetricInstance> {
                 .source_texture
                 .and_then(|texture| scene.textures.get(texture))
                 .map(texture_light_color);
-            instance(light, corona, sprite_color)
+            (light.actor_index, instance(light, corona, sprite_color))
+        })
+        .unzip()
+}
+
+fn unshadowed_instances(
+    actor_indices: &[usize],
+    instances: &[VolumetricInstance],
+    shadowed_actor_indices: &[usize],
+) -> Vec<VolumetricInstance> {
+    actor_indices
+        .iter()
+        .zip(instances)
+        .filter_map(|(actor_index, instance)| {
+            (!shadowed_actor_indices.contains(actor_index)).then_some(*instance)
         })
         .collect()
 }
@@ -533,7 +560,8 @@ mod tests {
             surface_materials: Vec::<SurfaceMaterial>::new(),
             sky_zone: None,
         };
-        let instances = instances(&scene);
+        let (actor_indices, instances) = instances(&scene);
+        assert_eq!(actor_indices, [3, 4, 5, 7]);
         assert_eq!(instances.len(), 4);
         assert_eq!(&instances[0].position_radius[..3], &[1.0, 2.0, 3.0]);
         assert_eq!(instances[0].position_radius[3], 200.0);
@@ -549,6 +577,25 @@ mod tests {
         assert!(instances[3].color_fog[1] > 0.001);
         assert_eq!(instances[3].color_fog[2], 0.0);
         assert_eq!(instances[3].profile[0], 1.0);
+    }
+
+    #[test]
+    fn shadowed_lights_do_not_keep_an_unshadowed_volume() {
+        let instances = [
+            VolumetricInstance {
+                position_radius: [1.0; 4],
+                color_fog: [1.0; 4],
+                profile: [1.0; 4],
+            },
+            VolumetricInstance {
+                position_radius: [2.0; 4],
+                color_fog: [2.0; 4],
+                profile: [2.0; 4],
+            },
+        ];
+        let unshadowed = unshadowed_instances(&[3, 7], &instances, &[7]);
+        assert_eq!(unshadowed.len(), 1);
+        assert_eq!(unshadowed[0].position_radius, [1.0; 4]);
     }
 
     #[test]
@@ -579,6 +626,6 @@ mod tests {
                 .flat_map(|lightmap| &lightmap.lights)
                 .any(|light| light.source_texture.is_some() && light.brightness == 0)
         );
-        assert!(instances(&scene.render).len() >= scene.render.coronas.len());
+        assert!(instances(&scene.render).1.len() >= scene.render.coronas.len());
     }
 }
