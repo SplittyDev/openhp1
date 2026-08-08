@@ -441,6 +441,8 @@ impl ScriptRuntime {
                 message: "input axes must be finite".to_owned(),
             });
         }
+        let pressed_jump =
+            input.jump && !(input.space_pressed && self.player_is_carrying_actor()?);
         let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self
             .actor_classes
@@ -472,7 +474,7 @@ impl ScriptRuntime {
                 ("bBroomBoost", Value::Byte(u8::from(input.broom_boost))),
                 ("bBroomBrake", Value::Byte(u8::from(input.broom_brake))),
                 ("bBroomAction", Value::Byte(u8::from(input.jump))),
-                ("bPressedJump", Value::Bool(input.jump)),
+                ("bPressedJump", Value::Bool(pressed_jump)),
             ] {
                 self.set_actor_value(&class, &mut instance, name, value)
                     .map_err(|message| DispatchError::InvalidPlayerInput { message })?;

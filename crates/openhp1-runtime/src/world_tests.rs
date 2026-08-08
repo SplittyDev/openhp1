@@ -1888,6 +1888,7 @@ fn player_input_populates_authored_channels() {
         "bBroomAction",
         "bPressedJump",
         "bSkipKeyPressed",
+        "CarryingActor",
     ]
     .into_iter()
     .enumerate()
@@ -1906,7 +1907,12 @@ fn player_input_populates_authored_channels() {
     runtime.object_actors.insert(player_object.clone(), player);
     runtime.actor_objects.insert(player, player_object);
     runtime.player_actor = Some(player);
-    runtime.instances.insert(player, InstanceState::default());
+    runtime.instances.insert(
+        player,
+        [(fields["CarryingActor"].clone(), StoredValue::Object(None))]
+            .into_iter()
+            .collect(),
+    );
 
     runtime
         .set_player_input(PlayerInput {
@@ -2074,6 +2080,7 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
             .tick_player(
                 PlayerInput {
                     space_pressed: true,
+                    jump: true,
                     ..PlayerInput::default()
                 },
                 1.0 / 60.0,
@@ -2083,6 +2090,10 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
     );
     assert_eq!(
         runtime.host_console_instance.get("bspacepressed"),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    assert_eq!(
+        runtime.instances[&player].get(&fields["bPressedJump"]),
         Some(&StoredValue::Value(Value::Bool(true)))
     );
     assert!(
@@ -2115,6 +2126,7 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
         .tick_player(
             PlayerInput {
                 space_pressed: true,
+                jump: true,
                 ..PlayerInput::default()
             },
             1.0 / 60.0,
@@ -2135,6 +2147,10 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
     assert_eq!(
         instance.get(&fields["WeaponRot"]),
         Some(&StoredValue::Value(Value::Rotator([4_096, 8_192, -2_048])))
+    );
+    assert_eq!(
+        instance.get(&fields["bPressedJump"]),
+        Some(&StoredValue::Value(Value::Bool(false)))
     );
     assert!(
         runtime
