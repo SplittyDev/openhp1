@@ -1,16 +1,16 @@
 # Formatting, building, and testing.
 prefix_rule(
-    pattern = ["cargo", ["fmt", "build", "check", "test", "clippy"]],
+    pattern = ["cargo", ["nextest", "fmt", "build", "check", "test", "clippy"]],
     decision = "allow",
 )
 
 # OpenHP1's required sccache-bypass forms.
 prefix_rule(
-    pattern = ["env", "RUSTC_WRAPPER=", "cargo", ["build", "check", "test", "clippy"]],
+    pattern = ["env", "RUSTC_WRAPPER=", "cargo", ["nextest", "build", "check", "test", "clippy"]],
     decision = "allow",
 )
 prefix_rule(
-    pattern = ["env", "-u", "RUSTC_WRAPPER", "cargo", ["build", "check", "test", "clippy"]],
+    pattern = ["env", "-u", "RUSTC_WRAPPER", "cargo", ["nextest", "build", "check", "test", "clippy"]],
     decision = "allow",
 )
 
