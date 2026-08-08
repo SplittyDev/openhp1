@@ -8,7 +8,7 @@ use eframe::{
 use glam::Vec3;
 use openhp1_render::{
     AmbientOcclusion, Antialiasing, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
-    RendererSettings, ToneMapper,
+    RendererSettings, ToneMapper, VolumetricTuning,
 };
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
@@ -39,6 +39,7 @@ pub(crate) struct ViewerApp {
     render_stats: RenderStats,
     load_error: Option<String>,
     renderer_settings: RendererSettings,
+    volumetric_tuning: VolumetricTuning,
 }
 
 impl ViewerApp {
@@ -90,6 +91,7 @@ impl ViewerApp {
             render_stats: RenderStats::default(),
             load_error: None,
             renderer_settings,
+            volumetric_tuning: VolumetricTuning::default(),
         })
     }
 
@@ -311,6 +313,70 @@ impl ViewerApp {
                     }
                 });
             });
+        if self.renderer_settings.mode == RendererMode::Modern
+            && self.renderer_settings.volumetric_lighting
+        {
+            egui::CollapsingHeader::new("Volumetric tuning")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.strong("Dust");
+                    egui::Grid::new("dust tuning").show(ui, |ui| {
+                        ui.label("Size");
+                        ui.add(
+                            egui::Slider::new(&mut self.volumetric_tuning.dust_size, 0.5..=12.0)
+                                .suffix(" px"),
+                        );
+                        ui.end_row();
+                        ui.label("Density");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.dust_density,
+                            0..=64,
+                        ));
+                        ui.end_row();
+                        ui.label("Opacity");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.dust_opacity,
+                            0.0..=4.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Speed");
+                        ui.add(
+                            egui::Slider::new(&mut self.volumetric_tuning.dust_speed, 0.0..=100.0)
+                                .suffix(" u/s"),
+                        );
+                        ui.end_row();
+                    });
+                    ui.separator();
+                    ui.strong("Haze");
+                    egui::Grid::new("haze tuning").show(ui, |ui| {
+                        ui.label("Size");
+                        ui.add(
+                            egui::Slider::new(&mut self.volumetric_tuning.haze_size, 5.0..=500.0)
+                                .logarithmic(true)
+                                .suffix(" u"),
+                        );
+                        ui.end_row();
+                        ui.label("Density");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.haze_density,
+                            0.0..=4.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Opacity");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.haze_opacity,
+                            0.0..=1.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Speed");
+                        ui.add(
+                            egui::Slider::new(&mut self.volumetric_tuning.haze_speed, 0.0..=50.0)
+                                .suffix(" u/s"),
+                        );
+                        ui.end_row();
+                    });
+                });
+        }
         egui::CollapsingHeader::new(format!("Actors ({})", self.scene.actors.len()))
             .default_open(false)
             .show(ui, |ui| self.actor_inspector(ui));
@@ -733,6 +799,7 @@ impl eframe::App for ViewerApp {
             } else if renderer_settings_changed {
                 self.rebuild_renderer(size);
             }
+            self.renderer.set_volumetric_tuning(self.volumetric_tuning);
             self.renderer.resize(&self.state.device, size);
             let response = ui.add(
                 egui::Image::new((self.target.id, available))

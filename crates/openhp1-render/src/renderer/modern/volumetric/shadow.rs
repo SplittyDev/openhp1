@@ -5,7 +5,7 @@ use glam::{Mat4, Vec2, Vec3};
 use openhp1_scene::{RenderScene, SurfaceMode};
 use wgpu::util::DeviceExt;
 
-use crate::{Camera, unreal_to_render};
+use crate::{Camera, VolumetricTuning, unreal_to_render};
 
 use super::super::super::DEPTH_FORMAT;
 use super::super::HDR_FORMAT;
@@ -14,6 +14,7 @@ const SHADOW_SIZE: u32 = 1024;
 // ponytail: Fixed wall-direction budget; raise it only if authored maps need more slices.
 const MAX_SHADOW_DIRECTIONS: usize = 4;
 const MAX_VISIBLE_PORTALS: usize = 128;
+const MAX_MOTES_PER_PORTAL: u32 = 64;
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
 const SHAFT_SHADER: &str = concat!(
     include_str!("../../../shaders/modern/volumetric_noise.wgsl"),
@@ -26,7 +27,9 @@ struct ShadowSettings {
     inverse_view_projection: mat4x4<f32>,
     camera_position: vec4<f32>,
     direction_density: vec4<f32>,
-    distance_intensity_phase: vec4<f32>,
+    distance_intensity_pixel: vec4<f32>,
+    haze: vec4<f32>,
+    dust: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -46,7 +49,9 @@ pub(super) struct ShadowUniform {
     pub(super) inverse_view_projection: [[f32; 4]; 4],
     pub(super) camera_position: [f32; 4],
     pub(super) direction_density: [f32; 4],
-    pub(super) distance_intensity_phase: [f32; 4],
+    pub(super) distance_intensity_pixel: [f32; 4],
+    pub(super) haze: [f32; 4],
+    pub(super) dust: [f32; 4],
 }
 
 #[repr(C)]
@@ -80,6 +85,7 @@ pub(super) struct DirectionalShadow {
     pipeline: wgpu::RenderPipeline,
     shaft_layout: wgpu::BindGroupLayout,
     shaft_pipeline: wgpu::RenderPipeline,
+    mote_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
     portals: Vec<PortalTriangle>,
     vertex_buffer: wgpu::Buffer,
@@ -87,6 +93,7 @@ pub(super) struct DirectionalShadow {
     vertex_count: usize,
     index_count: u32,
     enabled: bool,
+    tuning: VolumetricTuning,
 }
 
 impl DirectionalShadow {
@@ -263,6 +270,24 @@ impl DirectionalShadow {
                 bind_group_layouts: &[Some(&shaft_layout)],
                 immediate_size: 0,
             });
+        let additive_target = || {
+            Some(wgpu::ColorTargetState {
+                format: HDR_FORMAT,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        };
         let shaft_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("OpenHP1 volumetric sky shaft pipeline"),
             layout: Some(&shaft_pipeline_layout),
@@ -279,22 +304,28 @@ impl DirectionalShadow {
                 module: &shaft_shader,
                 entry_point: Some("fragment_sky_shafts"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[additive_target()],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let mote_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("OpenHP1 volumetric dust mote pipeline"),
+            layout: Some(&shaft_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shaft_shader,
+                entry_point: Some("vertex_dust_mote"),
+                compilation_options: Default::default(),
+                buffers: &[Self::portal_layout()],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shaft_shader,
+                entry_point: Some("fragment_dust_mote"),
+                compilation_options: Default::default(),
+                targets: &[additive_target()],
             }),
             multiview_mask: None,
             cache: None,
@@ -305,6 +336,7 @@ impl DirectionalShadow {
             pipeline,
             shaft_layout,
             shaft_pipeline,
+            mote_pipeline,
             shadow_sampler,
             portals,
             vertex_buffer,
@@ -312,7 +344,12 @@ impl DirectionalShadow {
             vertex_count: vertices.len(),
             index_count: indices.len() as u32,
             enabled,
+            tuning: VolumetricTuning::default(),
         }
+    }
+
+    pub(super) fn set_tuning(&mut self, tuning: VolumetricTuning) {
+        self.tuning = tuning;
     }
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, scene_depth: &wgpu::TextureView) {
@@ -349,6 +386,7 @@ impl DirectionalShadow {
         queue: &wgpu::Queue,
         camera: &Camera,
         aspect: f32,
+        viewport_size: [u32; 2],
         elapsed_time: f32,
     ) {
         if !self.enabled {
@@ -364,7 +402,14 @@ impl DirectionalShadow {
             queue.write_buffer(
                 &slice.uniform,
                 0,
-                bytemuck::bytes_of(&shadow_uniform(camera, aspect, direction, elapsed_time)),
+                bytemuck::bytes_of(&shadow_uniform(
+                    camera,
+                    aspect,
+                    direction,
+                    viewport_size,
+                    elapsed_time,
+                    self.tuning,
+                )),
             );
             queue.write_buffer(&slice.portal_buffer, 0, bytemuck::cast_slice(&portals));
             slice.portal_count = portals.len();
@@ -442,6 +487,15 @@ impl DirectionalShadow {
             pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
             pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
             pass.draw(0..6, 0..slice.portal_count as u32);
+        }
+        pass.set_pipeline(&self.mote_pipeline);
+        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+            pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
+            pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
+            pass.draw(
+                0..6 * self.tuning.dust_density.min(MAX_MOTES_PER_PORTAL),
+                0..slice.portal_count as u32,
+            );
         }
         1
     }
@@ -748,7 +802,9 @@ fn shadow_uniform(
     camera: &Camera,
     aspect: f32,
     direction: Vec3,
+    viewport_size: [u32; 2],
     elapsed_time: f32,
+    tuning: VolumetricTuning,
 ) -> ShadowUniform {
     let radius = camera.far.clamp(500.0, 3_000.0);
     let direction = direction.normalize();
@@ -764,9 +820,31 @@ fn shadow_uniform(
         light_view_projection: (projection * view).to_cols_array_2d(),
         view_projection: camera.view_projection(aspect).to_cols_array_2d(),
         inverse_view_projection: camera.view_projection(aspect).inverse().to_cols_array_2d(),
-        camera_position: camera.position.extend(1.0).to_array(),
-        direction_density: [direction.x, direction.y, direction.z, 0.00025],
-        distance_intensity_phase: [radius, 0.35, 0.45, elapsed_time],
+        camera_position: camera.position.extend(elapsed_time).to_array(),
+        direction_density: [
+            direction.x,
+            direction.y,
+            direction.z,
+            0.00025 * tuning.haze_density,
+        ],
+        distance_intensity_pixel: [
+            radius,
+            0.35,
+            1.0 / viewport_size[0].max(1) as f32,
+            1.0 / viewport_size[1].max(1) as f32,
+        ],
+        haze: [
+            tuning.haze_size,
+            tuning.haze_density,
+            tuning.haze_opacity,
+            tuning.haze_speed,
+        ],
+        dust: [
+            tuning.dust_size,
+            tuning.dust_opacity,
+            tuning.dust_speed,
+            0.0,
+        ],
     }
 }
 
@@ -967,7 +1045,7 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
-        assert_eq!(size_of::<ShadowUniform>(), 240);
+        assert_eq!(size_of::<ShadowUniform>(), 272);
     }
 
     #[test]

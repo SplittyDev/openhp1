@@ -8,7 +8,7 @@ use glam::Vec3;
 use openhp1_scene::{RenderLight, RenderScene, TextureImage};
 use wgpu::util::DeviceExt;
 
-use crate::Camera;
+use crate::{Camera, VolumetricTuning};
 
 use super::HDR_FORMAT;
 
@@ -31,6 +31,7 @@ struct VolumetricUniform {
     camera_position: [f32; 4],
     camera_forward: [f32; 4],
     projection: [f32; 4],
+    haze: [f32; 4],
 }
 
 #[repr(C)]
@@ -52,6 +53,7 @@ pub(super) struct VolumetricRenderer {
     instance_count: usize,
     point_volume_buffer: wgpu::Buffer,
     point_volume_count: usize,
+    tuning: VolumetricTuning,
 }
 
 impl VolumetricRenderer {
@@ -135,6 +137,7 @@ impl VolumetricRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let tuning = VolumetricTuning::default();
         Self {
             shadow,
             point_shadows,
@@ -146,7 +149,13 @@ impl VolumetricRenderer {
             instance_count: instances.len(),
             point_volume_buffer,
             point_volume_count: 0,
+            tuning,
         }
+    }
+
+    pub(super) fn set_tuning(&mut self, tuning: VolumetricTuning) {
+        self.tuning = tuning;
+        self.shadow.set_tuning(tuning);
     }
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
@@ -197,9 +206,16 @@ impl VolumetricRenderer {
                     camera.near,
                     elapsed_time,
                 ],
+                haze: [
+                    self.tuning.haze_size,
+                    self.tuning.haze_density,
+                    self.tuning.haze_opacity,
+                    self.tuning.haze_speed,
+                ],
             }),
         );
-        self.shadow.prepare(queue, camera, aspect, elapsed_time);
+        self.shadow
+            .prepare(queue, camera, aspect, viewport_size, elapsed_time);
         let point_volumes = self.point_shadows.prepare(queue, camera);
         self.point_volume_count = point_volumes.len();
         if !point_volumes.is_empty() {
@@ -544,7 +560,7 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
-        assert_eq!(size_of::<VolumetricUniform>(), 176);
+        assert_eq!(size_of::<VolumetricUniform>(), 192);
         assert_eq!(size_of::<VolumetricInstance>(), 48);
     }
 

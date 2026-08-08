@@ -120,6 +120,33 @@ impl Default for DisplaySettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumetricTuning {
+    pub dust_size: f32,
+    pub dust_density: u32,
+    pub dust_opacity: f32,
+    pub dust_speed: f32,
+    pub haze_size: f32,
+    pub haze_density: f32,
+    pub haze_opacity: f32,
+    pub haze_speed: f32,
+}
+
+impl Default for VolumetricTuning {
+    fn default() -> Self {
+        Self {
+            dust_size: 4.0,
+            dust_density: 64,
+            dust_opacity: 0.05,
+            dust_speed: 5.0,
+            haze_size: 60.0,
+            haze_density: 0.75,
+            haze_opacity: 0.5,
+            haze_speed: 25.0,
+        }
+    }
+}
+
 impl DisplaySettings {
     pub const fn for_mode(mode: RendererMode) -> Self {
         match mode {
@@ -213,6 +240,19 @@ mod tests {
             ToneMapper::Reinhard
         );
         assert!(RendererSettings::default().volumetric_lighting);
+        assert_eq!(
+            VolumetricTuning::default(),
+            VolumetricTuning {
+                dust_size: 4.0,
+                dust_density: 64,
+                dust_opacity: 0.05,
+                dust_speed: 5.0,
+                haze_size: 60.0,
+                haze_density: 0.75,
+                haze_opacity: 0.5,
+                haze_speed: 25.0,
+            }
+        );
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
         assert_eq!("cLaSsIc".parse(), Ok(RendererMode::Classic));
         assert_eq!("agx".parse(), Ok(ToneMapper::AgX));

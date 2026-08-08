@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode, ToneMapper,
-    unreal_to_render,
+    VolumetricTuning, unreal_to_render,
 };
 
 use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
@@ -341,6 +341,10 @@ impl ModernRenderer {
 
     pub(super) fn scene_view(&self) -> &wgpu::TextureView {
         &self.scene_view
+    }
+
+    pub(super) fn set_volumetric_tuning(&mut self, tuning: VolumetricTuning) {
+        self.volumetrics.set_tuning(tuning);
     }
 
     pub(super) fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {

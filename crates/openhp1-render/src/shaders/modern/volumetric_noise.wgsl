@@ -2,8 +2,7 @@ fn volumetric_hash(cell: vec3<f32>) -> f32 {
     return fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453);
 }
 
-fn volumetric_dust(position: vec3<f32>, time: f32) -> f32 {
-    let point = position * 0.025 + vec3(time * 0.08, -time * 0.035, time * 0.055);
+fn volumetric_noise(point: vec3<f32>) -> f32 {
     let cell = floor(point);
     let fraction = fract(point);
     let blend = fraction * fraction * (vec3(3.0) - 2.0 * fraction);
@@ -11,6 +10,12 @@ fn volumetric_dust(position: vec3<f32>, time: f32) -> f32 {
     let x10 = mix(volumetric_hash(cell + vec3(0.0, 1.0, 0.0)), volumetric_hash(cell + vec3(1.0, 1.0, 0.0)), blend.x);
     let x01 = mix(volumetric_hash(cell + vec3(0.0, 0.0, 1.0)), volumetric_hash(cell + vec3(1.0, 0.0, 1.0)), blend.x);
     let x11 = mix(volumetric_hash(cell + vec3(0.0, 1.0, 1.0)), volumetric_hash(cell + vec3(1.0, 1.0, 1.0)), blend.x);
-    let noise = mix(mix(x00, x10, blend.y), mix(x01, x11, blend.y), blend.z);
-    return mix(0.45, 1.55, smoothstep(0.25, 0.75, noise));
+    return mix(mix(x00, x10, blend.y), mix(x01, x11, blend.y), blend.z);
+}
+
+fn volumetric_dust(position: vec3<f32>, time: f32, settings: vec4<f32>) -> f32 {
+    let direction = normalize(vec3(3.2, -1.4, 2.2));
+    let drift = direction * time * settings.w;
+    let haze = volumetric_noise((position + drift) / max(settings.x, 0.001));
+    return mix(1.0, haze * 2.0, settings.z);
 }

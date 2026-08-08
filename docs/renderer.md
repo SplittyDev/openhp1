@@ -133,10 +133,17 @@ Only source triangles intersecting the camera frustum are submitted, capped at
 the 128 nearest triangles. Opaque walls and props shadow the resulting volumes.
 The accumulation is additive HDR scattering with no scene-wide extinction,
 retaining values for bloom and tone mapping without tinting the whole room.
-Window shafts and local volumetric sources share a subtle world-space density
-noise with approximately 40-unit cells, so narrow authored apertures retain
-visible variation. It drifts slowly with render time and pauses with the rest
-of the scene.
+Window shafts and local volumetric sources share a slowly drifting world-space
+density field with approximately 40-unit haze cells. Window shafts also carry
+sparse world-space motes inside their authored prisms; camera-facing billboards
+keep them round while scene depth and the sun shadow map clip them to the lit
+volume. Both layers pause with the rest of the scene.
+
+The map viewer exposes live dust size, density, opacity, and speed controls,
+plus haze field size, density, opacity, and speed. These are temporary tuning
+controls and do not change `OpenHP1.ini`. The shared defaults are dust size
+`4 px`, density `64`, opacity `0.05`, and speed `5 units/s`; haze size `60
+units`, density `0.75`, opacity `0.5`, and speed `25 units/s`.
 
 Local volumetric sources retain their compact HDR halos. Up to four nearest
 visible emitters or explicitly authored fog lights additionally receive

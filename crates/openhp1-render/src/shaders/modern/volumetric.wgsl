@@ -4,6 +4,7 @@ struct VolumetricSettings {
     camera_position: vec4<f32>,
     camera_forward: vec4<f32>,
     projection: vec4<f32>,
+    haze: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -152,7 +153,7 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     }
     let midpoint = input.position_radius.xyz
         + (ray_origin + ray_direction * ((start + end) * 0.5)) * radius;
-    density *= volumetric_dust(midpoint, settings.projection.w);
+    density *= settings.haze.y * volumetric_dust(midpoint, settings.projection.w, settings.haze);
     return vec4(
         input.color_fog.rgb * density,
         min(density * input.color_fog.a, 1.0),

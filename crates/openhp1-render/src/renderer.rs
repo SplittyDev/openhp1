@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     Camera, DisplaySettings, RenderScene, RendererMode, RendererSettings, SceneBounds,
-    SurfaceMaterial, SurfaceMode, TextureImage, unreal_to_render,
+    SurfaceMaterial, SurfaceMode, TextureImage, VolumetricTuning, unreal_to_render,
 };
 
 mod atlas;
@@ -104,6 +104,12 @@ pub struct Renderer {
 impl Renderer {
     pub fn settings(&self) -> RendererSettings {
         self.settings
+    }
+
+    pub fn set_volumetric_tuning(&mut self, tuning: VolumetricTuning) {
+        if let Some(modern) = &mut self.modern {
+            modern.set_volumetric_tuning(tuning);
+        }
     }
 
     pub fn new(
