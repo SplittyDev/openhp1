@@ -37,3 +37,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "29"
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "x11"] }
+
+[profile.dev]
+debug = 1
+codegen-units = 512
+opt-level = 0
+lto = "off"
+
+[profile.dev.package."*"]
+codegen-units = 128
