@@ -7,7 +7,9 @@ use std::{
 };
 
 use glam::Vec3;
-use openhp1_render::{Camera, DisplaySettings, Renderer, RendererMode, RendererSettings};
+use openhp1_render::{
+    Camera, DisplaySettings, Renderer, RendererMode, RendererSettings, unreal_to_render,
+};
 use openhp1_scene::LoadedScene;
 
 const SIZE: [u32; 2] = [1024, 768];
@@ -17,7 +19,10 @@ const MEASURED_FRAMES: usize = 60;
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args_os()
         .nth(1)
-        .ok_or("usage: modern_benchmark <map path>")?;
+        .ok_or("usage: modern_benchmark <map path> [--portal]")?;
+    let portal_view = env::args_os()
+        .nth(2)
+        .is_some_and(|value| value == "--portal");
     let scene = LoadedScene::load(path.into())?;
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -50,27 +55,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|corona| corona.actor_index)
         .collect::<std::collections::HashSet<_>>();
-    let camera = scene
-        .render
-        .realtime_lightmaps
-        .iter()
-        .flat_map(|lightmap| &lightmap.lights)
-        .find(|light| {
-            light.actor_index != usize::MAX
-                && light.effect != 4
-                && (light.source_texture.is_some()
-                    || corona_actors.contains(&light.actor_index)
-                    || (light.brightness != 0
-                        && light.volume_radius != 0
-                        && light.volume_brightness != 0))
-        })
-        .map(|light| {
-            Camera::looking_at(
-                light.location + Vec3::new(0.0, -250.0, 50.0),
-                light.location,
-                far,
-            )
-        })
+    let camera = portal_view
+        .then(|| portal_camera(&scene.render, far))
+        .flatten()
+        .or_else(|| local_light_camera(&scene.render, &corona_actors, far))
         .unwrap_or_else(|| Camera::looking_at(center, center - Vec3::Z, far));
     let output = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("OpenHP1 Modern benchmark output"),
@@ -110,6 +98,60 @@ fn main() -> Result<(), Box<dyn Error>> {
         stats.draw_calls,
     );
     Ok(())
+}
+
+fn portal_camera(scene: &openhp1_render::RenderScene, far: f32) -> Option<Camera> {
+    let (triangle, _) = scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+        .find(|(_, surface)| {
+            scene
+                .surface_materials
+                .get(**surface)
+                .is_some_and(|material| material.volumetric_source)
+        })?;
+    let [a, b, c] = <[u32; 3]>::try_from(triangle).ok()?;
+    let [a, b, c] = [a, b, c].map(|index| {
+        scene
+            .mesh
+            .positions
+            .get(index as usize)
+            .copied()
+            .map(unreal_to_render)
+    });
+    let [a, b, c] = [a?, b?, c?];
+    let center = (a + b + c) / 3.0;
+    let normal = (b - a).cross(c - a).normalize_or_zero();
+    Some(Camera::looking_at(center - normal * 300.0, center, far))
+}
+
+fn local_light_camera(
+    scene: &openhp1_render::RenderScene,
+    corona_actors: &std::collections::HashSet<usize>,
+    far: f32,
+) -> Option<Camera> {
+    scene
+        .realtime_lightmaps
+        .iter()
+        .flat_map(|lightmap| &lightmap.lights)
+        .find(|light| {
+            light.actor_index != usize::MAX
+                && light.effect != 4
+                && (light.source_texture.is_some()
+                    || corona_actors.contains(&light.actor_index)
+                    || (light.brightness != 0
+                        && light.volume_radius != 0
+                        && light.volume_brightness != 0))
+        })
+        .map(|light| {
+            Camera::looking_at(
+                light.location + Vec3::new(0.0, -250.0, 50.0),
+                light.location,
+                far,
+            )
+        })
 }
 
 fn render_frame(

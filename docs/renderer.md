@@ -129,6 +129,12 @@ selected slot but does not otherwise invalidate a point shadow. Changed caster
 bounds include both the old and new triangle positions, so moving geometry
 cannot leave stale depth behind.
 
+After shadow generation and froxel compute complete, froxel composite,
+directional shafts and local volumes draw in that order inside one additive HDR
+render pass. None samples the updated HDR attachment, so the merge preserves
+the previous draw order while avoiding intermediate attachment stores and
+loads on tile-based GPUs.
+
 Directional shafts use a renderer-owned four-layer shadow map over opaque scene
 geometry and a camera-aligned `rgba16float` froxel volume. At the normal
 1024x768 internal resolution the volume is 128x96x64, with exponential depth

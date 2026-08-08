@@ -290,24 +290,23 @@ impl VolumetricRenderer {
         } else {
             0
         };
-        let froxel_passes = if matches!(
-            debug_view,
-            VolumetricDebugView::Composite | VolumetricDebugView::Scattering
-        ) {
-            self.froxel.render(encoder, target)
+        let draw_froxel = self.froxel.has_scattering()
+            && matches!(
+                debug_view,
+                VolumetricDebugView::Composite | VolumetricDebugView::Scattering
+            );
+        let froxel_passes = if draw_froxel {
+            self.froxel.compute(encoder)
         } else {
             0
         };
-        let effect_passes = if directional {
-            self.shadow.render_shafts(encoder, target)
-        } else {
-            0
-        };
-        if !local || (self.instance_count == 0 && self.point_volume_count == 0) {
-            return shadow_passes + point_shadow_passes + froxel_passes + effect_passes;
+        let draw_shafts = directional && self.shadow.has_visible_shafts();
+        let draw_local = local && (self.instance_count != 0 || self.point_volume_count != 0);
+        if !draw_froxel && !draw_shafts && !draw_local {
+            return shadow_passes + point_shadow_passes + froxel_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("OpenHP1 volumetric lighting pass"),
+            label: Some("OpenHP1 additive volumetric lighting pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,
@@ -322,22 +321,30 @@ impl VolumetricRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        if self.instance_count != 0 && debug_view != VolumetricDebugView::LocalVisibility {
-            pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-            pass.draw(0..6, 0..self.instance_count as u32);
+        if draw_froxel {
+            self.froxel.draw(&mut pass);
         }
-        if self.point_volume_count != 0 {
-            pass.set_vertex_buffer(0, self.point_volume_buffer.slice(..));
-            let count = if debug_view == VolumetricDebugView::LocalVisibility {
-                1
-            } else {
-                self.point_volume_count
-            };
-            pass.draw(0..6, 0..count as u32);
+        if draw_shafts {
+            self.shadow.draw_shafts(&mut pass);
         }
-        shadow_passes + point_shadow_passes + froxel_passes + effect_passes + 1
+        if draw_local {
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            if self.instance_count != 0 && debug_view != VolumetricDebugView::LocalVisibility {
+                pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+                pass.draw(0..6, 0..self.instance_count as u32);
+            }
+            if self.point_volume_count != 0 {
+                pass.set_vertex_buffer(0, self.point_volume_buffer.slice(..));
+                let count = if debug_view == VolumetricDebugView::LocalVisibility {
+                    1
+                } else {
+                    self.point_volume_count
+                };
+                pass.draw(0..6, 0..count as u32);
+            }
+        }
+        shadow_passes + point_shadow_passes + froxel_passes + 1
     }
 }
 

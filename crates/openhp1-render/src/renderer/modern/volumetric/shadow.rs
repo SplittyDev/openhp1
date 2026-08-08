@@ -559,33 +559,16 @@ impl DirectionalShadow {
         pass.draw(0..self.vertices.len() as u32, 0..1);
     }
 
-    pub(super) fn render_shafts(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-    ) -> usize {
-        if !self.enabled
-            || self.vertices.is_empty()
-            || self.slices.iter().all(|slice| slice.portal_count == 0)
-        {
-            return 0;
+    pub(super) fn has_visible_shafts(&self) -> bool {
+        self.enabled
+            && !self.vertices.is_empty()
+            && self.slices.iter().any(|slice| slice.portal_count != 0)
+    }
+
+    pub(super) fn draw_shafts<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
+        if !self.has_visible_shafts() {
+            return;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("OpenHP1 volumetric sky shaft pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
         if matches!(
             self.tuning.debug_view,
             VolumetricDebugView::ApertureMask | VolumetricDebugView::DirectionalVisibility
@@ -619,7 +602,6 @@ impl DirectionalShadow {
                 );
             }
         }
-        1
     }
 }
 

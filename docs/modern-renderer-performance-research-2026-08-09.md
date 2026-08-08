@@ -36,6 +36,12 @@ draw/pass submissions. Both paths produced checksum `477194a049a3c069`.
 These are development-profile queued-GPU throughput measurements, not a claim
 about every authored camera view.
 
+The additive volumetric pass merge also completed. On a fixed `Lev_Tut1`
+portal view it reduced steady submissions from 203 to 201 and improved the
+five-run median from 10.100 to 9.804 ms/frame (2.9%), with identical checksum
+`c4d0899930b48d3c`. Shadow generation and froxel compute remain separate;
+only the three consecutive additive HDR draws share the render pass.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,

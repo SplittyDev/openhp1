@@ -218,44 +218,29 @@ impl FroxelVolume {
         );
     }
 
-    pub(super) fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-    ) -> usize {
+    pub(super) fn compute(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
         if self.portal_count == 0 {
             return 0;
         }
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("OpenHP1 froxel lighting pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.compute_pipeline);
-            pass.set_bind_group(0, &self.compute_bind_group, &[]);
-            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
-        }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("OpenHP1 froxel composite pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("OpenHP1 froxel lighting pass"),
             timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
         });
+        pass.set_pipeline(&self.compute_pipeline);
+        pass.set_bind_group(0, &self.compute_bind_group, &[]);
+        pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        1
+    }
+
+    pub(super) fn has_scattering(&self) -> bool {
+        self.portal_count != 0
+    }
+
+    pub(super) fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
         pass.set_pipeline(&self.composite_pipeline);
         pass.set_bind_group(0, &self.composite_uniform_bind_group, &[]);
         pass.set_bind_group(1, &self.composite_bind_group, &[]);
         pass.draw(0..3, 0..1);
-        2
     }
 }
 
