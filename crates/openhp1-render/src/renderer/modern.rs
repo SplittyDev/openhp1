@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode, ToneMapper,
-    VolumetricTuning, unreal_to_render,
+    VolumetricDebugView, VolumetricTuning, unreal_to_render,
 };
 
 use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
@@ -101,6 +101,7 @@ pub(super) struct ModernRenderer {
     ambient_occlusion: AmbientOcclusion,
     bloom: bool,
     volumetric_lighting: bool,
+    volumetric_debug_view: VolumetricDebugView,
 }
 
 impl ModernRenderer {
@@ -268,7 +269,7 @@ impl ModernRenderer {
         );
         let coronas =
             (!scene.coronas.is_empty()).then(|| CoronaRenderer::new(device, scene, texture_layout));
-        let volumetrics = VolumetricRenderer::new(device, depth_view, scene);
+        let volumetrics = VolumetricRenderer::new(device, queue, depth_view, scene);
 
         Self {
             coronas,
@@ -296,6 +297,7 @@ impl ModernRenderer {
             ambient_occlusion: settings.ambient_occlusion,
             bloom: settings.bloom,
             volumetric_lighting: settings.volumetric_lighting,
+            volumetric_debug_view: VolumetricDebugView::Composite,
         }
     }
 
@@ -344,6 +346,7 @@ impl ModernRenderer {
     }
 
     pub(super) fn set_volumetric_tuning(&mut self, tuning: VolumetricTuning) {
+        self.volumetric_debug_view = tuning.debug_view;
         self.volumetrics.set_tuning(tuning);
     }
 
@@ -391,27 +394,52 @@ impl ModernRenderer {
         contrast: f32,
         camera: &Camera,
     ) -> usize {
+        let debug = self.volumetric_debug_view != VolumetricDebugView::Composite;
+        let bloom = self.bloom && !debug;
         queue.write_buffer(
             &self.uniform,
             0,
             bytemuck::bytes_of(&ModernUniform {
                 brightness_gamma: display_gamma(brightness),
-                bloom_strength: if self.bloom { 1.5 } else { 0.0 },
+                bloom_strength: if bloom { 1.5 } else { 0.0 },
                 contrast,
                 tone_mapper: tone_mapper_id(self.tone_mapper),
-                ambient_occlusion: u32::from(self.ambient_occlusion != AmbientOcclusion::Off),
+                ambient_occlusion: u32::from(
+                    !debug && self.ambient_occlusion != AmbientOcclusion::Off,
+                ),
                 _padding: [0; 3],
             }),
         );
+        if debug {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 volumetric debug clear pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.scene_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
         let volumetric_passes = if self.volumetric_lighting {
             self.volumetrics.render(encoder, &self.scene_view)
         } else {
             0
         };
-        let ao_passes = self
-            .ao
-            .render(queue, encoder, camera, self.ambient_occlusion);
-        if self.bloom {
+        let ao_passes = if debug {
+            0
+        } else {
+            self.ao
+                .render(queue, encoder, camera, self.ambient_occlusion)
+        };
+        if bloom {
             draw_fullscreen(
                 encoder,
                 &self.bloom_a.view,
@@ -443,7 +471,7 @@ impl ModernRenderer {
             "OpenHP1 modern composite pass",
         );
         let aa_passes = self.aa.as_ref().map_or(0, |aa| aa.render(encoder, output));
-        volumetric_passes + ao_passes + (if self.bloom { 4 } else { 1 }) + aa_passes
+        volumetric_passes + ao_passes + usize::from(debug) + (if bloom { 4 } else { 1 }) + aa_passes
     }
 }
 

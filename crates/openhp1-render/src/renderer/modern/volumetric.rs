@@ -8,14 +8,14 @@ use glam::Vec3;
 use openhp1_scene::{RenderLight, RenderScene, TextureImage};
 use wgpu::util::DeviceExt;
 
-use crate::{Camera, VolumetricTuning};
+use crate::{Camera, VolumetricDebugView, VolumetricTuning};
 
 use super::HDR_FORMAT;
 
 mod point_shadow;
 mod shadow;
 
-use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer};
+use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer, fixture_energy_scales};
 use shadow::DirectionalShadow;
 
 const SHADER: &str = concat!(
@@ -61,10 +61,11 @@ pub(super) struct VolumetricRenderer {
 impl VolumetricRenderer {
     pub(super) fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
-        let shadow = DirectionalShadow::new(device, depth_view, scene);
+        let shadow = DirectionalShadow::new(device, queue, depth_view, scene);
         let point_shadows = PointShadowRenderer::new(device, scene);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
@@ -202,7 +203,10 @@ impl VolumetricRenderer {
             bytemuck::bytes_of(&VolumetricUniform {
                 view_projection: view_projection.to_cols_array_2d(),
                 inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
-                camera_position: camera.position.extend(1.0).to_array(),
+                camera_position: camera
+                    .position
+                    .extend(self.tuning.debug_view.shader_id() as f32)
+                    .to_array(),
                 camera_forward: camera.forward().extend(0.0).to_array(),
                 projection: [
                     tan_half_fov * aspect,
@@ -220,7 +224,8 @@ impl VolumetricRenderer {
         );
         self.shadow
             .prepare(queue, camera, aspect, viewport_size, elapsed_time);
-        let (shadowed_actor_indices, point_volumes) = self.point_shadows.prepare(queue, camera);
+        let (shadowed_actor_indices, point_volumes) =
+            self.point_shadows.prepare(queue, camera, aspect);
         let instances = unshadowed_instances(
             &self.instance_actor_indices,
             &self.instances,
@@ -245,10 +250,28 @@ impl VolumetricRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
-        let shadow_passes = self.shadow.render(encoder);
-        let point_shadow_passes = self.point_shadows.render(encoder, &self.shadow);
-        let shaft_passes = self.shadow.render_shafts(encoder, target);
-        if self.instance_count == 0 && self.point_volume_count == 0 {
+        let debug_view = self.tuning.debug_view;
+        let directional = debug_view != VolumetricDebugView::LocalVisibility;
+        let local = !matches!(
+            debug_view,
+            VolumetricDebugView::ApertureMask | VolumetricDebugView::DirectionalVisibility
+        );
+        let shadow_passes = if directional {
+            self.shadow.render(encoder)
+        } else {
+            0
+        };
+        let point_shadow_passes = if local {
+            self.point_shadows.render(encoder, &self.shadow)
+        } else {
+            0
+        };
+        let shaft_passes = if directional {
+            self.shadow.render_shafts(encoder, target)
+        } else {
+            0
+        };
+        if !local || (self.instance_count == 0 && self.point_volume_count == 0) {
             return shadow_passes + point_shadow_passes + shaft_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -269,13 +292,18 @@ impl VolumetricRenderer {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        if self.instance_count != 0 {
+        if self.instance_count != 0 && debug_view != VolumetricDebugView::LocalVisibility {
             pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
             pass.draw(0..6, 0..self.instance_count as u32);
         }
         if self.point_volume_count != 0 {
             pass.set_vertex_buffer(0, self.point_volume_buffer.slice(..));
-            pass.draw(0..6, 0..self.point_volume_count as u32);
+            let count = if debug_view == VolumetricDebugView::LocalVisibility {
+                1
+            } else {
+                self.point_volume_count
+            };
+            pass.draw(0..6, 0..count as u32);
         }
         shadow_passes + point_shadow_passes + shaft_passes + 1
     }
@@ -283,6 +311,7 @@ impl VolumetricRenderer {
 
 fn instances(scene: &RenderScene) -> (Vec<usize>, Vec<VolumetricInstance>) {
     let mut seen = HashSet::new();
+    let fixture_energy_scales = fixture_energy_scales(scene);
     let corona_lights = scene
         .coronas
         .iter()
@@ -309,7 +338,18 @@ fn instances(scene: &RenderScene) -> (Vec<usize>, Vec<VolumetricInstance>) {
                 .source_texture
                 .and_then(|texture| scene.textures.get(texture))
                 .map(texture_light_color);
-            (light.actor_index, instance(light, corona, sprite_color))
+            (
+                light.actor_index,
+                instance(
+                    light,
+                    corona,
+                    sprite_color,
+                    fixture_energy_scales
+                        .get(&light.actor_index)
+                        .copied()
+                        .unwrap_or(1.0),
+                ),
+            )
         })
         .unzip()
 }
@@ -332,16 +372,11 @@ fn instance(
     light: &RenderLight,
     corona: Option<&openhp1_scene::Corona>,
     sprite_color: Option<Vec3>,
+    energy_scale: f32,
 ) -> VolumetricInstance {
     let authored = light.volume_radius != 0 && light.volume_brightness != 0;
     let sprite = light.source_texture.is_some() && corona.is_none();
-    let radius = if authored {
-        (f32::from(light.volume_radius) + 1.0) * 25.0
-    } else if sprite {
-        50.0
-    } else {
-        (75.0 * corona.map_or(1.0, |corona| corona.draw_scale.abs())).clamp(50.0, 150.0)
-    };
+    let radius = volume_radius(light, corona);
     let (color, fog, profile) = if authored {
         let brightness =
             f32::from(light.brightness) / 255.0 * f32::from(light.volume_brightness) / 64.0 * 5.0;
@@ -363,8 +398,18 @@ fn instance(
     };
     VolumetricInstance {
         position_radius: [light.location.x, light.location.y, light.location.z, radius],
-        color_fog: color.extend(fog).to_array(),
+        color_fog: (color * energy_scale).extend(fog).to_array(),
         profile: [profile, 0.0, 0.0, 0.0],
+    }
+}
+
+fn volume_radius(light: &RenderLight, corona: Option<&openhp1_scene::Corona>) -> f32 {
+    if light.volume_radius != 0 && light.volume_brightness != 0 {
+        (f32::from(light.volume_radius) + 1.0) * 25.0
+    } else if light.source_texture.is_some() && corona.is_none() {
+        50.0
+    } else {
+        (75.0 * corona.map_or(1.0, |corona| corona.draw_scale.abs())).clamp(50.0, 150.0)
     }
 }
 

@@ -81,6 +81,11 @@ fn point_visibility(position: vec3<f32>, center: vec3<f32>, far_plane: f32, shad
     );
 }
 
+fn point_phase(incoming: vec3<f32>, outgoing: vec3<f32>) -> f32 {
+    let cosine = dot(incoming, outgoing);
+    return 0.35 + 0.65 * pow(max(cosine, 0.0), 4.0);
+}
+
 @fragment
 fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<i32>(textureDimensions(scene_depth));
@@ -115,8 +120,9 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     end = min(end, normalized_depth);
 
     var density = 0.0;
+    var visibility_sum = 0.0;
     if input.profile.y > 0.5 {
-        const STEP_COUNT = 20;
+        const STEP_COUNT = 32;
         let step_length = (end - start) / f32(STEP_COUNT);
         let shadow_index = i32(input.profile.y - 1.0);
         for (var index = 0; index < STEP_COUNT; index += 1) {
@@ -130,7 +136,12 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
                 input.profile.z,
                 shadow_index,
             );
-            density += local_density * visibility * step_length;
+            visibility_sum += visibility;
+            let incoming = normalize(world_position - input.position_radius.xyz);
+            density += local_density
+                * point_phase(incoming, -ray_direction)
+                * visibility
+                * step_length;
         }
     } else if input.profile.x > 0.5 {
         let perpendicular_squared = max(dot(ray_origin, ray_origin) - b * b, 0.0);
@@ -145,6 +156,10 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
         let integral_start = -(c * start + b * start * start + start * start * start / 3.0);
         let integral_end = -(c * end + b * end * end + end * end * end / 3.0);
         density = max((integral_end - integral_start) * 0.75, 0.0);
+    }
+    if u32(settings.camera_position.w + 0.5) == 4u {
+        let visibility = visibility_sum / 32.0;
+        return vec4(1.0 - visibility, visibility, 0.0, 0.0);
     }
     let midpoint = input.position_radius.xyz
         + (ray_origin + ray_direction * ((start + end) * 0.5)) * radius;

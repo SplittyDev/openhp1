@@ -21,6 +21,12 @@ var shadow_sampler: sampler_comparison;
 @group(0) @binding(3)
 var<uniform> settings: ShadowSettings;
 
+@group(0) @binding(4)
+var aperture_masks: texture_2d_array<f32>;
+
+@group(0) @binding(5)
+var aperture_sampler: sampler;
+
 struct PortalVertex {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) a: vec4<f32>,
@@ -28,6 +34,9 @@ struct PortalVertex {
     @location(2) @interpolate(flat) c: vec4<f32>,
     @location(3) @interpolate(flat) color: vec4<f32>,
     @location(4) @interpolate(flat) direction: vec4<f32>,
+    @location(5) @interpolate(flat) uv_a: vec4<f32>,
+    @location(6) @interpolate(flat) uv_b: vec4<f32>,
+    @location(7) @interpolate(flat) uv_c: vec4<f32>,
 };
 
 @vertex
@@ -38,6 +47,9 @@ fn vertex_fullscreen(
     @location(2) c: vec4<f32>,
     @location(3) color: vec4<f32>,
     @location(4) direction: vec4<f32>,
+    @location(5) uv_a: vec4<f32>,
+    @location(6) uv_b: vec4<f32>,
+    @location(7) uv_c: vec4<f32>,
 ) -> PortalVertex {
     let corners = array<vec2<f32>, 6>(
         vec2(-1.0, -1.0),
@@ -83,7 +95,21 @@ fn vertex_fullscreen(
     output.c = c;
     output.color = color;
     output.direction = direction;
+    output.uv_a = uv_a;
+    output.uv_b = uv_b;
+    output.uv_c = uv_c;
     return output;
+}
+
+fn aperture_transmission(uv: vec2<f32>, layer: f32) -> f32 {
+    let value = textureSampleLevel(
+        aperture_masks,
+        aperture_sampler,
+        uv,
+        i32(layer),
+        0.0,
+    ).r;
+    return smoothstep(0.1, 0.5, value);
 }
 
 fn clip_lower_bound(interval: vec2<f32>, origin: f32, slope: f32) -> vec2<f32> {
@@ -165,6 +191,11 @@ fn sun_visibility(position: vec3<f32>) -> f32 {
     return textureSampleCompareLevel(sun_shadow, shadow_sampler, uv, ndc.z - 0.001);
 }
 
+fn directional_phase(light_direction: vec3<f32>, view_direction: vec3<f32>) -> f32 {
+    let cosine = dot(light_direction, view_direction);
+    return 0.35 + 0.65 * pow(max(cosine, 0.0), 4.0);
+}
+
 @fragment
 fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     let dimensions = vec2<i32>(textureDimensions(scene_depth));
@@ -194,13 +225,15 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         return vec4(0.0);
     }
 
-    const STEP_COUNT = 8;
+    const STEP_COUNT = 32;
     let step_length = (interval.y - interval.x) / f32(STEP_COUNT);
     let extrusion_length = min(settings.distance_intensity_pixel.x * 0.5, 1500.0);
     let edge_ab = input.b.xyz - input.a.xyz;
     let edge_ac = input.c.xyz - input.a.xyz;
     let inverse_determinant = 1.0 / dot(edge_ab, cross(edge_ac, input.direction.xyz));
     var lit_length = 0.0;
+    var aperture_sum = 0.0;
+    var visibility_sum = 0.0;
     for (var index = 0; index < STEP_COUNT; index += 1) {
         let distance = interval.x + (f32(index) + 0.5) * step_length;
         let position = settings.camera_position.xyz + ray_direction * distance;
@@ -213,13 +246,33 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         );
         let along_shaft = clamp(prism.z / extrusion_length, 0.0, 1.0);
         let end_fade = 1.0 - smoothstep(0.65, 1.0, along_shaft);
-        lit_length += sun_visibility(position) * end_fade * step_length;
+        let aperture_uv = input.uv_a.xy
+            + (input.uv_b.xy - input.uv_a.xy) * prism.x
+            + (input.uv_c.xy - input.uv_a.xy) * prism.y;
+        let visibility = sun_visibility(position);
+        let transmission = aperture_transmission(aperture_uv, input.direction.w);
+        visibility_sum += visibility;
+        aperture_sum += transmission;
+        lit_length += visibility
+            * transmission
+            * end_fade
+            * step_length;
+    }
+    let debug_mode = u32(settings.dust.w + 0.5);
+    if debug_mode == 2u {
+        let transmission = aperture_sum / f32(STEP_COUNT);
+        return vec4(vec3(transmission), 0.0);
+    }
+    if debug_mode == 3u {
+        let visibility = visibility_sum / f32(STEP_COUNT);
+        return vec4(1.0 - visibility, visibility, 0.0, 0.0);
     }
     let beam = 1.0 - exp(-lit_length * settings.direction_density.w);
     let midpoint = settings.camera_position.xyz
         + ray_direction * ((interval.x + interval.y) * 0.5);
     let haze = volumetric_dust(midpoint, settings.camera_position.w, settings.haze);
-    return vec4(input.color.rgb * beam * haze * settings.distance_intensity_pixel.y, 0.0);
+    let phase = directional_phase(input.direction.xyz, -ray_direction);
+    return vec4(input.color.rgb * beam * haze * phase * settings.distance_intensity_pixel.y, 0.0);
 }
 
 struct DustMoteVertex {
@@ -227,6 +280,7 @@ struct DustMoteVertex {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) world_position: vec3<f32>,
     @location(2) @interpolate(flat) color_fade: vec4<f32>,
+    @location(3) @interpolate(flat) aperture_uv_layer: vec3<f32>,
 };
 
 @vertex
@@ -237,6 +291,9 @@ fn vertex_dust_mote(
     @location(2) c: vec4<f32>,
     @location(3) color: vec4<f32>,
     @location(4) direction: vec4<f32>,
+    @location(5) uv_a: vec4<f32>,
+    @location(6) uv_b: vec4<f32>,
+    @location(7) uv_c: vec4<f32>,
 ) -> DustMoteVertex {
     let corners = array<vec2<f32>, 6>(
         vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
@@ -274,6 +331,12 @@ fn vertex_dust_mote(
     output.uv = corner;
     output.world_position = world_position;
     output.color_fade = vec4(color.rgb, 1.0 - smoothstep(0.65, 1.0, phase));
+    output.aperture_uv_layer = vec3(
+        uv_a.xy * (1.0 - root)
+            + uv_b.xy * (root * (1.0 - split))
+            + uv_c.xy * (root * split),
+        direction.w,
+    );
     return output;
 }
 
@@ -288,6 +351,7 @@ fn fragment_dust_mote(input: DustMoteVertex) -> @location(0) vec4<f32> {
     let brightness = circle
         * input.color_fade.a
         * sun_visibility(input.world_position)
+        * aperture_transmission(input.aperture_uv_layer.xy, input.aperture_uv_layer.z)
         * settings.dust.y;
     return vec4(
         input.color_fade.rgb * brightness * settings.distance_intensity_pixel.y,

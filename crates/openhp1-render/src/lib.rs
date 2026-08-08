@@ -11,5 +11,5 @@ pub use openhp1_scene::{
 pub use renderer::{RenderStats, Renderer};
 pub use settings::{
     AmbientOcclusion, Antialiasing, DisplaySettings, RendererMode, RendererSettingError,
-    RendererSettings, ToneMapper, VolumetricTuning,
+    RendererSettings, ToneMapper, VolumetricDebugView, VolumetricTuning,
 };

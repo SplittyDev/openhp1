@@ -8,7 +8,7 @@ use eframe::{
 use glam::Vec3;
 use openhp1_render::{
     AmbientOcclusion, Antialiasing, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
-    RendererSettings, ToneMapper, VolumetricTuning,
+    RendererSettings, ToneMapper, VolumetricDebugView, VolumetricTuning,
 };
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
@@ -319,6 +319,36 @@ impl ViewerApp {
             egui::CollapsingHeader::new("Volumetric tuning")
                 .default_open(true)
                 .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("View");
+                        egui::ComboBox::from_id_salt("volumetric debug view")
+                            .selected_text(self.volumetric_tuning.debug_view.label())
+                            .show_ui(ui, |ui| {
+                                for view in VolumetricDebugView::ALL {
+                                    ui.selectable_value(
+                                        &mut self.volumetric_tuning.debug_view,
+                                        view,
+                                        view.label(),
+                                    );
+                                }
+                            });
+                    });
+                    match self.volumetric_tuning.debug_view {
+                        VolumetricDebugView::Composite => {}
+                        VolumetricDebugView::Scattering => {
+                            ui.small("Volumetric contribution on black");
+                        }
+                        VolumetricDebugView::ApertureMask => {
+                            ui.small("White transmits; black blocks");
+                        }
+                        VolumetricDebugView::DirectionalVisibility => {
+                            ui.small("Green is visible to the light; red is blocked");
+                        }
+                        VolumetricDebugView::LocalVisibility => {
+                            ui.small("Nearest local light: green visible, red blocked");
+                        }
+                    }
+                    ui.separator();
                     ui.strong("Dust");
                     egui::Grid::new("dust tuning").show(ui, |ui| {
                         ui.label("Size");

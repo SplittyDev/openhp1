@@ -116,23 +116,31 @@ visible fog orbs.
 Enabling volumetric lighting suppresses the legacy corona sprites so the two
 source-glow treatments do not stack.
 Scene depth terminates the ray, and the result enters the HDR scene before bloom
-and tone mapping. This avoids fixed-step ray-march banding and extra draw calls
-per sampling step. The classic scene shader, uniform layout, target format,
-depth usage, draw order, and display-gamma path remain unchanged.
+and tone mapping. Unshadowed fallback volumes retain the analytic integral;
+shadowed sources use a bounded march. The classic scene shader, uniform layout,
+target format, depth usage, draw order, and display-gamma path remain unchanged.
 
 Directional shafts use a renderer-owned four-layer shadow map over opaque scene
-geometry and a jittered world-space march through prisms extruded from actual
+geometry and a 32-sample world-space march through prisms extruded from actual
 opening triangles. Visible openings are grouped by nearly matching inward shaft
-directions so each group uses a matching shadow projection. Fake-backdrop
-surfaces are authored sky openings. The fixed shipped
+directions so evenly lit windows on every castle wall illuminate the room.
+Fake-backdrop surfaces are authored sky openings. The fixed shipped
 maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface texture names containing `win`, excluding known frame and non-aperture
 tokens `arch`, `column`, `wood`, `wallwindow`, and `furnace`. This corpus-backed
 fallback finds the `Lev_Tut1` windows while finding none in `Lev3_Dungeon`.
+Classified window textures feed a renderer-owned 128-pixel transmission-mask
+array. Because the shipped textures include both the window and its surrounding
+stone wall, mask construction flood-fills the border-connected wall and retains
+only mid-luminance glass inside the painted frame. The shaft march projects each
+sample back through the opening's authored texture coordinates, so painted
+mullions split the light even when the original map did not model them as
+geometry. Fake-backdrop sky openings use a fully transmissive mask.
 Only source triangles intersecting the camera frustum are submitted, capped at
 the 128 nearest triangles. Opaque walls and props shadow the resulting volumes.
-The accumulation is additive HDR scattering with no scene-wide extinction,
-retaining values for bloom and tone mapping without tinting the whole room.
+The accumulation is forward-weighted along the light-to-camera path and uses
+additive HDR scattering with no scene-wide extinction, retaining values for
+bloom and tone mapping without tinting the whole room.
 Window shafts and local volumetric sources share a slowly drifting world-space
 density field with approximately 40-unit haze cells. Window shafts also carry
 sparse world-space motes inside their authored prisms; camera-facing billboards
@@ -141,13 +149,31 @@ volume. Both layers pause with the rest of the scene.
 
 The map viewer exposes live dust size, density, opacity, and speed controls,
 plus haze field size, density, opacity, and speed. These are temporary tuning
-controls and do not change `OpenHP1.ini`. The shared defaults are dust size
+controls and do not change `OpenHP1.ini`. Its volumetric view selector can show
+the normal composite, scattering alone on black, the projected window mask,
+directional shadow visibility, or local-light shadow visibility. Visibility
+views use green for light-visible samples and red for blocked samples, while the
+mask view uses white for transmission. Local visibility isolates the nearest
+shadowed local light so overlapping authored ranges do not add into yellow;
+moving the camera near another source selects it. The shared defaults are dust size
 `4 px`, density `64`, opacity `0.05`, and speed `5 units/s`; haze size `60
 units`, density `0.75`, opacity `0.5`, and speed `25 units/s`.
 
-Local volumetric sources retain their compact HDR halos. Up to four nearest
-visible emitters or explicitly authored fog lights additionally receive
-renderer-owned cube shadow maps and a bounded world-space scattering march.
+Local volumetric sources outside the shadow budget retain their compact HDR
+halos. Up to twenty nearest visible emitters or explicitly authored fog lights
+use their authored UE1 lighting radius capped to a 300-unit fog extent, receive
+renderer-owned cube shadow maps, and use a bounded 32-sample
+world-space scattering march, forward-weighted along the light-to-camera path.
+Near a local source, bright textured fixture triangles transmit while darker
+triangles remain two-sided shadow casters, so a lamp's panes shape the volume
+and its metal frame splits it into rays. Geometry farther from the source stays
+fully opaque regardless of its texture.
+Nearby emitters belonging to one physical fixture share at most three shadowed
+samples. Three-emitter corona lanterns retain their authored output. Sprite-only
+candles instead use a compact 50-unit fog extent and one-third emitter energy
+per flame, with each fixture capped at one emitter's total energy. Dense
+multi-candle chandeliers cannot consume the entire shadow budget or add the same
+fixture's haze dozens of times; they use a 150-unit fog extent.
 This budget keeps candles and chandeliers responsive without turning invisible
 level-lighting helpers into disembodied fog or rendering a shadow cube for every
 light in a room.

@@ -122,6 +122,7 @@ impl Default for DisplaySettings {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolumetricTuning {
+    pub debug_view: VolumetricDebugView,
     pub dust_size: f32,
     pub dust_density: u32,
     pub dust_opacity: f32,
@@ -132,9 +133,45 @@ pub struct VolumetricTuning {
     pub haze_speed: f32,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VolumetricDebugView {
+    #[default]
+    Composite,
+    Scattering,
+    ApertureMask,
+    DirectionalVisibility,
+    LocalVisibility,
+}
+
+impl VolumetricDebugView {
+    pub const ALL: [Self; 5] = [
+        Self::Composite,
+        Self::Scattering,
+        Self::ApertureMask,
+        Self::DirectionalVisibility,
+        Self::LocalVisibility,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Composite => "Composite",
+            Self::Scattering => "Scattering only",
+            Self::ApertureMask => "Window mask",
+            Self::DirectionalVisibility => "Directional visibility",
+            Self::LocalVisibility => "Local-light visibility",
+        }
+    }
+
+    pub(crate) const fn shader_id(self) -> u32 {
+        self as u32
+    }
+}
+
 impl Default for VolumetricTuning {
     fn default() -> Self {
         Self {
+            debug_view: VolumetricDebugView::Composite,
             dust_size: 4.0,
             dust_density: 64,
             dust_opacity: 0.05,
@@ -243,6 +280,7 @@ mod tests {
         assert_eq!(
             VolumetricTuning::default(),
             VolumetricTuning {
+                debug_view: VolumetricDebugView::Composite,
                 dust_size: 4.0,
                 dust_density: 64,
                 dust_opacity: 0.05,
@@ -252,6 +290,10 @@ mod tests {
                 haze_opacity: 0.5,
                 haze_speed: 25.0,
             }
+        );
+        assert_eq!(
+            VolumetricDebugView::ALL.map(VolumetricDebugView::shader_id),
+            [0, 1, 2, 3, 4]
         );
         assert_eq!("modern".parse(), Ok(RendererMode::Modern));
         assert_eq!("cLaSsIc".parse(), Ok(RendererMode::Classic));

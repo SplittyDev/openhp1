@@ -1,16 +1,20 @@
-use std::mem::size_of;
+use std::{
+    collections::{HashMap, VecDeque},
+    mem::size_of,
+};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
-use openhp1_scene::{RenderScene, SurfaceMode};
+use openhp1_scene::{RenderScene, SurfaceMode, TextureImage};
 use wgpu::util::DeviceExt;
 
-use crate::{Camera, VolumetricTuning, unreal_to_render};
+use crate::{Camera, VolumetricDebugView, VolumetricTuning, unreal_to_render};
 
 use super::super::super::DEPTH_FORMAT;
 use super::super::HDR_FORMAT;
 
 const SHADOW_SIZE: u32 = 1024;
+const APERTURE_MASK_SIZE: u32 = 128;
 // ponytail: Fixed wall-direction budget; raise it only if authored maps need more slices.
 const MAX_SHADOW_DIRECTIONS: usize = 4;
 const MAX_VISIBLE_PORTALS: usize = 128;
@@ -58,6 +62,7 @@ pub(super) struct ShadowUniform {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct ShadowVertex {
     position: [f32; 3],
+    transmission: f32,
 }
 
 #[repr(C)]
@@ -68,6 +73,9 @@ struct PortalTriangle {
     c: [f32; 4],
     color: [f32; 4],
     direction: [f32; 4],
+    uv_a: [f32; 4],
+    uv_b: [f32; 4],
+    uv_c: [f32; 4],
 }
 
 struct ShadowSlice {
@@ -81,6 +89,10 @@ struct ShadowSlice {
 
 pub(super) struct DirectionalShadow {
     _texture: wgpu::Texture,
+    _aperture_texture: wgpu::Texture,
+    aperture_view: wgpu::TextureView,
+    aperture_sampler: wgpu::Sampler,
+    aperture_layers: HashMap<usize, u32>,
     slices: Vec<ShadowSlice>,
     pipeline: wgpu::RenderPipeline,
     shaft_layout: wgpu::BindGroupLayout,
@@ -89,24 +101,24 @@ pub(super) struct DirectionalShadow {
     shadow_sampler: wgpu::Sampler,
     portals: Vec<PortalTriangle>,
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
     vertex_count: usize,
-    index_count: u32,
     enabled: bool,
     tuning: VolumetricTuning,
 }
 
 impl DirectionalShadow {
     pub(super) fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32];
         wgpu::VertexBufferLayout {
             array_stride: size_of::<ShadowVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            attributes: &ATTRIBUTES,
         }
     }
 
     fn portal_layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4];
+        const ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
         wgpu::VertexBufferLayout {
             array_stride: size_of::<PortalTriangle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -116,15 +128,16 @@ impl DirectionalShadow {
 
     pub(super) fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         scene_depth: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
         let enabled = sky_exposed(scene);
         let vertices = shadow_vertices(scene);
-        let indices = shadow_caster_indices(scene);
-        let portals = shaft_portals(scene);
+        let (aperture_texture, aperture_view, aperture_sampler, aperture_layers) =
+            aperture_masks(device, queue, scene);
+        let portals = shaft_portals(scene, &aperture_layers);
         let fallback_vertex = ShadowVertex::zeroed();
-        let fallback_index = 0_u32;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("OpenHP1 volumetric shadow vertices"),
             contents: if vertices.is_empty() {
@@ -133,15 +146,6 @@ impl DirectionalShadow {
                 bytemuck::cast_slice(&vertices)
             },
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("OpenHP1 volumetric shadow indices"),
-            contents: if indices.is_empty() {
-                bytemuck::bytes_of(&fallback_index)
-            } else {
-                bytemuck::cast_slice(&indices)
-            },
-            usage: wgpu::BufferUsages::INDEX,
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 volumetric sun shadow layout"),
@@ -249,6 +253,7 @@ impl DirectionalShadow {
                     &view,
                     &shadow_sampler,
                     &uniform,
+                    (&aperture_view, &aperture_sampler),
                 );
                 ShadowSlice {
                     uniform,
@@ -332,6 +337,10 @@ impl DirectionalShadow {
         });
         Self {
             _texture: texture,
+            _aperture_texture: aperture_texture,
+            aperture_view,
+            aperture_sampler,
+            aperture_layers,
             slices,
             pipeline,
             shaft_layout,
@@ -340,9 +349,7 @@ impl DirectionalShadow {
             shadow_sampler,
             portals,
             vertex_buffer,
-            index_buffer,
             vertex_count: vertices.len(),
-            index_count: indices.len() as u32,
             enabled,
             tuning: VolumetricTuning::default(),
         }
@@ -361,13 +368,14 @@ impl DirectionalShadow {
                 &slice.view,
                 &self.shadow_sampler,
                 &slice.uniform,
+                (&self.aperture_view, &self.aperture_sampler),
             );
         }
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         let vertices = shadow_vertices(scene);
-        let portals = shaft_portals(scene);
+        let portals = shaft_portals(scene, &self.aperture_layers);
         if vertices.len() != self.vertex_count
             || portals.len() != self.portals.len()
             || sky_exposed(scene) != self.enabled
@@ -417,7 +425,7 @@ impl DirectionalShadow {
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
-        if !self.enabled || self.index_count == 0 {
+        if !self.enabled || self.vertex_count == 0 {
             return 0;
         }
         let mut pass_count = 0;
@@ -446,13 +454,12 @@ impl DirectionalShadow {
     }
 
     pub(super) fn has_geometry(&self) -> bool {
-        self.index_count != 0
+        self.vertex_count != 0
     }
 
     pub(super) fn draw_geometry<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.index_count, 0, 0..1);
+        pass.draw(0..self.vertex_count as u32, 0..1);
     }
 
     pub(super) fn render_shafts(
@@ -461,7 +468,7 @@ impl DirectionalShadow {
         target: &wgpu::TextureView,
     ) -> usize {
         if !self.enabled
-            || self.index_count == 0
+            || self.vertex_count == 0
             || self.slices.iter().all(|slice| slice.portal_count == 0)
         {
             return 0;
@@ -488,14 +495,19 @@ impl DirectionalShadow {
             pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
             pass.draw(0..6, 0..slice.portal_count as u32);
         }
-        pass.set_pipeline(&self.mote_pipeline);
-        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
-            pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
-            pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
-            pass.draw(
-                0..6 * self.tuning.dust_density.min(MAX_MOTES_PER_PORTAL),
-                0..slice.portal_count as u32,
-            );
+        if matches!(
+            self.tuning.debug_view,
+            VolumetricDebugView::Composite | VolumetricDebugView::Scattering
+        ) {
+            pass.set_pipeline(&self.mote_pipeline);
+            for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+                pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
+                pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
+                pass.draw(
+                    0..6 * self.tuning.dust_density.min(MAX_MOTES_PER_PORTAL),
+                    0..slice.portal_count as u32,
+                );
+            }
         }
         1
     }
@@ -541,6 +553,22 @@ fn shaft_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -552,6 +580,7 @@ fn shaft_bind_group(
     shadow: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     uniform: &wgpu::Buffer,
+    aperture: (&wgpu::TextureView, &wgpu::Sampler),
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("OpenHP1 volumetric sky shaft bind group"),
@@ -573,8 +602,144 @@ fn shaft_bind_group(
                 binding: 3,
                 resource: uniform.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(aperture.0),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(aperture.1),
+            },
         ],
     })
+}
+
+fn aperture_masks(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &RenderScene,
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::Sampler,
+    HashMap<usize, u32>,
+) {
+    let mut texture_indices = scene
+        .surface_materials
+        .iter()
+        .filter(|material| material.volumetric_source && material.mode != SurfaceMode::Backdrop)
+        .filter_map(|material| material.texture)
+        .collect::<Vec<_>>();
+    texture_indices.sort_unstable();
+    texture_indices.dedup();
+
+    let mut layers = HashMap::new();
+    let mut bytes = vec![255; (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE) as usize];
+    for texture_index in texture_indices {
+        let Some(image) = scene.textures.get(texture_index) else {
+            continue;
+        };
+        let layer = bytes.len() as u32 / (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE);
+        layers.insert(texture_index, layer);
+        bytes.extend(aperture_mask(image));
+    }
+    let layer_count = bytes.len() as u32 / (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE);
+    let texture = device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("OpenHP1 volumetric aperture masks"),
+            size: wgpu::Extent3d {
+                width: APERTURE_MASK_SIZE,
+                height: APERTURE_MASK_SIZE,
+                depth_or_array_layers: layer_count,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &bytes,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("OpenHP1 volumetric aperture mask array"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("OpenHP1 volumetric aperture mask sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    (texture, view, sampler, layers)
+}
+
+fn aperture_mask(image: &TextureImage) -> Vec<u8> {
+    if image.width == 0 || image.height == 0 {
+        return vec![255; (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE) as usize];
+    }
+    let luminance = (0..APERTURE_MASK_SIZE)
+        .flat_map(|y| {
+            (0..APERTURE_MASK_SIZE).map(move |x| {
+                let source_x = x * image.width / APERTURE_MASK_SIZE;
+                let source_y = y * image.height / APERTURE_MASK_SIZE;
+                let offset = ((source_y * image.width + source_x) * 4) as usize;
+                let red = u32::from(image.rgba[offset]);
+                let green = u32::from(image.rgba[offset + 1]);
+                let blue = u32::from(image.rgba[offset + 2]);
+                ((red * 54 + green * 183 + blue * 19) >> 8) as u8
+            })
+        })
+        .collect::<Vec<_>>();
+    let size = APERTURE_MASK_SIZE as usize;
+    let mut wall = vec![false; luminance.len()];
+    let mut queue = VecDeque::new();
+    // ponytail: Shipped windows have no aperture channel; use authored masks if future assets add one.
+    for index in 0..luminance.len() {
+        let x = index % size;
+        let y = index / size;
+        if (x == 0 || y == 0 || x + 1 == size || y + 1 == size) && luminance[index] >= 96 {
+            wall[index] = true;
+            queue.push_back(index);
+        }
+    }
+    while let Some(index) = queue.pop_front() {
+        let x = index % size;
+        let y = index / size;
+        for neighbor in [
+            (x > 0).then(|| index - 1),
+            (x + 1 < size).then(|| index + 1),
+            (y > 0).then(|| index - size),
+            (y + 1 < size).then(|| index + size),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !wall[neighbor] && luminance[neighbor] >= 96 {
+                wall[neighbor] = true;
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    luminance
+        .into_iter()
+        .zip(wall)
+        .map(|(luminance, wall)| {
+            if wall {
+                0
+            } else {
+                luminance
+                    .saturating_sub(24)
+                    .saturating_mul(8)
+                    .min(136_u8.saturating_sub(luminance).saturating_mul(8))
+            }
+        })
+        .collect()
 }
 
 fn portal_buffer(device: &wgpu::Device, portals: &[PortalTriangle]) -> wgpu::Buffer {
@@ -598,35 +763,71 @@ fn sky_exposed(scene: &RenderScene) -> bool {
 }
 
 fn shadow_vertices(scene: &RenderScene) -> Vec<ShadowVertex> {
-    scene
-        .mesh
-        .positions
-        .iter()
-        .map(|&position| ShadowVertex {
-            position: unreal_to_render(position).to_array(),
-        })
-        .collect()
-}
-
-fn shadow_caster_indices(scene: &RenderScene) -> Vec<u32> {
-    scene
+    let mut vertices = Vec::new();
+    for (triangle, surface) in scene
         .mesh
         .indices
         .chunks_exact(3)
         .zip(&scene.mesh.triangle_surfaces)
-        .filter(|(_, surface)| {
-            scene
-                .surface_materials
-                .get(**surface)
-                .is_some_and(|material| {
-                    material.mode == SurfaceMode::Opaque && !material.volumetric_source
-                })
-        })
-        .flat_map(|(triangle, _)| triangle.iter().copied())
-        .collect()
+    {
+        if !is_shadow_caster(scene, *surface) {
+            continue;
+        }
+        let &[a, b, c] = triangle else {
+            continue;
+        };
+        let [Some(a), Some(b), Some(c)] =
+            [a, b, c].map(|index| scene.mesh.positions.get(index as usize).copied())
+        else {
+            continue;
+        };
+        let transmission = triangle_transmission(scene, triangle, *surface);
+        vertices.extend([a, b, c].into_iter().map(|position| ShadowVertex {
+            position: unreal_to_render(position).to_array(),
+            transmission,
+        }));
+    }
+    vertices
 }
 
-fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
+fn triangle_transmission(scene: &RenderScene, triangle: &[u32], surface: usize) -> f32 {
+    let Some(image) = scene
+        .surface_materials
+        .get(surface)
+        .and_then(|material| material.texture)
+        .and_then(|texture| scene.textures.get(texture))
+    else {
+        return 0.0;
+    };
+    let mut uv = Vec2::ZERO;
+    for index in triangle {
+        let Some(texture_coordinates) = scene.mesh.texture_coordinates.get(*index as usize) else {
+            return 0.0;
+        };
+        uv += *texture_coordinates;
+    }
+    uv /= triangle.len() as f32;
+    let x = uv.x.rem_euclid(image.width as f32) as u32;
+    let y = uv.y.rem_euclid(image.height as f32) as u32;
+    let offset = ((y * image.width + x) * 4) as usize;
+    let Some(pixel) = image.rgba.get(offset..offset + 3) else {
+        return 0.0;
+    };
+    (f32::from(pixel[0]) * 0.2126 + f32::from(pixel[1]) * 0.7152 + f32::from(pixel[2]) * 0.0722)
+        / 255.0
+}
+
+fn is_shadow_caster(scene: &RenderScene, surface: usize) -> bool {
+    scene
+        .surface_materials
+        .get(surface)
+        .is_some_and(|material| material.mode == SurfaceMode::Opaque && !material.volumetric_source)
+}
+
+fn shaft_portals(
+    scene: &RenderScene,
+    aperture_layers: &HashMap<usize, u32>,
+) -> Vec<PortalTriangle> {
     scene
         .mesh
         .indices
@@ -637,10 +838,35 @@ fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
             if !material.volumetric_source {
                 return None;
             }
-            let &[a, b, c] = triangle else { return None };
-            let a = unreal_to_render(*scene.mesh.positions.get(a as usize)?);
-            let b = unreal_to_render(*scene.mesh.positions.get(b as usize)?);
-            let c = unreal_to_render(*scene.mesh.positions.get(c as usize)?);
+            let &[a_index, b_index, c_index] = triangle else {
+                return None;
+            };
+            let a = unreal_to_render(*scene.mesh.positions.get(a_index as usize)?);
+            let b = unreal_to_render(*scene.mesh.positions.get(b_index as usize)?);
+            let c = unreal_to_render(*scene.mesh.positions.get(c_index as usize)?);
+            let texture_size = material
+                .texture
+                .and_then(|index| scene.textures.get(index))
+                .map_or(Vec2::ONE, |texture| {
+                    Vec2::new(texture.width as f32, texture.height as f32)
+                });
+            let uv = |vertex: u32| {
+                scene
+                    .mesh
+                    .texture_coordinates
+                    .get(vertex as usize)
+                    .copied()
+                    .unwrap_or(Vec2::ZERO)
+                    / texture_size
+            };
+            let layer = if material.mode == SurfaceMode::Backdrop {
+                0
+            } else {
+                material
+                    .texture
+                    .and_then(|texture| aperture_layers.get(&texture).copied())
+                    .unwrap_or(0)
+            };
             Some(PortalTriangle {
                 a: a.extend(1.0).to_array(),
                 b: b.extend(1.0).to_array(),
@@ -648,7 +874,10 @@ fn shaft_portals(scene: &RenderScene) -> Vec<PortalTriangle> {
                 color: shaft_color(scene, triangle, material.texture)
                     .extend(1.0)
                     .to_array(),
-                direction: portal_direction(a, b, c).extend(0.0).to_array(),
+                direction: portal_direction(a, b, c).extend(layer as f32).to_array(),
+                uv_a: uv(a_index).extend(0.0).extend(0.0).to_array(),
+                uv_b: uv(b_index).extend(0.0).extend(0.0).to_array(),
+                uv_c: uv(c_index).extend(0.0).extend(0.0).to_array(),
             })
         })
         .collect()
@@ -843,7 +1072,7 @@ fn shadow_uniform(
             tuning.dust_size,
             tuning.dust_opacity,
             tuning.dust_speed,
-            0.0,
+            tuning.debug_view.shader_id() as f32,
         ],
     }
 }
@@ -902,8 +1131,8 @@ mod tests {
         let mut window = scene(SurfaceMode::Opaque, false);
         window.surface_materials[0].volumetric_source = true;
         assert!(sky_exposed(&window));
-        assert_eq!(shaft_portals(&window).len(), 1);
-        assert!(shadow_caster_indices(&window).is_empty());
+        assert_eq!(shaft_portals(&window, &HashMap::new()).len(), 1);
+        assert!(shadow_vertices(&window).is_empty());
     }
 
     #[test]
@@ -914,6 +1143,9 @@ mod tests {
             c: (Vec3::new(0.0, 0.5, 0.5) + offset).extend(1.0).to_array(),
             color: [1.0; 4],
             direction: [0.0; 4],
+            uv_a: [0.0; 4],
+            uv_b: [0.0; 4],
+            uv_c: [0.0; 4],
         };
         assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY, 1.0));
         assert!(!portal_in_view(
@@ -936,6 +1168,9 @@ mod tests {
             c: Vec3::new(2.0, 0.5, 0.5).extend(1.0).to_array(),
             color: [1.0; 4],
             direction: Vec3::NEG_X.extend(0.0).to_array(),
+            uv_a: [0.0; 4],
+            uv_b: [0.0; 4],
+            uv_c: [0.0; 4],
         };
 
         assert!(portal_in_view(portal, Mat4::IDENTITY, 4.0));
@@ -949,6 +1184,9 @@ mod tests {
             c: Vec3::Y.extend(1.0).to_array(),
             color: [1.0; 4],
             direction: [0.0; 4],
+            uv_a: [0.0; 4],
+            uv_b: [0.0; 4],
+            uv_c: [0.0; 4],
         };
         assert!(camera_on_interior_side(portal, -Vec3::Z));
         assert!(!camera_on_interior_side(portal, Vec3::Z));
@@ -973,6 +1211,9 @@ mod tests {
             c: [0.0; 4],
             color: [1.0; 4],
             direction: direction.extend(0.0).to_array(),
+            uv_a: [0.0; 4],
+            uv_b: [0.0; 4],
+            uv_c: [0.0; 4],
         };
         let nearly_same = (Vec3::X + Vec3::Z * 0.01).normalize();
 
@@ -1000,6 +1241,30 @@ mod tests {
     }
 
     #[test]
+    fn aperture_mask_rejects_wall_and_painted_frame() {
+        let mut rgba = vec![200; 5 * 5 * 4];
+        for y in 1..4 {
+            for x in 1..4 {
+                rgba[(y * 5 + x) * 4..(y * 5 + x + 1) * 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+        rgba[(2 * 5 + 2) * 4..(2 * 5 + 3) * 4].copy_from_slice(&[40, 70, 140, 255]);
+        let mask = aperture_mask(&TextureImage {
+            width: 5,
+            height: 5,
+            rgba,
+        });
+
+        assert_eq!(
+            mask.len(),
+            (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE) as usize
+        );
+        assert_eq!(mask[0], 0);
+        assert_eq!(mask[64 * APERTURE_MASK_SIZE as usize + 32], 0);
+        assert!(mask[64 * APERTURE_MASK_SIZE as usize + 64] > 200);
+    }
+
+    #[test]
     fn shaft_color_prefers_the_authored_window_lightmap_tint() {
         let mut scene = scene(SurfaceMode::Opaque, false);
         scene.mesh.vertex_lightmaps.fill(Some(0));
@@ -1021,19 +1286,135 @@ mod tests {
         let level =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res/Maps/Lev_Tut1.unr");
         let scene = openhp1_scene::LoadedScene::load(level).unwrap();
-        let portals = shaft_portals(&scene.render);
+        let aperture_layers = scene
+            .render
+            .surface_materials
+            .iter()
+            .filter(|material| material.volumetric_source)
+            .filter_map(|material| material.texture)
+            .enumerate()
+            .map(|(layer, texture)| (texture, layer as u32 + 1))
+            .collect();
+        let portals = shaft_portals(&scene.render, &aperture_layers);
         assert!(!portals.is_empty());
         assert!(portals.len() < 1_024, "{} shaft triangles", portals.len());
+        assert!(portals.iter().any(|portal| portal.direction[3] > 0.0));
+        assert!(portals.iter().any(|portal| portal.uv_a != portal.uv_b));
     }
 
     #[test]
     fn only_opaque_geometry_casts_sun_shadows() {
-        assert_eq!(
-            shadow_caster_indices(&scene(SurfaceMode::Opaque, true)),
-            [0, 1, 2]
+        assert_eq!(shadow_vertices(&scene(SurfaceMode::Opaque, true)).len(), 3);
+        assert!(shadow_vertices(&scene(SurfaceMode::Backdrop, true)).is_empty());
+        assert!(shadow_vertices(&scene(SurfaceMode::Translucent, true)).is_empty());
+    }
+
+    #[test]
+    fn textured_shadow_vertices_preserve_bright_fixture_apertures() {
+        let mut scene = scene(SurfaceMode::Opaque, false);
+        scene.surface_materials[0].texture = Some(0);
+        scene.textures.push(TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 255, 255, 255],
+        });
+
+        let vertices = shadow_vertices(&scene);
+        assert!(vertices.iter().all(|vertex| vertex.transmission == 1.0));
+
+        scene.textures[0].rgba[..3].fill(0);
+        let vertices = shadow_vertices(&scene);
+        assert!(vertices.iter().all(|vertex| vertex.transmission == 0.0));
+    }
+
+    #[test]
+    fn fixture_transmission_does_not_leak_across_shared_vertices() {
+        let mut scene = scene(SurfaceMode::Opaque, false);
+        scene.mesh.positions.push(Vec3::ONE);
+        scene.mesh.texture_coordinates.push(Vec2::ZERO);
+        scene.mesh.lightmap_coordinates.push(Vec2::ZERO);
+        scene.mesh.indices.extend([0, 2, 3]);
+        scene.mesh.normals.push(Vec3::Z);
+        scene.mesh.vertex_colors.push(Vec3::ONE);
+        scene.mesh.vertex_lightmaps.push(None);
+        scene.mesh.vertex_surfaces.push(1);
+        scene.mesh.triangle_surfaces.push(1);
+        scene.surface_materials[0].texture = Some(0);
+        scene.surface_materials.push(SurfaceMaterial {
+            mode: SurfaceMode::Opaque,
+            texture: Some(1),
+            ..Default::default()
+        });
+        scene.textures.extend([
+            TextureImage {
+                width: 1,
+                height: 1,
+                rgba: vec![255, 255, 255, 255],
+            },
+            TextureImage {
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+            },
+        ]);
+
+        let vertices = shadow_vertices(&scene);
+        assert!(
+            vertices[..3]
+                .iter()
+                .all(|vertex| vertex.transmission == 1.0)
         );
-        assert!(shadow_caster_indices(&scene(SurfaceMode::Backdrop, true)).is_empty());
-        assert!(shadow_caster_indices(&scene(SurfaceMode::Translucent, true)).is_empty());
+        assert!(
+            vertices[3..]
+                .iter()
+                .all(|vertex| vertex.transmission == 0.0)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local original game files"]
+    fn tut1_lantern_fixtures_contain_transmissive_panes_and_opaque_frames() {
+        let level =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res/Maps/Lev_Tut1.unr");
+        let loaded = openhp1_scene::LoadedScene::load(level).unwrap();
+        let scene = &loaded.render;
+        let corona_actors = scene
+            .coronas
+            .iter()
+            .map(|corona| corona.actor_index)
+            .collect::<std::collections::HashSet<_>>();
+        let mut seen = std::collections::HashSet::new();
+        let sources = scene
+            .realtime_lightmaps
+            .iter()
+            .flat_map(|lightmap| &lightmap.lights)
+            .filter(|light| {
+                corona_actors.contains(&light.actor_index) && seen.insert(light.actor_index)
+            });
+        let mut split_fixtures = 0;
+        for source in sources {
+            let transmissions = scene
+                .mesh
+                .indices
+                .chunks_exact(3)
+                .zip(&scene.mesh.triangle_surfaces)
+                .filter(|(triangle, surface)| {
+                    is_shadow_caster(scene, **surface)
+                        && (triangle.iter().fold(Vec3::ZERO, |center, &vertex| {
+                            center + unreal_to_render(scene.mesh.positions[vertex as usize])
+                        }) / 3.0)
+                            .distance(source.location)
+                            <= 32.0
+                })
+                .map(|(triangle, surface)| triangle_transmission(scene, triangle, *surface))
+                .collect::<Vec<_>>();
+            if transmissions.iter().any(|value| *value >= 0.65)
+                && transmissions.iter().any(|value| *value < 0.65)
+            {
+                split_fixtures += 1;
+            }
+        }
+        assert!(split_fixtures >= 4, "found {split_fixtures} split fixtures");
     }
 
     #[test]
@@ -1046,6 +1427,8 @@ mod tests {
         .validate(&module)
         .unwrap();
         assert_eq!(size_of::<ShadowUniform>(), 272);
+        assert_eq!(size_of::<ShadowVertex>(), 16);
+        assert_eq!(size_of::<PortalTriangle>(), 128);
     }
 
     #[test]
