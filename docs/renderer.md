@@ -120,9 +120,11 @@ and tone mapping. This avoids fixed-step ray-march banding and extra draw calls
 per sampling step. The classic scene shader, uniform layout, target format,
 depth usage, draw order, and display-gamma path remain unchanged.
 
-Directional shafts use a renderer-owned shadow map over opaque scene geometry
-and a jittered world-space march through prisms extruded from actual opening
-triangles. Fake-backdrop surfaces are authored sky openings. The fixed shipped
+Directional shafts use a renderer-owned four-layer shadow map over opaque scene
+geometry and a jittered world-space march through prisms extruded from actual
+opening triangles. Visible openings are grouped by nearly matching inward shaft
+directions so each group uses a matching shadow projection. Fake-backdrop
+surfaces are authored sky openings. The fixed shipped
 maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface texture names containing `win`, excluding known frame and non-aperture
 tokens `arch`, `column`, `wood`, `wallwindow`, and `furnace`. This corpus-backed
@@ -139,7 +141,7 @@ This budget keeps candles and chandeliers responsive without turning invisible
 level-lighting helpers into disembodied fog or rendering a shadow cube for every
 light in a room.
 
-The directional shadow projection is snapped to shadow-map texels so subtle
+Each directional shadow projection is snapped to shadow-map texels so subtle
 shafts do not crawl when the camera moves. Local raymarchers reject paths that
 are uniformly lit or uniformly shadowed; directional rays are instead bounded
 by opening prisms. Local corpus inspection confirms `Lev_Tut1`, `Lev_Tut2`, and
@@ -195,11 +197,12 @@ texture and blend operation ran through a historical 16-bit framebuffer.
 Modern BSP lighting follows runtime light brightness, position, and spotlight
 rotation changes through `RenderScene`; the volumetric instances follow those
 same runtime changes. Mesh actors retain the existing CPU vertex-lighting path.
-The volumetric pass is camera-depth-aware and sunlight shafts use an opaque BSP
-shadow map. A bounded set of nearby local lights uses cube shadow maps over the
-same opaque BSP geometry. Mesh actors and animated characters do not yet cast
-volumetric shadows. Diffuse GI, DDGI volumes, specular materials, and reflection
-probes are not yet implemented. Future GI and reflection captures should remain
+The volumetric pass is camera-depth-aware and sunlight shafts use
+direction-specific opaque BSP shadow maps. A bounded set of nearby local lights
+uses cube shadow maps over the same opaque BSP geometry. Mesh actors and animated
+characters do not yet cast volumetric shadows. Diffuse GI, DDGI volumes, specular
+materials, and reflection probes are not yet implemented. Future GI and
+reflection captures should remain
 renderer-owned resources built from `RenderScene`; package references and BSP
 serialization details must not cross into the renderer.
 

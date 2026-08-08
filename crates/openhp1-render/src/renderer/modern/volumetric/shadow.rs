@@ -11,6 +11,8 @@ use super::super::super::DEPTH_FORMAT;
 use super::super::HDR_FORMAT;
 
 const SHADOW_SIZE: u32 = 1024;
+// ponytail: Fixed wall-direction budget; raise it only if authored maps need more slices.
+const MAX_SHADOW_DIRECTIONS: usize = 4;
 const MAX_VISIBLE_PORTALS: usize = 128;
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
 const SHAFT_SHADER: &str = include_str!("../../../shaders/modern/sky_shafts.wgsl");
@@ -60,19 +62,23 @@ struct PortalTriangle {
     direction: [f32; 4],
 }
 
-pub(super) struct DirectionalShadow {
-    pub(super) uniform: wgpu::Buffer,
-    pub(super) view: wgpu::TextureView,
-    _texture: wgpu::Texture,
+struct ShadowSlice {
+    uniform: wgpu::Buffer,
+    view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    shaft_bind_group: wgpu::BindGroup,
+    portal_buffer: wgpu::Buffer,
+    portal_count: usize,
+}
+
+pub(super) struct DirectionalShadow {
+    _texture: wgpu::Texture,
+    slices: Vec<ShadowSlice>,
     pipeline: wgpu::RenderPipeline,
     shaft_layout: wgpu::BindGroupLayout,
-    shaft_bind_group: wgpu::BindGroup,
     shaft_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
-    portal_buffer: wgpu::Buffer,
     portals: Vec<PortalTriangle>,
-    visible_portal_count: usize,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     vertex_count: usize,
@@ -127,13 +133,6 @@ impl DirectionalShadow {
             },
             usage: wgpu::BufferUsages::INDEX,
         });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("OpenHP1 volumetric sun shadow settings"),
-            size: size_of::<ShadowUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let portal_buffer = portal_buffer(device, &portals);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("OpenHP1 volumetric sun shadow layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -147,20 +146,12 @@ impl DirectionalShadow {
                 count: None,
             }],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OpenHP1 volumetric sun shadow bind group"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            }],
-        });
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("OpenHP1 volumetric sun shadow map"),
+            label: Some("OpenHP1 volumetric sun shadow maps"),
             size: wgpu::Extent3d {
                 width: SHADOW_SIZE,
                 height: SHADOW_SIZE,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: MAX_SHADOW_DIRECTIONS as u32,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -169,7 +160,6 @@ impl DirectionalShadow {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let view = texture.create_view(&Default::default());
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("OpenHP1 volumetric sun shadow sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -219,14 +209,47 @@ impl DirectionalShadow {
             cache: None,
         });
         let shaft_layout = shaft_layout(device);
-        let shaft_bind_group = shaft_bind_group(
-            device,
-            &shaft_layout,
-            scene_depth,
-            &view,
-            &shadow_sampler,
-            &uniform,
-        );
+        let slices = (0..MAX_SHADOW_DIRECTIONS)
+            .map(|layer| {
+                let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("OpenHP1 volumetric sun shadow settings"),
+                    size: size_of::<ShadowUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("OpenHP1 volumetric sun shadow map"),
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer as u32,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                });
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("OpenHP1 volumetric sun shadow bind group"),
+                    layout: &layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    }],
+                });
+                let shaft_bind_group = shaft_bind_group(
+                    device,
+                    &shaft_layout,
+                    scene_depth,
+                    &view,
+                    &shadow_sampler,
+                    &uniform,
+                );
+                ShadowSlice {
+                    uniform,
+                    view,
+                    bind_group,
+                    shaft_bind_group,
+                    portal_buffer: portal_buffer(device, &portals),
+                    portal_count: 0,
+                }
+            })
+            .collect();
         let shaft_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("OpenHP1 volumetric sky shaft shader"),
             source: wgpu::ShaderSource::Wgsl(SHAFT_SHADER.into()),
@@ -274,18 +297,13 @@ impl DirectionalShadow {
             cache: None,
         });
         Self {
-            uniform,
-            view,
             _texture: texture,
-            bind_group,
+            slices,
             pipeline,
             shaft_layout,
-            shaft_bind_group,
             shaft_pipeline,
             shadow_sampler,
-            portal_buffer,
             portals,
-            visible_portal_count: 0,
             vertex_buffer,
             index_buffer,
             vertex_count: vertices.len(),
@@ -295,14 +313,16 @@ impl DirectionalShadow {
     }
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, scene_depth: &wgpu::TextureView) {
-        self.shaft_bind_group = shaft_bind_group(
-            device,
-            &self.shaft_layout,
-            scene_depth,
-            &self.view,
-            &self.shadow_sampler,
-            &self.uniform,
-        );
+        for slice in &mut self.slices {
+            slice.shaft_bind_group = shaft_bind_group(
+                device,
+                &self.shaft_layout,
+                scene_depth,
+                &slice.view,
+                &self.shadow_sampler,
+                &slice.uniform,
+            );
+        }
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
@@ -325,41 +345,50 @@ impl DirectionalShadow {
         if !self.enabled {
             return;
         }
-        queue.write_buffer(
-            &self.uniform,
-            0,
-            bytemuck::bytes_of(&shadow_uniform(camera, aspect)),
-        );
-        let portals = visible_portals(&self.portals, camera, aspect);
-        self.visible_portal_count = portals.len();
-        if !portals.is_empty() {
-            queue.write_buffer(&self.portal_buffer, 0, bytemuck::cast_slice(&portals));
+        let visible = visible_portals(&self.portals, camera, aspect);
+        let groups = portal_direction_groups(&visible);
+        for slice in &mut self.slices {
+            slice.portal_count = 0;
+        }
+        for (slice, portals) in self.slices.iter_mut().zip(groups) {
+            let direction = Vec3::from_slice(&portals[0].direction);
+            queue.write_buffer(
+                &slice.uniform,
+                0,
+                bytemuck::bytes_of(&shadow_uniform(camera, aspect, direction)),
+            );
+            queue.write_buffer(&slice.portal_buffer, 0, bytemuck::cast_slice(&portals));
+            slice.portal_count = portals.len();
         }
     }
 
     pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
-        if !self.enabled || self.index_count == 0 || self.visible_portal_count == 0 {
+        if !self.enabled || self.index_count == 0 {
             return 0;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("OpenHP1 volumetric sun shadow pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+        let mut pass_count = 0;
+        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 volumetric sun shadow pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &slice.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        self.draw_geometry(&mut pass);
-        1
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &slice.bind_group, &[]);
+            self.draw_geometry(&mut pass);
+            pass_count += 1;
+        }
+        pass_count
     }
 
     pub(super) fn has_geometry(&self) -> bool {
@@ -377,7 +406,10 @@ impl DirectionalShadow {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) -> usize {
-        if !self.enabled || self.index_count == 0 || self.visible_portal_count == 0 {
+        if !self.enabled
+            || self.index_count == 0
+            || self.slices.iter().all(|slice| slice.portal_count == 0)
+        {
             return 0;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -397,9 +429,11 @@ impl DirectionalShadow {
             multiview_mask: None,
         });
         pass.set_pipeline(&self.shaft_pipeline);
-        pass.set_bind_group(0, &self.shaft_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.portal_buffer.slice(..));
-        pass.draw(0..6, 0..self.visible_portal_count as u32);
+        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+            pass.set_bind_group(0, &slice.shaft_bind_group, &[]);
+            pass.set_vertex_buffer(0, slice.portal_buffer.slice(..));
+            pass.draw(0..6, 0..slice.portal_count as u32);
+        }
         1
     }
 }
@@ -593,6 +627,22 @@ fn visible_portals(
     visible
 }
 
+fn portal_direction_groups(portals: &[PortalTriangle]) -> Vec<Vec<PortalTriangle>> {
+    let mut groups: Vec<Vec<PortalTriangle>> = Vec::new();
+    for &portal in portals {
+        let direction = Vec3::from_slice(&portal.direction);
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| Vec3::from_slice(&group[0].direction).dot(direction) > 0.999)
+        {
+            group.push(portal);
+        } else if groups.len() < MAX_SHADOW_DIRECTIONS {
+            groups.push(vec![portal]);
+        }
+    }
+    groups
+}
+
 fn camera_on_interior_side(portal: PortalTriangle, camera_position: Vec3) -> bool {
     let a = Vec3::from_slice(&portal.a);
     let normal = (Vec3::from_slice(&portal.b) - a).cross(Vec3::from_slice(&portal.c) - a);
@@ -685,9 +735,9 @@ fn shaft_color(scene: &RenderScene, triangle: &[u32], texture: Option<usize>) ->
     (sum / (count * 255.0)).max(Vec3::splat(0.05))
 }
 
-fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
+fn shadow_uniform(camera: &Camera, aspect: f32, direction: Vec3) -> ShadowUniform {
     let radius = camera.far.clamp(500.0, 3_000.0);
-    let direction = SUN_DIRECTION.normalize();
+    let direction = direction.normalize();
     let center = snap_shadow_center(
         camera.position + camera.forward() * radius * 0.35,
         direction,
@@ -821,6 +871,25 @@ mod tests {
         assert!(right.y < 0.0);
         assert!(left.x < 0.0);
         assert!(right.x > 0.0);
+    }
+
+    #[test]
+    fn portal_shadow_groups_share_matching_directions_and_split_opposites() {
+        let portal = |direction: Vec3| PortalTriangle {
+            a: [0.0; 4],
+            b: [0.0; 4],
+            c: [0.0; 4],
+            color: [1.0; 4],
+            direction: direction.extend(0.0).to_array(),
+        };
+        let nearly_same = (Vec3::X + Vec3::Z * 0.01).normalize();
+
+        let groups =
+            portal_direction_groups(&[portal(Vec3::X), portal(nearly_same), portal(Vec3::NEG_X)]);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 2);
+        assert_eq!(groups[1].len(), 1);
     }
 
     #[test]
