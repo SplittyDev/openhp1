@@ -43,7 +43,7 @@ ACESBrightness=0.64
 ACESContrast=0.75
 AgXBrightness=0.6
 AgXContrast=0.9
-AmbientOcclusion=SSAO
+AmbientOcclusion=XeGTAO
 AntiAliasing=SMAA
 Bloom=true
 VolumetricLighting=true
@@ -95,7 +95,7 @@ These settings apply when `Renderer=Modern`.
 | `ACESContrast` | `0.75` | `0.5` to `2.0` | Sets contrast when using ACES. Values outside this range are moved to the nearest limit. |
 | `AgXBrightness` | `0.6` | `0.2` to `1.0` | Sets brightness when using AgX. Values outside this range are moved to the nearest limit. |
 | `AgXContrast` | `0.9` | `0.5` to `2.0` | Sets contrast when using AgX. Values outside this range are moved to the nearest limit. |
-| `AmbientOcclusion` | `SSAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
+| `AmbientOcclusion` | `XeGTAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
 | `AntiAliasing` | `SMAA` | `Off`, `FXAA`, `SMAA` | Chooses the Modern renderer's edge-smoothing method, or disables it. |
 | `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |
 | `VolumetricLighting` | `true` | `true`, `false` | Turns depth-aware atmospheric scattering around authored lights off or on. |

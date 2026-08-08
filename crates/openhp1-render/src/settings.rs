@@ -51,8 +51,8 @@ impl FromStr for ToneMapper {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AmbientOcclusion {
     Off,
-    #[default]
     Ssao,
+    #[default]
     XeGtao,
 }
 
@@ -228,7 +228,7 @@ impl Default for RendererSettings {
         Self {
             mode: RendererMode::Classic,
             tone_mapper: ToneMapper::default(),
-            ambient_occlusion: AmbientOcclusion::Ssao,
+            ambient_occlusion: AmbientOcclusion::default(),
             antialiasing: Antialiasing::Smaa,
             bloom: true,
             volumetric_lighting: true,
@@ -272,9 +272,14 @@ mod tests {
     #[test]
     fn parses_renderer_choices() {
         assert_eq!(ToneMapper::default(), ToneMapper::Reinhard);
+        assert_eq!(AmbientOcclusion::default(), AmbientOcclusion::XeGtao);
         assert_eq!(
             RendererSettings::default().tone_mapper,
             ToneMapper::Reinhard
+        );
+        assert_eq!(
+            RendererSettings::default().ambient_occlusion,
+            AmbientOcclusion::XeGtao
         );
         assert!(RendererSettings::default().volumetric_lighting);
         assert_eq!(
