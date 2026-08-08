@@ -3,7 +3,7 @@ fn volumetric_hash(cell: vec3<f32>) -> f32 {
 }
 
 fn volumetric_dust(position: vec3<f32>, time: f32) -> f32 {
-    let point = position * 0.0035 + vec3(time * 0.018, -time * 0.007, time * 0.011);
+    let point = position * 0.0035 + vec3(time * 0.1, -time * 0.04, time * 0.065);
     let cell = floor(point);
     let fraction = fract(point);
     let blend = fraction * fraction * (vec3(3.0) - 2.0 * fraction);
