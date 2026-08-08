@@ -354,6 +354,7 @@ struct UiTextures {
     hud_health_empty: TextureHandle,
     hud_counters: [TextureHandle; 4],
     hud_bean_piles: [TextureHandle; 4],
+    letter: [TextureHandle; 2],
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
     checkbox_off: TextureHandle,
@@ -763,6 +764,10 @@ impl GameUi {
                 load_texture(context, &mut packages, "HPMenu.Icons.beans3", true)?,
                 load_texture(context, &mut packages, "HPMenu.Icons.beans4", true)?,
             ],
+            letter: [
+                load_texture(context, &mut packages, "HPMenu.Icons.hedLetter1", true)?,
+                load_texture(context, &mut packages, "HPMenu.Icons.hedLetter2", true)?,
+            ],
             slider_track: load_texture(
                 context,
                 &mut packages,
@@ -1028,7 +1033,7 @@ impl GameUi {
 
     pub(super) fn set_player_state(&mut self, player: PlayerUiState) {
         if self.player_seen {
-            for (index, changed) in changed_hud_counters(self.player, player)
+            for (index, changed) in changed_hud_counters(&self.player, &player)
                 .into_iter()
                 .enumerate()
             {
@@ -1072,6 +1077,7 @@ impl GameUi {
         if !self.open {
             if !self.startup {
                 self.hud(context);
+                self.letter(context);
             }
             return;
         }
@@ -1204,6 +1210,38 @@ impl GameUi {
                 }
             }
         }
+    }
+
+    fn letter(&self, context: &egui::Context) {
+        let Some(text) = &self.player.letter else {
+            return;
+        };
+        let screen = context.content_rect();
+        let scale = (screen.width() / REFERENCE_SIZE.x)
+            .min(screen.height() / REFERENCE_SIZE.y)
+            .max(0.01);
+        let canvas = Rect::from_center_size(screen.center(), REFERENCE_SIZE * scale);
+        let painter = context.layer_painter(LayerId::new(Order::Foreground, Id::new("letter")));
+        for (index, texture) in self.textures.letter.iter().enumerate() {
+            draw_texture(
+                &painter,
+                canvas.min,
+                scale,
+                texture,
+                Pos2::new(64.0 + index as f32 * 256.0, 112.0),
+            );
+        }
+        let galley = painter.layout(
+            text.clone(),
+            FontId::proportional(14.0 * scale),
+            Color32::BLACK,
+            354.0 * scale,
+        );
+        painter.galley(
+            canvas.min + Vec2::new(144.0, 212.0) * scale,
+            galley,
+            Color32::BLACK,
+        );
     }
 
     fn main_page(&mut self, ui: &mut egui::Ui, scale: f32) {
@@ -2993,8 +3031,8 @@ fn save_quidditch_unlock(packages: &PackageStore, level: u8) -> Result<()> {
     Ok(())
 }
 
-fn changed_hud_counters(previous: PlayerUiState, current: PlayerUiState) -> [bool; 4] {
-    let values = |player: PlayerUiState| {
+fn changed_hud_counters(previous: &PlayerUiState, current: &PlayerUiState) -> [bool; 4] {
+    let values = |player: &PlayerUiState| {
         [
             player.fire_seeds,
             player.stars,
@@ -3339,10 +3377,10 @@ mod tests {
         };
         let current = PlayerUiState {
             beans: 5,
-            ..previous
+            ..previous.clone()
         };
         assert_eq!(
-            changed_hud_counters(previous, current),
+            changed_hud_counters(&previous, &current),
             [false, false, false, true]
         );
     }

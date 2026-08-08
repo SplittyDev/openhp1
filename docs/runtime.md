@@ -179,6 +179,15 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
 Unsupported actions should remain nonfatal actor diagnostics until their
 subsystem exists; they must not silently claim successful behavior.
 
+The game host projects authored HUD popups through the existing player UI
+snapshot because it does not execute UE1 `Canvas` drawing. For `hedLetter`
+popups, the runtime follows `PlayerPawn.myHUD` to `baseHud.curPopup` and exposes
+the localized `Pickup.[all]` text selected by `textName`; the game draws that
+text over the two shipped letter textures at their authored 640x480 positions.
+Space-key edges also update `baseHarry.bSkipKeyPressed`, matching
+`HPConsole.KeyEvent`, so `baseScroll.popstate` can close the letter and release
+the player.
+
 `TraceActors` traces colliding actors from its authored `Start` toward `End`,
 orders hits from that start, and does not insert a BSP pseudo-actor. Starting
 inside an actor does not report that existing overlap. `VisibleActors` skips

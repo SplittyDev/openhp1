@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayerUiState {
     pub health: f32,
     pub beans: i32,
@@ -14,6 +14,7 @@ pub struct PlayerUiState {
     pub house_points_slytherin: i32,
     pub house_points_hufflepuff: i32,
     pub house_points_ravenclaw: i32,
+    pub letter: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -182,7 +183,67 @@ impl ScriptRuntime {
             house_points_slytherin: integer("numHousePointsSlytherin")?,
             house_points_hufflepuff: integer("numHousePointsHufflepuff")?,
             house_points_ravenclaw: integer("numHousePointsRavenclaw")?,
+            letter: self.player_letter(&class, &instance)?,
         })
+    }
+
+    fn player_letter(
+        &mut self,
+        player_class: &ResolvedObject,
+        player: &InstanceState,
+    ) -> DispatchResult<Option<String>> {
+        let Some(hud) = self
+            .actor_object(player_class, player, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(hud) = self.object_actors.get(&hud).copied() else {
+            return Ok(None);
+        };
+        let hud_class = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        let Some(popup) = self
+            .actor_object(&hud_class, &hud_instance, "curPopup")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(popup) = self.object_actors.get(&popup).copied() else {
+            return Ok(None);
+        };
+        if self.destroyed.contains(&popup) {
+            return Ok(None);
+        }
+        let popup_class = self
+            .actor_classes
+            .get(&popup)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: popup })?;
+        let popup_class = self.resolved_object(&popup_class)?;
+        if !self.class_has_name(&popup_class, "hedLetter")? {
+            return Ok(None);
+        }
+        let popup_instance = self
+            .instances
+            .get(&popup)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: popup })?;
+        let Some(StoredValue::Value(Value::String(key))) =
+            self.instance_property(&popup_class, &popup_instance, "textName")?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(self.packages.localize("Pickup", "all", &key)))
     }
 
     pub fn initialize_player_hud(&mut self) -> DispatchResult<Vec<ActorAction>> {
@@ -415,6 +476,14 @@ impl ScriptRuntime {
             ] {
                 self.set_actor_value(&class, &mut instance, name, value)
                     .map_err(|message| DispatchError::InvalidPlayerInput { message })?;
+            }
+            if (input.space_pressed || input.space_released)
+                && let Some(field) = self.find_property(&class, "bSkipKeyPressed", 0)?
+            {
+                instance.insert(
+                    field,
+                    StoredValue::Value(Value::Bool(input.space_pressed && !input.space_released)),
+                );
             }
             Ok(())
         })();

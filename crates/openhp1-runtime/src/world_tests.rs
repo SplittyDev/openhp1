@@ -1702,15 +1702,24 @@ fn player_ui_state_reads_the_authored_harry_counters() {
     let system = root.join("System");
     fs::create_dir_all(&system).unwrap();
     fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    fs::write(
+        system.join("Pickup.int"),
+        "[all]\nhermione_letter_1=Harry, meet me by the greenhouse.\n",
+    )
+    .unwrap();
     let package_path = system.join("Test.u");
-    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+    fs::write(&package_path, synthetic_runtime_package_for("hedLetter")).unwrap();
 
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     let package = runtime.packages.load_path(&package_path).unwrap();
-    let class_id = object_id(&package, 0);
+    let popup_class_id = object_id(&package, 0);
+    let class_id = object_id(&package, 5);
     runtime
         .scripts
-        .insert(class_id.clone(), synthetic_class_script(0));
+        .insert(popup_class_id.clone(), synthetic_class_script(0));
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(5));
     let names = [
         "lifePotions",
         "MaxLifePotions",
@@ -1724,6 +1733,8 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         "numHousePointsSlytherin",
         "numHousePointsHufflepuff",
         "numHousePointsRavenclaw",
+        "myHUD",
+        "curPopup",
     ];
     let fields = names
         .into_iter()
@@ -1736,9 +1747,25 @@ fn player_ui_state_reads_the_authored_harry_counters() {
             Some(field.clone()),
         );
     }
+    let text_name = runtime_actor_id(200);
+    runtime.fields.insert(
+        (popup_class_id.clone(), "textname".to_owned()),
+        Some(text_name.clone()),
+    );
 
     let player = 7;
-    runtime.actor_classes.insert(player, class_id);
+    let hud = 8;
+    let popup = 9;
+    for (actor, actor_class) in [
+        (player, class_id.clone()),
+        (hud, class_id.clone()),
+        (popup, popup_class_id),
+    ] {
+        let object = runtime_actor_id(actor);
+        runtime.actor_classes.insert(actor, actor_class);
+        runtime.actor_objects.insert(actor, object.clone());
+        runtime.object_actors.insert(object, actor);
+    }
     runtime.player_actor = Some(player);
     let mut instance = InstanceState::default();
     for (name, value) in [
@@ -1770,7 +1797,29 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         fields["WizardCards"].clone(),
         StoredValue::Array(vec![card(101, true), card(2, false), card(69, true)]),
     );
+    instance.insert(
+        fields["myHUD"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(hud))),
+    );
     runtime.instances.insert(player, instance);
+    runtime.instances.insert(
+        hud,
+        [(
+            fields["curPopup"].clone(),
+            StoredValue::Object(Some(runtime_actor_id(popup))),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        popup,
+        [(
+            text_name,
+            StoredValue::Value(Value::String("hermione_letter_1".to_owned())),
+        )]
+        .into_iter()
+        .collect(),
+    );
 
     assert_eq!(
         runtime.player_ui_state().unwrap(),
@@ -1792,13 +1841,14 @@ fn player_ui_state_reads_the_authored_harry_counters() {
             house_points_slytherin: 18,
             house_points_hufflepuff: 12,
             house_points_ravenclaw: 15,
+            letter: Some("Harry, meet me by the greenhouse.".to_owned()),
         }
     );
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn player_input_populates_broom_channels() {
+fn player_input_populates_authored_channels() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-broom-input-{}-{}",
         std::process::id(),
@@ -1837,6 +1887,7 @@ fn player_input_populates_broom_channels() {
         "bBroomBrake",
         "bBroomAction",
         "bPressedJump",
+        "bSkipKeyPressed",
     ]
     .into_iter()
     .enumerate()
@@ -1867,6 +1918,7 @@ fn player_input_populates_broom_channels() {
             broom_pitch_up: true,
             broom_boost: true,
             broom_brake: true,
+            space_pressed: true,
             ..PlayerInput::default()
         })
         .unwrap();
@@ -1881,12 +1933,23 @@ fn player_input_populates_broom_channels() {
         ("bBroomBoost", Value::Byte(1)),
         ("bBroomBrake", Value::Byte(1)),
         ("bBroomAction", Value::Byte(1)),
+        ("bSkipKeyPressed", Value::Bool(true)),
     ] {
         assert_eq!(
             instance.get(&fields[name]),
             Some(&StoredValue::Value(value))
         );
     }
+    runtime
+        .set_player_input(PlayerInput {
+            space_released: true,
+            ..PlayerInput::default()
+        })
+        .unwrap();
+    assert_eq!(
+        runtime.instances[&player].get(&fields["bSkipKeyPressed"]),
+        Some(&StoredValue::Value(Value::Bool(false)))
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1971,6 +2034,7 @@ fn carried_actor_space_input_dispatches_alt_fire_after_updating_weapon_pose() {
         "bBroomBrake",
         "bBroomAction",
         "bPressedJump",
+        "bSkipKeyPressed",
         "aForward",
         "aTurn",
         "aLookUp",
