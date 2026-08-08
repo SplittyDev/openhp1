@@ -48,26 +48,25 @@ checked against its function or state export.
   889 (`DamagePerSec=200`). These are authored lethal/void regions, not a
   proposed map heuristic.
 
-The licensed SurrealEngine physics reference independently checks
-`Region().ZoneNumber == 0` before walking, falling, swimming, flying, and
-rolling physics, dispatches `FellOutOfWorld`, and returns immediately. See
-`SurrealEngine/UObject/UActor.cpp` lines 475-485 and 649-655 in the local
-SurrealEngine checkout. This is the important distinction: zone zero is an
-out-of-world physics region even though rendering may legitimately use zone
-zero as an ambient fallback.
+The licensed SurrealEngine physics reference checks `Region().ZoneNumber == 0`
+before walking, falling, swimming, flying, and rolling physics and dispatches
+`FellOutOfWorld`. HP1's authored content requires different handling: zone
+zero can contain active actors and inherits the active `LevelInfo`. In
+`Lev_Tut1.unr`, export 2967 (`tut1peeves0`) starts in zone zero, and the
+compiled `tut1Peeves` trigger path enters `patrol` and sets `PHYS_Flying`.
+Treating that location as out of world immediately runs the shipped
+`Pawn.FellOutOfWorld` death path and destroys Peeves before his Fred and George
+cutscene. This corpus evidence takes precedence over the generic reference
+engine behavior.
 
-OpenHP1 originally lost both death signals at the shared zone seam:
+OpenHP1 keeps the distinction at the shared zone seam:
 
-- `world::zone_actor_at` correctly returns `None` for BSP zone zero, but
-  `zone_physics` converted that value into an error. The existing
-  `None => FellOutOfWorld` branches in walking, falling, swimming, flying, and
-  rolling physics were therefore never reached.
-- `ZonePhysics` samples water, pain, and damage type, but not `bKillZone`.
+- `world::zone_actor_at` falls back to the active `LevelInfo` when zone zero
+  has no authored `ZoneInfo`, matching the renderer and HP1's active actors.
+- `ZonePhysics` still treats an authored `bKillZone` as lethal.
 
-That was the shared cause of void/kill regions behaving like ordinary space.
-`zone_physics` now preserves the out-of-world `None` result and treats an
-authored `bKillZone` as lethal. Both reuse the existing shared physics dispatch
-instead of adding a height or map-specific workaround.
+Authored `bKillZone` regions remain lethal through the existing shared physics
+dispatch, without a height or map-specific workaround.
 
 The original PC manual says both depleted stamina and a fall from a great
 height faint Harry and restart from the last save point. `baseHarry.stateDead`

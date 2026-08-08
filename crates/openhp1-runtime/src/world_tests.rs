@@ -3054,7 +3054,7 @@ fn positive_lifespans_expire_once_at_zero() {
 }
 
 #[test]
-fn zone_zero_is_out_of_world() {
+fn zone_zero_uses_level_info() {
     let collision = BspCollision::from_model(&Model {
         bounds: PrimitiveBounds {
             minimum: Vec3::ZERO,
@@ -3064,11 +3064,29 @@ fn zone_zero_is_out_of_world() {
         },
         vectors: Vec::new(),
         points: Vec::new(),
-        nodes: Vec::new(),
+        nodes: vec![BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: -1,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [0; 2],
+            vertex_count: 0,
+            leaves: [0; 2],
+        }],
         surfaces: Vec::new(),
         vertices: Vec::new(),
         shared_side_count: 0,
-        zones: Vec::new(),
+        zones: vec![Zone {
+            actor: ObjectReference::None,
+            connectivity: 0,
+            visibility: 0,
+        }],
         polys: ObjectReference::None,
         light_maps: Vec::new(),
         light_bits: Vec::new(),
@@ -3082,10 +3100,13 @@ fn zone_zero_is_out_of_world() {
     .unwrap();
     assert_eq!(
         zone_actor_at(&collision, Vec3::ZERO, None, &HashMap::default(), Some(4),),
-        None,
-        "UE1 zone zero is outside the world, not LevelInfo fallback",
+        Some(4),
+        "HP1 zone zero inherits the active LevelInfo",
     );
+}
 
+#[test]
+fn fell_out_of_world_stops_harry_physics() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-zone-zero-{}-{}",
         std::process::id(),
@@ -3097,15 +3118,6 @@ fn zone_zero_is_out_of_world() {
     let package_path = system.join("Test.u");
     fs::write(&package_path, synthetic_runtime_package_for("baseHarry")).unwrap();
     let mut runtime = ScriptRuntime::new(&root).unwrap();
-    runtime.collision = Some(Arc::new(collision));
-    runtime.level_info = Some(4);
-    assert!(
-        runtime
-            .zone_physics(Vec3::ZERO, 0, &InstanceState::default())
-            .unwrap()
-            .is_none(),
-        "falling physics must dispatch FellOutOfWorld in zone zero",
-    );
     let package = runtime.packages.load_path(&package_path).unwrap();
     let class = ResolvedObject {
         package: Arc::clone(&package),

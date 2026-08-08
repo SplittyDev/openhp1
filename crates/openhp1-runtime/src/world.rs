@@ -446,9 +446,6 @@ fn zone_actor_at(
     level_info: Option<usize>,
 ) -> Option<usize> {
     let zone = collision.zone_at(location)?;
-    if zone == 0 {
-        return None;
-    }
     collision
         .zone_actor_export(zone)
         .and_then(|export_index| {
