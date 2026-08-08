@@ -582,7 +582,7 @@ fn visible_portals(
         .copied()
         .filter(|portal| {
             camera_on_interior_side(*portal, camera.position)
-                && portal_in_view(*portal, view_projection)
+                && portal_in_view(*portal, view_projection, camera.far)
         })
         .collect::<Vec<_>>();
     visible.sort_by(|left, right| {
@@ -599,12 +599,21 @@ fn camera_on_interior_side(portal: PortalTriangle, camera_position: Vec3) -> boo
     normal.dot(camera_position - a) < 0.0
 }
 
-fn portal_in_view(portal: PortalTriangle, view_projection: Mat4) -> bool {
+fn portal_in_view(portal: PortalTriangle, view_projection: Mat4, view_distance: f32) -> bool {
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);
     let mut front_points = 0;
-    for point in [portal.a, portal.b, portal.c] {
-        let clip = view_projection * Vec3::from_slice(&point).extend(1.0);
+    let extrusion = Vec3::from_slice(&portal.direction) * shaft_length(view_distance);
+    for point in [portal.a, portal.b, portal.c]
+        .into_iter()
+        .flat_map(|point| {
+            [
+                Vec3::from_slice(&point),
+                Vec3::from_slice(&point) + extrusion,
+            ]
+        })
+    {
+        let clip = view_projection * point.extend(1.0);
         if clip.w <= 0.001 {
             continue;
         }
@@ -620,6 +629,10 @@ fn portal_in_view(portal: PortalTriangle, view_projection: Mat4) -> bool {
         && maximum.y >= -1.0
         && minimum.z <= 1.0
         && maximum.z >= 0.0
+}
+
+fn shaft_length(view_distance: f32) -> f32 {
+    (view_distance * 0.5).min(1_500.0)
 }
 
 fn portal_distance_squared(portal: PortalTriangle, camera_position: Vec3) -> f32 {
@@ -760,15 +773,30 @@ mod tests {
             color: [1.0; 4],
             direction: [0.0; 4],
         };
-        assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY));
+        assert!(portal_in_view(portal(Vec3::ZERO), Mat4::IDENTITY, 1.0));
         assert!(!portal_in_view(
             portal(Vec3::new(3.0, 0.0, 0.0)),
-            Mat4::IDENTITY
+            Mat4::IDENTITY,
+            1.0,
         ));
         assert!(!portal_in_view(
             portal(Vec3::new(0.0, 0.0, -2.0)),
-            Mat4::IDENTITY
+            Mat4::IDENTITY,
+            1.0,
         ));
+    }
+
+    #[test]
+    fn shaft_sources_remain_visible_while_their_extruded_volume_is_in_view() {
+        let portal = PortalTriangle {
+            a: Vec3::new(2.0, -0.5, 0.5).extend(1.0).to_array(),
+            b: Vec3::new(2.5, -0.5, 0.5).extend(1.0).to_array(),
+            c: Vec3::new(2.0, 0.5, 0.5).extend(1.0).to_array(),
+            color: [1.0; 4],
+            direction: Vec3::NEG_X.extend(0.0).to_array(),
+        };
+
+        assert!(portal_in_view(portal, Mat4::IDENTITY, 4.0));
     }
 
     #[test]

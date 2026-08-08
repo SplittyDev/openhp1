@@ -112,7 +112,7 @@ fn prism_coordinates(
     ) * inverse_determinant;
 }
 
-fn portal_path_length(
+fn portal_interval(
     ray_origin: vec3<f32>,
     ray_direction: vec3<f32>,
     ray_length: f32,
@@ -120,12 +120,12 @@ fn portal_path_length(
     b: vec3<f32>,
     c: vec3<f32>,
     direction: vec3<f32>,
-) -> f32 {
+) -> vec2<f32> {
     let edge_ab = b - a;
     let edge_ac = c - a;
     let determinant = dot(edge_ab, cross(edge_ac, direction));
     if abs(determinant) < 0.0001 {
-        return 0.0;
+        return vec2(1.0, -1.0);
     }
 
     let inverse_determinant = 1.0 / determinant;
@@ -150,7 +150,17 @@ fn portal_path_length(
     interval = clip_lower_bound(interval, 1.0 - origin.x - origin.y, -slope.x - slope.y);
     interval = clip_lower_bound(interval, origin.z, slope.z);
     interval = clip_lower_bound(interval, extrusion_length - origin.z, -slope.z);
-    return max(interval.y - interval.x, 0.0);
+    return interval;
+}
+
+fn sun_visibility(position: vec3<f32>) -> f32 {
+    let clip = settings.light_view_projection * vec4(position, 1.0);
+    let ndc = clip.xyz / clip.w;
+    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5);
+    if any(uv < vec2(0.0)) || any(uv > vec2(1.0)) || ndc.z < 0.0 || ndc.z > 1.0 {
+        return 0.0;
+    }
+    return textureSampleCompareLevel(sun_shadow, shadow_sampler, uv, ndc.z - 0.001);
 }
 
 @fragment
@@ -169,7 +179,7 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
     }
 
     let ray_direction = normalize(ray);
-    let path_length = portal_path_length(
+    let interval = portal_interval(
         settings.camera_position.xyz,
         ray_direction,
         ray_length,
@@ -178,6 +188,31 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         input.c.xyz,
         input.direction.xyz,
     );
-    let beam = 1.0 - exp(-path_length * 0.004);
-    return vec4(input.color.rgb * beam * 0.18, 0.0);
+    if interval.y <= interval.x {
+        return vec4(0.0);
+    }
+
+    const STEP_COUNT = 8;
+    let step_length = (interval.y - interval.x) / f32(STEP_COUNT);
+    let extrusion_length = min(settings.distance_intensity_phase.x * 0.5, 1500.0);
+    let edge_ab = input.b.xyz - input.a.xyz;
+    let edge_ac = input.c.xyz - input.a.xyz;
+    let inverse_determinant = 1.0 / dot(edge_ab, cross(edge_ac, input.direction.xyz));
+    var lit_length = 0.0;
+    for (var index = 0; index < STEP_COUNT; index += 1) {
+        let distance = interval.x + (f32(index) + 0.5) * step_length;
+        let position = settings.camera_position.xyz + ray_direction * distance;
+        let prism = prism_coordinates(
+            position - input.a.xyz,
+            edge_ab,
+            edge_ac,
+            input.direction.xyz,
+            inverse_determinant,
+        );
+        let along_shaft = clamp(prism.z / extrusion_length, 0.0, 1.0);
+        let end_fade = 1.0 - smoothstep(0.65, 1.0, along_shaft);
+        lit_length += sun_visibility(position) * end_fade * step_length;
+    }
+    let beam = 1.0 - exp(-lit_length * settings.direction_density.w);
+    return vec4(input.color.rgb * beam * settings.distance_intensity_phase.y, 0.0);
 }
