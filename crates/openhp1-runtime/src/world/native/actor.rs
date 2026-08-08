@@ -964,6 +964,8 @@ impl ScriptRuntime {
         self.actor_objects.insert(spawned, object);
         self.actor_classes
             .insert(spawned, object_id(&class.package, class.export_index));
+        self.track_actor_class(spawned, &class)
+            .map_err(|error| error.to_string())?;
         self.actor_states.insert(spawned, None);
         self.destroyed.remove(&spawned);
         self.refresh_tick_actor(spawned, &class)

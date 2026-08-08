@@ -48,6 +48,9 @@ impl ScriptRuntime {
             frame_zero_values: HashMap::default(),
             struct_members: HashMap::default(),
             actor_classes: HashMap::default(),
+            particle_actors: HashSet::default(),
+            wind_actors: HashSet::default(),
+            pawn_actors: HashSet::default(),
             actor_states: HashMap::default(),
             state_frames: HashMap::default(),
             state_revisions: HashMap::default(),
@@ -281,6 +284,7 @@ impl ScriptRuntime {
         self.actor_objects.insert(actor, object.clone());
         self.actor_classes
             .insert(actor, object_id(&class.package, class.export_index));
+        self.track_actor_class(actor, &class)?;
         if self.level_info.is_none() && self.class_has_name(&class, "LevelInfo")? {
             self.level_info = Some(actor);
         }
@@ -383,22 +387,37 @@ impl ScriptRuntime {
             .saturating_sub(self.destroyed.len())
     }
 
+    pub(super) fn track_actor_class(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+    ) -> DispatchResult<()> {
+        if self.class_has_name(class, "ParticleFX")? {
+            self.particle_actors.insert(actor);
+        }
+        if self.class_has_name(class, "Wind")? {
+            self.wind_actors.insert(actor);
+        }
+        if self.class_has_name(class, "Pawn")? {
+            self.pawn_actors.insert(actor);
+        }
+        Ok(())
+    }
+
     pub fn particle_emitters(&mut self) -> DispatchResult<Vec<ParticleEmitter>> {
         let actors = self
             .actor_classes
             .iter()
+            .filter(|(actor, _)| self.particle_actors.contains(actor))
             .map(|(&actor, class)| (actor, class.clone()))
             .collect::<Vec<_>>();
-        let winds = self.particle_winds(&actors)?;
+        let winds = self.particle_winds()?;
         let mut emitters = Vec::new();
         for (actor, class) in actors {
             if self.destroyed.contains(&actor) {
                 continue;
             }
             let class = self.resolved_object(&class)?;
-            if !self.class_has_name(&class, "ParticleFX")? {
-                continue;
-            }
             let instance = self
                 .instances
                 .get(&actor)
@@ -657,24 +676,24 @@ impl ScriptRuntime {
         }))
     }
 
-    fn particle_winds(
-        &mut self,
-        actors: &[(usize, ObjectId)],
-    ) -> DispatchResult<Vec<ParticleWind>> {
+    fn particle_winds(&mut self) -> DispatchResult<Vec<ParticleWind>> {
+        let actors = self
+            .actor_classes
+            .iter()
+            .filter(|(actor, _)| self.wind_actors.contains(actor))
+            .map(|(&actor, class)| (actor, class.clone()))
+            .collect::<Vec<_>>();
         let mut winds = Vec::new();
         for (actor, class) in actors {
-            if self.destroyed.contains(actor) {
+            if self.destroyed.contains(&actor) {
                 continue;
             }
-            let class = self.resolved_object(class)?;
-            if !self.class_has_name(&class, "Wind")? {
-                continue;
-            }
+            let class = self.resolved_object(&class)?;
             let instance = self
                 .instances
-                .get(actor)
+                .get(&actor)
                 .cloned()
-                .ok_or(DispatchError::ActiveActorContext { actor: *actor })?;
+                .ok_or(DispatchError::ActiveActorContext { actor })?;
             let rotation = match self.instance_property(&class, &instance, "Rotation")? {
                 Some(StoredValue::Value(Value::Rotator(rotation))) => rotation,
                 _ => [0; 3],
@@ -738,6 +757,7 @@ impl ScriptRuntime {
         let actors = self
             .actor_classes
             .iter()
+            .filter(|(actor, _)| self.pawn_actors.contains(actor))
             .map(|(&actor, class)| (actor, class.clone()))
             .collect::<Vec<_>>();
         let mut attachments = Vec::new();
@@ -746,9 +766,6 @@ impl ScriptRuntime {
                 continue;
             }
             let class = self.resolved_object(&class)?;
-            if !self.class_has_name(&class, "Pawn")? {
-                continue;
-            }
             let instance = self
                 .instances
                 .get(&pawn)

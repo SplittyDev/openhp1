@@ -10083,8 +10083,13 @@ fn particle_emitters_blend_immediate_superclass_defaults() {
         parent_class.clone(),
         values(16.0, 12.0, 6.0, 0.75, 1.0, 0.0),
     );
+    let child = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
     for (actor, blend) in [(7, 0.25), (8, -0.5)] {
         runtime.actor_classes.insert(actor, child_class.clone());
+        runtime.track_actor_class(actor, &child).unwrap();
         runtime
             .instances
             .insert(actor, values(8.0, 4.0, 2.0, 0.25, 0.5, blend));
