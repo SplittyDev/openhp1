@@ -11,3 +11,6 @@ glam.workspace = true
 openhp1-scene = { path = "../openhp1-scene" }
 thiserror.workspace = true
 wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true

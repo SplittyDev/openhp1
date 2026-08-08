@@ -2124,6 +2124,7 @@ dependencies = [
  "bytemuck",
  "glam 0.30.10",
  "openhp1-scene",
+ "pollster",
  "thiserror 2.0.19",
  "wgpu",
 ]
