@@ -4,7 +4,7 @@ use super::*;
 mod player;
 mod tick;
 
-pub use player::{PlayerTravelState, PlayerUiState};
+pub use player::{BossHealthUiState, FluffyHeadUiState, PlayerTravelState, PlayerUiState};
 pub(super) use tick::decode_latent_action;
 use tick::{
     particle_bool, particle_byte, particle_color, particle_float, particle_int, particle_scalar,

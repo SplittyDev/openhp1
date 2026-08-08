@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FluffyHeadUiState {
+    pub health: f32,
+    pub asleep: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum BossHealthUiState {
+    Voldemort(f32),
+    Peeves(f32),
+    Malfoy(f32),
+    Fluffy([FluffyHeadUiState; 3]),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayerUiState {
     pub health: f32,
@@ -14,6 +28,8 @@ pub struct PlayerUiState {
     pub house_points_slytherin: i32,
     pub house_points_hufflepuff: i32,
     pub house_points_ravenclaw: i32,
+    pub countdown: Option<f32>,
+    pub boss_health: Option<BossHealthUiState>,
     pub letter: Option<String>,
 }
 
@@ -183,7 +199,180 @@ impl ScriptRuntime {
             house_points_slytherin: integer("numHousePointsSlytherin")?,
             house_points_hufflepuff: integer("numHousePointsHufflepuff")?,
             house_points_ravenclaw: integer("numHousePointsRavenclaw")?,
+            countdown: self.player_countdown(&class, &instance)?,
+            boss_health: self.player_boss_health(&class, &instance)?,
             letter: self.player_letter(&class, &instance)?,
+        })
+    }
+
+    fn player_countdown(
+        &mut self,
+        player_class: &ResolvedObject,
+        player: &InstanceState,
+    ) -> DispatchResult<Option<f32>> {
+        let Some(hud) = self
+            .actor_object(player_class, player, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(hud) = self.object_actors.get(&hud).copied() else {
+            return Ok(None);
+        };
+        let hud_class = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        if !matches!(
+            self.instance_property(&hud_class, &hud_instance, "bCountingDown")?,
+            Some(StoredValue::Value(Value::Bool(true)))
+        ) {
+            return Ok(None);
+        }
+        let (Some(remaining), Some(start)) = (
+            self.numeric_property(&hud_class, &hud_instance, "fCountdownTime")?,
+            self.numeric_property(&hud_class, &hud_instance, "fStartCountdown")?,
+        ) else {
+            return Ok(None);
+        };
+        Ok((start > 0.0).then(|| normalized_health(remaining / start)))
+    }
+
+    fn player_boss_health(
+        &mut self,
+        player_class: &ResolvedObject,
+        player: &InstanceState,
+    ) -> DispatchResult<Option<BossHealthUiState>> {
+        let Some(target) = self
+            .actor_object(player_class, player, "BossTarget")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(target) = self.object_actors.get(&target).copied() else {
+            return Ok(None);
+        };
+        if self.destroyed.contains(&target) {
+            return Ok(None);
+        }
+        let target_class = self
+            .actor_classes
+            .get(&target)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: target })?;
+        let target_class = self.resolved_object(&target_class)?;
+        let target_instance = self
+            .instances
+            .get(&target)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: target })?;
+
+        if self.class_has_name(&target_class, "Fluffy")? {
+            return self
+                .fluffy_health(&target_class, &target_instance)
+                .map(|health| health.map(BossHealthUiState::Fluffy));
+        }
+        if self.class_has_name(&target_class, "BaseBossQuirrel")? {
+            return Ok(self
+                .numeric_property(&target_class, &target_instance, "Health")?
+                .map(|health| BossHealthUiState::Voldemort(normalized_health(health / 80.0))));
+        }
+        if self.class_has_name(&target_class, "Peeves")? {
+            return Ok(self
+                .numeric_property(&target_class, &target_instance, "hitCount")?
+                .map(|hits| BossHealthUiState::Peeves(normalized_health(hits / 4.0))));
+        }
+        if self.class_has_name(&target_class, "BroomDraco")? {
+            let (Some(hits), Some(total)) = (
+                self.numeric_property(&target_class, &target_instance, "Bumps")?,
+                self.numeric_property(&target_class, &target_instance, "BumpsToWin")?,
+            ) else {
+                return Ok(None);
+            };
+            return Ok((total > 0.0)
+                .then(|| BossHealthUiState::Malfoy(normalized_health((total - hits) / total))));
+        }
+        if self.class_has_name(&target_class, "BossRailMove")? {
+            let (Some(hits), Some(total)) = (
+                self.numeric_property(&target_class, &target_instance, "iNumHits")?,
+                self.numeric_property(&target_class, &target_instance, "iNumHitsToBeat")?,
+            ) else {
+                return Ok(None);
+            };
+            return Ok((total > 0.0)
+                .then(|| BossHealthUiState::Malfoy(normalized_health((total - hits) / total))));
+        }
+        Ok(None)
+    }
+
+    fn fluffy_health(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+    ) -> DispatchResult<Option<[FluffyHeadUiState; 3]>> {
+        let Some(StoredValue::Array(heads)) = self.instance_property(class, instance, "Heads")?
+        else {
+            return Ok(None);
+        };
+        let mut health = Vec::with_capacity(3);
+        for index in [2, 1, 0] {
+            let Some(StoredValue::Object(Some(head))) = heads.get(index) else {
+                return Ok(None);
+            };
+            let Some(head) = self.object_actors.get(head).copied() else {
+                return Ok(None);
+            };
+            let head_class = self
+                .actor_classes
+                .get(&head)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: head })?;
+            let head_class = self.resolved_object(&head_class)?;
+            let head_instance = self
+                .instances
+                .get(&head)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor: head })?;
+            let asleep = matches!(
+                self.instance_property(&head_class, &head_instance, "bSleeping")?,
+                Some(StoredValue::Value(Value::Bool(true)))
+            );
+            let (Some(timer), Some(duration)) = (
+                self.numeric_property(&head_class, &head_instance, "_Timer")?,
+                self.numeric_property(
+                    &head_class,
+                    &head_instance,
+                    if asleep { "SleepTime" } else { "ListenTime" },
+                )?,
+            ) else {
+                return Ok(None);
+            };
+            health.push(FluffyHeadUiState {
+                health: normalized_health(timer / duration),
+                asleep,
+            });
+        }
+        Ok(health.try_into().ok())
+    }
+
+    fn numeric_property(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &InstanceState,
+        name: &str,
+    ) -> DispatchResult<Option<f32>> {
+        Ok(match self.instance_property(class, instance, name)? {
+            Some(StoredValue::Value(Value::Byte(value))) => Some(f32::from(value)),
+            Some(StoredValue::Value(Value::Int(value))) => Some(value as f32),
+            Some(StoredValue::Value(Value::Float(value))) => Some(value),
+            _ => None,
         })
     }
 
@@ -686,5 +875,13 @@ impl ScriptRuntime {
         })();
         self.instances.insert(actor, instance);
         result
+    }
+}
+
+fn normalized_health(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }

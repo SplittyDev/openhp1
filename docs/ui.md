@@ -119,4 +119,10 @@ full/empty health art remains at the upper left, while fire seeds, stars, house
 points, and beans use the shipped counter textures at x=160, 320, 480, and 480
 on the 640-wide reference canvas. The counters appear for five seconds when
 their corresponding live Harry field changes, matching each authored `Show()`
-call; bean totals also layer the four original bean-pile textures.
+call; bean totals also layer the four original bean-pile textures. The same
+runtime projection reads `baseHud.bCountingDown`, `fCountdownTime`, and
+`fStartCountdown` for the lower-right spell-learning timer. `HPHud` enemy
+health follows Harry's live `BossTarget`: Quirrell/Voldemort, Peeves,
+BossRailMove/BroomDraco, and Fluffy use their shipped bar art and authored
+health fields, including the separate awake/asleep state of Fluffy's three
+heads.

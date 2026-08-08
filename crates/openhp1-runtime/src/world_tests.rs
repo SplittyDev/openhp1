@@ -1798,7 +1798,7 @@ fn singular_functions_do_not_reenter_the_same_actor() {
 }
 
 #[test]
-fn player_ui_state_reads_the_authored_harry_counters() {
+fn player_ui_state_reads_authored_harry_and_hud_state() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-ui-{}-{}",
         std::process::id(),
@@ -1814,17 +1814,24 @@ fn player_ui_state_reads_the_authored_harry_counters() {
     .unwrap();
     let package_path = system.join("Test.u");
     fs::write(&package_path, synthetic_runtime_package_for("hedLetter")).unwrap();
+    let boss_package_path = system.join("Peeves.u");
+    fs::write(&boss_package_path, synthetic_runtime_package_for("Peeves")).unwrap();
 
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     let package = runtime.packages.load_path(&package_path).unwrap();
+    let boss_package = runtime.packages.load_path(&boss_package_path).unwrap();
     let popup_class_id = object_id(&package, 0);
     let class_id = object_id(&package, 5);
+    let boss_class_id = object_id(&boss_package, 0);
     runtime
         .scripts
         .insert(popup_class_id.clone(), synthetic_class_script(0));
     runtime
         .scripts
         .insert(class_id.clone(), synthetic_class_script(5));
+    runtime
+        .scripts
+        .insert(boss_class_id.clone(), synthetic_class_script(0));
     let names = [
         "lifePotions",
         "MaxLifePotions",
@@ -1839,7 +1846,11 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         "numHousePointsHufflepuff",
         "numHousePointsRavenclaw",
         "myHUD",
+        "BossTarget",
         "curPopup",
+        "bCountingDown",
+        "fCountdownTime",
+        "fStartCountdown",
     ];
     let fields = names
         .into_iter()
@@ -1857,14 +1868,21 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         (popup_class_id.clone(), "textname".to_owned()),
         Some(text_name.clone()),
     );
+    let hit_count = runtime_actor_id(201);
+    runtime.fields.insert(
+        (boss_class_id.clone(), "hitcount".to_owned()),
+        Some(hit_count.clone()),
+    );
 
     let player = 7;
     let hud = 8;
     let popup = 9;
+    let boss = 10;
     for (actor, actor_class) in [
         (player, class_id.clone()),
         (hud, class_id.clone()),
         (popup, popup_class_id),
+        (boss, boss_class_id),
     ] {
         let object = runtime_actor_id(actor);
         runtime.actor_classes.insert(actor, actor_class);
@@ -1906,13 +1924,31 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         fields["myHUD"].clone(),
         StoredValue::Object(Some(runtime_actor_id(hud))),
     );
+    instance.insert(
+        fields["BossTarget"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(boss))),
+    );
     runtime.instances.insert(player, instance);
     runtime.instances.insert(
         hud,
-        [(
-            fields["curPopup"].clone(),
-            StoredValue::Object(Some(runtime_actor_id(popup))),
-        )]
+        [
+            (
+                fields["curPopup"].clone(),
+                StoredValue::Object(Some(runtime_actor_id(popup))),
+            ),
+            (
+                fields["bCountingDown"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["fCountdownTime"].clone(),
+                StoredValue::Value(Value::Float(7.5)),
+            ),
+            (
+                fields["fStartCountdown"].clone(),
+                StoredValue::Value(Value::Float(15.0)),
+            ),
+        ]
         .into_iter()
         .collect(),
     );
@@ -1924,6 +1960,12 @@ fn player_ui_state_reads_the_authored_harry_counters() {
         )]
         .into_iter()
         .collect(),
+    );
+    runtime.instances.insert(
+        boss,
+        [(hit_count, StoredValue::Value(Value::Float(2.0)))]
+            .into_iter()
+            .collect(),
     );
 
     assert_eq!(
@@ -1946,6 +1988,8 @@ fn player_ui_state_reads_the_authored_harry_counters() {
             house_points_slytherin: 18,
             house_points_hufflepuff: 12,
             house_points_ravenclaw: 15,
+            countdown: Some(0.5),
+            boss_health: Some(BossHealthUiState::Peeves(0.5)),
             letter: Some("Harry, meet me by the greenhouse.".to_owned()),
         }
     );

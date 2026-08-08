@@ -10,7 +10,7 @@ use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, Textu
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
 use openhp1_render::{AmbientOcclusion, Antialiasing, DisplaySettings, RendererMode, ToneMapper};
-use openhp1_runtime::{PlayerUiState, ScriptRuntime};
+use openhp1_runtime::{BossHealthUiState, PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
 use super::graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS};
@@ -354,6 +354,14 @@ struct UiTextures {
     hud_health_empty: TextureHandle,
     hud_counters: [TextureHandle; 4],
     hud_bean_piles: [TextureHandle; 4],
+    hud_timer_full: TextureHandle,
+    hud_timer_empty: TextureHandle,
+    hud_enemy_empty: TextureHandle,
+    hud_enemy_voldemort: TextureHandle,
+    hud_enemy_peeves: TextureHandle,
+    hud_enemy_malfoy: TextureHandle,
+    hud_enemy_fluffy_awake: TextureHandle,
+    hud_enemy_fluffy_asleep: TextureHandle,
     letter: [TextureHandle; 2],
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
@@ -764,6 +772,54 @@ impl GameUi {
                 load_texture(context, &mut packages, "HPMenu.Icons.beans3", true)?,
                 load_texture(context, &mut packages, "HPMenu.Icons.beans4", true)?,
             ],
+            hud_timer_full: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.TimerBarFull",
+                true,
+            )?,
+            hud_timer_empty: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.TimerBarEmpty",
+                true,
+            )?,
+            hud_enemy_empty: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.EnemyBarEmpty",
+                true,
+            )?,
+            hud_enemy_voldemort: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.VoldemortHead",
+                true,
+            )?,
+            hud_enemy_peeves: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.PeevesHead",
+                true,
+            )?,
+            hud_enemy_malfoy: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.MalfoyHead",
+                true,
+            )?,
+            hud_enemy_fluffy_awake: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FluffyHeadMAwake",
+                true,
+            )?,
+            hud_enemy_fluffy_asleep: load_texture(
+                context,
+                &mut packages,
+                "HPMenu.Icons.FluffyHeadMAsleep",
+                true,
+            )?,
             letter: [
                 load_texture(context, &mut packages, "HPMenu.Icons.hedLetter1", true)?,
                 load_texture(context, &mut packages, "HPMenu.Icons.hedLetter2", true)?,
@@ -1209,6 +1265,19 @@ impl GameUi {
                     remaining -= 3;
                 }
             }
+        }
+        if let Some(remaining) = self.player.countdown {
+            draw_countdown(
+                &painter,
+                canvas.min,
+                scale,
+                &self.textures.hud_timer_empty,
+                &self.textures.hud_timer_full,
+                remaining,
+            );
+        }
+        if let Some(boss) = &self.player.boss_health {
+            draw_boss_health(&painter, canvas, &self.textures, boss);
         }
     }
 
@@ -2750,6 +2819,136 @@ fn draw_texture(
     );
 }
 
+fn draw_countdown(
+    painter: &egui::Painter,
+    origin: Pos2,
+    scale: f32,
+    empty: &TextureHandle,
+    full: &TextureHandle,
+    remaining: f32,
+) {
+    let size = full.size_vec2();
+    let position = Pos2::new(
+        REFERENCE_SIZE.x - 8.0 - size.x,
+        REFERENCE_SIZE.y - 8.0 - size.y,
+    );
+    draw_texture(painter, origin, scale, empty, position);
+    let (source_y, height) = countdown_fill(size.y, remaining);
+    painter.image(
+        full.id(),
+        Rect::from_min_size(
+            origin + (position.to_vec2() + Vec2::new(0.0, source_y)) * scale,
+            Vec2::new(size.x, height) * scale,
+        ),
+        Rect::from_min_max(
+            Pos2::new(0.0, source_y / size.y),
+            Pos2::new(1.0, (source_y + height) / size.y),
+        ),
+        Color32::WHITE,
+    );
+}
+
+fn draw_boss_health(
+    painter: &egui::Painter,
+    canvas: Rect,
+    textures: &UiTextures,
+    boss: &BossHealthUiState,
+) {
+    match boss {
+        BossHealthUiState::Voldemort(health) => draw_boss_bar(
+            painter,
+            canvas,
+            &textures.hud_enemy_empty,
+            &textures.hud_enemy_voldemort,
+            97.0,
+            8.0,
+            *health,
+        ),
+        BossHealthUiState::Peeves(health) => draw_boss_bar(
+            painter,
+            canvas,
+            &textures.hud_enemy_empty,
+            &textures.hud_enemy_peeves,
+            97.0,
+            8.0,
+            *health,
+        ),
+        BossHealthUiState::Malfoy(health) => draw_boss_bar(
+            painter,
+            canvas,
+            &textures.hud_enemy_empty,
+            &textures.hud_enemy_malfoy,
+            97.0,
+            8.0,
+            *health,
+        ),
+        BossHealthUiState::Fluffy(heads) => {
+            let width = textures.hud_enemy_fluffy_awake.size_vec2().x;
+            for (x, head) in [
+                8.0,
+                (REFERENCE_SIZE.x - width) / 2.0,
+                REFERENCE_SIZE.x - 8.0 - width,
+            ]
+            .into_iter()
+            .zip(heads)
+            {
+                draw_boss_bar(
+                    painter,
+                    canvas,
+                    &textures.hud_enemy_empty,
+                    if head.asleep {
+                        &textures.hud_enemy_fluffy_asleep
+                    } else {
+                        &textures.hud_enemy_fluffy_awake
+                    },
+                    38.0,
+                    x,
+                    head.health,
+                );
+            }
+        }
+    }
+}
+
+fn draw_boss_bar(
+    painter: &egui::Painter,
+    canvas: Rect,
+    empty: &TextureHandle,
+    full: &TextureHandle,
+    head_width: f32,
+    x: f32,
+    health: f32,
+) {
+    let scale = canvas.width() / REFERENCE_SIZE.x;
+    let size = full.size_vec2();
+    let position = Pos2::new(x, REFERENCE_SIZE.y - size.y / 2.0 - 36.0);
+    draw_texture(painter, canvas.min, scale, empty, position);
+    let width = boss_fill_width(size.x, head_width, health);
+    painter.image(
+        full.id(),
+        Rect::from_min_size(
+            canvas.min + position.to_vec2() * scale,
+            Vec2::new(width, size.y) * scale,
+        ),
+        Rect::from_min_max(Pos2::ZERO, Pos2::new(width / size.x, 1.0)),
+        Color32::WHITE,
+    );
+}
+
+fn countdown_fill(height: f32, remaining: f32) -> (f32, f32) {
+    let remaining = remaining.clamp(0.0, 1.0);
+    let interior = (height - 20.0).max(0.0);
+    (
+        interior * (1.0 - remaining) + 11.0,
+        interior * remaining + 9.0,
+    )
+}
+
+fn boss_fill_width(width: f32, head_width: f32, health: f32) -> f32 {
+    let head_width = head_width.min(width);
+    head_width + (width - head_width) * health.clamp(0.0, 1.0)
+}
+
 fn draw_centered_texture(
     painter: &egui::Painter,
     origin: Pos2,
@@ -3395,6 +3594,16 @@ mod tests {
             hud_counter_text_offset(Vec2::new(64.0, 64.0), 10),
             Vec2::new(22.0, 37.0)
         );
+    }
+
+    #[test]
+    fn authored_timer_and_boss_bars_preserve_their_end_caps() {
+        assert_eq!(countdown_fill(100.0, 0.0), (91.0, 9.0));
+        assert_eq!(countdown_fill(100.0, 0.5), (51.0, 49.0));
+        assert_eq!(countdown_fill(100.0, 1.0), (11.0, 89.0));
+        assert_eq!(boss_fill_width(200.0, 97.0, 0.0), 97.0);
+        assert_eq!(boss_fill_width(200.0, 97.0, 0.5), 148.5);
+        assert_eq!(boss_fill_width(200.0, 97.0, 1.0), 200.0);
     }
 
     #[test]
