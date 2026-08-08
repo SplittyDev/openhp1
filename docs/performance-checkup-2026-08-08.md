@@ -2,7 +2,7 @@
 
 ## Scope and evidence standard
 
-This checkup covers the current engine at commit `37b76cf` (`Render window shafts with matched shadow directions`). It is a source audit, not a new benchmark run. The only numeric results below are from the repository's earlier measured performance commits and are labeled historical. Candidate impact is therefore ranked as an expectation to validate, not as a measured claim.
+This checkup began from commit `37b76cf` (`Render window shafts with matched shadow directions`) with a source audit, then validated selected candidates with release builds, CPU samples, the real `res/` corpus, and the rebuilt game executable. Older figures quoted later in the document remain labeled historical.
 
 Primary sources inspected:
 
@@ -28,6 +28,24 @@ The most promising behavior-preserving work is CPU-side data movement, not a bli
 | 6 | Add correct BSP/zone/frustum visibility | Potentially high on large maps, especially for shadow passes | High | GPU capture showing vertex/raster cost from off-screen geometry |
 
 Candidates 1 and 2 are the best first implementation targets. Candidates 4 and 6 can outperform them on the GPU, but they are not low-risk, low-reading changes and should be attempted only after a GPU capture proves the bottleneck.
+
+## Measured implementation results
+
+All timings below used the same release `runtime_scan` workload on `res/Maps/Lev_Tut1.unr` for five simulated seconds. Every before/after run produced identical timer, state-resume, action, animation, movement, rotation, visibility, spawn, destroy, sound, music, log, and deferred-diagnostic counters.
+
+- `8a50a21` stopped cloning every actor's `InstanceState` when lazily building collision caches. Median wall time fell from 4.43 s to 4.09 s (7.7%) and median user CPU time from 4.32 s to 3.93 s (9.0%).
+- `201742c` caches ParticleFX, Wind, and Pawn membership at actor registration and spawn instead of resolving every actor's class ancestry in every presentation snapshot. With the three game presentation queries instrumented into the workload, median wall time fell from 4.60 s to 3.93 s and user CPU time from 4.46 s to 3.81 s (about 14.6% each).
+- `40fffbc` borrows the Pawn state while reading its weapon instead of cloning the complete instance. In matched five-second release game samples, inclusive `weapon_attachments` samples fell from approximately 125 to 21 (about 83% within that path).
+
+The final workspace check ran 353 tests successfully with four skipped GPU-dependent tests. The final release game executable rebuilt and completed an unattended startup smoke check.
+
+### Rejected experiments and remaining evidence
+
+- Removing the full `player_ui_state` clone did not produce a measurable improvement in the instrumented release workload and was reverted.
+- A single changed vertex span did not reduce the release game's high upload churn. Exact per-vertex runs were worse: scattered updates generated thousands of `Queue::write_buffer` calls and made the directional-shadow update dominate the CPU sample. Both experiments were reverted. The next safe renderer attempt must propagate scene-owned dirty domains and actor/particle ranges, coalesce them before upload, and validate Classic and Modern output in an authored replay.
+- The post-change runtime sample attributed fewer than 0.2% of samples to lifespan sorting, so sparse physics/lifespan active sets were not implemented.
+- Repeated unattended Modern-renderer launches showed highly volatile resident/physical footprint readings (roughly 6-55 GB across `ps` and `sample`). The measurements did not establish whether this is retained CPU allocation, unified GPU accounting, or an actual leak. Investigate separately with Instruments allocations plus a Metal capture before changing ownership or resource lifetime.
+- FIFO presentation remains unchanged. Uncapping without first separating simulation cadence from rendering would change gameplay behavior, as described below.
 
 ## Frame cap and scheduling
 
