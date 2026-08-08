@@ -15,7 +15,10 @@ const SHADOW_SIZE: u32 = 1024;
 const MAX_SHADOW_DIRECTIONS: usize = 4;
 const MAX_VISIBLE_PORTALS: usize = 128;
 const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, -1.0, -0.35);
-const SHAFT_SHADER: &str = include_str!("../../../shaders/modern/sky_shafts.wgsl");
+const SHAFT_SHADER: &str = concat!(
+    include_str!("../../../shaders/modern/volumetric_noise.wgsl"),
+    include_str!("../../../shaders/modern/sky_shafts.wgsl"),
+);
 const SHADER: &str = r#"
 struct ShadowSettings {
     light_view_projection: mat4x4<f32>,
@@ -341,7 +344,13 @@ impl DirectionalShadow {
         true
     }
 
-    pub(super) fn prepare(&mut self, queue: &wgpu::Queue, camera: &Camera, aspect: f32) {
+    pub(super) fn prepare(
+        &mut self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        aspect: f32,
+        elapsed_time: f32,
+    ) {
         if !self.enabled {
             return;
         }
@@ -355,7 +364,7 @@ impl DirectionalShadow {
             queue.write_buffer(
                 &slice.uniform,
                 0,
-                bytemuck::bytes_of(&shadow_uniform(camera, aspect, direction)),
+                bytemuck::bytes_of(&shadow_uniform(camera, aspect, direction, elapsed_time)),
             );
             queue.write_buffer(&slice.portal_buffer, 0, bytemuck::cast_slice(&portals));
             slice.portal_count = portals.len();
@@ -735,7 +744,12 @@ fn shaft_color(scene: &RenderScene, triangle: &[u32], texture: Option<usize>) ->
     (sum / (count * 255.0)).max(Vec3::splat(0.05))
 }
 
-fn shadow_uniform(camera: &Camera, aspect: f32, direction: Vec3) -> ShadowUniform {
+fn shadow_uniform(
+    camera: &Camera,
+    aspect: f32,
+    direction: Vec3,
+    elapsed_time: f32,
+) -> ShadowUniform {
     let radius = camera.far.clamp(500.0, 3_000.0);
     let direction = direction.normalize();
     let center = snap_shadow_center(
@@ -752,7 +766,7 @@ fn shadow_uniform(camera: &Camera, aspect: f32, direction: Vec3) -> ShadowUnifor
         inverse_view_projection: camera.view_projection(aspect).inverse().to_cols_array_2d(),
         camera_position: camera.position.extend(1.0).to_array(),
         direction_density: [direction.x, direction.y, direction.z, 0.00025],
-        distance_intensity_phase: [radius, 0.35, 0.45, 0.0],
+        distance_intensity_phase: [radius, 0.35, 0.45, elapsed_time],
     }
 }
 

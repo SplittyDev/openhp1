@@ -131,7 +131,10 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
                 shadow_index,
             );
             visible_steps += visibility;
-            density += local_density * visibility * step_length;
+            density += local_density
+                * visibility
+                * volumetric_dust(world_position, settings.projection.w)
+                * step_length;
         }
         let lit_fraction = visible_steps / f32(STEP_COUNT);
         let occlusion_contrast = 4.0 * lit_fraction * (1.0 - lit_fraction);

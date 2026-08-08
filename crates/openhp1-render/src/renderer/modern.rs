@@ -356,11 +356,13 @@ impl ModernRenderer {
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport_size: [u32; 2],
+        elapsed_time: f32,
     ) {
         if let Some(coronas) = &self.coronas {
             coronas.prepare_frame(queue, camera, viewport_size);
         }
-        self.volumetrics.prepare_frame(queue, camera, viewport_size);
+        self.volumetrics
+            .prepare_frame(queue, camera, viewport_size, elapsed_time);
     }
 
     pub(super) fn draw_scene_effects<'pass>(

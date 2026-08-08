@@ -18,7 +18,10 @@ mod shadow;
 use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer};
 use shadow::DirectionalShadow;
 
-const SHADER: &str = include_str!("../../shaders/modern/volumetric.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../../shaders/modern/volumetric_noise.wgsl"),
+    include_str!("../../shaders/modern/volumetric.wgsl"),
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -175,6 +178,7 @@ impl VolumetricRenderer {
         queue: &wgpu::Queue,
         camera: &Camera,
         viewport_size: [u32; 2],
+        elapsed_time: f32,
     ) {
         let aspect = viewport_size[0] as f32 / viewport_size[1].max(1) as f32;
         let view_projection = camera.view_projection(aspect);
@@ -187,10 +191,15 @@ impl VolumetricRenderer {
                 inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
                 camera_position: camera.position.extend(1.0).to_array(),
                 camera_forward: camera.forward().extend(0.0).to_array(),
-                projection: [tan_half_fov * aspect, tan_half_fov, camera.near, 0.0],
+                projection: [
+                    tan_half_fov * aspect,
+                    tan_half_fov,
+                    camera.near,
+                    elapsed_time,
+                ],
             }),
         );
-        self.shadow.prepare(queue, camera, aspect);
+        self.shadow.prepare(queue, camera, aspect, elapsed_time);
         let point_volumes = self.point_shadows.prepare(queue, camera);
         self.point_volume_count = point_volumes.len();
         if !point_volumes.is_empty() {

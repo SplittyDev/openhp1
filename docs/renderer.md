@@ -133,6 +133,8 @@ Only source triangles intersecting the camera frustum are submitted, capped at
 the 128 nearest triangles. Opaque walls and props shadow the resulting volumes.
 The accumulation is additive HDR scattering with no scene-wide extinction,
 retaining values for bloom and tone mapping without tinting the whole room.
+Window shafts and shadowed local beams share a subtle world-space density noise
+that drifts slowly with render time and pauses with the rest of the scene.
 
 Local volumetric sources retain their compact HDR halos. Up to four nearest
 visible emitters or explicitly authored fog lights additionally receive

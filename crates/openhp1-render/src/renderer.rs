@@ -756,7 +756,12 @@ impl Renderer {
             }),
         );
         if let Some(modern) = &mut self.modern {
-            modern.prepare_frame(queue, camera, viewport_size);
+            modern.prepare_frame(
+                queue,
+                camera,
+                viewport_size,
+                self.auto_uv / AUTO_UV_PER_SECOND,
+            );
         }
         let (blended_indices, blended_batches) =
             sorted_blended_batches(&self.blended_surfaces, camera.position);

@@ -211,7 +211,10 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         );
         let along_shaft = clamp(prism.z / extrusion_length, 0.0, 1.0);
         let end_fade = 1.0 - smoothstep(0.65, 1.0, along_shaft);
-        lit_length += sun_visibility(position) * end_fade * step_length;
+        lit_length += sun_visibility(position)
+            * end_fade
+            * volumetric_dust(position, settings.distance_intensity_phase.w)
+            * step_length;
     }
     let beam = 1.0 - exp(-lit_length * settings.direction_density.w);
     return vec4(input.color.rgb * beam * settings.distance_intensity_phase.y, 0.0);
