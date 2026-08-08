@@ -631,23 +631,16 @@ fn shaft_color(scene: &RenderScene, texture: Option<usize>) -> Vec3 {
     let Some(texture) = texture.and_then(|index| scene.textures.get(index)) else {
         return Vec3::new(1.0, 0.82, 0.62);
     };
-    let (sum, weight) =
-        texture
-            .rgba
-            .chunks_exact(4)
-            .fold((Vec3::ZERO, 0.0), |(sum, weight), pixel| {
-                let alpha = f32::from(pixel[3]) / 255.0;
-                (
-                    sum + Vec3::new(
-                        f32::from(pixel[0]),
-                        f32::from(pixel[1]),
-                        f32::from(pixel[2]),
-                    ) * alpha,
-                    weight + alpha,
-                )
-            });
-    let color = sum / (weight.max(1.0) * 255.0);
-    color.max(Vec3::splat(0.15))
+    let pixels = texture.rgba.chunks_exact(4);
+    let count = pixels.len().max(1) as f32;
+    let sum = pixels.fold(Vec3::ZERO, |sum, pixel| {
+        sum + Vec3::new(
+            f32::from(pixel[0]),
+            f32::from(pixel[1]),
+            f32::from(pixel[2]),
+        )
+    });
+    (sum / (count * 255.0)).max(Vec3::splat(0.05))
 }
 
 fn shadow_uniform(camera: &Camera, aspect: f32) -> ShadowUniform {
@@ -683,7 +676,7 @@ fn snap_shadow_center(center: Vec3, direction: Vec3, radius: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use glam::Vec2;
-    use openhp1_scene::{SurfaceMaterial, TriangleMesh};
+    use openhp1_scene::{SurfaceMaterial, TextureImage, TriangleMesh};
 
     use super::*;
 
@@ -771,6 +764,21 @@ mod tests {
         assert!(right.y < 0.0);
         assert!(left.x < 0.0);
         assert!(right.x > 0.0);
+    }
+
+    #[test]
+    fn shaft_color_uses_opaque_texture_rgb_when_palette_alpha_is_zero() {
+        let mut scene = scene(SurfaceMode::Opaque, false);
+        scene.textures.push(TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 0],
+        });
+
+        let color = shaft_color(&scene, Some(0));
+
+        assert!(color.x > color.y * 4.0);
+        assert!(color.x > color.z * 4.0);
     }
 
     #[test]

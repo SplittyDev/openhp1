@@ -84,39 +84,73 @@ fn vertex_fullscreen(
     return output;
 }
 
-fn inside_portal_volume(
-    world: vec3<f32>,
+fn clip_lower_bound(interval: vec2<f32>, origin: f32, slope: f32) -> vec2<f32> {
+    if abs(slope) < 0.00001 {
+        if origin < 0.0 {
+            return vec2(1.0, -1.0);
+        }
+        return interval;
+    }
+    let crossing = -origin / slope;
+    if slope > 0.0 {
+        return vec2(max(interval.x, crossing), interval.y);
+    }
+    return vec2(interval.x, min(interval.y, crossing));
+}
+
+fn prism_coordinates(
+    vector: vec3<f32>,
+    edge_ab: vec3<f32>,
+    edge_ac: vec3<f32>,
+    direction: vec3<f32>,
+    inverse_determinant: f32,
+) -> vec3<f32> {
+    return vec3(
+        dot(vector, cross(edge_ac, direction)),
+        dot(edge_ab, cross(vector, direction)),
+        dot(edge_ab, cross(edge_ac, vector)),
+    ) * inverse_determinant;
+}
+
+fn portal_path_length(
+    ray_origin: vec3<f32>,
+    ray_direction: vec3<f32>,
+    ray_length: f32,
     a: vec3<f32>,
     b: vec3<f32>,
     c: vec3<f32>,
     direction: vec3<f32>,
-) -> bool {
+) -> f32 {
     let edge_ab = b - a;
     let edge_ac = c - a;
-    let normal = cross(edge_ab, edge_ac);
-    if dot(normal, normal) < 0.0001 {
-        return false;
+    let determinant = dot(edge_ab, cross(edge_ac, direction));
+    if abs(determinant) < 0.0001 {
+        return 0.0;
     }
 
-    let denominator = dot(normal, direction);
-    if abs(denominator) < 0.0001 {
-        return false;
-    }
-    let travel = dot(normal, world - a) / denominator;
-    if travel < 0.0 || travel > min(settings.distance_intensity_phase.x * 0.5, 1500.0) {
-        return false;
-    }
-
-    let point = world - direction * travel - a;
-    let d00 = dot(edge_ab, edge_ab);
-    let d01 = dot(edge_ab, edge_ac);
-    let d11 = dot(edge_ac, edge_ac);
-    let d20 = dot(point, edge_ab);
-    let d21 = dot(point, edge_ac);
-    let inverse = 1.0 / max(d00 * d11 - d01 * d01, 0.0001);
-    let v = (d11 * d20 - d01 * d21) * inverse;
-    let w = (d00 * d21 - d01 * d20) * inverse;
-    return v >= 0.0 && w >= 0.0 && v + w <= 1.0;
+    let inverse_determinant = 1.0 / determinant;
+    let origin = prism_coordinates(
+        ray_origin - a,
+        edge_ab,
+        edge_ac,
+        direction,
+        inverse_determinant,
+    );
+    let slope = prism_coordinates(
+        ray_direction,
+        edge_ab,
+        edge_ac,
+        direction,
+        inverse_determinant,
+    );
+    let extrusion_length = min(settings.distance_intensity_phase.x * 0.5, 1500.0);
+    var interval = vec2(0.0, ray_length);
+    interval = clip_lower_bound(interval, origin.x, slope.x);
+    interval = clip_lower_bound(interval, origin.y, slope.y);
+    interval = clip_lower_bound(interval, 1.0 - origin.x - origin.y, -slope.x - slope.y);
+    interval = clip_lower_bound(interval, origin.z, slope.z);
+    interval = clip_lower_bound(interval, extrusion_length - origin.z, -slope.z);
+    return max(interval.y - interval.x, 0.0);
 }
 
 @fragment
@@ -134,23 +168,16 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         return vec4(0.0);
     }
 
-    const STEP_COUNT = 24u;
     let ray_direction = normalize(ray);
-    let step_length = ray_length / f32(STEP_COUNT);
-    var path_length = 0.0;
-    for (var step = 0u; step < STEP_COUNT; step++) {
-        let distance = (f32(step) + 0.5) * step_length;
-        let sample_position = settings.camera_position.xyz + ray_direction * distance;
-        if inside_portal_volume(
-            sample_position,
-            input.a.xyz,
-            input.b.xyz,
-            input.c.xyz,
-            input.direction.xyz,
-        ) {
-            path_length += step_length;
-        }
-    }
+    let path_length = portal_path_length(
+        settings.camera_position.xyz,
+        ray_direction,
+        ray_length,
+        input.a.xyz,
+        input.b.xyz,
+        input.c.xyz,
+        input.direction.xyz,
+    );
     let beam = 1.0 - exp(-path_length * 0.004);
     return vec4(input.color.rgb * beam * 0.18, 0.0);
 }
