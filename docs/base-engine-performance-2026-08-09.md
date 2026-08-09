@@ -41,6 +41,44 @@ The sample counts are diagnostic rather than percentages: separate five-second
 `sample` captures can vary with CPU frequency and sampling alignment. The
 release timings above are the acceptance measurements.
 
+## Live viewer CPU-floor follow-up
+
+A release Classic/no-vsync capture of `Lev_Tut1` found two additional fixed
+CPU costs that the headless scan could not expose:
+
+| Commit | Change | Matched result |
+| --- | --- | --- |
+| `213d8b2` | Coalesce animation, root-motion, callback, and runtime scene changes into one final vertex upload per rendered viewer frame | `Renderer::update_vertices` leaf samples fell from 707 to 436 and `memmove` leaf samples from 1,653 to 1,100; clean overlay readings were 10.78 ms before and 10.23 ms after |
+| `e4a30d2` | Retain the incrementally maintained actor-collision cache across runtime ticks | 5 s mean: 2.106 to 2.014 s wall (4.4%); 1.912 to 1.879 s user CPU (1.7%) |
+
+The viewer already synchronized every CPU-side change before rendering, but it
+uploaded the complete final scene after animation work and then uploaded it
+again after runtime actions. The game already used a dirty flag to defer the
+same work until the final state was ready, so the viewer now follows that
+existing path. No GPU consumer exists between those CPU updates.
+
+The runtime collision cache already refreshed individual actors after script
+property writes, native collision changes, movement, spawn, destruction,
+visual-bound changes, and restore. Clearing both collision indexes at the
+start of every tick defeated that incremental maintenance and made the first
+movement query rebuild all actors. Retaining the cache removed the rebuild;
+`ensure_collision_actors` fell from 339 inclusive samples to one in matched
+live captures.
+
+The collision change produced identical five-second `Lev_Tut1` behavior
+counters. A separate one-second-per-map scan also produced identical aggregate
+counters in the original and optimized builds: 1,617/1,804 animations, 806
+sounds, 13,471 state resumes, 1,950 spawns, 73,145 location actions, 37,492
+rotation actions, 1,845 visibility actions, and 653 script logs.
+
+After both changes, the largest fixed live-viewer branch was the renderer's
+resolution-independent CPU vertex path: one complete vertex repack and wgpu
+staging upload accounted for 1,097 of 4,278 sampled viewer-update stacks, with
+799 samples in `Queue::write_buffer` and 751 in its memory copy. Classic draw
+submission itself occupied only a few dozen samples. This explains why the
+floor does not scale with resolution, but further work on that path is outside
+this investigation's renderer boundary.
+
 ## Why these paths were slow
 
 The skeletal decoder naturally produces one position per source vertex, but
@@ -72,10 +110,10 @@ that the same frame had already computed.
 
 ## Remaining profile
 
-After the retained changes, work is spread across skeletal pose sampling,
-vertex-normal construction, BSP collision sweeps, movement, script execution,
-and allocation/copy routines. None was a comparable isolated hotspot in this
-workload.
+After the retained non-renderer changes, runtime work is spread across
+skeletal pose sampling, vertex-normal construction, BSP collision sweeps,
+movement, and script execution. None was a comparable isolated hotspot in the
+live or headless workload.
 
 The next plausible narrow candidate is to reuse the visible skeletal sample
 for the subset of meshes that really do compute weapon attachments. It should
@@ -85,12 +123,12 @@ that state. Likewise, changing collision broad phases, physics stepping, tick
 ordering, or script dispatch to reduce work would require original-engine
 evidence and much stronger profiling because those changes can alter gameplay.
 
-This headless workload deliberately removes rendering and presentation from
-the measurement. It proves substantial avoidable base-engine work existed,
-but it does not claim that the game's reported 14 ms frame will fall by the
-same percentage. A release Classic replay with the same save, camera path,
-and uncapped settings is still needed to measure the end-to-end frame-time
-change and visually confirm skeletal animation, tweening, and attachments.
+The headless workload deliberately removes rendering and presentation from the
+measurement. It proves substantial avoidable base-engine work existed, while
+the live viewer capture identifies the remaining resolution-independent upload
+cost. An authored release replay is still needed to measure the end-to-end game
+frame-time change and visually confirm skeletal animation, tweening, and
+attachments.
 
 ## Verification protocol
 
@@ -98,6 +136,8 @@ change and visually confirm skeletal animation, tweening, and attachments.
   duration, executable, and output counters.
 - Focused `openhp1-mesh` and `openhp1-scene` tests ran after each retained
   optimization; the final focused run executed 53 tests.
+- The collision-cache follow-up ran all 171 `openhp1-runtime` tests and a
+  matched one-second-per-map original-corpus scan.
 - Strict Clippy passed for both changed crates after allowing three documented
   pre-existing scene lints (`field-reassign-with-default`, `obfuscated-if-else`,
   and `type-complexity`).
