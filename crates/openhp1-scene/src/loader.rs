@@ -1688,7 +1688,13 @@ impl LoadedScene {
         animation.playing = true;
         animation.looping = looping;
         animation.root_motion = root_motion;
-        animation.root_motion_position = Vec3::ZERO;
+        animation.root_motion_position = if root_motion {
+            animation
+                .transform
+                .transform_vector3(animation.sample()?.root_motion)
+        } else {
+            Vec3::ZERO
+        };
         if animation.rate == 0.0 && animation.tween_from.is_none() {
             let sample = animation.sample()?;
             let bone_positions = animation.bone_positions_from(&sample);

@@ -157,7 +157,9 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
 - Tween-time arguments blend from the displayed pose.
 - HP1's `RootBone='Move'` argument extracts skeletal root translation from the
   rendered pose and applies it through UE1 smooth movement so a blocked forward
-  component can slide upward during a mount.
+  component can slide upward during a mount. Translation is measured from the
+  reference pose, and starting a new root-motion sequence treats its first pose
+  as the movement baseline so a follow-up loop does not apply that offset twice.
 - HP1's numeric `BonePos` native uses the current sampled skeletal bone origin
   after the mesh and actor transforms, in Unreal coordinates. Pose updates run
   before script ticks and preserve the displayed tween interpolation.

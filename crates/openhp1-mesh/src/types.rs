@@ -432,9 +432,8 @@ impl SkeletalAnimation {
             let fallback = local[mesh_bone];
             local[mesh_bone] = track.sample(time, movement.track_time, fallback);
             if extract_root_motion && mesh_bone == 0 {
-                let start = track.sample(0.0, movement.track_time, fallback).1;
-                root_motion = local[mesh_bone].1 - start;
-                local[mesh_bone].1 = start;
+                root_motion = local[mesh_bone].1 - fallback.1;
+                local[mesh_bone].1 = fallback.1;
             }
         }
 
@@ -533,27 +532,49 @@ mod tests {
             weapon_adjust: Mat4::IDENTITY,
         };
         let animation = SkeletalAnimation {
-            sequences: vec![MeshAnimationSequence {
-                name: "Move".to_owned(),
-                group: "None".to_owned(),
-                start_frame: 0,
-                frame_count: 2,
-                notifications: Vec::new(),
-                rate: 1.0,
-            }],
+            sequences: vec![
+                MeshAnimationSequence {
+                    name: "Move".to_owned(),
+                    group: "None".to_owned(),
+                    start_frame: 0,
+                    frame_count: 2,
+                    notifications: Vec::new(),
+                    rate: 1.0,
+                },
+                MeshAnimationSequence {
+                    name: "Moved".to_owned(),
+                    group: "None".to_owned(),
+                    start_frame: 2,
+                    frame_count: 1,
+                    notifications: Vec::new(),
+                    rate: 1.0,
+                },
+            ],
             bones: vec![AnimationBone {
                 name: "Root".to_owned(),
             }],
-            moves: vec![AnimationMove {
-                track_time: 1.0,
-                start_bone: 0,
-                bone_indices: vec![0],
-                tracks: vec![AnimationTrack {
-                    rotations: Vec::new(),
-                    positions: vec![Vec3::ZERO, Vec3::new(4.0, 2.0, 6.0)],
-                    times: vec![0.0, 1.0],
-                }],
-            }],
+            moves: vec![
+                AnimationMove {
+                    track_time: 1.0,
+                    start_bone: 0,
+                    bone_indices: vec![0],
+                    tracks: vec![AnimationTrack {
+                        rotations: Vec::new(),
+                        positions: vec![Vec3::ZERO, Vec3::new(4.0, 2.0, 6.0)],
+                        times: vec![0.0, 1.0],
+                    }],
+                },
+                AnimationMove {
+                    track_time: 1.0,
+                    start_bone: 0,
+                    bone_indices: vec![0],
+                    tracks: vec![AnimationTrack {
+                        rotations: Vec::new(),
+                        positions: vec![Vec3::new(4.0, 2.0, 6.0)],
+                        times: vec![0.0],
+                    }],
+                },
+            ],
         };
 
         let (points, motion, _) = animation.sample_pose(&mesh, 0, 0.5, true).unwrap();
@@ -588,6 +609,9 @@ mod tests {
 
         assert_eq!(points, vec![Vec3::ZERO]);
         assert_eq!(motion, Vec3::new(2.0, -1.0, 3.0));
+        let (moved_points, moved_motion, _) = animation.sample_pose(&mesh, 1, 0.0, true).unwrap();
+        assert_eq!(moved_points, vec![Vec3::ZERO]);
+        assert_eq!(moved_motion, Vec3::new(4.0, -2.0, 6.0));
         assert!(
             attached
                 .transform_point3(Vec3::ZERO)
