@@ -18,6 +18,36 @@ use openhp1_scene::{
 
 use crate::target::ColorTarget;
 
+const FRAME_TIMING_SAMPLE_SECONDS: f32 = 0.5;
+
+struct FrameTiming {
+    accumulated_seconds: f32,
+    sample_count: u32,
+    average_seconds: f32,
+}
+
+impl Default for FrameTiming {
+    fn default() -> Self {
+        Self {
+            accumulated_seconds: 0.0,
+            sample_count: 0,
+            average_seconds: 1.0 / 60.0,
+        }
+    }
+}
+
+impl FrameTiming {
+    fn record(&mut self, frame_seconds: f32) {
+        self.accumulated_seconds += frame_seconds;
+        self.sample_count += 1;
+        if self.accumulated_seconds >= FRAME_TIMING_SAMPLE_SECONDS {
+            self.average_seconds = self.accumulated_seconds / self.sample_count as f32;
+            self.accumulated_seconds = 0.0;
+            self.sample_count = 0;
+        }
+    }
+}
+
 pub(crate) struct ViewerApp {
     state: eframe::egui_wgpu::RenderState,
     renderer: Renderer,
@@ -36,6 +66,7 @@ pub(crate) struct ViewerApp {
     runtime: ScriptRuntime,
     player_touch_position: Option<Vec3>,
     last_frame: Instant,
+    frame_timing: FrameTiming,
     render_stats: RenderStats,
     load_error: Option<String>,
     renderer_settings: RendererSettings,
@@ -88,6 +119,7 @@ impl ViewerApp {
             runtime,
             player_touch_position: None,
             last_frame: Instant::now(),
+            frame_timing: FrameTiming::default(),
             render_stats: RenderStats::default(),
             load_error: None,
             renderer_settings,
@@ -153,6 +185,7 @@ impl ViewerApp {
         self.selected_actor = None;
         self.render_stats = RenderStats::default();
         self.last_frame = Instant::now();
+        self.frame_timing = FrameTiming::default();
         self.load_error = None;
     }
 
@@ -167,7 +200,7 @@ impl ViewerApp {
         );
     }
 
-    fn sidebar(&mut self, ui: &mut egui::Ui, stable_delta_time: f32) -> (Option<PathBuf>, bool) {
+    fn sidebar(&mut self, ui: &mut egui::Ui) -> (Option<PathBuf>, bool) {
         let previous_renderer_settings = self.renderer_settings;
         let current_level = self
             .scene
@@ -415,10 +448,13 @@ impl ViewerApp {
             .show(ui, |ui| {
                 egui::Grid::new("performance statistics").show(ui, |ui| {
                     ui.label("FPS");
-                    ui.label(format!("{:.1}", stable_delta_time.recip()));
+                    ui.label(format!("{:.1}", self.frame_timing.average_seconds.recip()));
                     ui.end_row();
                     ui.label("Frame time");
-                    ui.label(format!("{:.2} ms", stable_delta_time * 1_000.0));
+                    ui.label(format!(
+                        "{:.2} ms",
+                        self.frame_timing.average_seconds * 1_000.0
+                    ));
                     ui.end_row();
                 });
             });
@@ -799,10 +835,11 @@ impl ViewerApp {
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = Instant::now();
-        let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
+        let frame_time = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
+        self.frame_timing.record(frame_time);
+        let delta_time = frame_time.min(0.1);
         self.renderer.advance_time(delta_time);
-        let stable_delta_time = ui.input(|input| input.stable_dt);
 
         let full_height = ui.available_height();
         ui.horizontal(|ui| {
@@ -811,7 +848,7 @@ impl eframe::App for ViewerApp {
                 .vertical(|ui| {
                     ui.set_width(300.0);
                     egui::ScrollArea::vertical()
-                        .show(ui, |ui| self.sidebar(ui, stable_delta_time))
+                        .show(ui, |ui| self.sidebar(ui))
                         .inner
                 })
                 .inner;
@@ -909,4 +946,20 @@ fn format_vec3(value: Vec3) -> String {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrameTiming;
+
+    #[test]
+    fn frame_timing_updates_only_after_half_a_second() {
+        let mut timing = FrameTiming::default();
+
+        timing.record(0.25);
+        assert_eq!(timing.average_seconds, 1.0 / 60.0);
+
+        timing.record(0.25);
+        assert_eq!(timing.average_seconds, 0.25);
+    }
 }
