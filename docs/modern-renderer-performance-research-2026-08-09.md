@@ -42,6 +42,23 @@ five-run median from 10.100 to 9.804 ms/frame (2.9%), with identical checksum
 `c4d0899930b48d3c`. Shadow generation and froxel compute remain separate;
 only the three consecutive additive HDR draws share the render pass.
 
+A follow-up release-viewer measurement showed that the original benchmark had
+missed the dominant live-update cost: Classic was about 23 ms/frame, Modern
+with every optional effect disabled was 35--40 ms/frame, volumetrics raised it
+to about 41 ms/frame, and all effects reached 50--60 ms/frame. The benchmark
+now has a 1792x1536 Retina workload and an `--updates` mode that exercises the
+same `Renderer::update_scene` path used by animated viewer frames.
+
+That mode exposed repeated full-image scans for unchanged light-sprite colors,
+plus volumetric scene updates and frame preparation even when volumetrics were
+disabled. Caching each unique source-texture color and refreshing it only from
+reported texture changes reduced the full-effects development benchmark from
+255.708 to a three-run median of 79.897 ms/frame (68.8%). Skipping the unused
+volumetric update/prepare path reduced the baseline diagnostic from 253.066 to
+a three-run median of 21.821 ms/frame (91.4%). Both retained their original
+checksums. These deliberately update an unchanged full scene every frame to
+isolate renderer update overhead; they are not release gameplay frame times.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,

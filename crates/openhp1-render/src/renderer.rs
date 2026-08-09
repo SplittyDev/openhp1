@@ -725,7 +725,7 @@ impl Renderer {
     }
 
     pub fn update_textures(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         images: &[TextureImage],
         changed: &[usize],
@@ -765,7 +765,9 @@ impl Renderer {
                 texture.size(),
             );
         }
-        true
+        self.modern
+            .as_mut()
+            .is_none_or(|modern| modern.update_textures(images, changed))
     }
 
     pub fn update_lightmaps(

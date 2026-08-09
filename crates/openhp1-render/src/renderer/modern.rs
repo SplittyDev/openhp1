@@ -4,8 +4,8 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::{
-    AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode, ToneMapper,
-    VolumetricDebugView, VolumetricTuning, unreal_to_render,
+    AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode,
+    TextureImage, ToneMapper, VolumetricDebugView, VolumetricTuning, unreal_to_render,
 };
 
 use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
@@ -355,7 +355,11 @@ impl ModernRenderer {
             Some(coronas) => coronas.update(queue, scene),
             None => scene.coronas.is_empty(),
         };
-        coronas_updated && self.volumetrics.update(queue, scene)
+        coronas_updated && (!self.volumetric_lighting || self.volumetrics.update(queue, scene))
+    }
+
+    pub(super) fn update_textures(&mut self, textures: &[TextureImage], changed: &[usize]) -> bool {
+        !self.volumetric_lighting || self.volumetrics.update_textures(textures, changed)
     }
 
     pub(super) fn prepare_frame(
@@ -368,8 +372,10 @@ impl ModernRenderer {
         if let Some(coronas) = &self.coronas {
             coronas.prepare_frame(queue, camera, viewport_size);
         }
-        self.volumetrics
-            .prepare_frame(queue, camera, viewport_size, elapsed_time);
+        if self.volumetric_lighting {
+            self.volumetrics
+                .prepare_frame(queue, camera, viewport_size, elapsed_time);
+        }
     }
 
     pub(super) fn draw_scene_effects<'pass>(

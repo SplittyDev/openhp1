@@ -58,6 +58,7 @@ pub(super) struct VolumetricRenderer {
     instance_count: usize,
     point_volume_buffer: wgpu::Buffer,
     point_volume_count: usize,
+    texture_colors: HashMap<usize, Vec3>,
     tuning: VolumetricTuning,
 }
 
@@ -69,9 +70,10 @@ impl VolumetricRenderer {
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
     ) -> Self {
+        let texture_colors = source_texture_colors(scene);
         let shadow = DirectionalShadow::new(device, queue, depth_view, scene);
         let froxel = FroxelVolume::new(device, viewport_size, depth_view, &shadow);
-        let point_shadows = PointShadowRenderer::new(device, scene);
+        let point_shadows = PointShadowRenderer::new(device, scene, &texture_colors);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -137,7 +139,7 @@ impl VolumetricRenderer {
             immediate_size: 0,
         });
         let pipeline = pipeline(device, &pipeline_layout, &shader);
-        let (instance_actor_indices, instances) = instances(scene);
+        let (instance_actor_indices, instances) = instances(scene, &texture_colors);
         let instance_count = instances.len();
         let instance_buffer = instance_buffer(device, &instances);
         let point_volume_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -161,6 +163,7 @@ impl VolumetricRenderer {
             instance_count,
             point_volume_buffer,
             point_volume_count: 0,
+            texture_colors,
             tuning,
         }
     }
@@ -190,7 +193,8 @@ impl VolumetricRenderer {
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        let (instance_actor_indices, instances) = instances(scene);
+        refresh_source_texture_colors(&mut self.texture_colors, scene);
+        let (instance_actor_indices, instances) = instances(scene, &self.texture_colors);
         if instances.len() != self.instances.len() {
             return false;
         }
@@ -199,8 +203,13 @@ impl VolumetricRenderer {
         let Some(shadow_changes) = self.shadow.update(queue, scene) else {
             return false;
         };
-        self.point_shadows.update(scene, shadow_changes);
+        self.point_shadows
+            .update(scene, shadow_changes, &self.texture_colors);
         true
+    }
+
+    pub(super) fn update_textures(&mut self, textures: &[TextureImage], changed: &[usize]) -> bool {
+        update_source_texture_colors(&mut self.texture_colors, textures, changed)
     }
 
     pub(super) fn prepare_frame(
@@ -348,9 +357,12 @@ impl VolumetricRenderer {
     }
 }
 
-fn instances(scene: &RenderScene) -> (Vec<usize>, Vec<VolumetricInstance>) {
+fn instances(
+    scene: &RenderScene,
+    texture_colors: &HashMap<usize, Vec3>,
+) -> (Vec<usize>, Vec<VolumetricInstance>) {
     let mut seen = HashSet::new();
-    let fixture_energy_scales = fixture_energy_scales(scene);
+    let fixture_energy_scales = fixture_energy_scales(scene, texture_colors);
     let corona_lights = scene
         .coronas
         .iter()
@@ -375,8 +387,8 @@ fn instances(scene: &RenderScene) -> (Vec<usize>, Vec<VolumetricInstance>) {
             let corona = corona_lights.get(&light.actor_index).copied();
             let sprite_color = light
                 .source_texture
-                .and_then(|texture| scene.textures.get(texture))
-                .map(texture_light_color);
+                .and_then(|texture| texture_colors.get(&texture))
+                .copied();
             (
                 light.actor_index,
                 instance(
@@ -450,6 +462,45 @@ fn volume_radius(light: &RenderLight, corona: Option<&openhp1_scene::Corona>) ->
     } else {
         (75.0 * corona.map_or(1.0, |corona| corona.draw_scale.abs())).clamp(50.0, 150.0)
     }
+}
+
+fn source_texture_colors(scene: &RenderScene) -> HashMap<usize, Vec3> {
+    let mut colors = HashMap::new();
+    refresh_source_texture_colors(&mut colors, scene);
+    colors
+}
+
+fn refresh_source_texture_colors(colors: &mut HashMap<usize, Vec3>, scene: &RenderScene) {
+    let indices = scene
+        .realtime_lightmaps
+        .iter()
+        .flat_map(|lightmap| &lightmap.lights)
+        .filter_map(|light| light.source_texture)
+        .collect::<HashSet<_>>();
+    colors.retain(|index, _| indices.contains(index));
+    for index in indices {
+        if let Some(texture) = scene.textures.get(index) {
+            colors
+                .entry(index)
+                .or_insert_with(|| texture_light_color(texture));
+        }
+    }
+}
+
+fn update_source_texture_colors(
+    colors: &mut HashMap<usize, Vec3>,
+    textures: &[TextureImage],
+    changed: &[usize],
+) -> bool {
+    for &index in changed {
+        if let Some(color) = colors.get_mut(&index) {
+            let Some(texture) = textures.get(index) else {
+                return false;
+            };
+            *color = texture_light_color(texture);
+        }
+    }
+    true
 }
 
 fn texture_light_color(texture: &TextureImage) -> Vec3 {
@@ -644,7 +695,7 @@ mod tests {
             surface_materials: Vec::<SurfaceMaterial>::new(),
             sky_zone: None,
         };
-        let (actor_indices, instances) = instances(&scene);
+        let (actor_indices, instances) = instances(&scene, &source_texture_colors(&scene));
         assert_eq!(actor_indices, [3, 4, 5, 7]);
         assert_eq!(instances.len(), 4);
         assert_eq!(&instances[0].position_radius[..3], &[1.0, 2.0, 3.0]);
@@ -683,6 +734,20 @@ mod tests {
     }
 
     #[test]
+    fn refreshes_only_reported_source_texture_colors() {
+        let textures = [TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+        }];
+        let mut colors = HashMap::from([(0, Vec3::ZERO)]);
+        assert!(update_source_texture_colors(&mut colors, &textures, &[]));
+        assert_eq!(colors[&0], Vec3::ZERO);
+        assert!(update_source_texture_colors(&mut colors, &textures, &[0]));
+        assert_eq!(colors[&0], Vec3::X);
+    }
+
+    #[test]
     fn shader_and_gpu_layout_are_valid() {
         let module = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap();
         wgpu::naga::valid::Validator::new(
@@ -710,6 +775,11 @@ mod tests {
                 .flat_map(|lightmap| &lightmap.lights)
                 .any(|light| light.source_texture.is_some() && light.brightness == 0)
         );
-        assert!(instances(&scene.render).1.len() >= scene.render.coronas.len());
+        assert!(
+            instances(&scene.render, &source_texture_colors(&scene.render),)
+                .1
+                .len()
+                >= scene.render.coronas.len()
+        );
     }
 }

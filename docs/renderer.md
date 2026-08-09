@@ -117,6 +117,12 @@ Invisible fill lights used only to shape baked illumination do not become
 visible fog orbs.
 Enabling volumetric lighting suppresses the legacy corona sprites so the two
 source-glow treatments do not stack.
+When volumetric lighting is disabled, scene updates and frame preparation skip
+the unused volumetric renderer entirely; changing the setting rebuilds the
+renderer. When it is enabled, sprite-derived light colors are cached per unique
+source texture and recomputed only when `update_textures` reports that texture
+as changed. Animated geometry therefore does not repeatedly scan unchanged
+sprite pixels.
 Scene depth terminates the ray, and the result enters the HDR scene before bloom
 and tone mapping. Unshadowed fallback volumes retain the analytic integral;
 shadowed sources use a bounded march. The classic scene shader, uniform layout,

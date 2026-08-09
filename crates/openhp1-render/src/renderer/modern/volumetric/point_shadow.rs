@@ -13,7 +13,6 @@ use super::super::super::DEPTH_FORMAT;
 use super::{
     VolumetricInstance,
     shadow::{DirectionalShadow, ShadowChangeBounds},
-    texture_light_color,
 };
 
 // ponytail: Fixed local-light budget; make shadow allocation dynamic if authored scenes exceed it.
@@ -124,7 +123,11 @@ pub(super) struct PointShadowRenderer {
 }
 
 impl PointShadowRenderer {
-    pub(super) fn new(device: &wgpu::Device, scene: &RenderScene) -> Self {
+    pub(super) fn new(
+        device: &wgpu::Device,
+        scene: &RenderScene,
+        texture_colors: &HashMap<usize, Vec3>,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OpenHP1 volumetric point shadow maps"),
             size: wgpu::Extent3d {
@@ -249,7 +252,7 @@ impl PointShadowRenderer {
             _texture: texture,
             pipeline,
             faces,
-            sources: point_fixtures(scene),
+            sources: point_fixtures(scene, texture_colors),
             selected: Vec::new(),
             cached: [None; MAX_POINT_SHADOWS],
             dirty: [false; MAX_POINT_SHADOWS],
@@ -257,8 +260,13 @@ impl PointShadowRenderer {
         }
     }
 
-    pub(super) fn update(&mut self, scene: &RenderScene, changes: Vec<ShadowChangeBounds>) {
-        self.sources = point_fixtures(scene);
+    pub(super) fn update(
+        &mut self,
+        scene: &RenderScene,
+        changes: Vec<ShadowChangeBounds>,
+        texture_colors: &HashMap<usize, Vec3>,
+    ) {
+        self.sources = point_fixtures(scene, texture_colors);
         self.geometry_changes.extend(changes);
     }
 
@@ -358,7 +366,7 @@ fn shadow_map_needs_render(
             .any(|bounds| bounds.intersects_cube(source.position, source.radius))
 }
 
-fn point_sources(scene: &RenderScene) -> Vec<PointSource> {
+fn point_sources(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> Vec<PointSource> {
     let coronas = scene
         .coronas
         .iter()
@@ -388,8 +396,8 @@ fn point_sources(scene: &RenderScene) -> Vec<PointSource> {
                 .or_else(|| {
                     light
                         .source_texture
-                        .and_then(|texture| scene.textures.get(texture))
-                        .map(texture_light_color)
+                        .and_then(|texture| texture_colors.get(&texture))
+                        .copied()
                 })
                 .unwrap_or_else(|| light.source_color());
             point_source(light, color, fixture_emitter, source_sprite)
@@ -397,8 +405,8 @@ fn point_sources(scene: &RenderScene) -> Vec<PointSource> {
         .collect()
 }
 
-fn point_fixtures(scene: &RenderScene) -> Vec<PointFixture> {
-    cluster_sources(point_sources(scene))
+fn point_fixtures(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> Vec<PointFixture> {
+    cluster_sources(point_sources(scene, texture_colors))
 }
 
 // ponytail: Scene light counts are small; replace this O(n²) grouping only if profiling says so.
@@ -467,8 +475,11 @@ fn fixture(members: Vec<PointSource>) -> PointFixture {
     }
 }
 
-pub(super) fn fixture_energy_scales(scene: &RenderScene) -> HashMap<usize, f32> {
-    point_fixtures(scene)
+pub(super) fn fixture_energy_scales(
+    scene: &RenderScene,
+    texture_colors: &HashMap<usize, Vec3>,
+) -> HashMap<usize, f32> {
+    point_fixtures(scene, texture_colors)
         .into_iter()
         .flat_map(|fixture| {
             let scale = fixture_energy_scale(&fixture);
@@ -770,7 +781,10 @@ mod tests {
         let level =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res/Maps/Lev_Tut1.unr");
         let scene = openhp1_scene::LoadedScene::load(level).unwrap();
-        let fixtures = point_fixtures(&scene.render);
+        let fixtures = point_fixtures(
+            &scene.render,
+            &super::super::source_texture_colors(&scene.render),
+        );
         let chandelier = fixtures
             .iter()
             .find(|fixture| fixture.actor_indices.len() >= 20)
