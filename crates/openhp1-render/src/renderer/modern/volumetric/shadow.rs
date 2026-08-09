@@ -105,6 +105,8 @@ struct ShadowSlice {
     shaft_bind_group: wgpu::BindGroup,
     portal_buffer: wgpu::Buffer,
     portal_count: usize,
+    shadow_view_projection: Option<[[f32; 4]; 4]>,
+    dirty: bool,
 }
 
 pub(super) struct DirectionalShadow {
@@ -294,6 +296,8 @@ impl DirectionalShadow {
                     shaft_bind_group,
                     portal_buffer: portal_buffer(device, &portals),
                     portal_count: 0,
+                    shadow_view_projection: None,
+                    dirty: true,
                 }
             })
             .collect();
@@ -453,6 +457,9 @@ impl DirectionalShadow {
         let changes = changed_shadow_bounds(&self.vertices, &vertices);
         if !changes.is_empty() {
             queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+            for slice in &mut self.slices {
+                slice.dirty = true;
+            }
         }
         self.vertices = vertices;
         self.portals = portals;
@@ -489,6 +496,12 @@ impl DirectionalShadow {
                 elapsed_time,
                 self.tuning,
             );
+            slice.dirty = shadow_map_needs_render(
+                slice.shadow_view_projection,
+                uniform.light_view_projection,
+                slice.dirty,
+            );
+            slice.shadow_view_projection = Some(uniform.light_view_projection);
             queue.write_buffer(&slice.uniform, 0, bytemuck::bytes_of(&uniform));
             queue.write_buffer(&slice.portal_buffer, 0, bytemuck::cast_slice(&portals));
             slice.portal_count = portals.len();
@@ -521,12 +534,17 @@ impl DirectionalShadow {
         &self.light_view_projections
     }
 
-    pub(super) fn render(&self, encoder: &mut wgpu::CommandEncoder) -> usize {
+    pub(super) fn render(&mut self, encoder: &mut wgpu::CommandEncoder) -> usize {
         if !self.enabled || self.vertices.is_empty() {
             return 0;
         }
         let mut pass_count = 0;
-        for slice in self.slices.iter().filter(|slice| slice.portal_count != 0) {
+        let vertex_count = self.vertices.len() as u32;
+        for slice in self
+            .slices
+            .iter_mut()
+            .filter(|slice| slice.portal_count != 0 && slice.dirty)
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("OpenHP1 volumetric sun shadow pass"),
                 color_attachments: &[],
@@ -544,7 +562,10 @@ impl DirectionalShadow {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &slice.bind_group, &[]);
-            self.draw_geometry(&mut pass);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..vertex_count, 0..1);
+            drop(pass);
+            slice.dirty = false;
             pass_count += 1;
         }
         pass_count
@@ -1291,6 +1312,14 @@ fn shadow_uniform(
     }
 }
 
+fn shadow_map_needs_render(
+    cached_projection: Option<[[f32; 4]; 4]>,
+    projection: [[f32; 4]; 4],
+    geometry_changed: bool,
+) -> bool {
+    geometry_changed || cached_projection != Some(projection)
+}
+
 fn snap_shadow_center(center: Vec3, direction: Vec3, radius: f32) -> Vec3 {
     let texel = radius * 2.0 / SHADOW_SIZE as f32;
     let light_rotation = Mat4::look_to_rh(Vec3::ZERO, direction, Vec3::Z);
@@ -1730,6 +1759,23 @@ mod tests {
                 .max_element()
                 < 0.0001
         );
+    }
+
+    #[test]
+    fn directional_shadow_cache_tracks_projection_and_geometry() {
+        let projection = Mat4::IDENTITY.to_cols_array_2d();
+        assert!(shadow_map_needs_render(None, projection, false));
+        assert!(!shadow_map_needs_render(
+            Some(projection),
+            projection,
+            false
+        ));
+        assert!(shadow_map_needs_render(
+            Some(projection),
+            Mat4::ZERO.to_cols_array_2d(),
+            false,
+        ));
+        assert!(shadow_map_needs_render(Some(projection), projection, true));
     }
 
     #[test]

@@ -71,6 +71,11 @@ The same full-effects forced-update workload improved from 79.897 to a
 three-run median of 70.217 ms/frame (12.1%), retaining checksum
 `a38ca3a7a3464ee3` and 198 draw/pass submissions.
 
+Directional shadow slices now persist until their exact light-view projection
+or caster geometry changes. On the Retina portal-camera forced-update workload,
+this removed three steady shadow passes and improved the three-run median from
+70.723 to 68.992 ms/frame (2.4%), with checksum `4b3c4d710847bf8f` unchanged.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,
