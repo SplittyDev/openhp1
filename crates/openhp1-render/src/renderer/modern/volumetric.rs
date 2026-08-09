@@ -17,7 +17,7 @@ mod point_shadow;
 mod shadow;
 
 use froxel::FroxelVolume;
-use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer, fixture_energy_scales};
+use point_shadow::{MAX_POINT_SHADOWS, PointShadowRenderer, fixture_energy_scales, point_fixtures};
 use shadow::DirectionalShadow;
 
 const SHADER: &str = concat!(
@@ -71,9 +71,10 @@ impl VolumetricRenderer {
         scene: &RenderScene,
     ) -> Self {
         let texture_colors = source_texture_colors(scene);
+        let fixtures = point_fixtures(scene, &texture_colors);
         let shadow = DirectionalShadow::new(device, queue, depth_view, scene);
         let froxel = FroxelVolume::new(device, viewport_size, depth_view, &shadow);
-        let point_shadows = PointShadowRenderer::new(device, scene, &texture_colors);
+        let point_shadows = PointShadowRenderer::new(device, fixtures.clone());
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -139,7 +140,7 @@ impl VolumetricRenderer {
             immediate_size: 0,
         });
         let pipeline = pipeline(device, &pipeline_layout, &shader);
-        let (instance_actor_indices, instances) = instances(scene, &texture_colors);
+        let (instance_actor_indices, instances) = instances(scene, &texture_colors, &fixtures);
         let instance_count = instances.len();
         let instance_buffer = instance_buffer(device, &instances);
         let point_volume_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -194,7 +195,8 @@ impl VolumetricRenderer {
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         refresh_source_texture_colors(&mut self.texture_colors, scene);
-        let (instance_actor_indices, instances) = instances(scene, &self.texture_colors);
+        let fixtures = point_fixtures(scene, &self.texture_colors);
+        let (instance_actor_indices, instances) = instances(scene, &self.texture_colors, &fixtures);
         if instances.len() != self.instances.len() {
             return false;
         }
@@ -203,8 +205,7 @@ impl VolumetricRenderer {
         let Some(shadow_changes) = self.shadow.update(queue, scene) else {
             return false;
         };
-        self.point_shadows
-            .update(scene, shadow_changes, &self.texture_colors);
+        self.point_shadows.update(fixtures, shadow_changes);
         true
     }
 
@@ -360,9 +361,10 @@ impl VolumetricRenderer {
 fn instances(
     scene: &RenderScene,
     texture_colors: &HashMap<usize, Vec3>,
+    fixtures: &[point_shadow::PointFixture],
 ) -> (Vec<usize>, Vec<VolumetricInstance>) {
     let mut seen = HashSet::new();
-    let fixture_energy_scales = fixture_energy_scales(scene, texture_colors);
+    let fixture_energy_scales = fixture_energy_scales(fixtures);
     let corona_lights = scene
         .coronas
         .iter()
@@ -695,7 +697,9 @@ mod tests {
             surface_materials: Vec::<SurfaceMaterial>::new(),
             sky_zone: None,
         };
-        let (actor_indices, instances) = instances(&scene, &source_texture_colors(&scene));
+        let texture_colors = source_texture_colors(&scene);
+        let fixtures = point_fixtures(&scene, &texture_colors);
+        let (actor_indices, instances) = instances(&scene, &texture_colors, &fixtures);
         assert_eq!(actor_indices, [3, 4, 5, 7]);
         assert_eq!(instances.len(), 4);
         assert_eq!(&instances[0].position_radius[..3], &[1.0, 2.0, 3.0]);
@@ -775,11 +779,8 @@ mod tests {
                 .flat_map(|lightmap| &lightmap.lights)
                 .any(|light| light.source_texture.is_some() && light.brightness == 0)
         );
-        assert!(
-            instances(&scene.render, &source_texture_colors(&scene.render),)
-                .1
-                .len()
-                >= scene.render.coronas.len()
-        );
+        let colors = source_texture_colors(&scene.render);
+        let fixtures = point_fixtures(&scene.render, &colors);
+        assert!(instances(&scene.render, &colors, &fixtures).1.len() >= scene.render.coronas.len());
     }
 }

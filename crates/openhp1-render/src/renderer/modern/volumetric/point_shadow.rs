@@ -98,7 +98,7 @@ impl From<PointSource> for PointShadowKey {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PointFixture {
+pub(super) struct PointFixture {
     actor_indices: Vec<usize>,
     sources: Vec<PointSource>,
 }
@@ -123,11 +123,7 @@ pub(super) struct PointShadowRenderer {
 }
 
 impl PointShadowRenderer {
-    pub(super) fn new(
-        device: &wgpu::Device,
-        scene: &RenderScene,
-        texture_colors: &HashMap<usize, Vec3>,
-    ) -> Self {
+    pub(super) fn new(device: &wgpu::Device, sources: Vec<PointFixture>) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OpenHP1 volumetric point shadow maps"),
             size: wgpu::Extent3d {
@@ -252,7 +248,7 @@ impl PointShadowRenderer {
             _texture: texture,
             pipeline,
             faces,
-            sources: point_fixtures(scene, texture_colors),
+            sources,
             selected: Vec::new(),
             cached: [None; MAX_POINT_SHADOWS],
             dirty: [false; MAX_POINT_SHADOWS],
@@ -260,13 +256,8 @@ impl PointShadowRenderer {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        scene: &RenderScene,
-        changes: Vec<ShadowChangeBounds>,
-        texture_colors: &HashMap<usize, Vec3>,
-    ) {
-        self.sources = point_fixtures(scene, texture_colors);
+    pub(super) fn update(&mut self, sources: Vec<PointFixture>, changes: Vec<ShadowChangeBounds>) {
+        self.sources = sources;
         self.geometry_changes.extend(changes);
     }
 
@@ -405,7 +396,10 @@ fn point_sources(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> 
         .collect()
 }
 
-fn point_fixtures(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> Vec<PointFixture> {
+pub(super) fn point_fixtures(
+    scene: &RenderScene,
+    texture_colors: &HashMap<usize, Vec3>,
+) -> Vec<PointFixture> {
     cluster_sources(point_sources(scene, texture_colors))
 }
 
@@ -475,18 +469,15 @@ fn fixture(members: Vec<PointSource>) -> PointFixture {
     }
 }
 
-pub(super) fn fixture_energy_scales(
-    scene: &RenderScene,
-    texture_colors: &HashMap<usize, Vec3>,
-) -> HashMap<usize, f32> {
-    point_fixtures(scene, texture_colors)
-        .into_iter()
+pub(super) fn fixture_energy_scales(fixtures: &[PointFixture]) -> HashMap<usize, f32> {
+    fixtures
+        .iter()
         .flat_map(|fixture| {
-            let scale = fixture_energy_scale(&fixture);
+            let scale = fixture_energy_scale(fixture);
             fixture
                 .actor_indices
-                .into_iter()
-                .map(move |actor_index| (actor_index, scale))
+                .iter()
+                .map(move |actor_index| (*actor_index, scale))
         })
         .collect()
 }

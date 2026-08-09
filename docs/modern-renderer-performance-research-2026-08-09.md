@@ -65,6 +65,12 @@ mask, and the composite no longer reads AO or bloom textures while those
 effects are disabled. At 1792x1536, the five-run baseline median improved from
 7.427 to 6.457 ms/frame (13.1%) with checksum `fbc483c96ac2f238` on both paths.
 
+The local-volumetric update now also clusters fixture emitters once and shares
+that result between light-volume energy scaling and point-shadow selection.
+The same full-effects forced-update workload improved from 79.897 to a
+three-run median of 70.217 ms/frame (12.1%), retaining checksum
+`a38ca3a7a3464ee3` and 198 draw/pass submissions.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,
