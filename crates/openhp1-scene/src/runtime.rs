@@ -143,6 +143,10 @@ fn initialize_runtime_after_creation(
             }
         }
     }
+    let actions = runtime.initialize_actor_bases()?;
+    let applied = apply_runtime_actions_with(scene, runtime, actions, &mut external)?;
+    animations += applied.0;
+    deferred += applied.1;
     info!(events, animations, deferred, "initialized script runtime");
     Ok(())
 }

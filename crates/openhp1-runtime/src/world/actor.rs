@@ -389,6 +389,82 @@ impl ScriptRuntime {
             .saturating_sub(self.destroyed.len())
     }
 
+    pub fn initialize_actor_bases(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        let mut actions = Vec::new();
+        for actor in actors {
+            self.initialize_actor_base(actor, &mut actions)?;
+        }
+        Ok(actions)
+    }
+
+    pub(super) fn initialize_actor_base(
+        &mut self,
+        actor: usize,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        if self.destroyed.contains(&actor) {
+            return Ok(());
+        }
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let Some(attach_tag) = self
+            .optional_actor_name(&class, &instance, "AttachTag")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+            .filter(|tag| !tag.eq_ignore_ascii_case("None"))
+        else {
+            return Ok(());
+        };
+        let base = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let mut children = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        children.sort_unstable();
+        for child in children {
+            if self.destroyed.contains(&child) {
+                continue;
+            }
+            let child_class = self
+                .actor_classes
+                .get(&child)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: child })?;
+            let child_class = self.resolved_object(&child_class)?;
+            let mut child_instance = self
+                .instances
+                .remove(&child)
+                .ok_or(DispatchError::ActiveActorContext { actor: child })?;
+            let result = (|| {
+                let tag = self.optional_actor_name(&child_class, &child_instance, "Tag")?;
+                if tag.is_some_and(|tag| tag.eq_ignore_ascii_case(&attach_tag)) {
+                    self.set_actor_base(
+                        child,
+                        &child_class,
+                        &mut child_instance,
+                        Some(base.clone()),
+                        actions,
+                    )?;
+                }
+                Ok::<_, String>(())
+            })();
+            self.instances.insert(child, child_instance);
+            result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        Ok(())
+    }
+
     pub(super) fn track_actor_class(
         &mut self,
         actor: usize,

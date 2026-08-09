@@ -2399,6 +2399,9 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
             Some(field.clone()),
         );
     }
+    runtime
+        .fields
+        .insert((hud_class_id.clone(), "attachtag".to_owned()), None);
 
     let player = 7;
     let player_object = runtime_actor_id(player);
@@ -2736,6 +2739,9 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
             Some(field.clone()),
         );
     }
+    runtime
+        .fields
+        .insert((spawned_class_id.clone(), "attachtag".to_owned()), None);
 
     let mut defaults = InstanceState::default();
     for name in ["Instigator", "Level", "XLevel", "Owner", "Brush"] {
@@ -3425,6 +3431,92 @@ fn player_can_see_me_native_skips_the_active_pawn_and_accepts_coincidence() {
             .unwrap(),
         Value::Bool(true),
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn attach_tag_initialization_bases_matching_actors() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-attach-tag-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+    let attach_tag_field = runtime_actor_id(10);
+    let tag_field = runtime_actor_id(11);
+    let base_field = runtime_actor_id(12);
+    let level_field = runtime_actor_id(13);
+    for (name, field) in [
+        ("AttachTag", &attach_tag_field),
+        ("Tag", &tag_field),
+        ("Base", &base_field),
+        ("Level", &level_field),
+    ] {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "standingcount".to_owned()), None);
+    for event in ["Attach", "BaseChange"] {
+        runtime
+            .function_lookups
+            .insert(FunctionLookup::new(class_id.clone(), None, event, 0), None);
+    }
+
+    let mover = runtime_actor_id(20);
+    let plant = runtime_actor_id(21);
+    let level = runtime_actor_id(22);
+    for (actor, object) in [(0, &mover), (1, &plant), (2, &level)] {
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object.clone());
+    }
+    let instance = |attach_tag: &str, tag: &str| {
+        [
+            (
+                attach_tag_field.clone(),
+                StoredValue::Name(attach_tag.to_owned()),
+            ),
+            (tag_field.clone(), StoredValue::Name(tag.to_owned())),
+            (base_field.clone(), StoredValue::Object(None)),
+            (
+                level_field.clone(),
+                StoredValue::Object(Some(level.clone())),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    runtime
+        .instances
+        .insert(0, instance("Carousel1", "Spinner"));
+    runtime.instances.insert(1, instance("None", "Carousel1"));
+    runtime.instances.insert(2, instance("None", "None"));
+
+    assert!(runtime.initialize_actor_bases().unwrap().is_empty());
+    assert_eq!(
+        runtime.instances[&1].get(&base_field),
+        Some(&StoredValue::Object(Some(mover.clone())))
+    );
+    assert_eq!(runtime.base_children.get(&mover), Some(&vec![1]));
+
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1010,6 +1010,8 @@ impl ScriptRuntime {
                 }),
             }
         }
+        self.initialize_actor_base(spawned, actions)
+            .map_err(|error| error.to_string())?;
         *instance = self
             .instances
             .remove(&actor)

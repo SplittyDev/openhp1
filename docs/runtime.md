@@ -345,6 +345,9 @@ rotated actor bounds use the ordinary blocking,
 persistent transform, collision index, and scene action; its based actors turn
 around the base's yaw, and every `Pawn` subclass receives that yaw in
 `ViewRotation`.
+After loaded actors finish `SetInitialState`, native `InitBase` applies a
+non-`None` `AttachTag` by basing every actor with the matching `Tag` on that
+actor. Spawned actors run the same attachment step after their startup events.
 `GetWorldCollisionBox(true)` transforms the mesh's serialized primitive bounds
 through its mesh and current actor transforms; the default form returns the
 actor's collision bounds instead.
