@@ -411,7 +411,6 @@ impl LoadedScene {
             &mut self.actor_render.class_cache,
             0,
         );
-        let is_pawn = class_state.is_pawn;
         let is_light = class_state.is_light;
         let mut state = class_state.actor;
         state.location = location;
@@ -455,7 +454,6 @@ impl LoadedScene {
             &mut self.actor_render,
             &mut actor,
             &state,
-            is_pawn,
             is_light,
             actor_index,
             &mut self.render.mesh,
@@ -480,7 +478,6 @@ impl LoadedScene {
         }
         let render_state = ActorRenderState {
             actor: state,
-            is_pawn,
             is_light,
         };
         if actor_index == self.actors.len() {
@@ -2286,7 +2283,6 @@ struct ActorState {
     location: Vec3,
     rotation: Rotator,
     pre_pivot: Vec3,
-    collision_height: f32,
     draw_scale: f32,
     draw_type: u8,
     brush: Option<SceneObject>,
@@ -2317,7 +2313,6 @@ struct ActorState {
 #[derive(Clone)]
 struct ClassState {
     actor: ActorState,
-    is_pawn: bool,
     is_light: bool,
     diagnostics: Vec<String>,
 }
@@ -2325,7 +2320,6 @@ struct ClassState {
 #[derive(Clone, Default)]
 struct ActorRenderState {
     actor: ActorState,
-    is_pawn: bool,
     is_light: bool,
 }
 
@@ -2335,7 +2329,6 @@ impl Default for ActorState {
             location: Vec3::ZERO,
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
-            collision_height: 0.0,
             draw_scale: 1.0,
             draw_type: 0,
             brush: None,
@@ -2380,9 +2373,6 @@ impl ActorState {
         }
         if let Some(pre_pivot) = properties.pre_pivot {
             self.pre_pivot = pre_pivot;
-        }
-        if let Some(collision_height) = properties.collision_height {
-            self.collision_height = collision_height;
         }
         if let Some(draw_scale) = properties.draw_scale {
             self.draw_scale = draw_scale;
@@ -2617,7 +2607,6 @@ fn load_actors(
         );
         let ClassState {
             actor: mut state,
-            is_pawn,
             is_light,
             diagnostics,
         } = class_state;
@@ -2629,7 +2618,6 @@ fn load_actors(
                 .push(format!("actor property resolution failed: {error}"));
             actor_states.push(ActorRenderState {
                 actor: state,
-                is_pawn,
                 is_light,
             });
             actors.push(scene_actor);
@@ -2648,7 +2636,6 @@ fn load_actors(
             actor_render,
             &mut scene_actor,
             &state,
-            is_pawn,
             is_light,
             actors.len(),
             render_mesh,
@@ -2660,7 +2647,6 @@ fn load_actors(
         );
         actor_states.push(ActorRenderState {
             actor: state,
-            is_pawn,
             is_light,
         });
         actors.push(scene_actor);
@@ -2710,7 +2696,6 @@ fn append_scene_actor_render(
     actor_render: &mut ActorRenderContext,
     scene_actor: &mut SceneActor,
     state: &ActorState,
-    is_pawn: bool,
     is_light: bool,
     actor_index: usize,
     render_mesh: &mut openhp1_map::TriangleMesh,
@@ -2807,16 +2792,6 @@ fn append_scene_actor_render(
         ));
         return;
     };
-    let mesh_offset = pawn_mesh_offset(
-        is_pawn,
-        mesh_object
-            .package
-            .summary()
-            .class_name(&mesh_object.package.summary().exports[mesh_object.export_index])
-            == Some("SkeletalMesh"),
-        state.collision_height,
-        mesh.origin.z,
-    );
     let animation_source =
         actor_animation_source(packages, animation_cache, state, &mesh_object, &mesh);
     if let ActorAnimationSource::Error(error) = &animation_source {
@@ -2832,7 +2807,6 @@ fn append_scene_actor_render(
         &mesh,
         &animation_source,
         state,
-        mesh_offset,
         actor_index,
         model,
         vertex_lighting,
@@ -3129,7 +3103,6 @@ fn class_state(
     if depth > 32 {
         return ClassState {
             actor: ActorState::default(),
-            is_pawn: false,
             is_light: false,
             diagnostics: vec!["class inheritance exceeds 32 levels".to_owned()],
         };
@@ -3151,7 +3124,6 @@ fn class_state(
             let error = format!("class defaults failed for {}: {error}", class.name());
             let state = ClassState {
                 actor: ActorState::default(),
-                is_pawn: class.name().eq_ignore_ascii_case("Pawn"),
                 is_light: class.name().eq_ignore_ascii_case("Light"),
                 diagnostics: vec![error],
             };
@@ -3164,14 +3136,12 @@ fn class_state(
             let base = class_state(packages, &SceneObject::from(base), cache, depth + 1);
             ClassState {
                 actor: base.actor,
-                is_pawn: base.is_pawn,
                 is_light: base.is_light,
                 diagnostics: Vec::new(),
             }
         }
         Ok(None) => ClassState {
             actor: ActorState::default(),
-            is_pawn: false,
             is_light: false,
             diagnostics: Vec::new(),
         },
@@ -3179,7 +3149,6 @@ fn class_state(
             let error = format!("base class resolution failed for {}: {error}", class.name());
             ClassState {
                 actor: ActorState::default(),
-                is_pawn: false,
                 is_light: false,
                 diagnostics: vec![error],
             }
@@ -3193,7 +3162,6 @@ fn class_state(
         );
         state.diagnostics.push(error);
     }
-    state.is_pawn |= class.name().eq_ignore_ascii_case("Pawn");
     state.is_light |= class.name().eq_ignore_ascii_case("Light");
     cache.insert(key, state.clone());
     state
@@ -3338,7 +3306,6 @@ fn append_actor_mesh(
     mesh: &Arc<Mesh>,
     animation_source: &ActorAnimationSource,
     actor: &ActorState,
-    mesh_offset: Vec3,
     actor_index: usize,
     model: &Model,
     vertex_lighting: &VertexLighting,
@@ -3359,15 +3326,16 @@ fn append_actor_mesh(
                 .map(|object| object.map(SceneObject::from))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mesh_to_object = rotation_matrix(Rotator {
-        pitch: mesh.rotation_origin.x,
-        yaw: mesh.rotation_origin.y,
-        roll: mesh.rotation_origin.z,
-    }) * Mat4::from_scale(mesh.scale)
-        * Mat4::from_translation(-mesh.origin);
-    let local_transform = Mat4::from_translation(mesh_offset)
-        * Mat4::from_scale(Vec3::splat(actor.draw_scale))
-        * mesh_to_object;
+    let mesh_to_object = mesh_to_object_transform(
+        mesh.scale,
+        mesh.origin,
+        Rotator {
+            pitch: mesh.rotation_origin.x,
+            yaw: mesh.rotation_origin.y,
+            roll: mesh.rotation_origin.z,
+        },
+    );
+    let local_transform = Mat4::from_scale(Vec3::splat(actor.draw_scale)) * mesh_to_object;
     let visual_bounds = mesh.bounds.map(|(minimum, maximum)| {
         let center = local_transform.transform_point3((minimum + maximum) * 0.5);
         let extents = Mat3::from_mat4(local_transform).abs() * ((maximum - minimum) * 0.5);
@@ -3645,17 +3613,8 @@ fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
     forward * vector.x + right * vector.y + up * vector.z
 }
 
-fn pawn_mesh_offset(
-    is_pawn: bool,
-    is_skeletal_mesh: bool,
-    collision_height: f32,
-    mesh_origin_z: f32,
-) -> Vec3 {
-    if is_pawn && is_skeletal_mesh {
-        Vec3::new(0.0, 0.0, mesh_origin_z - collision_height)
-    } else {
-        Vec3::ZERO
-    }
+fn mesh_to_object_transform(scale: Vec3, origin: Vec3, rotation_origin: Rotator) -> Mat4 {
+    rotation_matrix(rotation_origin) * Mat4::from_scale(scale) * Mat4::from_translation(-origin)
 }
 
 fn load_materials(
@@ -4232,7 +4191,6 @@ mod tests {
             actor_render,
             &mut actors[0],
             &state,
-            false,
             false,
             0,
             &mut render.mesh,
@@ -5361,7 +5319,7 @@ mod tests {
     }
 
     #[test]
-    fn draw_scale_resizes_mesh_bounds_about_the_mesh_offset() {
+    fn draw_scale_resizes_mesh_bounds_about_the_pivot() {
         let bounds = (
             glam::Vec3::new(1.0, 2.0, 3.0),
             glam::Vec3::new(3.0, 6.0, 7.0),
@@ -5399,26 +5357,15 @@ mod tests {
     }
 
     #[test]
-    fn aligns_only_skeletal_pawns_to_their_collision_feet() {
-        assert_eq!(
-            super::pawn_mesh_offset(true, true, 50.0, 0.0),
-            glam::Vec3::new(0.0, 0.0, -50.0)
+    fn mesh_to_object_uses_the_authored_origin() {
+        let transform = super::mesh_to_object_transform(
+            glam::Vec3::ONE,
+            glam::Vec3::new(0.0, 0.0, 42.0),
+            openhp1_map::Rotator::default(),
         );
         assert_eq!(
-            super::pawn_mesh_offset(true, true, 40.0, 42.0),
-            glam::Vec3::new(0.0, 0.0, 2.0)
-        );
-        assert_eq!(
-            super::pawn_mesh_offset(true, true, 42.0, 0.0),
-            glam::Vec3::new(0.0, 0.0, -42.0)
-        );
-        assert_eq!(
-            super::pawn_mesh_offset(false, true, 50.0, 0.0),
-            glam::Vec3::ZERO
-        );
-        assert_eq!(
-            super::pawn_mesh_offset(true, false, 50.0, 0.0),
-            glam::Vec3::ZERO
+            transform.transform_point3(glam::Vec3::new(1.0, 2.0, 42.0)),
+            glam::Vec3::new(1.0, 2.0, 0.0)
         );
     }
 

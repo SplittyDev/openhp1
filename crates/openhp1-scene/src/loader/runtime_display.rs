@@ -507,7 +507,6 @@ impl LoadedScene {
                 &mut self.actor_render,
                 actor,
                 &state,
-                self.actor_states[actor_index].is_pawn,
                 self.actor_states[actor_index].is_light,
                 actor_index,
                 &mut self.render.mesh,

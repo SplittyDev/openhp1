@@ -364,8 +364,11 @@ The renderer still uses only the first mip and does not cull by zones. Visible
 vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
 serialized or runtime-selected animation sequences. Their transforms use
 HP1's upward-positive pitch, so their visual forward axis matches runtime
-`GetAxes` movement. Mover geometry comes from
-the brush model's `Polys` export and follows UE1's
+`GetAxes` movement. Mesh placement follows UE1's
+`(Location + PrePivot) * Rotation * DrawScale * meshToObject` transform;
+`meshToObject` retains the mesh's authored origin, scale, and rotation, without
+deriving a visual offset from the actor's collision cylinder. Mover geometry
+comes from the brush model's `Polys` export and follows UE1's
 `Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
 therefore pivots around `Location`, not the mesh-actor
 `Location + PrePivot` origin. Sprite actors use texture-sized quads aligned to
