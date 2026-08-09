@@ -21,7 +21,8 @@ on world BSP geometry.
 8. `openhp1-scene` resolves actor defaults and instance properties, retains
    first-class actor records, and appends visible vertex meshes, skeletal
    meshes, moving brushes, and authored `bCorona`/`Skin` records with their
-   materials and render ranges.
+   materials and render ranges. Actor-mesh faces whose selected material has no
+   texture are retained but hidden, matching UE1's mesh rendering path.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
    backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
 10. `openhp1-render` packs Classic lightmaps or Modern visibility masks with

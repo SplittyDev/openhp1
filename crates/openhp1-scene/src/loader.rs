@@ -3405,6 +3405,9 @@ fn append_actor_mesh(
                 images,
                 water_animations,
             );
+            if material.texture.is_none() {
+                material.mode = SurfaceMode::Hidden;
+            }
             material.environment_map = actor.mesh_environment_map;
             let surface = materials.len();
             materials.push(material);
@@ -4207,6 +4210,46 @@ mod tests {
             diagnostic.starts_with("animation metadata could not be decoded:")
         }));
         assert!(!scene.animation_request_exposes_capability_gap(0, "All"));
+    }
+
+    #[test]
+    fn untextured_actor_mesh_surfaces_are_hidden() {
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+        let state = scene.actor_states[0].actor.clone();
+        let super::LoadedScene {
+            actor_render,
+            actors,
+            render,
+            animations,
+            sprites,
+            water_animations,
+            ..
+        } = &mut scene;
+
+        super::append_scene_actor_render(
+            actor_render,
+            &mut actors[0],
+            &state,
+            false,
+            0,
+            &mut render.mesh,
+            &mut render.textures,
+            &mut render.surface_materials,
+            animations,
+            sprites,
+            water_animations,
+        );
+
+        assert_eq!(render.surface_materials[0].mode, SurfaceMode::Hidden);
     }
 
     #[test]

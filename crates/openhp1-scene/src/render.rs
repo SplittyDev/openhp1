@@ -115,8 +115,8 @@ pub struct RenderScene {
     /// Authored UE1 lights and visibility masks evaluated by the Modern renderer.
     pub realtime_lightmaps: Vec<RenderLightmap>,
     pub coronas: Vec<Corona>,
-    /// Material for each BSP surface. Missing textures use the renderer's
-    /// checkerboard.
+    /// Material for each surface. Missing visible textures use the renderer's
+    /// checkerboard; the scene loader hides untextured actor-mesh faces.
     pub surface_materials: Vec<SurfaceMaterial>,
     /// A fixed UE1 sky-box viewpoint rendered behind the main scene.
     pub sky_zone: Option<SkyZone>,
