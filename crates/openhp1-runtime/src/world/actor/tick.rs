@@ -20,8 +20,6 @@ impl ScriptRuntime {
         self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
         self.tick_animation_properties(delta_time, &mut actions);
-        self.collision_actors.clear();
-        self.collision_actors_by_min_x.clear();
         let mut actors = self
             .tick_functions
             .iter()
