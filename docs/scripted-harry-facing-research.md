@@ -47,8 +47,11 @@ explicitly says both latent `MoveTo` and `MoveToward` rotate the pawn toward
 their destination, but the runtime's existing `PlayerPawn` rotation gate only
 yields to `CutMovingTo` or matching latent `TurnTo`/`TurnToward`. Harry has
 authored latent `MoveTo` and `MoveToward` paths outside `CutMovingTo`. The
-source-backed facing fix is to make that gate also yield for a matching latent
-`MoveTo` or `MoveToward`.
+shipped native confirms that their initial calls and subsequent polls write the
+receiving pawn's `DesiredRotation` after player input and before pawn rotation
+physics. Making that gate also yield for a matching latent `MoveTo` or
+`MoveToward` is therefore faithful while the latent remains active. It is not
+fully exact on the poll that completes movement; that limit is detailed below.
 
 ## Original cutscene ownership chain
 
@@ -131,19 +134,80 @@ that every Harry state preserves those values.
 | --- | --- | --- |
 | `Harry.PlayerWalking` | Input-driven walking/running; compiled state export 489, `PlayerTick` 498, `PlayerMove` 503 | `Harry.UpdateRotation` export 554 calls `SetRotation` from `ViewRotation`; this is player-input ownership. |
 | `baseHarry.CutMovingTo` | Cutscene run using per-tick `MoveSmooth`; exports 2807/2806 | Per-tick `DesiredRotation` from the destination vector. |
-| `Harry.ChessMode` | Authored `PlayWalking(); MoveTo(ChessTargetLocation)`; state export 975 | Latent `MoveTo` owns destination rotation according to `Engine.u`; ordinary player rotation can also run from this state's `PlayerTick`, so this path needs an exact replay before changing precedence. |
+| `Harry.ChessMode` | Authored `PlayWalking(); MoveTo(ChessTargetLocation)`; state export 975 | Latent `MoveTo` owns destination rotation. The shipped actor tick runs this state's `PlayerTick` first, then the latent poll, so the latent heading is the final `DesiredRotation` consumed by physics. |
 | `Harry.waitForDeath` | `MoveToward(bustedBy)` with `run`, or `MoveTo(Location)` when close; state export 789 | Latent movement owns destination rotation according to `Engine.u`. |
 | `Harry.FallingMount` / `Harry.Mounting` | Turn toward the mount, then animation/root movement; state exports 740 and 774 | Latent `TurnTo`; these are scripted traversal but not running. |
 | `baseHarry.lookatActor` / `wingspell` | Stationary repeated turns; state exports 2864 and 2760 | Latent `TurnTo`. |
 | `baseHarry.CutIdleing` / `stateDead` | `MoveTo(self.Location)` is only a stop/grounding operation; state exports 2848 and 2907 | No travel heading. |
 
-`Engine.u`, `Pawn` `ScriptText` export 4863 at `0xbbe8c`, declares the latent
-movement functions and states that `MoveTo` sets `Destination`, `MoveToward`
-sets `MoveTarget`, and the actor rotates toward the destination. The underlying
-rotation contract is defined on `Actor`: `DesiredRotation` export 199,
+`Engine.u`, `Pawn` `ScriptText` export 4863 at `0xbbe8c`, declares final latent
+native 500 `MoveTo` and final latent native 502 `MoveToward`; its adjacent
+shipped comment states that they set `Destination`/`MoveTarget` and that the
+actor rotates toward the destination. The underlying rotation contract is
+defined on `Actor`: `DesiredRotation` export 199,
 `RotationRate` export 61, `bRotateToDesired` export 1157, and
 `bFixedRotationDir` export 1155. `Actor` `ScriptText` export 5401 at `0xd98a9`
 describes `DesiredRotation` as the pawn rotation target.
+
+### Native latent movement owns the receiving pawn's facing
+
+The shipped `Engine.dll` makes the precedence and ownership explicit. Its PE
+image base is `0x10300000`, and the retained decorated symbols identify these
+functions without relying on a reference engine:
+
+- `APawn::execMoveTo` body `0x103d8580` writes latent code `0x1f5` to the
+  receiving pawn's own state frame at `Pawn+0x0c` (`0x103d8674..0x103d8686`),
+  then calls `APawn::rotateToward` at `0x103d86ae` before `moveToward`.
+  `APawn::execPollMoveTo` body `0x103d8730` calls `rotateToward` again at
+  `0x103d873a` on every poll.
+- `APawn::execMoveToward` body `0x103d87a0` similarly writes latent code
+  `0x1f7` to that pawn's state frame at `0x103d892b..0x103d8935`, then calls
+  `rotateToward`. `APawn::execPollMoveToward` body `0x103d89c0` refreshes its
+  target location and calls `rotateToward` at `0x103d8ac1` on every poll.
+- `APawn::rotateToward` body `0x103d9e90` computes a rotator from
+  `target - Location` and stores it directly at actor offsets
+  `0x214..0x21c` (`0x103d9f1d..0x103d9f34`). The `Engine.u` property exports
+  identify that field as `Actor.DesiredRotation`.
+
+There is no PlayerPawn exception after those writes. In `AActor::Tick` body
+`0x103b3840`, the PlayerPawn path dispatches `PlayerInput` at
+`0x103b4159..0x103b417c` and `PlayerTick` at
+`0x103b417f..0x103b419b`, then calls virtual `ProcessState` at
+`0x103b4248..0x103b424d`, where the latent poll runs. Automatic physics follows
+at `0x103b4331..0x103b434c`. `APawn::performPhysics` body `0x103e5520`
+explicitly recognizes `APlayerPawn::PrivateStaticClass` at `0x105f1ef0` and
+routes it to `APawn::physicsRotation` at `0x103e5647..0x103e565d`.
+`physicsRotation` body `0x103e5950` reads current `Rotation`,
+`DesiredRotation`, and `RotationRate` and turns toward that desired value; it
+has no PlayerPawn early return.
+
+This also establishes why OpenHP1's gate must match the latent receiver rather
+than merely detect any active movement latent. In the original native, the
+`this` pawn both receives `DesiredRotation` and owns the state-frame latent
+code. OpenHP1 represents a latent action as `MoveTo(actor)` or
+`MoveToward(actor)`, where `actor` is that native receiver, while state frames
+are stored separately. Yielding only when the encoded actor equals the
+PlayerPawn reproduces the original per-pawn ownership; yielding for an
+unrelated pawn's latent would not.
+
+The matching-latent predicate is an OpenHP1 representation of this ownership,
+not a branch present in the native executable: the original pawn's state frame
+already makes receiver identity intrinsic. Matching the encoded receiver in
+commit `cdbdea6` is therefore faithful, and an unrelated pawn's latent must not
+enable rotation.
+
+Both original poll bodies call `rotateToward` before `moveToward`; if
+`moveToward` reports completion, they then clear the state-frame latent code.
+The same `AActor::Tick` nevertheless reaches `APawn::physicsRotation`
+afterward, so the last heading written by that completing poll is still
+consumed. OpenHP1 now writes `DesiredRotation` before testing movement
+completion and records the receiving pawn for the remainder of the tick. Its
+later global physics phase uses that marker after the latent has changed to
+`Continue`, preserving both same-tick state resumption and the retail final
+turn. The regression covers the completing `MoveTo` poll explicitly. This
+evidence does not validate the pre-existing decision to suppress ordinary
+PlayerPawn rotation physics when no matching latent or `CutMovingTo` state is
+active.
 
 ## Offline Lev_Tut1 check
 
@@ -420,7 +484,7 @@ Omitting the event is a general native-semantic gap, but it does not adjust
 acceleration, velocity, destination, or location in this `CutMovingTo` state
 and does not explain this stall.
 
-## SurrealEngine comparison and uncertainty
+## SurrealEngine comparison and remaining uncertainty
 
 The local SurrealEngine remains useful only as a secondary implementation
 comparison. Its `UActor::TryMoveSmooth` stops after the first projected
@@ -432,7 +496,10 @@ original packages and `Engine.dll`.
 
 The source-backed facing change remains narrow: matching latent `MoveTo` and
 `MoveToward` join `CutMovingTo` and the turn latents in the existing
-PlayerPawn rotation gate. The collision work likewise stays at shared native
+PlayerPawn rotation gate. The original native ordering above confirms that
+this precedence is not merely inferred from the script declaration. Retaining
+the per-tick authored-rotation marker through physics also matches the native
+completion poll. The collision work likewise stays at shared native
 seams: aligned pawn bounds, the complete `MoveSmooth` wall adjustment, and
 recursive CSG leaf eligibility. None of those collision changes explains the
 earlier live divergence. Matching the native `SetPhysics` motion reset removes
@@ -442,6 +509,6 @@ timeout teleports.
 
 The original recursive BSP `Outside`/`IsCsg` eligibility remains a shared
 collision requirement, but it is not the first cause of this route failure.
-An authored `ChessMode` replay remains useful for the separate facing question
-because its own `PlayerTick` may intentionally take precedence over latent
-rotation.
+An authored `ChessMode` replay remains useful as gameplay confirmation, but is
+no longer needed to decide rotation precedence: the shipped PlayerPawn tick,
+latent poll, and pawn physics ordering establishes that precedence directly.

@@ -134,6 +134,7 @@ impl ScriptRuntime {
 
     pub(super) fn tick_move_to(
         &mut self,
+        actor: usize,
         class: &ResolvedObject,
         instance: &mut InstanceState,
         elapsed: f32,
@@ -144,8 +145,21 @@ impl ScriptRuntime {
         let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
         let destination = Vec3::from_array(self.actor_vector(class, instance, "Destination")?);
         let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
-        let Some(direction) = move_to_direction(physics, destination - location, velocity, timer)
-        else {
+        let delta = destination - location;
+        let yaw = (delta.y.atan2(delta.x) * (65_536.0 / std::f32::consts::TAU)) as i32;
+        let pitch = if physics == PHYS_WALKING {
+            0
+        } else {
+            direction_pitch(delta)
+        };
+        self.set_actor_value(
+            class,
+            instance,
+            "DesiredRotation",
+            Value::Rotator([pitch, yaw, 0]),
+        )?;
+        self.latent_rotation_authored_this_tick.insert(actor);
+        let Some(direction) = move_to_direction(physics, delta, velocity, timer) else {
             return Ok(true);
         };
         let acceleration_direction = if matches!(physics, PHYS_SWIMMING | PHYS_FLYING)
@@ -165,23 +179,12 @@ impl ScriptRuntime {
             "Acceleration",
             Value::Vector(acceleration.to_array()),
         )?;
-        let yaw = (direction.y.atan2(direction.x) * (65_536.0 / std::f32::consts::TAU)) as i32;
-        let pitch = if physics == PHYS_WALKING {
-            0
-        } else {
-            direction_pitch(direction)
-        };
-        self.set_actor_value(
-            class,
-            instance,
-            "DesiredRotation",
-            Value::Rotator([pitch, yaw, 0]),
-        )?;
         Ok(false)
     }
 
     pub(super) fn tick_move_toward(
         &mut self,
+        actor: usize,
         class: &ResolvedObject,
         instance: &mut InstanceState,
         elapsed: f32,
@@ -195,7 +198,7 @@ impl ScriptRuntime {
         let destination = self.other_actor_vector(target, "Location")?;
         self.set_actor_value(class, instance, "Destination", Value::Vector(destination))?;
         self.set_actor_value(class, instance, "Focus", Value::Vector(destination))?;
-        self.tick_move_to(class, instance, elapsed)
+        self.tick_move_to(actor, class, instance, elapsed)
     }
 
     pub(super) fn tick_physics(

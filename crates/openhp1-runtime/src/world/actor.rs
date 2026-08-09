@@ -61,6 +61,7 @@ impl ScriptRuntime {
             failed_ticks: HashSet::default(),
             failed_physics: HashMap::default(),
             physics_ticked: HashSet::default(),
+            latent_rotation_authored_this_tick: HashSet::default(),
             disabled_events: HashMap::default(),
             object_actors: HashMap::default(),
             actor_objects: HashMap::default(),

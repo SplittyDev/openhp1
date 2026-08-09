@@ -16,6 +16,7 @@ impl ScriptRuntime {
             return Err(DispatchError::InvalidDeltaTime { value: delta_time });
         }
         self.physics_ticked.clear();
+        self.latent_rotation_authored_this_tick.clear();
         self.tick_sound_channels(delta_time);
         self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
@@ -126,10 +127,10 @@ impl ScriptRuntime {
                         .actor_bool(&class, &instance, "bInterpolating")
                         .map(|interpolating| !interpolating),
                     Some(LatentAction::MoveTo(_)) => {
-                        self.tick_move_to(&class, &mut instance, delta_time)
+                        self.tick_move_to(target, &class, &mut instance, delta_time)
                     }
                     Some(LatentAction::MoveToward(_)) => {
-                        self.tick_move_toward(&class, &mut instance, delta_time)
+                        self.tick_move_toward(target, &class, &mut instance, delta_time)
                     }
                     Some(LatentAction::TurnTo(_)) => self.tick_turn_to(&class, &mut instance),
                     Some(LatentAction::TurnToward(_)) => {

@@ -357,6 +357,7 @@ impl ScriptRuntime {
         self.failed_ticks.clear();
         self.failed_physics.clear();
         self.physics_ticked.clear();
+        self.latent_rotation_authored_this_tick.clear();
         self.disabled_events
             .retain(|(actor, _), _| transient.contains(actor));
         self.destroyed.retain(|actor| transient.contains(actor));

@@ -941,11 +941,12 @@ impl ScriptRuntime {
         let player_pawn = self
             .class_has_name(class, "PlayerPawn")
             .map_err(|error| error.to_string())?;
-        let scripted_movement = self
-            .actor_states
-            .get(&actor)
-            .and_then(|state| state.as_deref())
-            .is_some_and(|state| state.eq_ignore_ascii_case("CutMovingTo"));
+        let scripted_movement = self.latent_rotation_authored_this_tick.contains(&actor)
+            || self
+                .actor_states
+                .get(&actor)
+                .and_then(|state| state.as_deref())
+                .is_some_and(|state| state.eq_ignore_ascii_case("CutMovingTo"));
         // Keep normal PlayerPawn rotation script-controlled. HP1's CutMovingTo
         // state and blocking latent movement both author DesiredRotation directly.
         if player_rotation_is_script_controlled(

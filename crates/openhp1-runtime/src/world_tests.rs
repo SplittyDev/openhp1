@@ -8140,6 +8140,62 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         Some(&StoredValue::Value(Value::Vector([-1.0; 3])))
     );
 
+    for (field, value) in [
+        ("Physics", Value::Byte(physics::PHYS_ROTATING)),
+        ("Location", Value::Vector([99.5, 0.0, 0.0])),
+        ("Destination", Value::Vector([100.0, 0.0, 0.0])),
+        ("Velocity", Value::Vector([0.0; 3])),
+        ("DesiredRotation", Value::Rotator([0, 16_384, 0])),
+        ("Rotation", Value::Rotator([0, 16_384, 0])),
+        ("MoveTimer", Value::Float(10.0)),
+    ] {
+        runtime
+            .instances
+            .get_mut(&receiver)
+            .unwrap()
+            .insert(fields[field].clone(), StoredValue::Value(value));
+    }
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state.clone(),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(receiver),
+        },
+    );
+    runtime.tick(0.02).unwrap();
+    assert_eq!(
+        runtime.instances[&receiver].get(&fields["DesiredRotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0; 3]))),
+        "a completing MoveTo poll must refresh its final destination heading"
+    );
+    assert_eq!(
+        runtime.instances[&receiver].get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 15_384, 0]))),
+        "PlayerPawn physics must consume the completing MoveTo heading"
+    );
+    for (field, value) in [
+        ("Location", Value::Vector([0.0; 3])),
+        ("Destination", Value::Vector([100.0, 0.0, 0.0])),
+        ("Velocity", Value::Vector([0.0; 3])),
+        ("DesiredRotation", Value::Rotator([0; 3])),
+        ("MoveTimer", Value::Float(10.0)),
+    ] {
+        runtime
+            .instances
+            .get_mut(&receiver)
+            .unwrap()
+            .insert(fields[field].clone(), StoredValue::Value(value));
+    }
+    runtime.state_frames.insert(
+        caller,
+        StateFrame {
+            state: movement_state.clone(),
+            frame: FrameSnapshot::at(0),
+            latent: LatentAction::MoveTo(receiver),
+        },
+    );
+
     runtime.instances.get_mut(&receiver).unwrap().insert(
         fields["Physics"].clone(),
         StoredValue::Value(Value::Byte(physics::PHYS_FLYING)),
