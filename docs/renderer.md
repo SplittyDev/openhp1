@@ -29,7 +29,9 @@ on world BSP geometry.
    surfaces, advances `PF_AutoUPan`/`PF_AutoVPan` texture coordinates, and draws
    them with repeat sampling and depth testing. A sky map first renders to a
    separate color/depth target; fake-backdrop polygons sample that target in
-   screen space during the playable pass.
+   screen space during the playable pass. A map carrying `PF_Mirrored` likewise
+   renders the shared scene from a camera reflected across the authored BSP
+   plane, then projects that target over the mirror polygons.
 11. `openhp1-viewer` presents an offscreen `Rgba8Unorm` target inside egui and
     exposes searchable actor state and diagnostics.
 12. `openhp1-game` renders the scene and its UI into the selected internal
@@ -315,6 +317,21 @@ map's fixed `SkyZoneInfo` viewpoint into a separate target. The playable pass
 then composites that image only over depth-tested fake-backdrop polygons.
 Backdrop depth prevents geometry outside the visible zone from leaking through
 until full BSP visibility traversal exists.
+
+`PF_Mirrored` (`0x08000000`) marks a planar reflection rather than an ordinary
+opaque wall. As in UE1, the effective surface flags combine the BSP surface's
+flags with its texture flags; a texture whose serialized `bMirrored` property
+is set therefore creates a mirror even when the BSP surface itself does not
+carry `PF_Mirrored`.
+Original maps contain both world-BSP and mover-brush mirrors, and a single map
+can contain multiple reflection planes. Surface ownership and each reflection
+plane come from the authored triangle surface index and triangle geometry;
+shared vertex metadata can describe an adjacent plane. OpenHP1 gives every
+authored mirror surface its own reflected camera and render target in both
+renderer modes. The reflected pass clips world and actor fragments to the
+viewer's side of the authored plane, matching the half-space retained by UE1's
+mirror-portal BSP traversal. Geometry physically behind a mirror therefore
+cannot cover or leak into its reflection.
 
 Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
 matters for sky-box cube faces.

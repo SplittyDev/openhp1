@@ -4,6 +4,7 @@ struct Camera {
     camera_position: vec4<f32>,
     display_gamma: vec4<f32>,
     auto_uv: vec4<f32>,
+    clip_plane: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -150,6 +151,12 @@ fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fragment_mirror(input: VertexOutput) -> @location(0) vec4<f32> {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    return textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
+}
+
+@fragment
 fn fragment_modern(input: VertexOutput) -> @location(0) vec4<f32> {
     return apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
 }
@@ -200,6 +207,7 @@ fn fragment_backdrop_modern(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    clip_to_portal(input);
     let light = textureSample(
         lightmap_texture,
         lightmap_sampler,
@@ -209,14 +217,17 @@ fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    clip_to_portal(input);
     return vec4(color.rgb * input.vertex_color.rgb, color.a);
 }
 
 fn apply_modern_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    clip_to_portal(input);
     return vec4(srgb_to_linear(color.rgb * input.vertex_color.rgb), color.a);
 }
 
 fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    clip_to_portal(input);
     if input.lighting_index == 0xffffffffu {
         return apply_modern_vertex_light(input, color);
     }
@@ -288,6 +299,12 @@ fn apply_opacity(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     // a clamped multiplier of the full translucent source color until traces
     // disprove it; UE1's One/OneMinusSrcColor blend ignores alpha for RGB.
     return color * input.vertex_color.a;
+}
+
+fn clip_to_portal(input: VertexOutput) {
+    if dot(vec4(input.world_position, 1.0), camera.clip_plane) < 0.0 {
+        discard;
+    }
 }
 
 fn apply_display_gamma(color: vec4<f32>) -> vec4<f32> {

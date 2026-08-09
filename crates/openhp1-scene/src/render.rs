@@ -80,6 +80,8 @@ pub struct SurfaceMaterial {
     /// Authored sky or corpus-identified window surface that can admit a
     /// directional volumetric shaft.
     pub volumetric_source: bool,
+    /// Render the scene reflected across this BSP surface.
+    pub mirror: bool,
     /// Derive texture coordinates from the reflected view direction.
     pub environment_map: bool,
     /// HP1-specific multiplier for blended source color.
@@ -97,6 +99,7 @@ impl Default for SurfaceMaterial {
             two_sided: false,
             unlit: false,
             volumetric_source: false,
+            mirror: false,
             environment_map: false,
             opacity: 1.0,
             texture_pan_speed: [0.0; 2],

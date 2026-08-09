@@ -3938,6 +3938,7 @@ fn surface_material(
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
         unlit: flags.contains(PolyFlags::UNLIT),
         volumetric_source: false,
+        mirror: flags.contains(PolyFlags::MIRRORED) || texture_flags.mirrored,
         environment_map: false,
         opacity: 1.0,
         texture_pan_speed: [0.0; 2],
@@ -5243,6 +5244,19 @@ mod tests {
 
         let unlit = super::surface_material(PolyFlags::UNLIT, None, None);
         assert!(unlit.unlit);
+
+        let mirror = super::surface_material(PolyFlags::MIRRORED, None, None);
+        assert!(mirror.mirror);
+
+        let texture_mirror = super::surface_material(
+            PolyFlags::default(),
+            None,
+            Some(TextureRenderFlags {
+                mirrored: true,
+                ..Default::default()
+            }),
+        );
+        assert!(texture_mirror.mirror);
     }
 
     #[test]

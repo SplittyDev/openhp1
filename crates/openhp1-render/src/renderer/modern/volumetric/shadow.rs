@@ -939,7 +939,9 @@ fn is_shadow_caster(scene: &RenderScene, surface: usize) -> bool {
     scene
         .surface_materials
         .get(surface)
-        .is_some_and(|material| material.mode == SurfaceMode::Opaque && !material.volumetric_source)
+        .is_some_and(|material| {
+            material.mode == SurfaceMode::Opaque && !material.mirror && !material.volumetric_source
+        })
 }
 
 fn shaft_portals(

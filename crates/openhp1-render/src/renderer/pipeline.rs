@@ -13,6 +13,7 @@ pub(super) fn create_pipeline(
     shader: &wgpu::ShaderModule,
     material: SurfaceMaterial,
     modern: bool,
+    reflected: bool,
 ) -> wgpu::RenderPipeline {
     let blended = matches!(
         material.mode,
@@ -45,7 +46,7 @@ pub(super) fn create_pipeline(
         primitive: wgpu::PrimitiveState {
             // The Unreal-to-render axis conversion changes handedness, so UE
             // polygon winding becomes clockwise in render space.
-            front_face: wgpu::FrontFace::Cw,
+            front_face: front_face(reflected),
             cull_mode: (!material.two_sided).then_some(wgpu::Face::Back),
             ..Default::default()
         },
@@ -77,16 +78,24 @@ pub(super) fn create_pipeline(
     })
 }
 
-pub(super) fn create_backdrop_pipeline(
+fn front_face(reflected: bool) -> wgpu::FrontFace {
+    if reflected {
+        wgpu::FrontFace::Ccw
+    } else {
+        wgpu::FrontFace::Cw
+    }
+}
+
+pub(super) fn create_screen_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     two_sided: bool,
-    modern: bool,
+    fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("OpenHP1 fake-backdrop pipeline"),
+        label: Some("OpenHP1 screen-projected surface pipeline"),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -127,11 +136,7 @@ pub(super) fn create_backdrop_pipeline(
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if modern {
-                "fragment_backdrop_modern"
-            } else {
-                "fragment_backdrop"
-            }),
+            entry_point: Some(fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -256,4 +261,15 @@ pub(super) fn texture(
         wgpu::util::TextureDataOrder::LayerMajor,
         &image.rgba,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reflected_view_reverses_the_render_space_front_face() {
+        assert!(matches!(front_face(false), wgpu::FrontFace::Cw));
+        assert!(matches!(front_face(true), wgpu::FrontFace::Ccw));
+    }
 }

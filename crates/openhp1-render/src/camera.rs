@@ -57,6 +57,22 @@ impl Camera {
         }
     }
 
+    pub(crate) fn reflected_view(&self, plane_point: Vec3, plane_normal: Vec3) -> (Vec3, Mat4) {
+        let normal = plane_normal.normalize_or_zero();
+        let reflection = Mat4::from_translation(plane_point)
+            * Mat4::from_cols(
+                (Vec3::X - 2.0 * normal.x * normal).extend(0.0),
+                (Vec3::Y - 2.0 * normal.y * normal).extend(0.0),
+                (Vec3::Z - 2.0 * normal.z * normal).extend(0.0),
+                Vec3::ZERO.extend(1.0),
+            )
+            * Mat4::from_translation(-plane_point);
+        (
+            reflection.transform_point3(self.position),
+            self.view() * reflection,
+        )
+    }
+
     pub(crate) fn view_projection(&self, aspect: f32) -> Mat4 {
         Mat4::perspective_rh(self.vertical_fov, aspect, self.near, self.far) * self.view()
     }
@@ -102,5 +118,28 @@ mod tests {
         });
         assert_eq!(sky.position, Vec3::new(20.0, 30.0, -10.0));
         assert!((sky.yaw + std::f32::consts::FRAC_PI_2).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn mirror_view_reflects_world_across_the_authored_plane() {
+        let camera = Camera::looking_at(Vec3::new(2.0, 3.0, 4.0), Vec3::ZERO, 1000.0);
+        let normal = Vec3::new(1.0, 2.0, 0.5).normalize();
+        let point = Vec3::new(-3.0, 1.0, 2.0);
+        let (position, view) = camera.reflected_view(point, normal);
+
+        assert!(position.abs_diff_eq(
+            camera.position - 2.0 * (camera.position - point).dot(normal) * normal,
+            0.000_01,
+        ));
+        let original_view = camera.view();
+        assert!(
+            view.transform_point3(point)
+                .abs_diff_eq(original_view.transform_point3(point), 0.000_01)
+        );
+        assert!(view.transform_point3(point + normal * 7.0).abs_diff_eq(
+            original_view.transform_point3(point - normal * 7.0),
+            0.000_01,
+        ));
+        assert!(view.determinant().is_sign_negative());
     }
 }

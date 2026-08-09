@@ -5,14 +5,14 @@ pub(super) struct DepthTarget {
     pub(super) size: [u32; 2],
 }
 
-pub(super) struct SkyTarget {
+pub(super) struct SampledTarget {
     _texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     pub(super) bind_group: wgpu::BindGroup,
     pub(super) depth: DepthTarget,
 }
 
-impl SkyTarget {
+impl SampledTarget {
     pub(super) fn new(
         device: &wgpu::Device,
         size: [u32; 2],
@@ -24,7 +24,7 @@ impl SkyTarget {
     ) -> Self {
         let size = [size[0].max(1), size[1].max(1)];
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("OpenHP1 sky-zone color"),
+            label: Some("OpenHP1 sampled scene target"),
             size: wgpu::Extent3d {
                 width: size[0],
                 height: size[1],
@@ -39,7 +39,7 @@ impl SkyTarget {
         });
         let view = texture.create_view(&Default::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OpenHP1 sky-zone texture bind group"),
+            label: Some("OpenHP1 sampled scene target bind group"),
             layout: texture_layout,
             entries: &[
                 wgpu::BindGroupEntry {

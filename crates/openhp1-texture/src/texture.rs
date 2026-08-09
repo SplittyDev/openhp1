@@ -32,6 +32,7 @@ pub struct TextureRenderFlags {
     pub modulated: bool,
     pub fake_backdrop: bool,
     pub two_sided: bool,
+    pub mirrored: bool,
 }
 
 pub fn texture_poly_flags(package: &Package, export_index: usize) -> Result<u32> {
@@ -670,6 +671,8 @@ impl TextureRenderFlags {
             self.fake_backdrop = value;
         } else if name.eq_ignore_ascii_case("bTwoSided") {
             self.two_sided = value;
+        } else if name.eq_ignore_ascii_case("bMirrored") {
+            self.mirrored = value;
         }
     }
 }
@@ -756,10 +759,12 @@ mod tests {
         flags.set("bTransparent", true);
         flags.set("bModulate", true);
         flags.set("bTwoSided", true);
+        flags.set("bMirrored", true);
         assert!(flags.masked);
         assert!(flags.translucent);
         assert!(flags.modulated);
         assert!(flags.two_sided);
+        assert!(flags.mirrored);
     }
 
     #[test]

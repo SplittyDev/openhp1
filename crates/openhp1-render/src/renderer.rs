@@ -1,7 +1,7 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{Mat4, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -19,14 +19,14 @@ mod target;
 use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
 use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
-    sorted_blended_batches, texture_batches, update_blended_centers,
+    mirror_geometries, sorted_blended_batches, texture_batches, update_blended_centers,
 };
 use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
-use pipeline::{create_backdrop_pipeline, create_pipeline, texture, texture_bind_group};
-use target::{DepthTarget, SkyTarget};
+use pipeline::{create_pipeline, create_screen_pipeline, texture, texture_bind_group};
+use target::{DepthTarget, SampledTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const PIPELINES_PER_MODE: usize = 8;
@@ -63,11 +63,32 @@ struct CameraUniform {
     camera_position: [f32; 4],
     display_gamma: [f32; 4],
     auto_uv: [f32; 4],
+    clip_plane: [f32; 4],
+}
+
+struct Mirror {
+    surface: usize,
+    plane: (Vec3, Vec3),
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    pipeline: usize,
+    target: SampledTarget,
+}
+
+#[derive(Clone, Copy)]
+enum ScenePass {
+    Main,
+    Sky,
+    Reflection,
 }
 
 pub struct Renderer {
     pipelines: [wgpu::RenderPipeline; PIPELINE_COUNT],
+    reflected_pipelines: Option<[wgpu::RenderPipeline; PIPELINE_COUNT]>,
     backdrop_pipelines: [wgpu::RenderPipeline; 2],
+    mirror_pipelines: [wgpu::RenderPipeline; 2],
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     sky_camera_buffer: Option<wgpu::Buffer>,
@@ -80,13 +101,14 @@ pub struct Renderer {
     opaque_batches: Vec<DrawBatch>,
     backdrop_index_buffer: wgpu::Buffer,
     backdrop_batches: Vec<BackdropBatch>,
+    mirrors: Vec<Mirror>,
     blended_index_buffer: wgpu::Buffer,
     sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
     modern: Option<ModernRenderer>,
     lighting: Option<ModernLighting>,
-    sky_target: Option<SkyTarget>,
+    sky_target: Option<SampledTarget>,
     bounds: SceneBounds,
     sky_zone: Option<openhp1_scene::SkyZone>,
     target_format: wgpu::TextureFormat,
@@ -248,6 +270,7 @@ impl Renderer {
         let bounds = scene_bounds(&vertices);
         let (opaque_indices, opaque_batches) = texture_batches(scene, fallback_texture);
         let (backdrop_indices, backdrop_batches) = backdrop_batches(scene);
+        let mirror_geometries = mirror_geometries(scene);
         let blended_surfaces = blended_surfaces(scene, fallback_texture, &vertices);
         let blended_index_count = blended_surfaces
             .iter()
@@ -466,20 +489,60 @@ impl Renderer {
                     ..Default::default()
                 },
                 modern_enabled,
+                false,
             )
         });
+        let reflected_pipelines = (!mirror_geometries.is_empty()).then(|| {
+            std::array::from_fn(|index| {
+                let mode = match index / PIPELINES_PER_MODE {
+                    0 => SurfaceMode::Opaque,
+                    1 => SurfaceMode::Translucent,
+                    2 => SurfaceMode::Modulated,
+                    _ => unreachable!(),
+                };
+                create_pipeline(
+                    device,
+                    scene_format,
+                    &pipeline_layout,
+                    &shader,
+                    SurfaceMaterial {
+                        mode,
+                        masked: index % 4 >= 2,
+                        two_sided: index % 2 != 0,
+                        unlit: index % PIPELINES_PER_MODE >= 4,
+                        ..Default::default()
+                    },
+                    modern_enabled,
+                    true,
+                )
+            })
+        });
         let backdrop_pipelines = std::array::from_fn(|index| {
-            create_backdrop_pipeline(
+            create_screen_pipeline(
                 device,
                 scene_format,
                 &pipeline_layout,
                 &shader,
                 index != 0,
-                modern_enabled,
+                if modern_enabled {
+                    "fragment_backdrop_modern"
+                } else {
+                    "fragment_backdrop"
+                },
+            )
+        });
+        let mirror_pipelines = std::array::from_fn(|index| {
+            create_screen_pipeline(
+                device,
+                scene_format,
+                &pipeline_layout,
+                &shader,
+                index != 0,
+                "fragment_mirror",
             )
         });
         let sky_target = scene.sky_zone.map(|_| {
-            SkyTarget::new(
+            SampledTarget::new(
                 device,
                 viewport_size,
                 scene_format,
@@ -489,6 +552,49 @@ impl Renderer {
                 &lightmap_sampler,
             )
         });
+        let mirrors = mirror_geometries
+            .into_iter()
+            .filter_map(|geometry| {
+                let plane = mirror_plane(scene, &vertices, geometry.surface)?;
+                let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("OpenHP1 mirror camera"),
+                    size: size_of::<CameraUniform>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("OpenHP1 mirror camera bind group"),
+                    layout: &camera_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("OpenHP1 mirror indices"),
+                    contents: bytemuck::cast_slice(&geometry.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                Some(Mirror {
+                    surface: geometry.surface,
+                    plane,
+                    camera_buffer,
+                    camera_bind_group,
+                    index_buffer,
+                    index_count: geometry.indices.len() as u32,
+                    pipeline: geometry.pipeline,
+                    target: SampledTarget::new(
+                        device,
+                        viewport_size,
+                        scene_format,
+                        &texture_layout,
+                        &sky_sampler,
+                        &lightmap_view,
+                        &lightmap_sampler,
+                    ),
+                })
+            })
+            .collect();
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
         let modern = modern_enabled.then(|| {
             ModernRenderer::new(
@@ -510,7 +616,9 @@ impl Renderer {
 
         Self {
             pipelines,
+            reflected_pipelines,
             backdrop_pipelines,
+            mirror_pipelines,
             camera_buffer,
             camera_bind_group,
             sky_camera_buffer,
@@ -523,6 +631,7 @@ impl Renderer {
             opaque_batches,
             backdrop_index_buffer,
             backdrop_batches,
+            mirrors,
             blended_index_buffer,
             sky_blended_index_buffer,
             blended_surfaces,
@@ -571,6 +680,12 @@ impl Renderer {
                     .normalize_or_zero()
                     .to_array();
             vertex.environment_map = f32::from(material.environment_map);
+        }
+        for mirror in &mut self.mirrors {
+            let Some(plane) = mirror_plane(scene, &self.vertices, mirror.surface) else {
+                return false;
+            };
+            mirror.plane = plane;
         }
         update_blended_centers(&mut self.blended_surfaces, &self.vertices);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
@@ -708,7 +823,7 @@ impl Renderer {
                 modern.resize(device, viewport_size, &self.depth.view);
             }
             if self.sky_target.is_some() {
-                self.sky_target = Some(SkyTarget::new(
+                self.sky_target = Some(SampledTarget::new(
                     device,
                     viewport_size,
                     if self.modern.is_some() {
@@ -721,6 +836,21 @@ impl Renderer {
                     &self.lightmap_view,
                     &self.lightmap_sampler,
                 ));
+            }
+            for mirror in &mut self.mirrors {
+                mirror.target = SampledTarget::new(
+                    device,
+                    viewport_size,
+                    if self.modern.is_some() {
+                        HDR_FORMAT
+                    } else {
+                        self.target_format
+                    },
+                    &self.texture_layout,
+                    &self.sky_sampler,
+                    &self.lightmap_view,
+                    &self.lightmap_sampler,
+                );
             }
         }
     }
@@ -759,6 +889,7 @@ impl Renderer {
                 camera_position: camera.position.extend(1.0).to_array(),
                 display_gamma,
                 auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                clip_plane: Vec4::ZERO.to_array(),
             }),
         );
         if let Some(modern) = &mut self.modern {
@@ -802,6 +933,7 @@ impl Renderer {
                     camera_position: sky_camera.position.extend(1.0).to_array(),
                     display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                    clip_plane: Vec4::ZERO.to_array(),
                 }),
             );
             let (sky_indices, sky_batches) =
@@ -842,6 +974,63 @@ impl Renderer {
                 sky_blended_index_buffer,
                 &sky_batches,
                 None,
+                ScenePass::Sky,
+            );
+        }
+
+        for mirror in &self.mirrors {
+            let (plane_point, plane_normal) = mirror.plane;
+            let (mirror_camera_position, mirror_world_to_view) =
+                camera.reflected_view(plane_point, plane_normal);
+            let clip_plane = mirror_clip_plane(camera.position, plane_point, plane_normal);
+            queue.write_buffer(
+                &mirror.camera_buffer,
+                0,
+                bytemuck::bytes_of(&CameraUniform {
+                    view_projection: (Mat4::perspective_rh(
+                        camera.vertical_fov,
+                        aspect,
+                        camera.near,
+                        camera.far,
+                    ) * mirror_world_to_view)
+                        .to_cols_array_2d(),
+                    world_to_view: mirror_world_to_view.to_cols_array_2d(),
+                    camera_position: mirror_camera_position.extend(1.0).to_array(),
+                    display_gamma,
+                    auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                    clip_plane: clip_plane.to_array(),
+                }),
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 mirror render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &mirror.target.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear_color()),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &mirror.target.depth.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            draw_calls += self.draw_scene(
+                &mut pass,
+                &mirror.camera_bind_group,
+                &self.blended_index_buffer,
+                &[],
+                None,
+                ScenePass::Reflection,
             );
         }
 
@@ -878,6 +1067,7 @@ impl Renderer {
             &self.blended_index_buffer,
             &blended_batches,
             self.sky_target.as_ref().map(|target| &target.bind_group),
+            ScenePass::Main,
         );
         if let Some(modern) = &self.modern {
             draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups);
@@ -906,8 +1096,16 @@ impl Renderer {
         blended_index_buffer: &'pass wgpu::Buffer,
         blended_batches: &[DrawBatch],
         backdrop_bind_group: Option<&'pass wgpu::BindGroup>,
+        scene_pass: ScenePass,
     ) -> usize {
         let mut draw_calls = 0;
+        let pipelines = if matches!(scene_pass, ScenePass::Reflection) {
+            self.reflected_pipelines
+                .as_ref()
+                .expect("mirror pass requires reflected pipelines")
+        } else {
+            &self.pipelines
+        };
         pass.set_bind_group(0, camera_bind_group, &[]);
         if let Some(lighting) = &self.lighting {
             pass.set_bind_group(2, &lighting.bind_group, &[]);
@@ -915,6 +1113,7 @@ impl Renderer {
         if !self.opaque_batches.is_empty()
             || !blended_batches.is_empty()
             || (backdrop_bind_group.is_some() && !self.backdrop_batches.is_empty())
+            || (matches!(scene_pass, ScenePass::Main) && !self.mirrors.is_empty())
         {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         }
@@ -924,9 +1123,18 @@ impl Renderer {
                 wgpu::IndexFormat::Uint32,
             );
             for batch in &self.opaque_batches {
-                pass.set_pipeline(&self.pipelines[batch.pipeline]);
+                pass.set_pipeline(&pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                draw_calls += 1;
+            }
+        }
+        if matches!(scene_pass, ScenePass::Main) {
+            for mirror in &self.mirrors {
+                pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_bind_group(1, &mirror.target.bind_group, &[]);
+                pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
+                pass.draw_indexed(0..mirror.index_count, 0, 0..1);
                 draw_calls += 1;
             }
         }
@@ -947,7 +1155,7 @@ impl Renderer {
         if !blended_batches.is_empty() {
             pass.set_index_buffer(blended_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in blended_batches {
-                pass.set_pipeline(&self.pipelines[batch.pipeline]);
+                pass.set_pipeline(&pipelines[batch.pipeline]);
                 pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
@@ -1008,6 +1216,44 @@ fn scene_bounds(vertices: &[Vertex]) -> SceneBounds {
         maximum = Vec3::ONE;
     }
     SceneBounds { minimum, maximum }
+}
+
+fn mirror_plane(
+    scene: &RenderScene,
+    vertices: &[Vertex],
+    mirror_surface: usize,
+) -> Option<(Vec3, Vec3)> {
+    scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+        .find_map(|(triangle, &surface)| {
+            if surface != mirror_surface {
+                return None;
+            }
+            let &[a, b, c] = triangle else {
+                return None;
+            };
+            let [a, b, c] = [a, b, c].map(|vertex| usize::try_from(vertex).ok());
+            let (a, b, c) = (a?, b?, c?);
+            let [a, b, c] = [a, b, c].map(|vertex| {
+                vertices
+                    .get(vertex)
+                    .map(|vertex| Vec3::from_array(vertex.position))
+            });
+            let (a, b, c) = (a?, b?, c?);
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            (normal.length_squared() > 0.0).then_some((a, normal))
+        })
+}
+
+fn mirror_clip_plane(camera: Vec3, point: Vec3, normal: Vec3) -> Vec4 {
+    let mut normal = normal.normalize_or_zero();
+    if (camera - point).dot(normal) < 0.0 {
+        normal = -normal;
+    }
+    normal.extend(-point.dot(normal))
 }
 
 #[cfg(test)]
@@ -1134,6 +1380,71 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(0, 0, 0..3), (1, 3, 3..6), (2, 0, 6..9)]
         );
+    }
+
+    #[test]
+    fn mirrored_surfaces_keep_their_own_reflection_planes() {
+        let vertices = [
+            vertex_at(2.0, 0.0, 0.0),
+            vertex_at(2.0, 1.0, 0.0),
+            vertex_at(2.0, 0.0, 1.0),
+            vertex_at(0.0, 3.0, 0.0),
+            vertex_at(0.0, 3.0, 1.0),
+            vertex_at(1.0, 3.0, 0.0),
+        ];
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..6).collect(),
+                triangle_surfaces: vec![0, 1],
+                vertex_surfaces: vec![2; 6],
+                ..Default::default()
+            },
+            textures: vec![],
+            lightmaps: vec![],
+            realtime_lightmaps: vec![],
+            coronas: vec![],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    mirror: true,
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    mirror: true,
+                    two_sided: true,
+                    ..Default::default()
+                },
+                SurfaceMaterial::default(),
+            ],
+            sky_zone: None,
+        };
+
+        assert!(texture_batches(&scene, 0).0.is_empty());
+        let geometries = mirror_geometries(&scene);
+        assert_eq!(geometries.len(), 2);
+        assert_eq!(geometries[0].surface, 0);
+        assert_eq!(geometries[0].indices, [0, 1, 2]);
+        assert_eq!(geometries[0].pipeline, 0);
+        assert_eq!(geometries[1].surface, 1);
+        assert_eq!(geometries[1].indices, [3, 4, 5]);
+        assert_eq!(geometries[1].pipeline, 1);
+        assert_eq!(
+            mirror_plane(&scene, &vertices, 0),
+            Some((Vec3::new(2.0, 0.0, 0.0), Vec3::X))
+        );
+        assert_eq!(
+            mirror_plane(&scene, &vertices, 1),
+            Some((Vec3::new(0.0, 3.0, 0.0), Vec3::Y))
+        );
+    }
+
+    #[test]
+    fn mirror_clip_plane_keeps_only_the_viewer_side_of_the_portal() {
+        let point = Vec3::new(0.0, -10.0, 0.0);
+        let plane = mirror_clip_plane(Vec3::ZERO, point, -Vec3::Y);
+
+        assert!(plane.dot(Vec3::ZERO.extend(1.0)) > 0.0);
+        assert_eq!(plane.dot(point.extend(1.0)), 0.0);
+        assert!(plane.dot(Vec3::new(0.0, -11.0, 0.0).extend(1.0)) < 0.0);
     }
 
     #[test]

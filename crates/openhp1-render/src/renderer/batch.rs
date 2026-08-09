@@ -17,6 +17,12 @@ pub(super) struct BackdropBatch {
     pub(super) pipeline: usize,
 }
 
+pub(super) struct MirrorGeometry {
+    pub(super) surface: usize,
+    pub(super) indices: Vec<u32>,
+    pub(super) pipeline: usize,
+}
+
 pub(super) struct BlendedSurface {
     pub(super) indices: Vec<u32>,
     center: Vec3,
@@ -56,6 +62,35 @@ pub(super) fn backdrop_batches(scene: &RenderScene) -> (Vec<u32>, Vec<BackdropBa
     (indices, batches)
 }
 
+pub(super) fn mirror_geometries(scene: &RenderScene) -> Vec<MirrorGeometry> {
+    let mut surfaces = vec![Vec::new(); scene.surface_materials.len()];
+    for (triangle, &surface) in scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+    {
+        let Some(material) = scene.surface_materials.get(surface) else {
+            continue;
+        };
+        if material.mirror {
+            surfaces[surface].extend_from_slice(triangle);
+        }
+    }
+
+    surfaces
+        .into_iter()
+        .enumerate()
+        .filter_map(|(surface, indices)| {
+            (!indices.is_empty()).then(|| MirrorGeometry {
+                surface,
+                indices,
+                pipeline: usize::from(scene.surface_materials[surface].two_sided),
+            })
+        })
+        .collect()
+}
+
 pub(super) fn texture_batches(
     scene: &RenderScene,
     fallback_texture: usize,
@@ -72,7 +107,7 @@ pub(super) fn texture_batches(
             .get(*surface)
             .copied()
             .unwrap_or_default();
-        if material.mode != SurfaceMode::Opaque {
+        if material.mode != SurfaceMode::Opaque || material.mirror {
             continue;
         }
         let texture = material
