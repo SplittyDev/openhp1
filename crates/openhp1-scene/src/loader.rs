@@ -531,8 +531,10 @@ impl LoadedScene {
         animation.playing = !tween_only || tween_time > 0.0;
         animation.looping = looping;
         animation.root_motion = root_motion;
+        let sample = animation.sample()?;
+        let bone_positions = animation.bone_positions_from(&sample);
+        animation.bone_positions = bone_positions;
         if root_motion {
-            let sample = animation.sample()?;
             animation.root_motion_position =
                 animation.transform.transform_vector3(sample.root_motion);
         }
@@ -1341,8 +1343,9 @@ impl LoadedScene {
                 Ok((
                     animation.actor_index,
                     animation
-                        .bone_positions()?
-                        .into_iter()
+                        .bone_positions
+                        .iter()
+                        .copied()
                         .map(|position| position.to_array())
                         .collect(),
                 ))
@@ -1444,6 +1447,8 @@ impl LoadedScene {
                 .map(|&normal| (animation.normal_transform * normal).normalize_or_zero())
                 .collect::<Vec<_>>();
             let mut lit_colors = tween.is_none().then(|| vec![None; positions.len()]);
+            let bone_positions = animation.bone_positions_from(&sample);
+            animation.bone_positions = bone_positions;
             if animation.root_motion {
                 let root_motion = animation.transform.transform_vector3(sample.root_motion);
                 let delta = root_motion - animation.root_motion_position;
@@ -1670,9 +1675,8 @@ impl LoadedScene {
             .then(|| animation.local_attachment())
             .transpose()?
             .flatten();
-        let tween_bone_positions_from = (tween_time > 0.0)
-            .then(|| animation.bone_positions())
-            .transpose()?;
+        let tween_bone_positions_from =
+            (tween_time > 0.0).then(|| animation.bone_positions.clone());
         animation.tween_attachment_from = tween_attachment_from;
         animation.tween_bone_positions_from = tween_bone_positions_from;
         // ponytail: keep the displayed render-space pose until moving actors need
@@ -1688,6 +1692,11 @@ impl LoadedScene {
         animation.looping = looping;
         animation.root_motion = root_motion;
         animation.root_motion_position = Vec3::ZERO;
+        if animation.rate == 0.0 && animation.tween_from.is_none() {
+            let sample = animation.sample()?;
+            let bone_positions = animation.bone_positions_from(&sample);
+            animation.bone_positions = bone_positions;
+        }
         let actor = self
             .actors
             .get_mut(actor_index)
@@ -1841,6 +1850,7 @@ struct AnimatedActorMesh {
     tween_from: Option<Vec<Vec3>>,
     tween_attachment_from: Option<Mat4>,
     tween_bone_positions_from: Option<Vec<Vec3>>,
+    bone_positions: Vec<Vec3>,
     tween_elapsed: f32,
     tween_duration: f32,
     vertices: Range<usize>,
@@ -2203,25 +2213,19 @@ impl AnimatedActorMesh {
         })
     }
 
-    fn bone_positions(&self) -> openhp1_mesh::Result<Vec<Vec3>> {
-        let Some(animation) = &self.skeletal_animation else {
-            return Ok(Vec::new());
-        };
-        let positions = self
-            .mesh
-            .sample_skeletal_bone_positions(animation, self.sequence, self.phase, self.root_motion)?
-            .into_iter()
+    fn bone_positions_from(&self, sample: &openhp1_mesh::MeshSample) -> Vec<Vec3> {
+        let positions = sample
+            .bone_positions()
             .map(|position| self.transform.transform_point3(position))
             .collect::<Vec<_>>();
-        Ok(self
-            .tween_bone_positions_from
-            .as_ref()
-            .map_or(positions.clone(), |from| {
-                from.iter()
-                    .zip(&positions)
-                    .map(|(from, to)| from.lerp(*to, self.tween_elapsed / self.tween_duration))
-                    .collect()
-            }))
+        if let Some(from) = &self.tween_bone_positions_from {
+            from.iter()
+                .zip(&positions)
+                .map(|(from, to)| from.lerp(*to, self.tween_elapsed / self.tween_duration))
+                .collect()
+        } else {
+            positions
+        }
     }
 
     fn local_attachment(&self) -> openhp1_mesh::Result<Option<Mat4>> {
@@ -3474,6 +3478,14 @@ fn append_actor_mesh(
         frame_count: sequences[sequence].frame_count,
     });
     if !sequences.is_empty() {
+        let bone_positions = match animation_source {
+            ActorAnimationSource::Skeletal(animation) => mesh
+                .sample_skeletal_bone_positions(animation, sequence.unwrap_or(0), phase, false)?
+                .into_iter()
+                .map(|position| transform.transform_point3(position))
+                .collect(),
+            ActorAnimationSource::Legacy | ActorAnimationSource::Error(_) => Vec::new(),
+        };
         animations.push(AnimatedActorMesh {
             actor_index,
             mesh: Arc::clone(mesh),
@@ -3491,6 +3503,7 @@ fn append_actor_mesh(
             tween_from: None,
             tween_attachment_from: None,
             tween_bone_positions_from: None,
+            bone_positions,
             tween_elapsed: 0.0,
             tween_duration: 0.0,
             vertices: first_vertex..render_mesh.positions.len(),
