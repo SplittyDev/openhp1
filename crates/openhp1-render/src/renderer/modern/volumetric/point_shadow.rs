@@ -256,8 +256,14 @@ impl PointShadowRenderer {
         }
     }
 
-    pub(super) fn update(&mut self, sources: Vec<PointFixture>, changes: Vec<ShadowChangeBounds>) {
-        self.sources = sources;
+    pub(super) fn update(
+        &mut self,
+        sources: Option<Vec<PointFixture>>,
+        changes: Vec<ShadowChangeBounds>,
+    ) {
+        if let Some(sources) = sources {
+            self.sources = sources;
+        }
         self.geometry_changes.extend(changes);
     }
 

@@ -76,6 +76,15 @@ or caster geometry changes. On the Retina portal-camera forced-update workload,
 this removed three steady shadow passes and improved the three-run median from
 70.723 to 68.992 ms/frame (2.4%), with checksum `4b3c4d710847bf8f` unchanged.
 
+The local-volumetric light inputs now also persist across unrelated vertex
+updates. A Time Profiler capture showed point fixture clustering and instance
+packing repeating even when every light, corona, and source texture was
+unchanged. Comparing only the fields that can affect those outputs reduced the
+same forced-update workload from 73.781 ms/frame to a three-run median of
+46.173 ms/frame (37.4%), with checksum `4b3c4d710847bf8f` and 198 submissions
+unchanged. Geometry invalidation remains independent, so moving shadow casters
+still invalidate the affected point shadows.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,

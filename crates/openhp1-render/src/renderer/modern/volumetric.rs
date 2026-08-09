@@ -5,7 +5,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
-use openhp1_scene::{RenderLight, RenderScene, TextureImage};
+use openhp1_scene::{Corona, RenderLight, RenderScene, TextureImage};
 use wgpu::util::DeviceExt;
 
 use crate::{Camera, VolumetricDebugView, VolumetricTuning};
@@ -44,6 +44,37 @@ struct VolumetricInstance {
     profile: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VolumetricLightKey {
+    actor_index: usize,
+    source_texture: Option<usize>,
+    location: Vec3,
+    effect: u8,
+    brightness: u8,
+    hue: u8,
+    saturation: u8,
+    volume_brightness: u8,
+    volume_fog: u8,
+    volume_radius: u8,
+}
+
+impl From<&RenderLight> for VolumetricLightKey {
+    fn from(light: &RenderLight) -> Self {
+        Self {
+            actor_index: light.actor_index,
+            source_texture: light.source_texture,
+            location: light.location,
+            effect: light.effect,
+            brightness: light.brightness,
+            hue: light.hue,
+            saturation: light.saturation,
+            volume_brightness: light.volume_brightness,
+            volume_fog: light.volume_fog,
+            volume_radius: light.volume_radius,
+        }
+    }
+}
+
 pub(super) struct VolumetricRenderer {
     shadow: DirectionalShadow,
     froxel: FroxelVolume,
@@ -59,6 +90,9 @@ pub(super) struct VolumetricRenderer {
     point_volume_buffer: wgpu::Buffer,
     point_volume_count: usize,
     texture_colors: HashMap<usize, Vec3>,
+    light_keys: Vec<VolumetricLightKey>,
+    coronas: Vec<Corona>,
+    light_inputs_dirty: bool,
     tuning: VolumetricTuning,
 }
 
@@ -165,6 +199,9 @@ impl VolumetricRenderer {
             point_volume_buffer,
             point_volume_count: 0,
             texture_colors,
+            light_keys: volumetric_light_keys(scene),
+            coronas: scene.coronas.clone(),
+            light_inputs_dirty: false,
             tuning,
         }
     }
@@ -194,14 +231,26 @@ impl VolumetricRenderer {
     }
 
     pub(super) fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        refresh_source_texture_colors(&mut self.texture_colors, scene);
-        let fixtures = point_fixtures(scene, &self.texture_colors);
-        let (instance_actor_indices, instances) = instances(scene, &self.texture_colors, &fixtures);
-        if instances.len() != self.instances.len() {
-            return false;
-        }
-        self.instance_actor_indices = instance_actor_indices;
-        self.instances = instances;
+        let light_inputs_changed = self.light_inputs_dirty
+            || self.coronas != scene.coronas
+            || !volumetric_light_keys_match(scene, &self.light_keys);
+        let fixtures = if light_inputs_changed {
+            refresh_source_texture_colors(&mut self.texture_colors, scene);
+            let fixtures = point_fixtures(scene, &self.texture_colors);
+            let (instance_actor_indices, instances) =
+                instances(scene, &self.texture_colors, &fixtures);
+            if instances.len() != self.instances.len() {
+                return false;
+            }
+            self.instance_actor_indices = instance_actor_indices;
+            self.instances = instances;
+            self.light_keys = volumetric_light_keys(scene);
+            self.coronas.clone_from(&scene.coronas);
+            self.light_inputs_dirty = false;
+            Some(fixtures)
+        } else {
+            None
+        };
         let Some(shadow_changes) = self.shadow.update(queue, scene) else {
             return false;
         };
@@ -210,6 +259,12 @@ impl VolumetricRenderer {
     }
 
     pub(super) fn update_textures(&mut self, textures: &[TextureImage], changed: &[usize]) -> bool {
+        if changed
+            .iter()
+            .any(|index| self.texture_colors.contains_key(index))
+        {
+            self.light_inputs_dirty = true;
+        }
         update_source_texture_colors(&mut self.texture_colors, textures, changed)
     }
 
@@ -472,6 +527,26 @@ fn source_texture_colors(scene: &RenderScene) -> HashMap<usize, Vec3> {
     colors
 }
 
+fn volumetric_lights(scene: &RenderScene) -> impl Iterator<Item = &RenderLight> {
+    scene
+        .realtime_lightmaps
+        .iter()
+        .flat_map(|lightmap| &lightmap.lights)
+}
+
+fn volumetric_light_keys(scene: &RenderScene) -> Vec<VolumetricLightKey> {
+    volumetric_lights(scene)
+        .map(VolumetricLightKey::from)
+        .collect()
+}
+
+fn volumetric_light_keys_match(scene: &RenderScene, keys: &[VolumetricLightKey]) -> bool {
+    let mut lights = volumetric_lights(scene);
+    keys.iter()
+        .all(|key| lights.next().is_some_and(|light| *key == light.into()))
+        && lights.next().is_none()
+}
+
 fn refresh_source_texture_colors(colors: &mut HashMap<usize, Vec3>, scene: &RenderScene) {
     let indices = scene
         .realtime_lightmaps
@@ -643,6 +718,21 @@ mod tests {
                 values: vec![255],
             },
         }
+    }
+
+    #[test]
+    fn volumetric_light_key_tracks_only_volumetric_inputs() {
+        let light = light(3, 7);
+        let key = VolumetricLightKey::from(&light);
+        let mut changed = light.clone();
+        changed.direction = Vec3::X;
+        changed.radius = 200;
+        changed.cone = 32;
+        changed.visibility.values[0] = 0;
+        assert_eq!(VolumetricLightKey::from(&changed), key);
+
+        changed.volume_fog += 1;
+        assert_ne!(VolumetricLightKey::from(&changed), key);
     }
 
     #[test]
