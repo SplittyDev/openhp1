@@ -366,8 +366,7 @@ ms/frame (3.0%). A conservative screen-rectangle branch around `portal_light`
 also regressed to 46.073 ms/frame (4.0%). All retained the same
 `4b3c4d710847bf8f` checksum and 198 draw calls. On this Metal path, loop-carried
 state, synchronization, and divergence cost more than the arithmetic they
-avoid. The next implementation should reduce the portal loop's trip count with
-an order-preserving per-tile list rather than adding work inside that loop.
+avoid.
 
 The larger opportunity is a **conservative, order-preserving portal list per
 screen tile**. The current CPU path globally camera-culls portals, but every
@@ -381,6 +380,24 @@ lists; this is the authoritative precedent, not a mandate to copy its broader
 renderer
 ([EA/Frostbite overview](https://www.ea.com/news/physically-based-unified-volumetric-rendering-in-frostbite),
 [SIGGRAPH 2015 Frostbite course material](https://www.advances.realtimerendering.com/s2015/Frostbite%20PB%20and%20unified%20volumetrics.pptx)).
+
+That list was also tested and removed. Conservative projected prism bounds
+reduced the 112-portal loop to an average of 9.6 portals per 8x8 tile (maximum
+72), but rebuilding and uploading the lists every frame regressed the median
+to 47.566 ms/frame (7.3%). Caching unchanged lists recovered that CPU/upload
+cost, but the remaining storage-buffer indirection still measured 45.550
+ms/frame (2.8% slower than the 44.319 ms/frame baseline). Both variants kept
+checksum `4b3c4d710847bf8f` and 198 draw calls. No froxel-loop restructuring
+tested so far is a measured win on this Metal workload; revisit it only with a
+GPU capture showing a different bottleneck or a substantially cheaper list
+representation.
+
+Packing portal-invariant edges, normalized direction, inverse determinant,
+center coordinates, and UV deltas into a smaller 128-byte record was likewise
+removed. It preserved the checksum and draw count but measured 46.089 ms/frame
+(4.0% slower). Even removing only the redundant direction normalization
+measured 46.279 ms/frame. The unmodified control immediately afterward was
+44.667 ms/frame, consistent with the established 44.319 ms/frame baseline.
 
 Do not start by changing `TILE_SIZE`, `DEPTH_SLICES`, the 1500-unit distance,
 portal order, shadow filtering, or noise. Those change sampling or floating
