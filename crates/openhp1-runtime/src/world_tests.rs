@@ -10480,3 +10480,74 @@ fn state_lookups_are_case_insensitive() {
         StateLookup::new(class, "PATROL")
     );
 }
+
+#[test]
+fn set_physics_clears_motion_for_none_and_rotating() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-set-physics-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let fields = ["Physics", "Velocity", "Acceleration"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let field = ObjectId {
+                package: Arc::from("<set-physics-test>"),
+                export_index: index,
+            };
+            runtime.fields.insert(
+                (class_id.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+            (name, field)
+        })
+        .collect::<HashMap<_, _>>();
+    let mut instance = InstanceState::default();
+
+    for physics in [physics::PHYS_NONE, physics::PHYS_ROTATING] {
+        instance.insert(
+            fields["Velocity"].clone(),
+            StoredValue::Value(Value::Vector([100.0, 20.0, 0.0])),
+        );
+        instance.insert(
+            fields["Acceleration"].clone(),
+            StoredValue::Value(Value::Vector([500.0, 0.0, 0.0])),
+        );
+        runtime
+            .native(
+                0,
+                &class,
+                &package,
+                SET_PHYSICS,
+                &[Value::Byte(physics)],
+                &mut instance,
+                &mut Vec::new(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            instance.get(&fields["Velocity"]),
+            Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+        );
+        assert_eq!(
+            instance.get(&fields["Acceleration"]),
+            Some(&StoredValue::Value(Value::Vector([0.0; 3])))
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}

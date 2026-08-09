@@ -946,11 +946,12 @@ impl ScriptRuntime {
                         .join(", ")
                 ));
             };
-            let field = self
-                .find_property(actor_class, "Physics", 0)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| "SetPhysics property Physics is missing".to_owned())?;
-            instance.insert(field, StoredValue::Value(Value::Byte(*physics)));
+            self.set_actor_value(actor_class, instance, "Physics", Value::Byte(*physics))?;
+            if matches!(*physics, physics::PHYS_NONE | physics::PHYS_ROTATING) {
+                for property in ["Velocity", "Acceleration"] {
+                    self.set_actor_value(actor_class, instance, property, Value::Vector([0.0; 3]))?;
+                }
+            }
             return Ok(Value::None);
         }
         if matches!(index, MOVE | MOVE_SMOOTH) {

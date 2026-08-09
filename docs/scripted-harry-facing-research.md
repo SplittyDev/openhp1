@@ -27,13 +27,20 @@ walker reaches the original map's invisible semisolid classroom ramp, and the
 shipped native projection produces the same approximately `(0,-40,-20)` slide
 as OpenHP1. Suppressing that slide would contradict the original binary.
 
-The confirmed route divergence is in the following world sweep. The shipped
-`FBoxLineCheck` recursively follows only BSP sides intersected by the moving
-box and tests a collision hull only at a reached inside leaf. OpenHP1 instead
-considered every decoded world hull whose bounds overlapped the sweep. Porting
-the native CSG-reachability walk removes those ineligible candidates and lets
-the faithful `CutScene59` replay complete its second leg instead of stalling
-near the classroom benches. This is the smallest source-backed collision fix.
+The live `CutScene59` replay invalidated the zero-momentum headless replay as
+an acceptance test: Harry passes the first aisle waypoint and runs toward the
+wall before collision can explain the divergence. The headless setup had
+started Harry with zero `Velocity` and `Acceleration`, while the authored touch
+path begins as Harry runs into the cutscene trigger.
+
+The missing transition is in native `SetPhysics`. `CutIdleing` selects
+`PHYS_Rotating` before the first scripted leg. The shipped native clears both
+motion vectors for that physics mode, but OpenHP1 previously changed only the
+`Physics` byte. Its walking physics therefore added Harry's incoming player-run
+momentum after `CutMovingTo.PlayerTick` had already called `MoveSmooth` toward
+the authored mark. That extra displacement carries him past the waypoint and
+leaves the cutscene timeout to teleport him back. Restoring the native reset is
+the first source-backed fix that addresses the pre-collision divergence.
 
 A separate facing gap is broader than `CutMovingTo`: shipped `Engine.u`
 explicitly says both latent `MoveTo` and `MoveToward` rotate the pawn toward
@@ -306,13 +313,13 @@ the slope projection would be wrong: the ramp contact is valid. The actual
 shared gap was selecting hull candidates globally instead of allowing the BSP
 topology and CSG outside state to select collision leaves.
 
-The faithful `CutScene59` replay validates that distinction. Before the
-reachability filter, its second Harry leg stalled near X=1599 and eventually
-used the authored timeout relocation. With the original recursive candidate
-walk, it advances through X=1603 and onward to `CutMark40` near X=1620 by about
-five seconds. A later forced-harness contact around nine seconds is an
-overlapping startup/cutscene diagnostic and is not evidence for the supplied
-route. In particular, logged `CollisionHit.node` values identify the entering
+The zero-momentum `CutScene59` harness did show that the recursive candidate
+walk advances through X=1603 and onward to `CutMark40` instead of selecting an
+ineligible hull near X=1599. The live replay nevertheless proves that result
+does not validate the authored route: it omitted the incoming player momentum
+that causes the earlier divergence. A later forced-harness contact around nine
+seconds is also an overlapping startup/cutscene diagnostic and is not evidence
+for the supplied route. Logged `CollisionHit.node` values identify the entering
 hull plane, not the owner of the eligible collision leaf; plane IDs alone must
 not be used to infer that the recursion selected an unreachable leaf.
 
@@ -322,8 +329,8 @@ On the faithful replay, Harry reaches the second mark with center
 `(1506.0388,-6563.1367,853.03174)`. `CutMovingTo` then cues the cutscene and
 enters `CutIdleing`. The compiled Begin of state export 2848 selects physics 5
 (`PHYS_Rotating`) and calls native 3969 with `(0,0,-100)` before `LoopAnim`.
-Velocity and Acceleration are both zero and no animation root displacement is
-present; this call alone changes the center to approximately
+In the isolated harness, Velocity and Acceleration were both seeded to zero and
+no animation root displacement was present; this call alone changed the center to approximately
 `(1506.0388,-6603.1367,833.0317)`.
 
 OpenHP1's first world hit is at essentially time zero with normal
@@ -354,9 +361,11 @@ shipped semantics.
 The shipped native `SetPhysics` has one relevant semantic absent from the
 original OpenHP1 implementation: `AActor::setPhysics` body `0x103e5140` zeros
 the actor vectors at offsets `0x12c` and `0x13c` when selecting physics 0 or 5.
-`Engine.u` identifies those fields as `Velocity` and `Acceleration`. Restoring
-that behavior is source-backed, but it is insufficient here because both
-vectors were already zero throughout the exact replay.
+`Engine.u` identifies those fields as `Velocity` and `Acceleration`. The live
+path reaches `CutScene59` by running into its touch trigger, so those vectors
+are not generally zero. OpenHP1's missing reset allowed automatic walking
+physics to add that stale momentum after the scripted `MoveSmooth`; the
+zero-seeded diagnostic concealed this first-leg divergence.
 
 `GotoState` is not deferred to another frame. `AActor::ProcessState` body
 `0x1040ef10` compares the current StateFrame node with the saved node after an
@@ -425,14 +434,14 @@ The source-backed facing change remains narrow: matching latent `MoveTo` and
 `MoveToward` join `CutMovingTo` and the turn latents in the existing
 PlayerPawn rotation gate. The collision work likewise stays at shared native
 seams: aligned pawn bounds, the complete `MoveSmooth` wall adjustment, and
-recursive CSG leaf eligibility. The faithful headless replay now completes the
-reported `CutScene59` route; rendered confirmation remains a separate visual
-check.
+recursive CSG leaf eligibility. None of those collision changes explains the
+earlier live divergence. Matching the native `SetPhysics` motion reset removes
+the extra pre-collision movement. A normal live approach into `CutScene59` on
+2026-08-10 confirmed that Harry follows the authored aisle route without the
+timeout teleports.
 
-The route's shared collision seam is now established: retain the original
-recursive BSP `Outside`/`IsCsg` eligibility before clipping leaf hulls. A retail
-trace could still verify exact item numbers and positions, but it is no longer
-needed to choose between a slope workaround and a CSG traversal fix. An
-authored `ChessMode` replay remains useful for the separate facing question
+The original recursive BSP `Outside`/`IsCsg` eligibility remains a shared
+collision requirement, but it is not the first cause of this route failure.
+An authored `ChessMode` replay remains useful for the separate facing question
 because its own `PlayerTick` may intentionally take precedence over latent
 rotation.

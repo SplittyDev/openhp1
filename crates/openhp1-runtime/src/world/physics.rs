@@ -11,12 +11,12 @@ mod kinematics;
 use kinematics::*;
 
 const PHYSICS_STEP: f32 = 0.02;
-const PHYS_NONE: u8 = 0;
+pub(super) const PHYS_NONE: u8 = 0;
 pub(super) const PHYS_WALKING: u8 = 1;
 pub(super) const PHYS_FALLING: u8 = 2;
 pub(super) const PHYS_SWIMMING: u8 = 3;
 pub(super) const PHYS_FLYING: u8 = 4;
-const PHYS_ROTATING: u8 = 5;
+pub(super) const PHYS_ROTATING: u8 = 5;
 const PHYS_PROJECTILE: u8 = 6;
 const PHYS_ROLLING: u8 = 7;
 const PHYS_INTERPOLATING: u8 = 8;
