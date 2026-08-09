@@ -3004,14 +3004,13 @@ fn particle_render_primitive_positions(
     if render_primitive != 2 {
         return particle_sprite_positions(center, half_size, view_rotation, spin);
     }
-    let (sin, cos) = spin.sin_cos();
-    let side = Vec3::new(cos, sin, 0.0) * half_size.x;
-    let up = Vec3::new(-sin, cos, 0.0) * half_size.y;
+    let side = view_rotation.transform_vector3(Vec3::Y) * half_size.x;
+    let down = -view_rotation.transform_vector3(Vec3::Z) * half_size.y;
     [
-        center - side - up,
-        center + side - up,
-        center + side + up,
-        center - side + up,
+        center - side + down * 1.5,
+        center + down * 2.0,
+        center + side + down,
+        center,
     ]
 }
 
@@ -5566,7 +5565,7 @@ mod tests {
     }
 
     #[test]
-    fn particle_liquid_uses_a_horizontal_world_plane() {
+    fn particle_liquid_uses_the_view_plane() {
         let center = glam::Vec3::new(1.0, 2.0, 3.0);
         let positions = super::particle_render_primitive_positions(
             center,
@@ -5578,8 +5577,9 @@ mod tests {
             0.0,
             2,
         );
-        assert!(positions[0].abs_diff_eq(glam::Vec3::new(-1.0, 1.0, 3.0), 1.0e-5));
-        assert!(positions[2].abs_diff_eq(glam::Vec3::new(3.0, 3.0, 3.0), 1.0e-5));
-        assert!(positions.iter().all(|position| position.z == center.z));
+        assert!(positions[0].abs_diff_eq(glam::Vec3::new(3.0, 2.0, 1.5), 1.0e-5));
+        assert!(positions[1].abs_diff_eq(glam::Vec3::new(1.0, 2.0, 1.0), 1.0e-5));
+        assert!(positions[2].abs_diff_eq(glam::Vec3::new(-1.0, 2.0, 2.0), 1.0e-5));
+        assert_eq!(positions[3], center);
     }
 }
