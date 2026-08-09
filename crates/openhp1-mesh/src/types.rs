@@ -59,6 +59,14 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    pub fn has_attachment_pose(&self) -> bool {
+        self.attachment_vertices.is_some()
+            || self
+                .skeletal
+                .as_ref()
+                .is_some_and(|mesh| mesh.weapon_bone.is_some())
+    }
+
     pub fn bone_names(&self) -> impl Iterator<Item = &str> {
         self.skeletal
             .iter()
@@ -499,7 +507,7 @@ mod tests {
         };
 
         let (points, motion) = animation.sample_with_root_motion(&mesh, 0, 0.5).unwrap();
-        let attached = Mesh {
+        let mut attached_mesh = Mesh {
             triangles: Vec::new(),
             textures: Vec::new(),
             animation_sequences: Vec::new(),
@@ -515,10 +523,18 @@ mod tests {
             face_vertices: Vec::new(),
             attachment_vertices: None,
             skeletal: Some(mesh.clone()),
-        }
-        .sample_skeletal_weapon_transform(&animation, 0, 0.5, true)
-        .unwrap()
-        .unwrap();
+        };
+        assert!(attached_mesh.has_attachment_pose());
+        attached_mesh.skeletal.as_mut().unwrap().weapon_bone = None;
+        assert!(!attached_mesh.has_attachment_pose());
+        attached_mesh.attachment_vertices = Some([0; 3]);
+        assert!(attached_mesh.has_attachment_pose());
+        attached_mesh.attachment_vertices = None;
+        attached_mesh.skeletal.as_mut().unwrap().weapon_bone = Some(0);
+        let attached = attached_mesh
+            .sample_skeletal_weapon_transform(&animation, 0, 0.5, true)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(points, vec![Vec3::ZERO]);
         assert_eq!(motion, Vec3::new(2.0, -1.0, 3.0));

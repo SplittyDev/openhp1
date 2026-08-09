@@ -2202,6 +2202,9 @@ impl AnimatedActorMesh {
         let Some(animation) = &self.skeletal_animation else {
             return Ok(None);
         };
+        if !self.mesh.has_attachment_pose() {
+            return Ok(None);
+        }
         if let Some(points) =
             self.mesh
                 .sample_skeletal_attachment(animation, self.sequence, self.phase)?
