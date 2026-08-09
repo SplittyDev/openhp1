@@ -69,24 +69,59 @@ struct HullPlane {
 #[derive(Clone, Copy)]
 enum SweepShape {
     Aabb(Vec3),
-    Cylinder { radius: f32, height: f32 },
+    Cylinder {
+        radius: f32,
+        height: f32,
+        support_transform: Mat3,
+    },
 }
 
 impl SweepShape {
     fn bounds(self) -> Vec3 {
         match self {
             Self::Aabb(extents) => extents,
-            Self::Cylinder { radius, height } => Vec3::new(radius, radius, height),
+            Self::Cylinder { .. } => Vec3::new(
+                self.support(Vec3::X),
+                self.support(Vec3::Y),
+                self.support(Vec3::Z),
+            ),
         }
     }
 
     fn support(self, normal: Vec3) -> f32 {
         match self {
             Self::Aabb(extents) => normal.abs().dot(extents),
-            Self::Cylinder { radius, height } => {
+            Self::Cylinder {
+                radius,
+                height,
+                support_transform,
+            } => {
+                let normal = support_transform * normal;
                 normal.truncate().length() * radius + normal.z.abs() * height
             }
         }
+    }
+
+    fn axis_aligned_cylinder(self) -> Option<(f32, f32)> {
+        let Self::Cylinder {
+            radius,
+            height,
+            support_transform,
+        } = self
+        else {
+            return None;
+        };
+        let x = support_transform * Vec3::X;
+        let y = support_transform * Vec3::Y;
+        let z = support_transform * Vec3::Z;
+        let x_scale = x.truncate().length();
+        let y_scale = y.truncate().length();
+        (x.z.abs() <= 1.0e-5
+            && y.z.abs() <= 1.0e-5
+            && z.truncate().length_squared() <= 1.0e-10
+            && (x_scale - y_scale).abs() <= 1.0e-5
+            && x.truncate().dot(y.truncate()).abs() <= 1.0e-5)
+            .then_some((radius * x_scale, height * z.z.abs()))
     }
 }
 
@@ -271,7 +306,15 @@ impl BspCollision {
         {
             return None;
         }
-        self.sweep_shape(start, end, SweepShape::Cylinder { radius, height })
+        self.sweep_shape(
+            start,
+            end,
+            SweepShape::Cylinder {
+                radius,
+                height,
+                support_transform: Mat3::IDENTITY,
+            },
+        )
     }
 
     pub fn overlaps_aabb(&self, location: Vec3, extents: Vec3) -> bool {
@@ -286,7 +329,14 @@ impl BspCollision {
             && height.is_finite()
             && radius >= 0.0
             && height >= 0.0
-            && self.overlaps_shape(location, SweepShape::Cylinder { radius, height })
+            && self.overlaps_shape(
+                location,
+                SweepShape::Cylinder {
+                    radius,
+                    height,
+                    support_transform: Mat3::IDENTITY,
+                },
+            )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -319,6 +369,49 @@ impl BspCollision {
                 hit.normal = (rotation * (hit.normal / scale)).normalize();
                 hit
             })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sweep_transformed_cylinder(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        radius: f32,
+        height: f32,
+        location: Vec3,
+        rotation: Mat3,
+        pre_pivot: Vec3,
+        scale: Vec3,
+    ) -> Option<CollisionHit> {
+        if !start.is_finite()
+            || !end.is_finite()
+            || !radius.is_finite()
+            || !height.is_finite()
+            || !location.is_finite()
+            || !rotation.is_finite()
+            || !pre_pivot.is_finite()
+            || !scale.is_finite()
+            || radius < 0.0
+            || height < 0.0
+            || scale.abs().cmple(Vec3::splat(f32::EPSILON)).any()
+        {
+            return None;
+        }
+        let world_to_local = rotation.transpose();
+        let to_local = |point| world_to_local * (point - location) / scale + pre_pivot;
+        self.sweep_shape(
+            to_local(start),
+            to_local(end),
+            SweepShape::Cylinder {
+                radius,
+                height,
+                support_transform: rotation * Mat3::from_diagonal(scale.recip()),
+            },
+        )
+        .map(|mut hit| {
+            hit.normal = (rotation * (hit.normal / scale)).normalize();
+            hit
+        })
     }
 
     pub fn overlaps_transformed_aabb(
@@ -410,7 +503,7 @@ impl BspCollision {
                 minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
                 maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
             };
-            if let SweepShape::Cylinder { radius, height } = shape
+            if let Some((radius, height)) = shape.axis_aligned_cylinder()
                 && hull_is_axis_aligned_box(hull)
             {
                 let target = (bounds.minimum + bounds.maximum) * 0.5;

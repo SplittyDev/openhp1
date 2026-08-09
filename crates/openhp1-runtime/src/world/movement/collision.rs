@@ -171,8 +171,10 @@ pub(super) fn sweep_collision_actors(
 ) -> Option<CollisionSweep> {
     let current_location = collision_actor_center(current);
     if let Some(brush) = &other.brush {
-        brush
-            .sweep_transformed_aabb(
+        let hit = if current.collide_type == COLLIDE_BOX
+            || current.collide_type == COLLIDE_SHAPE && current.shape_bounds.is_some()
+        {
+            brush.sweep_transformed_aabb(
                 current_location,
                 current_location + delta,
                 collision_actor_world_extents(current),
@@ -181,11 +183,23 @@ pub(super) fn sweep_collision_actors(
                 other.pre_pivot,
                 other.main_scale,
             )
-            .map(|hit| CollisionSweep {
-                fraction: hit.fraction,
-                normal: hit.normal,
-                node: Some(hit.node),
-            })
+        } else {
+            brush.sweep_transformed_cylinder(
+                current_location,
+                current_location + delta,
+                current.radius,
+                current.height,
+                other.location,
+                other.rotation,
+                other.pre_pivot,
+                other.main_scale,
+            )
+        };
+        hit.map(|hit| CollisionSweep {
+            fraction: hit.fraction,
+            normal: hit.normal,
+            node: Some(hit.node),
+        })
     } else if other.collide_type == COLLIDE_BOX
         || other.collide_type == COLLIDE_SHAPE && other.shape_bounds.is_some()
     {

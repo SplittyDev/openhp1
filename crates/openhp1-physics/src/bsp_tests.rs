@@ -103,6 +103,19 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
         .unwrap();
     assert!(hit.fraction > 0.35 && hit.fraction < 0.45);
     assert!(hit.normal.abs_diff_eq(Vec3::Y, 1.0e-6));
+    let corner = collision
+        .sweep_transformed_cylinder(
+            Vec3::new(13.0, 11.5, 0.0),
+            Vec3::new(0.0, 11.5, 0.0),
+            2.0,
+            1.0,
+            Vec3::ZERO,
+            Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            Vec3::ZERO,
+            Vec3::ONE,
+        )
+        .unwrap();
+    assert!(corner.normal.abs_diff_eq(Vec3::new(0.6, 0.8, 0.0), 1.0e-4));
     assert_eq!(
         collision.transformed_bounds(Vec3::new(100.0, 0.0, 0.0), rotation, Vec3::ZERO, Vec3::ONE,),
         Some((Vec3::new(100.0, 0.0, 0.0), Vec3::splat(10.1)))

@@ -156,6 +156,14 @@ Moving-brush rotation must use the same runtime mutation path as native
 leaves the cached collision transform at the previous angle, so an authored
 rotating door can look open while still blocking a scripted pawn as if closed.
 
+The shipped `Engine.Actor` script defines collision type 0 as an aligned
+cylinder. Ambient students in `Lev_Tut1`, including the patrol through
+`GrandHallDoors`, serialize that type. Their yaw therefore cannot change the
+footprint that meets the door. Brush sweeps must preserve the cylinder against
+the mover's transform; approximating it with an oriented box creates square
+corners that catch on the opened door leaf instead of producing the radial
+normal needed to slide past it.
+
 ## Harry jump and ledge states are separate
 
 Harry's ordinary jump and ledge-climb flow is not a fallback used by
@@ -186,8 +194,10 @@ A faithful runtime should be checked at these shared boundaries:
 6. preserve mover collision and `EncroachingOn` semantics independently;
 7. prevent ambient bump emotes while the original HUD cutscene flag is set.
 8. keep a moving brush's rendered and cached collision rotations synchronized.
+9. preserve an aligned-cylinder pawn shape when sweeping it against a rotated
+   moving brush.
 
-If all eight hold, a blocked scripted pawn can end at an imperfect visible
+If all nine hold, a blocked scripted pawn can end at an imperfect visible
 location, but it cannot retain player capture forever. A forced scene release,
 actor-specific collision exception, or map-specific teleport would bypass
 the original contract rather than restore it.
@@ -202,4 +212,4 @@ the original contract rather than restore it.
 | `Engine.u` | `Actor` exports 5764 and 5773 | Native `MoveSmooth` and `SetLocation` declarations |
 | `Engine.u` | `Mover` export 3305 and `TriggerToggle` state export 3250 | Encroachment result and door interpolation state |
 | `HarryPotter.u` | `Harry` function exports 40 and 436; state exports 633, 740, 774 | Separate jump and mount/ledge flow |
-| `Lev_Tut1.unr` | exports 1824, 1738, 1702 | Rotating doorway and its triggers |
+| `Lev_Tut1.unr` | exports 1824, 1738, 1702; `Mover0` export 1693 | Rotating doorways and their triggers |
