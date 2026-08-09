@@ -60,10 +60,12 @@ fn two_wall_adjust(
 
 fn player_rotation_is_script_controlled(
     player_pawn: bool,
+    script_sets_desired_rotation: bool,
     actor: usize,
     state_frames: &HashMap<usize, StateFrame>,
 ) -> bool {
     player_pawn
+        && !script_sets_desired_rotation
         && !state_frames.values().any(|frame| {
             matches!(
                 frame.latent,
@@ -561,13 +563,24 @@ mod tests {
             latent,
         };
         let mut frames = HashMap::default();
-        assert!(player_rotation_is_script_controlled(true, 7, &frames));
-        assert!(!player_rotation_is_script_controlled(false, 7, &frames));
+        assert!(player_rotation_is_script_controlled(
+            true, false, 7, &frames
+        ));
+        assert!(!player_rotation_is_script_controlled(
+            false, false, 7, &frames
+        ));
+        assert!(!player_rotation_is_script_controlled(
+            true, true, 7, &frames
+        ));
         frames.insert(99, frame(LatentAction::TurnTo(8)));
-        assert!(player_rotation_is_script_controlled(true, 7, &frames));
+        assert!(player_rotation_is_script_controlled(
+            true, false, 7, &frames
+        ));
         for latent in [LatentAction::TurnTo(7), LatentAction::TurnToward(7)] {
             frames.insert(99, frame(latent));
-            assert!(!player_rotation_is_script_controlled(true, 7, &frames));
+            assert!(!player_rotation_is_script_controlled(
+                true, false, 7, &frames
+            ));
         }
     }
 }

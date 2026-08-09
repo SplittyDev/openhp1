@@ -51,6 +51,11 @@ Its movement event then does the following each game tick:
 6. after timeout, call `SetLocation` at the destination, call `MoveSmooth`
    downward by 100 units, and mark arrival.
 
+`baseHarry` derives from `PlayerPawn`, but its compiled `CutMovingTo.PlayerTick`
+still assigns `DesiredRotation` from that heading. Normal player input owns
+Harry's rotation outside this state; while `CutMovingTo` is active, pawn
+rotation must consume the authored value so his mesh faces along the run.
+
 The script ignores every `MoveSmooth` result and the `SetLocation` result.
 `Actor.MoveSmooth` is native 3969 (`Engine.u`, export 5764), while
 `Actor.SetLocation` is native 267 (`Engine.u`, export 5773). Consequently, even
@@ -196,8 +201,10 @@ A faithful runtime should be checked at these shared boundaries:
 8. keep a moving brush's rendered and cached collision rotations synchronized.
 9. preserve an aligned-cylinder pawn shape when sweeping it against a rotated
    moving brush.
+10. let `baseHarry.CutMovingTo` apply its authored `DesiredRotation` while
+    retaining input-owned rotation in ordinary player states.
 
-If all nine hold, a blocked scripted pawn can end at an imperfect visible
+If all ten hold, a blocked scripted pawn can end at an imperfect visible
 location, but it cannot retain player capture forever. A forced scene release,
 actor-specific collision exception, or map-specific teleport would bypass
 the original contract rather than restore it.
