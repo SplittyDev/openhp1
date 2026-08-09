@@ -187,7 +187,8 @@ fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
     let color = apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
-    return apply_opacity(input, color);
+    // UE1 clamps the lit source before blending; the modern target does not.
+    return clamp(apply_opacity(input, color), vec4(0.0), vec4(1.0));
 }
 
 @fragment
@@ -196,7 +197,7 @@ fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32>
     if color.a < 0.5 {
         discard;
     }
-    return apply_opacity(input, apply_realtime_light(input, color));
+    return clamp(apply_opacity(input, apply_realtime_light(input, color)), vec4(0.0), vec4(1.0));
 }
 
 @fragment
