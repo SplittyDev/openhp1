@@ -19,6 +19,20 @@ use openhp1_scene::{
 use crate::target::ColorTarget;
 
 const FRAME_TIMING_SAMPLE_SECONDS: f32 = 0.5;
+const RESOLUTION_PRESETS: [[u32; 2]; 12] = [
+    [512, 384],
+    [640, 480],
+    [800, 600],
+    [1024, 768],
+    [1280, 960],
+    [1600, 1200],
+    [1920, 1440],
+    [2560, 1920],
+    [1280, 720],
+    [1920, 1080],
+    [2560, 1440],
+    [3840, 2160],
+];
 
 struct FrameTiming {
     accumulated_seconds: f32,
@@ -71,6 +85,7 @@ pub(crate) struct ViewerApp {
     load_error: Option<String>,
     renderer_settings: RendererSettings,
     volumetric_tuning: VolumetricTuning,
+    fixed_resolution: Option<[u32; 2]>,
 }
 
 impl ViewerApp {
@@ -124,6 +139,7 @@ impl ViewerApp {
             load_error: None,
             renderer_settings,
             volumetric_tuning: VolumetricTuning::default(),
+            fixed_resolution: None,
         })
     }
 
@@ -244,6 +260,29 @@ impl ViewerApp {
                             "Modern",
                         );
                     });
+                    ui.end_row();
+
+                    ui.label("Resolution");
+                    let target_size = self.target.size();
+                    egui::ComboBox::from_id_salt("viewer resolution selector")
+                        .selected_text(match self.fixed_resolution {
+                            Some([width, height]) => format!("{width} x {height}"),
+                            None => format!("Auto ({} x {})", target_size[0], target_size[1]),
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.fixed_resolution,
+                                None,
+                                "Auto (viewport)",
+                            );
+                            for [width, height] in RESOLUTION_PRESETS {
+                                ui.selectable_value(
+                                    &mut self.fixed_resolution,
+                                    Some([width, height]),
+                                    format!("{width} x {height}"),
+                                );
+                            }
+                        });
                     ui.end_row();
 
                     if self.renderer_settings.mode == RendererMode::Modern {
@@ -860,19 +899,25 @@ impl eframe::App for ViewerApp {
                 (available.x * pixels_per_point).round().max(1.0) as u32,
                 (available.y * pixels_per_point).round().max(1.0) as u32,
             ];
-            self.target.resize(&self.state, size);
+            let render_size = self.fixed_resolution.unwrap_or(size);
+            self.target.resize(&self.state, render_size);
             if let Some(path) = requested_level {
-                self.load_level(path, size);
+                self.load_level(path, render_size);
             } else if renderer_settings_changed {
-                self.rebuild_renderer(size);
+                self.rebuild_renderer(render_size);
             }
             self.renderer.set_volumetric_tuning(self.volumetric_tuning);
-            self.renderer.resize(&self.state.device, size);
-            let response = ui.add(
-                egui::Image::new((self.target.id, available))
-                    .sense(Sense::drag())
-                    .maintain_aspect_ratio(false),
-            );
+            self.renderer.resize(&self.state.device, render_size);
+            let source_size = egui::vec2(render_size[0] as f32, render_size[1] as f32);
+            let response = ui
+                .centered_and_justified(|ui| {
+                    ui.add(
+                        egui::Image::new((self.target.id, source_size))
+                            .fit_to_exact_size(available)
+                            .sense(Sense::drag()),
+                    )
+                })
+                .inner;
             self.update_camera(ui, &response, delta_time);
             self.update_animations(delta_time);
             self.update_runtime(delta_time);
@@ -888,7 +933,7 @@ impl eframe::App for ViewerApp {
                 &mut encoder,
                 &self.target.view,
                 &self.camera,
-                size,
+                render_size,
                 self.display_settings(),
             );
             self.state.queue.submit([encoder.finish()]);

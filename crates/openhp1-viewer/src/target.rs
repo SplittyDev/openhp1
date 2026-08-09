@@ -45,6 +45,10 @@ impl ColorTarget {
         self.view = view;
         self.size = size;
     }
+
+    pub(crate) fn size(&self) -> [u32; 2] {
+        self.size
+    }
 }
 
 fn create_color_texture(
