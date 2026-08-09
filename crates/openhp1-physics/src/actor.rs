@@ -1,4 +1,4 @@
-use glam::{Mat3, Vec3};
+use glam::{Mat3, Vec2, Vec3};
 
 const TRACE_MARGIN: f32 = 1.0;
 
@@ -176,6 +176,7 @@ pub(super) fn sweep_cylinder_aabb(
 ) -> Option<ActorCollisionHit> {
     let start = start - target;
     let end = end - target;
+    let delta = end - start;
     let combined_height = height + target_extents.z;
     let closest = start
         .truncate()
@@ -183,10 +184,35 @@ pub(super) fn sweep_cylinder_aabb(
     if start.z.abs() < combined_height
         && start.truncate().distance_squared(closest) < radius * radius
     {
+        let horizontal_offset = start.truncate() - closest;
+        let (horizontal_depth, horizontal_normal) =
+            if horizontal_offset.length_squared() > f32::EPSILON {
+                let distance = horizontal_offset.length();
+                (radius - distance, horizontal_offset / distance)
+            } else {
+                let x_depth = target_extents.x + radius - start.x.abs();
+                let y_depth = target_extents.y + radius - start.y.abs();
+                if x_depth <= y_depth {
+                    (x_depth, Vec2::X * if start.x >= 0.0 { 1.0 } else { -1.0 })
+                } else {
+                    (y_depth, Vec2::Y * if start.y >= 0.0 { 1.0 } else { -1.0 })
+                }
+            };
+        let vertical_depth = combined_height - start.z.abs();
+        let normal = if vertical_depth <= horizontal_depth {
+            Vec3::Z * if start.z >= 0.0 { 1.0 } else { -1.0 }
+        } else {
+            horizontal_normal.extend(0.0)
+        };
+        if delta.dot(normal) < 0.0 {
+            return Some(ActorCollisionHit {
+                fraction: 0.0,
+                normal,
+            });
+        }
         return None;
     }
 
-    let delta = end - start;
     let distance = delta.length();
     if distance <= f32::EPSILON {
         return None;

@@ -126,3 +126,18 @@ fn cylinder_sweep_rounds_horizontal_box_corners() {
     assert!(hit.normal.x > 0.0);
     assert!(hit.normal.y > 0.0);
 }
+
+#[test]
+fn cylinder_sweep_blocks_deeper_motion_from_an_aabb_overlap() {
+    let target_extents = Vec3::new(10.0, 10.0, 5.0);
+    let start = Vec3::new(0.0, 0.0, 6.0);
+
+    let hit =
+        sweep_cylinder_aabb(start, start - Vec3::Z, 2.0, 2.0, Vec3::ZERO, target_extents).unwrap();
+    assert_eq!(hit.fraction, 0.0);
+    assert_eq!(hit.normal, Vec3::Z);
+    assert!(
+        sweep_cylinder_aabb(start, start + Vec3::Z, 2.0, 2.0, Vec3::ZERO, target_extents,)
+            .is_none()
+    );
+}
