@@ -26,6 +26,11 @@ recommends prioritizing passes on the GPU critical path and using Occupancy,
 Limiter, and Bandwidth counters to identify the actual constraint
 ([Apple Performance timeline](https://developer.apple.com/documentation/xcode/analyzing-apple-gpu-performance-using-a-visual-timeline)).
 
+The later release-game capture found a higher-priority CPU hitch outside the
+steady GPU pass chain: authored actor display rebuilds can invoke the complete
+renderer constructor. The topology-only refresh described below is now the
+highest expected-impact unimplemented candidate.
+
 ## Implemented result
 
 The first candidate now keeps point-shadow slots until their exact source key
@@ -84,6 +89,117 @@ same forced-update workload from 73.781 ms/frame to a three-run median of
 46.173 ms/frame (37.4%), with checksum `4b3c4d710847bf8f` and 198 submissions
 unchanged. Geometry invalidation remains independent, so moving shadow casters
 still invalidate the affected point shadows.
+
+The CPU trace also showed `RenderScene::set_light_location` and
+`set_light_rotation` high in the steady-state leaf cost. Every ordinary actor
+transform called these functions, and each call scanned every authored light
+copy across all real-time lightmaps even though only actors decoded as lights
+can own one. Guarding those calls with the existing `ActorRenderState::is_light`
+flag reduced a three-run debug `runtime_scan Lev_Tut1.unr 1` median from 10.58
+to 9.48 seconds (10.4%) and user CPU time from 10.34 to 9.24 seconds (10.6%).
+Both sides processed the same 3,715 actions, including 362 relocations and
+1,745 rotations. This is a CPU/runtime win shared by Classic and Modern; it
+does not alter any light or actor state.
+
+A cache that compared the fully packed Modern light arrays before uploading
+them was rejected. On the Retina portal-camera forced-update benchmark, the
+three-run median regressed from 44.319 to 46.528 ms/frame (5.0%) with the same
+`4b3c4d710847bf8f` checksum and 198 draw calls. Comparing thousands of packed
+light copies cost more than the two `Queue::write_buffer` calls it avoided, so
+the implementation was removed.
+
+## Measured runtime display-rebuild hitch
+
+A release Time Profiler capture found **15 renderer-reload clusters in 12
+seconds**, each costing about **43--47 ms of CPU time**. Diagnostics at those
+clusters reported both `scene_updated=false` and `lightmaps_updated=false`.
+The CPU scene grew from 115,200 to 130,710 vertices, commonly in steps of
+1,350--1,482 vertices, while its texture table grew from 186 to 190 entries.
+Temporary actor diagnostics identified at least actor 1253,
+`baseWand1253` (`baseWand`), while removing its mesh override; its previous
+range was `112320..112368`. That actor attribution is partial rather than a
+complete accounting of every rebuild in each cluster.
+
+The source path explains the measured cliff:
+
+1. Runtime `SetMesh`, `SetDrawType`, `SetStyle`, `SetSkin`, and `SetSkelAnim`
+   actions enter the display setters; per-frame weapon synchronization also
+   rebuilds an actor when an attachment is added, removed, or changes mesh
+   ([runtime action dispatch](../crates/openhp1-scene/src/runtime.rs#L338),
+   [display setters](../crates/openhp1-scene/src/loader/runtime_display.rs#L94),
+   [weapon synchronization](../crates/openhp1-scene/src/loader/runtime_display.rs#L3),
+   [game caller](../crates/openhp1-game/src/app.rs#L1425)).
+2. `rebuild_actor_render` collapses the old positions but leaves every old
+   mesh array entry allocated, then calls `append_scene_actor_render` to append
+   replacement vertices, indices, triangle/surface ownership, and materials
+   ([rebuild](../crates/openhp1-scene/src/loader/runtime_display.rs#L458),
+   [actor append dispatch](../crates/openhp1-scene/src/loader.rs#L2670),
+   [mesh append](../crates/openhp1-scene/src/loader.rs#L3298)). Textures are
+   better behaved: `ActorRenderContext::images` deduplicates expanded images,
+   although a newly encountered skin or mesh texture still grows the scene
+   texture table
+   ([texture cache](../crates/openhp1-scene/src/loader.rs#L3501)). Materials
+   are not deduplicated across rebuilds.
+3. The game marks vertices dirty and asks `Renderer::update_scene` to update
+   in place. That function requires exactly the original texture and vertex
+   counts. A count change returns `false`; the lightmap update is deliberately
+   short-circuited and therefore also reports false
+   ([game fallback](../crates/openhp1-game/src/app.rs#L1513),
+   [`Renderer::update_scene`](../crates/openhp1-render/src/renderer.rs#L580)).
+4. `reload_scene` calls the complete `Renderer::new_with_settings` constructor.
+   It recreates scene buffers and batches, but also all scene pipelines,
+   textures/bind groups, depth/HDR/AO/bloom/AA targets, lighting resources, and
+   volumetric pipelines/resources
+   ([reload](../crates/openhp1-render/src/renderer.rs#L593),
+   [constructor](../crates/openhp1-render/src/renderer.rs#L132),
+   [Modern ownership](../crates/openhp1-render/src/renderer/modern.rs#L78)).
+   This broad reconstruction is why a small authored display transition can
+   become a multi-frame CPU hitch.
+
+The existing update seams show the intended alternative. Location, rotation,
+draw-scale, visibility, opacity, lighting, sprite billboarding, animation, and
+attachment-pose changes already mutate stable vertex ranges. Particle systems
+reuse capacity until they must grow; hidden or retired ranges are collapsed
+rather than deleted; mesh, animation, decoded-texture, and expanded-image
+caches survive display changes
+([stable display updates](../crates/openhp1-scene/src/loader/runtime_display.rs#L124),
+[particle capacity growth](../crates/openhp1-scene/src/loader.rs#L1859)). The
+renderer likewise already updates equal-sized vertex, lighting, corona,
+volumetric-shadow, and texture data without recreating pipelines
+([vertex update](../crates/openhp1-render/src/renderer.rs#L552),
+[Modern update](../crates/openhp1-render/src/renderer/modern.rs#L353)). There
+is no general geometry compactor or free-list for retired actor ranges.
+
+### Smallest viable fix
+
+Add a **topology-only scene refresh** beside `update_scene`: repack all `Vertex`
+fields, regenerate opaque/backdrop/blended indices and batches, grow or replace
+only the affected vertex/index buffers, and append newly encountered GPU
+textures/bind groups. Give Modern lighting, coronas, directional-shadow
+geometry, and local-volume instance buffers equivalent resize/rebuild hooks.
+Keep the already-compatible pipelines, camera state, depth/HDR targets, AO,
+bloom, AA, samplers, and unchanged textures alive. This directly removes the
+measured constructor cliff while preserving the exact CPU scene, triangle
+order, material selection, and shader path.
+
+Do **not** make compaction the first fix. It is now justified to cap the
+observed append-only CPU growth, but compaction alone cannot handle a real mesh,
+material, batch, or texture topology change; it would still reach the current
+full-reload fallback. After the topology-only refresh is measured, compact
+retired actor/particle ranges at a conservative threshold, updating every
+actor, animation, sprite, particle, hidden-position, vertex, index, and surface
+reference in one scene-owned operation.
+
+Measure this candidate with the same 12-second authored replay: count display
+rebuilds, topology refreshes, forbidden full `Renderer` constructions, vertex /
+material / texture growth, and CPU time per refresh. Require zero steady-state
+full reconstructions, identical fixed-camera/fixed-time image checksums, equal
+draw/pass counts outside the changed display topology, and a live check of
+wand attachment/removal, animation playback restoration, sprites, particles,
+translucent sorting, visibility, and Modern shadows. Expected impact is **very
+high** for hitch time; output-equivalence risk is **medium** because every
+packed vertex field and batch classification must be refreshed, not only
+position/color/normal.
 
 ## Current cost model
 
@@ -399,17 +515,19 @@ caching and pass reduction.
 
 ## Recommended measured sequence
 
-1. Capture baseline CPU/GPU/counter data and fixed-time images.
-2. Cache point-shadow faces with complete invalidation; stop if it does not
+1. Replace display-triggered full construction with the measured topology-only
+   scene refresh, then verify the authored wand/particle/display replay.
+2. Capture baseline CPU/GPU/counter data and fixed-time images.
+3. Cache point-shadow faces with complete invalidation; stop if it does not
    move the point-shadow timing.
-3. Merge the additive volumetric HDR passes; confirm draw order and exact
+4. Merge the additive volumetric HDR passes; confirm draw order and exact
    output.
-4. Remove duplicate slice-boundary evaluation, then add conservative per-tile
+5. Remove duplicate slice-boundary evaluation, then add conservative per-tile
    portal lists only if froxel compute remains hot.
-5. Add the multiview point-shadow path only if dirty/dynamic shadow frames are
+6. Add the multiview point-shadow path only if dirty/dynamic shadow frames are
    still material.
-6. Benchmark a small fixed set of workgroup shapes and keep one winner.
-7. Profile AO, upload allocation, and CPU encoding before considering the
+7. Benchmark a small fixed set of workgroup shapes and keep one winner.
+8. Profile AO, upload allocation, and CPU encoding before considering the
    lower-ranked candidates.
 
 Each accepted optimization should be a separate commit with its own before /
