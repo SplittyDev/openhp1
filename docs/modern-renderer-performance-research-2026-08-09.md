@@ -241,6 +241,11 @@ sample from a 1024x1024 shadow map
 The actual portal count and early-return rate therefore belong in every
 benchmark; the worst case is not a claim that shipped maps reach it.
 
+The Retina `Lev_Tut1` portal benchmark actually submits 112 visible portals.
+Its 224x192 columns therefore execute about **308 million** portal-loop
+iterations per frame (`224 * 192 * 64 * 112`), close enough to the limit that
+global visibility culling is not sufficient for this view.
+
 The current path already makes several sound choices worth preserving: bloom
 is quarter-resolution, AO uses single-channel targets, HDR and froxel storage
 are already 16-bit-per-component textures, full-screen passes use one triangle,
@@ -353,6 +358,16 @@ boundary is evaluated once. This leaves the same 65 boundary evaluations and
 the same integration order, while avoiding up to 63 duplicate `pow` calls per
 screen tile. Confirm in the Metal shader profiler because a compiler may
 already eliminate some repetition.
+
+Both boundary-reuse variants were tested and removed. Carrying the previous
+boundary regressed the three-run median from 44.319 to 46.328 ms/frame (4.5%),
+and computing all 65 boundaries once in workgroup memory regressed it to 45.651
+ms/frame (3.0%). A conservative screen-rectangle branch around `portal_light`
+also regressed to 46.073 ms/frame (4.0%). All retained the same
+`4b3c4d710847bf8f` checksum and 198 draw calls. On this Metal path, loop-carried
+state, synchronization, and divergence cost more than the arithmetic they
+avoid. The next implementation should reduce the portal loop's trip count with
+an order-preserving per-tile list rather than adding work inside that loop.
 
 The larger opportunity is a **conservative, order-preserving portal list per
 screen tile**. The current CPU path globally camera-culls portals, but every
