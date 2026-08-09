@@ -239,30 +239,38 @@ fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
         let light = realtime_lights[index];
         let offset = light.position_radius.xyz - input.world_position;
         let distance_squared = dot(offset, offset);
-        let distance = sqrt(distance_squared);
         let radius_squared = light.position_radius.w * light.position_radius.w;
         let visibility_uv = input.lighting_coordinates * light.visibility.xy + light.visibility.zw;
-        let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
         var strength = 0.0;
         switch light.effect.x {
             case 13u: {
-                strength = visibility * max(1.0 - distance / light.position_radius.w, 0.0);
+                if distance_squared < radius_squared {
+                    let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
+                    strength = visibility * (1.0 - sqrt(distance_squared) / light.position_radius.w);
+                }
             }
             case 14u: {
+                let distance = sqrt(distance_squared);
                 let normalized = distance / light.position_radius.w;
                 if normalized >= 0.8 && normalized < 1.0 {
+                    let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
                     strength = visibility * (1.0 - 10.0 * abs(normalized - 0.9));
                 }
             }
             case 17u: {
                 let planar = offset.x * offset.x + offset.z * offset.z;
-                strength = visibility * max(1.0 - planar / radius_squared, 0.0);
+                if planar < radius_squared {
+                    let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
+                    strength = visibility * (1.0 - planar / radius_squared);
+                }
             }
             case 8u, 12u: {
-                let normalized_distance = distance_squared / radius_squared;
-                if normalized_distance < 1.0 && light.direction_outer.w < 1.0 && distance > 0.0 {
+                if distance_squared < radius_squared && light.direction_outer.w < 1.0 && distance_squared > 0.0 {
+                    let distance = sqrt(distance_squared);
+                    let normalized_distance = distance_squared / radius_squared;
                     let cosine = dot(offset / distance, light.direction_outer.xyz);
                     let spot = max(1.0 - min((1.0 - cosine) / (1.0 - light.direction_outer.w), 1.0), 0.0);
+                    let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
                     strength = visibility
                         * ue1_distance_falloff(normalized_distance)
                         * abs(dot(offset / distance, normal))
@@ -271,7 +279,9 @@ fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
             }
             case 4u: {}
             default: {
-                if distance_squared < radius_squared && distance > 0.0 {
+                if distance_squared < radius_squared && distance_squared > 0.0 {
+                    let distance = sqrt(distance_squared);
+                    let visibility = textureSample(visibility_texture, visibility_sampler, visibility_uv).r * 2.0;
                     strength = visibility
                         * ue1_distance_falloff(distance_squared / radius_squared)
                         * abs(dot(offset / distance, normal));

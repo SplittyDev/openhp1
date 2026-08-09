@@ -106,6 +106,11 @@ recreates that display-space response from the original lights, and then
 decodes the potentially overbright result to linear HDR. Values above one
 remain available to tone mapping and bloom.
 
+The Modern lighting shader rejects lights that cannot contribute at the
+current fragment before sampling their authored visibility mask. The final
+composite similarly avoids AO and bloom texture reads when those effects are
+disabled; enabled paths keep the same sampling and arithmetic order.
+
 Modern-only HDR, sampleable-depth, post-processing, bloom, AO, corona, and
 volumetric resources are created only for `RendererMode::Modern`. Each unique
 eligible light draws one projected sphere. Authored UE1 volumes use UE1's

@@ -59,6 +59,12 @@ a three-run median of 21.821 ms/frame (91.4%). Both retained their original
 checksums. These deliberately update an unchanged full scene every frame to
 isolate renderer update overhead; they are not release gameplay frame times.
 
+The same follow-up removed per-pixel work that was provably unable to affect
+the image: out-of-range real-time lights no longer sample their visibility
+mask, and the composite no longer reads AO or bloom textures while those
+effects are disabled. At 1792x1536, the five-run baseline median improved from
+7.427 to 6.457 ms/frame (13.1%) with checksum `fbc483c96ac2f238` on both paths.
+
 ## Current cost model
 
 The Modern frame is not one expensive shader. It is a chain of persistent HDR,
