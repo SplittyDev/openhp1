@@ -4,7 +4,11 @@ mod target;
 use std::{env, ffi::OsString, path::PathBuf};
 
 use anyhow::{Result, anyhow, bail};
-use eframe::egui;
+use eframe::{
+    egui,
+    egui_wgpu::{SurfaceConfig, WgpuConfiguration},
+    wgpu::PresentMode,
+};
 use openhp1_render::RendererSettings;
 use tracing_subscriber::EnvFilter;
 
@@ -21,6 +25,14 @@ fn main() -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: WgpuConfiguration::default().with_surface_config(SurfaceConfig {
+            present_mode: if command.no_vsync {
+                PresentMode::AutoNoVsync
+            } else {
+                PresentMode::AutoVsync
+            },
+            desired_maximum_frame_latency: Some(2),
+        }),
         ..Default::default()
     };
     eframe::run_native(
@@ -34,12 +46,14 @@ fn main() -> Result<()> {
 struct Options {
     path: PathBuf,
     renderer: RendererSettings,
+    no_vsync: bool,
 }
 
 fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options> {
     let mut options = Options {
         path: PathBuf::from("res/Maps/Quid_RavenA.unr"),
         renderer: RendererSettings::default(),
+        no_vsync: false,
     };
     let mut has_path = false;
     for argument in arguments {
@@ -54,11 +68,13 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
             options.renderer.ambient_occlusion = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--anti-aliasing=") {
             options.renderer.antialiasing = value.parse()?;
+        } else if argument == "--no-vsync" {
+            options.no_vsync = true;
         } else if argument.starts_with('-') || has_path {
             bail!(
                 "usage: openhp1-viewer [map path] [--renderer=classic|modern] \
                  [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao] \
-                 [--anti-aliasing=off|fxaa|smaa]"
+                 [--anti-aliasing=off|fxaa|smaa] [--no-vsync]"
             );
         } else {
             options.path = PathBuf::from(argument);
@@ -80,6 +96,7 @@ mod tests {
         let defaults = options_from([]).unwrap();
         assert_eq!(defaults.path, PathBuf::from("res/Maps/Quid_RavenA.unr"));
         assert_eq!(defaults.renderer, RendererSettings::default());
+        assert!(!defaults.no_vsync);
 
         let options = options_from([
             OsString::from("res/Maps/Lev5_Chess.unr"),
@@ -87,6 +104,7 @@ mod tests {
             OsString::from("--tone-mapper=reinhard"),
             OsString::from("--ambient-occlusion=xegtao"),
             OsString::from("--anti-aliasing=smaa"),
+            OsString::from("--no-vsync"),
         ])
         .unwrap();
         assert_eq!(options.path, PathBuf::from("res/Maps/Lev5_Chess.unr"));
@@ -94,5 +112,6 @@ mod tests {
         assert_eq!(options.renderer.tone_mapper, ToneMapper::Reinhard);
         assert_eq!(options.renderer.ambient_occlusion, AmbientOcclusion::XeGtao);
         assert_eq!(options.renderer.antialiasing, Antialiasing::Smaa);
+        assert!(options.no_vsync);
     }
 }
