@@ -3213,6 +3213,7 @@ fn append_actor_brush(
         "brush MainScale is not finite"
     );
     let transform = brush_transform(actor);
+    let mirrored = transform.determinant() < 0.0;
     let normal_transform = Mat3::from_mat4(transform).inverse().transpose();
     let transformed = polys
         .polygons
@@ -3280,7 +3281,7 @@ fn append_actor_brush(
         for offset in 1..u32::try_from(polygon.vertices.len() - 1)? {
             render_mesh
                 .indices
-                .extend_from_slice(&[base, base + offset, base + offset + 1]);
+                .extend_from_slice(&brush_triangle(base, offset, mirrored));
             render_mesh.triangle_surfaces.push(surface);
         }
     }
@@ -3297,6 +3298,14 @@ fn brush_transform(actor: &ActorState) -> Mat4 {
         * rotation_matrix(actor.rotation)
         * Mat4::from_scale(actor.main_scale)
         * Mat4::from_translation(-actor.pre_pivot)
+}
+
+fn brush_triangle(base: u32, offset: u32, mirrored: bool) -> [u32; 3] {
+    if mirrored {
+        [base, base + offset + 1, base + offset]
+    } else {
+        [base, base + offset, base + offset + 1]
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5445,6 +5454,24 @@ mod tests {
             transform.transform_point3(actor.pre_pivot + glam::Vec3::X),
             actor.location + glam::Vec3::X * 2.0
         );
+    }
+
+    #[test]
+    fn mirrored_brushes_preserve_polygon_winding() {
+        let actor = super::ActorState {
+            main_scale: glam::Vec3::new(1.0, -1.0, 1.0),
+            ..Default::default()
+        };
+        let transform = super::brush_transform(&actor);
+        let points = [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y]
+            .map(|point| transform.transform_point3(point));
+        let triangle = super::brush_triangle(0, 1, transform.determinant() < 0.0);
+        let geometric_normal = (points[triangle[1] as usize] - points[triangle[0] as usize])
+            .cross(points[triangle[2] as usize] - points[triangle[0] as usize]);
+        let transformed_normal =
+            glam::Mat3::from_mat4(transform).inverse().transpose() * glam::Vec3::Z;
+
+        assert!(geometric_normal.dot(transformed_normal) > 0.0);
     }
 
     #[test]

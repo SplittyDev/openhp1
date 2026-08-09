@@ -371,9 +371,12 @@ HP1's upward-positive pitch, so their visual forward axis matches runtime
 deriving a visual offset from the actor's collision cylinder. Mover geometry
 comes from the brush model's `Polys` export and follows UE1's
 `Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
-therefore pivots around `Location`, not the mesh-actor
-`Location + PrePivot` origin. Sprite actors use texture-sized quads aligned to
-the active UE1 view axes. Engine `S_*` textures and textures from the `HPEdit`
+therefore pivots around `Location`. A `MainScale` transform with negative
+determinant also reverses the generated triangle winding so mirrored brushes
+retain their authored front faces and normals. Mesh actors instead pivot around
+their `Location + PrePivot` origin. Sprite actors use texture-sized quads
+aligned to the active UE1 view axes. Engine `S_*` textures and textures from
+the `HPEdit`
 package are editor viewport icons, not runtime sprites, and are excluded from
 that path. Particle actors use their live `ParticleFX` emitter state. In modern
 mode, coronas use their authored `Skin`, `DrawScale`, hue, and saturation; a
