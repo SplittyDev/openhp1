@@ -894,7 +894,7 @@ fn hp_menu_save_accepts_transient_audio_and_restores_non_player_state() {
 }
 
 #[test]
-fn destroyed_saved_actor_does_not_resume_tick() {
+fn destroyed_saved_actor_does_not_resume_or_run_stale_tick() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-destroyed-save-{}-{}",
         std::process::id(),
@@ -928,6 +928,31 @@ fn destroyed_saved_actor_does_not_resume_tick() {
 
     assert!(restored.destroyed.contains(&7));
     assert!(!restored.tick_functions.contains_key(&7));
+
+    let tick = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    restored
+        .scripts
+        .insert(object_id(&package, 1), log_event_script(1, "stale tick"));
+    restored.tick_functions.insert(7, tick);
+    restored.level_info = Some(7);
+    for (name, field, value) in [
+        ("TimeSeconds", runtime_actor_id(20), 0.0),
+        ("TimeDilation", runtime_actor_id(21), 1.0),
+    ] {
+        restored.fields.insert(
+            (object_id(&package, 0), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+        restored
+            .instances
+            .get_mut(&7)
+            .unwrap()
+            .insert(field, StoredValue::Value(Value::Float(value)));
+    }
+    assert!(restored.tick(1.0 / 60.0).unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 

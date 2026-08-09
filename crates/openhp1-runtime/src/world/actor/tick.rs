@@ -38,6 +38,9 @@ impl ScriptRuntime {
         let player = self.player_actor;
         let mut player_ticked = false;
         for (actor, function) in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
             if !player_ticked && player.is_some_and(|player| player < actor) {
                 self.tick_player_events(delta_time, &mut actions)?;
                 player_ticked = true;
