@@ -51,6 +51,10 @@ Nested remote calls may inspect or call back into their caller, so the caller's
 live instance remains addressable while the remote context executes. Serialized
 `UStruct` child chains may contain any `UField`; non-property fields are skipped
 by following their shared `Next` link.
+Destroyed actors remain valid remote contexts for ordinary calls such as
+`Object.IsA` while an existing script chain still holds their identity. Direct
+event dispatch, ticking, collision, and other active-world processing continue
+to exclude them.
 
 The host `Player.Console` bridge retains authored console fields as mutable
 instance state. Desktop Space and wand press/release edges update the same

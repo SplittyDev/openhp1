@@ -570,9 +570,6 @@ impl ScriptRuntime {
             self.object_instances.insert(object, (class_id, instance));
             return result;
         };
-        if actor != current_actor && self.destroyed.contains(&actor) {
-            return Ok(CallOutput::value(Value::None));
-        }
         if actor == current_actor {
             return self.dispatch_call(
                 current_actor,
@@ -1555,7 +1552,7 @@ mod iterator_tests {
     }
 
     #[test]
-    fn context_calls_ignore_destroyed_actor_receivers() {
+    fn destroyed_actor_context_still_answers_is_a() {
         let root = radius_actors_test_root();
         let mut runtime = ScriptRuntime::new(&root.0).unwrap();
         let source = runtime.packages.load("RadiusActorsTest").unwrap();
@@ -1582,15 +1579,15 @@ mod iterator_tests {
                     &class,
                     receiver,
                     &source,
-                    FunctionCall::Native(RAND_RANGE),
-                    &[Value::Float(2.0), Value::Float(2.0)],
+                    FunctionCall::Native(IS_A),
+                    &[Value::NameText("Base".to_owned())],
                     &mut InstanceState::default(),
                     &mut Vec::new(),
                     0,
                 )
                 .unwrap()
                 .value,
-            Value::None,
+            Value::Bool(true),
         );
     }
 
