@@ -12,14 +12,28 @@ heading from `CutWalkDest.Location - Location`, writes that heading to
 `DesiredRotation`, and moves with `MoveSmooth`. A later `FACE` snaps both
 `DesiredRotation` and `Rotation`; a later `TURNTO` performs a latent turn.
 
-Two shared runtime gaps produced the longer visible stall in the supplied
-`CutScene60` sequence. OpenHP1's `MoveSmooth` stopped after one wall slide,
-while the shipped native performs `TwoWallAdjust` and a third movement attempt
-when that slide also hits. OpenHP1 also swept an aligned pawn cylinder against
-world BSP as a rounded cylinder, while the shipped native passes
-`(CollisionRadius, CollisionRadius, CollisionHeight)` through the model's box
-extent trace. Matching both native paths lets Harry cross the authored bench
-route instead of timing out and teleporting.
+Two native-semantic gaps were found along the way. OpenHP1's `MoveSmooth`
+stopped after one wall slide, while the shipped native performs
+`TwoWallAdjust` and a third movement attempt when that slide also hits. OpenHP1
+also swept an aligned pawn cylinder against world BSP as a rounded cylinder,
+while the shipped native passes Harry's axis-aligned collision bounds through
+the model's box-extent trace. Both are real shared gaps, but neither explains
+the remaining `CutScene59` trajectory by itself.
+
+One conspicuous displacement occurs when `CutMovingTo` reaches its second
+authored mark and immediately enters `CutIdleing`. That state's compiled Begin
+executes `MoveSmooth(vect(0,0,-100))`. At the observed center, the shipped BSP
+walker reaches the original map's invisible semisolid classroom ramp, and the
+shipped native projection produces the same approximately `(0,-40,-20)` slide
+as OpenHP1. Suppressing that slide would contradict the original binary.
+
+The confirmed route divergence is in the following world sweep. The shipped
+`FBoxLineCheck` recursively follows only BSP sides intersected by the moving
+box and tests a collision hull only at a reached inside leaf. OpenHP1 instead
+considered every decoded world hull whose bounds overlapped the sweep. Porting
+the native CSG-reachability walk removes those ineligible candidates and lets
+the faithful `CutScene59` replay complete its second leg instead of stalling
+near the classroom benches. This is the smallest source-backed collision fix.
 
 A separate facing gap is broader than `CutMovingTo`: shipped `Engine.u`
 explicitly says both latent `MoveTo` and `MoveToward` rotate the pawn toward
@@ -151,72 +165,40 @@ the longest continuous interval with actor yaw more than 45 degrees from
 The same 41-map, 20-second headless scan completed after broadening the latent
 movement gate, including `Lev5_Chess` and `Lev_Tut1`.
 
-### `CutScene60` trace correction
+### Corrected failing route: `CutScene59`
 
-An early diagnostic forced `Lev_Tut1.CutScene60` while the startup cutscene was
-still moving Harry toward `CutMark90` export 1545. Comparing that in-flight
-`PlayerTick` local with `CutWalkDest` after the forced command crossed two
-authored command phases; it did **not** demonstrate a stale VM receiver or
-value. OpenHP1 also returns event side effects as `ActorAction`s and drains
-queued `DispatchEvent` actions afterward
-(`crates/openhp1-scene/src/runtime.rs`, `apply_runtime_actions_with`), so a
-property sampled after that drain is not a same-expression snapshot of a
-vector logged inside the preceding `PlayerTick`.
+The door and `Mover36` hypothesis is retracted. In a faithful replay, Harry is
+near `(1997.6,-6208,923)` before `CutScene59`; once its movement is active he is
+near `(1502.6,-6585,842.1)`. `Mover36` remains at its closed rotation
+`(0,16384,16384)` and is not on this route. Earlier forced `CutScene60` probes
+also overlapped the startup cast or began from unauthored positions, so their
+stalls do not identify the supplied failure.
 
-A delayed probe also cannot begin Harry's movement by merely touching
-`CutScene60`. The actor is map export 2139 at serialized offset `0x771e2`, and
-its shipped cast data orders `WAITFOR HarryInFront` before `MOVETO HPpath1` and
-`MOVETO HPpath2`. Until Quirrell issues `CUE HarryInFront`, Harry remains in
-`CutIdleing`; seeing its retained prior `CutWalkDest` (`CutMark0` export 842) is
-therefore expected. The active `CutMovingTo` state never clears `CutWalkDest`
-when it enters `CutIdleing`.
+The original `Lev_Tut1.unr` data gives the active path directly. `CutScene59`
+is export 2086 at serialized offset `0x75804`. Its first Harry cast commands
+include `CAPTURE`, then `MOVETO LocName0`, `MOVETO LocName1`, and
+`MOVETO LocName2` at cast indices 5, 7, and 12. The `Locs` records are compact
+object references, not name searches:
 
-An isolation that started after the startup cast and then delivered
-`HarryInFront` resolved `HPpath1` to map export 942 at
-`(1527.6072,-6602.846)` and `HPpath2` to export 768 at
-`(1443.412,-6723.6416)`. The corresponding `PlayerTick` vector operations read
-those current locations in order. This invalidates the stale-receiver premise;
-the remaining failure was a stall short of `HPpath1`, not a wrong
-`CutWalkDest.Location` read.
+- `Locs[0]` at `0x7586e` references `CutMark33` export 671 at
+  `(1519.8224,-6270.44,933)`;
+- `Locs[1]` at `0x7587e` references `CutMark34` export 796 at
+  `(1506.0388,-6563.1367,824.5744)`;
+- `Locs[2]` at `0x7588e` references `CutMark40` export 827 at
+  `(1620.7673,-6577.815,822.35846)`.
 
-### `HPpath1` is a serialized actor reference, not an actor search
+The authored horizontal legs are therefore approximately 293 units toward
+`(-13.78,-292.70)` and 116 units toward `(114.73,-14.68)`. `CutMark` itself is
+only `class CutMark expands NavigationPoint;` (`HPBase.u`, `ScriptText` export
+3478 at `0x2cf610`), while `CutMovingTo.PlayerTick` uses direct `MoveSmooth`
+probes rather than navigation or path search. Animation is not a second motion
+owner: the shipped `LoopAnim('run')` supplies only the sequence argument even
+though `Engine.u`'s native `LoopAnim` declaration has optional root-motion
+arguments.
 
-`HPBase.u` defines `CutScene.CutLoc` as an editable `actor locName` plus a
-string `alias`; `CutScene` owns a fixed `Locs[40]` array. The shipped
-`lookupTarget` source in `CutScene` `ScriptText` export 3476 at `0x2c9f96`
-uppercases the command argument, scans `Locs` from index 0 through 39, and
-returns `locs[i].locName` directly when the alias matches. Compiled
-`lookupTarget` export 3541 at `0x2de504` confirms that active order: the
-`locName != None` test is at decoded bytecode `0x0081..0x0096`, the
-case-insensitive alias comparison is at `0x0097..0x00b2`, and the return reads
-the same array element's `locName` at `0x00b3..0x00c4`. It does not enumerate
-actors or compare an actor name, `Tag`, class, or export order for a location
-alias. `handleCast` then passes the returned actor directly to
-`baseHarry.CutMoveTo`.
-
-The original `Lev_Tut1.unr` data makes this unambiguous. `CutScene60` export
-2139 at `0x771e2` serializes `Locs[7]` at payload offset `0x772b7` as the compact
-object reference to export 942 followed by the string `HPpath1`. That export is
-`CutMark44`, class `CutMark`, at `0x2738d`; its serialized location is
-`(1527.6072,-6602.846,821.57446)`. `Locs[0]` similarly stores alias `HPpath2`
-and a direct reference to `CutMark45` export 768. Of the 17 populated
-`CutScene60.Locs` entries, only index 7 has alias `HPpath1`. Some distinct
-aliases deliberately share a target (`HPpath2` and `LocName8` both refer to
-export 768), but there is no competing `HPpath1` entry.
-
-The map contains 110 `CutMark` actors, and export 942 has the ordinary `Tag`
-value `CutMark`, but neither fact participates in this lookup. The shipped
-`CutMark` source is only `class CutMark expands NavigationPoint;`
-(`HPBase.u` `ScriptText` export 3478 at `0x2cf610`). Consequently, retail cannot
-select a different mark for this command merely because actors or exports are
-visited in a different order: the authored reference is export 942. A target
-difference would instead require mis-decoding that serialized object reference
-or mutating `Locs[7]`; neither occurred in the isolated trace.
-
-This conclusion is limited to the two compiled property reads and the current
-VM evaluation path above. It does not prove the retail player tick/event order;
-the binary inspection below is limited to the relevant `moveSmooth`,
-`TwoWallAdjust`, and `HitWall` dispatch paths.
+The earlier stale-`CutWalkDest` inference is also retracted. It compared a
+forced command with an already-running startup movement. In isolated ordering,
+both compiled `CutWalkDest.Location` contexts read the current serialized mark.
 
 ## Original native `MoveSmooth` collision contract
 
@@ -247,11 +229,17 @@ the shipped script and defaults.
 ### World BSP uses a box extent, including for cylinders
 
 The second difference is below `MoveSmooth`, in the extent passed through
-`MoveActor` to world-model collision. The shipped `Engine.dll` exports
-`AActor::GetCylinderExtent`; its thunk at `0x103028d3` reaches the body at
-`0x1037a900`. For an ordinary aligned cylinder such as Harry
-(`CollideType=0`, radius `15`, height `42`), that body returns the vector
-`(CollisionRadius, CollisionRadius, CollisionHeight)`.
+`MoveActor` to world-model collision. In the shipped `Engine.dll`, `MoveActor`
+at `0x103aa719` calls the actor virtual `GetPrimitive`; for Harry's
+`CollideType=0`, `AActor::GetPrimitive` at `0x1037a880` selects the generic
+`UPrimitive`. `MoveActor` then calls that primitive's
+`GetCollisionBoundingBox(actor,true)` virtual at `0x103aa731`.
+`UPrimitive::GetCollisionBoundingBox` at `0x103fa2f0` reads
+`CollisionRadius` twice, `CollisionHeight` vertically, and `CollisionWidth` as
+a vertical center offset. Shipped Harry has radius `15`, width `0`, and height
+`42`, so the resulting box is centered on `Location` with half extents
+`(15,15,42)`. `MoveActor` derives that center and extent at
+`0x103aa743..0x103aa7e8` before its level trace.
 
 The original `UModel::LineCheck` body at `0x10429c80` sends a non-zero extent
 to `FBoxLineCheck` at `0x1042a480`. That path sweeps an axis-aligned box through
@@ -260,29 +248,141 @@ extent with a rounded cylinder. The local licensed SurrealEngine independently
 uses the same model-level `TraceAABBModel` path, but the original binary is the
 authority for this choice.
 
-OpenHP1 already had the required BSP AABB sweep and already used it for
-`CT_Box`; the incorrect branch was the default aligned-cylinder fallback in
-world movement. Routing non-brush actors through the existing AABB sweep fixes
-that shared seam. Actor-versus-actor collision and spawn placement remain on
-their existing shape-specific paths.
+OpenHP1 already had a BSP AABB sweep and used it for `CT_Box`; using the
+shipped aligned-cylinder bounds for world movement closes that shared native
+gap. It is not, by itself, evidence that a forced route which starts from an
+unauthored location should clear the same BSP. Actor-versus-actor collision and
+spawn placement remain separate shape-specific paths.
 
-### Isolated `Lev_Tut1` result
+### Original BSP traversal limits eligible hulls
 
-The supplied sequence resolves `HPpath1` to `CutMark44` at
-`(1527.6072,-6602.846,821.57446)` and then `HPpath2` to `CutMark45` at
-`(1443.412,-6723.6416,805)`. The blocking world geometry includes a 16-unit
-step and adjoining ramp represented by BSP hull 2254. The compiled
-`CutMovingTo.PlayerTick` supplies its own 15-unit up/across/down probes, so the
-native collision and two-wall behavior determine whether that route advances.
+`MoveActor` body `0x103aa3a0` passes the collision-box center as `Start`, that
+center plus the requested delta as `End`, and the box half extent to
+`ULevel::MultiLineCheck` at `0x103aa90c`. It passes Harry's actor-collision bit,
+the active `LevelInfo` because `bCollideWorld` is set, and a literal
+`ExtraNodeFlags=0`. `MultiLineCheck` body `0x103ac620` performs the world
+`UModel::LineCheck` first, with `Actor=None`, before considering actor-hash
+hits. There is no hidden center offset for this call: Harry's shipped
+`CollisionWidth=0` leaves the center at `Location`.
 
-In a non-interactive 60 Hz replay, the rounded-cylinder implementation stayed
-at approximately `(1440.0005,-6639.1504,795)` until the authored timeout. With
-the original box-extent sweep and third `MoveActor` attempt, Harry reached the
-first target region at `(1521.4314,-6624.2813,827)` and continued to the second
-target without the timeout relocation. Retail PC footage also shows Harry
-crossing this ramp continuously. This replay validates simulation state and
-movement; final rendered confirmation in OpenHP1 remains a separate visual
-check.
+The box recursion is not a global hull scan. In `FBoxLineCheck` body
+`0x1042a480`, the support distance for each partition plane is
+`1.1 * dot(abs(Normal), Extent)`; the `1.1` constant is serialized at
+`0x10478854`. Applicable back and front children are derived from the start
+and end plane distances. The start-side child is visited first (front when the
+start distance is at least the negative support, otherwise back), then the
+other applicable child. Its outside state follows the compiled CSG relation:
+
+```text
+is_csg        = NumVertices > 0 && !(NodeFlags & (ExtraNodeFlags | 0x21))
+back_outside  = outside && !is_csg
+front_outside = outside || is_csg
+```
+
+At a missing child, the parent node's `CollisionBound` is tested only when the
+resulting state is inside. `FBspNode::IsCsg` body `0x1042cda0` implements the
+first expression exactly. This checks the BSP node's flags, not its surface's
+polygon flags. Node 2373 has eight vertices and node flags `0x04`; with
+`ExtraNodeFlags=0`, it is CSG. Surface 2785's numerically similar
+`PolyFlags=0x21` therefore does not exclude its invisible semisolid brush from
+world movement collision.
+
+Replaying that recursion over the shipped Model export 3592 establishes the
+grounding contact; that model serializes `RootOutside=false`:
+
+- For the `CutIdleing` downward sweep from
+  `(1506.0388,-6563.1367,853.03174)` with extent `(15,15,42)`, the walker
+  reaches the coplanar ramp leaves 2371 and 2373. For node 2373 the signed
+  center distances are `45.2580566` and `-44.1848145`. The recursive traversal
+  support is `48.7015572`, so it reaches that leaf. The later hull-plane clip
+  at `0x1042a9c4..0x1042aacb` uses the unscaled support `44.2741432`, placing
+  the geometric entry near fraction `0.011`. The ramp contact and its normal
+  are therefore expected native behavior. Static reconstruction does not
+  uniquely establish which of the two coplanar leaf item numbers retail
+  retains as the final hit, but both have the same motion-relevant plane.
+
+This distinction explains why filtering by semisolid surface flags or changing
+the slope projection would be wrong: the ramp contact is valid. The actual
+shared gap was selecting hull candidates globally instead of allowing the BSP
+topology and CSG outside state to select collision leaves.
+
+The faithful `CutScene59` replay validates that distinction. Before the
+reachability filter, its second Harry leg stalled near X=1599 and eventually
+used the authored timeout relocation. With the original recursive candidate
+walk, it advances through X=1603 and onward to `CutMark40` near X=1620 by about
+five seconds. A later forced-harness contact around nine seconds is an
+overlapping startup/cutscene diagnostic and is not evidence for the supplied
+route. In particular, logged `CollisionHit.node` values identify the entering
+hull plane, not the owner of the eligible collision leaf; plane IDs alone must
+not be used to infer that the recursion selected an unreachable leaf.
+
+### Exact `CutScene59` grounding displacement
+
+On the faithful replay, Harry reaches the second mark with center
+`(1506.0388,-6563.1367,853.03174)`. `CutMovingTo` then cues the cutscene and
+enters `CutIdleing`. The compiled Begin of state export 2848 selects physics 5
+(`PHYS_Rotating`) and calls native 3969 with `(0,0,-100)` before `LoopAnim`.
+Velocity and Acceleration are both zero and no animation root displacement is
+present; this call alone changes the center to approximately
+`(1506.0388,-6603.1367,833.0317)`.
+
+OpenHP1's first world hit is at essentially time zero with normal
+`(0,-0.44721356,0.8944272)`. This is not a generated or guessed plane:
+`Lev_Tut1` world Model export 3592 serializes it as BSP node 2373, surface 2785.
+The surface belongs to `Brush2342` export 1310, group `DADA classroom`, at
+`(1520,-6568,800)`, with `CsgOper=1` and `PolyFlags=0x21` (invisible and
+semisolid). The flat comparison hit is node 2490 with normal `(0,0,1)`.
+
+The shipped `moveSmooth` math explains the displacement exactly. Its first
+projection at `0x103e4cf4..0x103e4d5c` is
+`(Delta - Normal*(Delta dot Normal))*(1-Hit.Time)`, followed by an acceptance
+test of `Delta dot projected` at `0x103e4d5f..0x103e4d8e`. For
+`Delta=(0,0,-100)` and node 2373's normal, the projection is approximately
+`(0,-40,-20)` and the acceptance dot product is positive. There is no
+walkable-floor or `Normal.Z` rejection in the original function. On flat node
+2490 the same projection is zero.
+
+Therefore `smooth_remaining_delta` is not missing a slope condition in this
+case. The original executable's own BSP recursion reaches the same ramp plane
+from this center and extent, so it performs the same near-40-unit slide. A
+map-specific floor guard, ignoring semisolid BSP during cutscenes, or
+discarding horizontal components of a downward `MoveSmooth` would all change
+shipped semantics.
+
+### State changes and actor tick order
+
+The shipped native `SetPhysics` has one relevant semantic absent from the
+original OpenHP1 implementation: `AActor::setPhysics` body `0x103e5140` zeros
+the actor vectors at offsets `0x12c` and `0x13c` when selecting physics 0 or 5.
+`Engine.u` identifies those fields as `Velocity` and `Acceleration`. Restoring
+that behavior is source-backed, but it is insufficient here because both
+vectors were already zero throughout the exact replay.
+
+`GotoState` is not deferred to another frame. `AActor::ProcessState` body
+`0x1040ef10` compares the current StateFrame node with the saved node after an
+opcode at `0x1040eff9`; on a state change it loops back into the interpreter at
+`0x1040f00e -> 0x1040efba`, allowing up to four immediate state transitions.
+Thus `GotoState('CutIdleing')` can execute that state's Begin and downward
+`MoveSmooth` in the same actor tick.
+
+The original actor-local order is also explicit in `AActor::Tick` body
+`0x103b3840`. On the PlayerPawn path, `PlayerInput` dispatch at
+`0x103b4159..0x103b417c` and `PlayerTick` at
+`0x103b417f..0x103b419b` precede virtual `ProcessState` at
+`0x103b4248..0x103b424d`; automatic physics is later at
+`0x103b4331..0x103b434c`. `ULevel::Tick` body `0x103b6db0` then walks its
+Actors array in ascending slot order at `0x103b7177..0x103b71a2`, calling each
+actor's Tick before advancing. In original `Lev_Tut1` Level export 3616, Harry
+export 602 is actor slot 220 and `CutScene59` export 2086 is slot 1697.
+
+OpenHP1 instead globally runs Tick/PlayerTick events, then all state frames,
+then all physics. That is a confirmed engine-order gap and delays
+`CutScene59.Tick`'s response to Harry's cue by one frame. It does not prevent
+the grounding slide: original Harry executes PlayerTick, immediate state code
+including `CutCue` and `CutIdleing` Begin, and physics before the later
+`CutScene59` actor ticks. The shipped `CutScene.CutCue` only clears the matching
+cast entry's `bWaiting` and `strWaitingFor`; it does not run the next cast
+command reentrantly.
 
 ### `HitWall` is dispatched, but is inert in `CutMovingTo`
 
@@ -313,37 +413,26 @@ and does not explain this stall.
 
 ## SurrealEngine comparison and uncertainty
 
-The local SurrealEngine calls virtual `TickRotating` after every non-`PHYS_None`
-physics step. Its `UPawn::TickRotating` consumes `DesiredRotation`, but its
-`UPlayerPawn::TickRotating` is effectively a no-op. That cannot satisfy the
-shipped HP scripts above without another HP-specific path, so it is useful for
-the general tick order but not authoritative for Harry's rotation ownership.
+The local SurrealEngine remains useful only as a secondary implementation
+comparison. Its `UActor::TryMoveSmooth` stops after the first projected
+`TryMove` and even marks the return with `// XXX: does this break anything?`
+(`SurrealEngine/UObject/UActor.cpp`), omitting the shipped binary's
+`TwoWallAdjust` and third move. Its PlayerPawn tick placement also differs from
+the original binary order established above. Neither should override the
+original packages and `Engine.dll`.
 
-Its actor hierarchy also provides one concrete ordering reference:
-`UPlayerPawn::Tick` calls `UPawn::Tick` first; `UPawn::Tick` reaches
-`UActor::Tick`, which advances ordinary `Tick`, state code, and then physics;
-only after that returns does `UPlayerPawn::Tick` dispatch `PlayerInput` and
-`PlayerTick` (`SurrealEngine/UObject/UActor.cpp`). The shipped HPBase code is
-compatible with that order: `CutMovingTo.PlayerTick` performs its own
-`MoveSmooth` after the frame's physics. This comparison identifies a shared
-engine seam to test, but remains licensed-reference evidence rather than proof
-of the retail HP executable's native order.
+The source-backed facing change remains narrow: matching latent `MoveTo` and
+`MoveToward` join `CutMovingTo` and the turn latents in the existing
+PlayerPawn rotation gate. The collision work likewise stays at shared native
+seams: aligned pawn bounds, the complete `MoveSmooth` wall adjustment, and
+recursive CSG leaf eligibility. The faithful headless replay now completes the
+reported `CutScene59` route; rendered confirmation remains a separate visual
+check.
 
-SurrealEngine's `UActor::TryMoveSmooth` also stops after the first projected
-`TryMove` and even marks its return with `// XXX: does this break anything?`
-(`SurrealEngine/UObject/UActor.cpp`). It omits the original binary's
-`TwoWallAdjust` and third move, so it is not authoritative for this collision
-corner.
-
-Only the relevant original `Engine.dll` smooth-movement and `HitWall` dispatch
-paths were disassembled for this note. The package evidence establishes who
-writes each rotation value, but not whether the retail executable gives HP's
-`PlayerPawn` a native rotation or tick special case.
-The source-backed runtime changes therefore stay at two existing seams:
-matching latent movement passes through the `PlayerPawn` rotation gate, while
-`MoveSmooth` and world BSP movement use the original third-attempt and box-
-extent contracts. The latent-movement regression verifies the rotation gate,
-and the world-collision regression distinguishes the native box extent from
-the rounded cylinder that caused the ramp stall. An authored `ChessMode`
-replay remains useful because its own `PlayerTick` may intentionally take
-precedence.
+The route's shared collision seam is now established: retain the original
+recursive BSP `Outside`/`IsCsg` eligibility before clipping leaf hulls. A retail
+trace could still verify exact item numbers and positions, but it is no longer
+needed to choose between a slope workaround and a CSG traversal fix. An
+authored `ChessMode` replay remains useful for the separate facing question
+because its own `PlayerTick` may intentionally take precedence over latent
+rotation.

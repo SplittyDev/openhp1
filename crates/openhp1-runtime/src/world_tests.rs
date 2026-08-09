@@ -2935,7 +2935,7 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
                 leaf_hulls,
                 leaves: Vec::new(),
                 lights: Vec::new(),
-                root_outside: true,
+                root_outside: false,
                 linked: false,
             })
             .unwrap(),
@@ -3926,7 +3926,7 @@ fn actor_reachable_bsp() -> Arc<BspCollision> {
         ],
         leaves: Vec::new(),
         lights: Vec::new(),
-        root_outside: true,
+        root_outside: false,
         linked: false,
     };
     Arc::new(BspCollision::from_model(&model).unwrap())
@@ -4643,7 +4643,7 @@ fn placement_test_collision(half_extent: f32) -> Arc<BspCollision> {
         leaf_hulls: Vec::new(),
         leaves: Vec::new(),
         lights: Vec::new(),
-        root_outside: true,
+        root_outside: false,
         linked: false,
     };
     model.nodes = [
@@ -5732,7 +5732,7 @@ fn stair_collision(current_floor: f32, forward_floor: f32) -> Arc<BspCollision> 
         leaf_hulls: Vec::new(),
         leaves: Vec::new(),
         lights: Vec::new(),
-        root_outside: true,
+        root_outside: false,
         linked: false,
     };
     for (minimum_x, maximum_x, floor) in [(-80.0, 0.0, current_floor), (0.0, 80.0, forward_floor)] {
@@ -5776,6 +5776,7 @@ fn stair_collision(current_floor: f32, forward_floor: f32) -> Arc<BspCollision> 
                 .map(|value| value as i32),
         );
     }
+    model.nodes[0].front = 6;
     Arc::new(BspCollision::from_model(&model).unwrap())
 }
 

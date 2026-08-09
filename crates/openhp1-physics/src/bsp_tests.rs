@@ -174,6 +174,52 @@ fn static_aabb_check_separates_a_slanted_hull_on_a_box_axis() {
 }
 
 #[test]
+fn box_sweep_ignores_hulls_in_unreached_bsp_leaves() {
+    let mut model = empty_model();
+    model.nodes = vec![
+        BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            front: 1,
+            back: 2,
+            ..empty_node()
+        },
+        empty_node(),
+    ];
+    for plane in [
+        [1.0, 0.0, 0.0, 10.0],
+        [-1.0, 0.0, 0.0, -8.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+        [0.0, 0.0, -1.0, 1.0],
+    ] {
+        model.nodes.push(BspNode {
+            plane,
+            collision_bound: if model.nodes.len() == 2 { 0 } else { -1 },
+            ..empty_node()
+        });
+    }
+    model.leaf_hulls = vec![2, 3, 4, 5, 6, 7, -1];
+    model.leaf_hulls.extend(
+        [8.0_f32, -1.0, -1.0, 10.0, 1.0, 1.0]
+            .map(f32::to_bits)
+            .map(|value| value as i32),
+    );
+
+    let collision = BspCollision::from_model(&model).unwrap();
+
+    assert!(
+        collision
+            .sweep_aabb(
+                Vec3::new(12.0, 0.0, 0.0),
+                Vec3::new(8.0, 0.0, 0.0),
+                Vec3::ONE
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn point_trace_hits_bsp_polygons_from_both_sides() {
     let mut model = empty_model();
     model.points = vec![
@@ -226,6 +272,24 @@ fn point_trace_hits_bsp_polygons_from_both_sides() {
     assert_eq!(back.normal, Vec3::NEG_X);
 }
 
+fn empty_node() -> BspNode {
+    BspNode {
+        plane: [0.0; 4],
+        zone_mask: 0,
+        flags: 0,
+        vertex_pool: 0,
+        surface: -1,
+        back: -1,
+        front: -1,
+        coplanar: -1,
+        collision_bound: -1,
+        render_bound: -1,
+        zones: [0; 2],
+        vertex_count: 0,
+        leaves: [0; 2],
+    }
+}
+
 fn empty_model() -> Model {
     Model {
         bounds: PrimitiveBounds {
@@ -248,7 +312,7 @@ fn empty_model() -> Model {
         leaf_hulls: Vec::new(),
         leaves: Vec::new(),
         lights: Vec::new(),
-        root_outside: true,
+        root_outside: false,
         linked: false,
     }
 }

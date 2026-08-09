@@ -8,8 +8,10 @@ use thiserror::Error;
 use crate::actor::sweep_cylinder_aabb;
 
 const HULL_FLIP: i32 = 0x4000_0000;
+const NODE_NOT_CSG_MASK: u8 = 0x21;
 const BOX_EPSILON: f32 = 0.1;
 const TRACE_MARGIN: f32 = 1.0;
+const TRAVERSAL_EXTENT_SCALE: f32 = 1.1;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -29,7 +31,8 @@ pub struct SurfaceHit {
 #[derive(Clone, Debug)]
 pub struct BspCollision {
     hulls: Vec<ConvexHull>,
-    hulls_by_min_x: Vec<usize>,
+    hull_by_node: Vec<Option<usize>>,
+    root_outside: bool,
     zone_nodes: Vec<BspNode>,
     points: Vec<Vec3>,
     vertices: Vec<BspVertex>,
@@ -243,18 +246,14 @@ impl BspCollision {
                 _ => None,
             })
             .collect();
-        let mut hulls_by_min_x = (0..hulls.len()).collect::<Vec<_>>();
-        hulls_by_min_x.sort_unstable_by(|&left, &right| {
-            hulls[left]
-                .bounds
-                .minimum
-                .x
-                .total_cmp(&hulls[right].bounds.minimum.x)
-                .then_with(|| left.cmp(&right))
-        });
+        let mut hull_by_node = vec![None; model.nodes.len()];
+        for (hull_index, hull) in hulls.iter().enumerate() {
+            hull_by_node[hull.node] = Some(hull_index);
+        }
         Ok(Self {
             hulls,
-            hulls_by_min_x,
+            hull_by_node,
+            root_outside: model.root_outside,
             zone_nodes: model.nodes.clone(),
             points: model.points.clone(),
             vertices: model.vertices.clone(),
@@ -484,94 +483,100 @@ impl BspCollision {
             minimum: start.min(trace_end) - extents,
             maximum: start.max(trace_end) + extents,
         };
-        let candidate_count = self
-            .hulls_by_min_x
-            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= query_bounds.maximum.x);
         let mut nearest = None;
-
-        for &hull_index in &self.hulls_by_min_x[..candidate_count] {
-            let hull = &self.hulls[hull_index];
-            if hull.bounds.maximum.x < query_bounds.minimum.x
-                || hull.bounds.maximum.y < query_bounds.minimum.y
-                || hull.bounds.minimum.y > query_bounds.maximum.y
-                || hull.bounds.maximum.z < query_bounds.minimum.z
-                || hull.bounds.minimum.z > query_bounds.maximum.z
-            {
-                continue;
-            }
-            let bounds = Aabb {
-                minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
-                maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
-            };
-            if let Some((radius, height)) = shape.axis_aligned_cylinder()
-                && hull_is_axis_aligned_box(hull)
-            {
-                let target = (bounds.minimum + bounds.maximum) * 0.5;
-                let target_extents = (bounds.maximum - bounds.minimum) * 0.5;
-                let Some(hit) =
-                    sweep_cylinder_aabb(start, end, height, radius, target, target_extents)
-                else {
-                    continue;
-                };
-                let hit = CollisionHit {
-                    fraction: hit.fraction,
-                    normal: hit.normal,
-                    node: hull
-                        .planes
-                        .iter()
-                        .find(|plane| plane.plane.normal.abs_diff_eq(hit.normal, 0.00001))
-                        .map_or(hull.node, |plane| plane.node),
-                };
-                if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
-                    hit.fraction < current.fraction
-                        || (hit.fraction == current.fraction && hull_index < current_index)
-                }) {
-                    nearest = Some((hull_index, hit));
+        let hulls = &self.hulls;
+        visit_reached_hulls(
+            &self.zone_nodes,
+            &self.hull_by_node,
+            self.root_outside,
+            start,
+            end,
+            extents,
+            &mut |hull_index| {
+                let hull = &hulls[hull_index];
+                if hull.bounds.minimum.x > query_bounds.maximum.x
+                    || hull.bounds.maximum.x < query_bounds.minimum.x
+                    || hull.bounds.maximum.y < query_bounds.minimum.y
+                    || hull.bounds.minimum.y > query_bounds.maximum.y
+                    || hull.bounds.maximum.z < query_bounds.minimum.z
+                    || hull.bounds.minimum.z > query_bounds.maximum.z
+                {
+                    return;
                 }
-                continue;
-            }
-            let mut cursor = SweepCursor::new(start, trace_end, shape);
-            if !cursor.clip_box(bounds) {
-                continue;
-            }
-            if !hull
-                .planes
-                .iter()
-                .copied()
-                .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
-            {
-                continue;
-            }
-            for (index, plane) in hull.planes.iter().copied().enumerate() {
-                for other in hull.planes[..index].iter().copied() {
-                    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                        if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
-                            cursor.clip_bevel(plane.plane, other.plane, axis);
+                let bounds = Aabb {
+                    minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
+                    maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
+                };
+                if let Some((radius, height)) = shape.axis_aligned_cylinder()
+                    && hull_is_axis_aligned_box(hull)
+                {
+                    let target = (bounds.minimum + bounds.maximum) * 0.5;
+                    let target_extents = (bounds.maximum - bounds.minimum) * 0.5;
+                    let Some(hit) =
+                        sweep_cylinder_aabb(start, end, height, radius, target, target_extents)
+                    else {
+                        return;
+                    };
+                    let hit = CollisionHit {
+                        fraction: hit.fraction,
+                        normal: hit.normal,
+                        node: hull
+                            .planes
+                            .iter()
+                            .find(|plane| plane.plane.normal.abs_diff_eq(hit.normal, 0.00001))
+                            .map_or(hull.node, |plane| plane.node),
+                    };
+                    if nearest.is_none_or(|(_, current): (usize, CollisionHit)| {
+                        hit.fraction < current.fraction
+                    }) {
+                        nearest = Some((hull_index, hit));
+                    }
+                    return;
+                }
+                let mut cursor = SweepCursor::new(start, trace_end, shape);
+                if !cursor.clip_box(bounds) {
+                    return;
+                }
+                if !hull
+                    .planes
+                    .iter()
+                    .copied()
+                    .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
+                {
+                    return;
+                }
+                for (index, plane) in hull.planes.iter().copied().enumerate() {
+                    for other in hull.planes[..index].iter().copied() {
+                        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                            if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
+                                cursor.clip_bevel(plane.plane, other.plane, axis);
+                            }
                         }
                     }
                 }
-            }
-            let Some(hit_distance) = cursor.hit_distance(trace_distance) else {
-                continue;
-            };
-            let fraction = ((hit_distance - TRACE_MARGIN).max(0.0) / distance).min(1.0);
-            let hit = CollisionHit {
-                fraction,
-                normal: cursor.hit_normal,
-                node: cursor.hit_node.unwrap_or_else(|| {
-                    hull.planes
-                        .iter()
-                        .find(|plane| plane.plane.normal.abs_diff_eq(cursor.hit_normal, 0.00001))
-                        .map_or(hull.node, |plane| plane.node)
-                }),
-            };
-            if nearest.is_none_or(|(current_index, current): (usize, CollisionHit)| {
-                hit.fraction < current.fraction
-                    || (hit.fraction == current.fraction && hull_index < current_index)
-            }) {
-                nearest = Some((hull_index, hit));
-            }
-        }
+                let Some(hit_distance) = cursor.hit_distance(trace_distance) else {
+                    return;
+                };
+                let fraction = ((hit_distance - TRACE_MARGIN).max(0.0) / distance).min(1.0);
+                let hit = CollisionHit {
+                    fraction,
+                    normal: cursor.hit_normal,
+                    node: cursor.hit_node.unwrap_or_else(|| {
+                        hull.planes
+                            .iter()
+                            .find(|plane| {
+                                plane.plane.normal.abs_diff_eq(cursor.hit_normal, 0.00001)
+                            })
+                            .map_or(hull.node, |plane| plane.node)
+                    }),
+                };
+                if nearest.is_none_or(|(_, current): (usize, CollisionHit)| {
+                    hit.fraction < current.fraction
+                }) {
+                    nearest = Some((hull_index, hit));
+                }
+            },
+        );
         nearest.map(|(_, hit)| hit)
     }
 
@@ -581,48 +586,57 @@ impl BspCollision {
             minimum: location - extents,
             maximum: location + extents,
         };
-        let candidate_count = self
-            .hulls_by_min_x
-            .partition_point(|&index| self.hulls[index].bounds.minimum.x <= query_bounds.maximum.x);
-
-        for &hull_index in &self.hulls_by_min_x[..candidate_count] {
-            let hull = &self.hulls[hull_index];
-            if hull.bounds.maximum.x < query_bounds.minimum.x
-                || hull.bounds.maximum.y < query_bounds.minimum.y
-                || hull.bounds.minimum.y > query_bounds.maximum.y
-                || hull.bounds.maximum.z < query_bounds.minimum.z
-                || hull.bounds.minimum.z > query_bounds.maximum.z
-            {
-                continue;
-            }
-            let bounds = Aabb {
-                minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
-                maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
-            };
-            let mut cursor = SweepCursor::new(location, location, shape);
-            if !cursor.clip_box(bounds)
-                || !hull
-                    .planes
-                    .iter()
-                    .copied()
-                    .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
-            {
-                continue;
-            }
-            for (index, plane) in hull.planes.iter().copied().enumerate() {
-                for other in hull.planes[..index].iter().copied() {
-                    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                        if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
-                            cursor.clip_bevel(plane.plane, other.plane, axis);
+        let mut overlaps = false;
+        visit_reached_hulls(
+            &self.zone_nodes,
+            &self.hull_by_node,
+            self.root_outside,
+            location,
+            location,
+            extents,
+            &mut |hull_index| {
+                if overlaps {
+                    return;
+                }
+                let hull = &self.hulls[hull_index];
+                if hull.bounds.minimum.x > query_bounds.maximum.x
+                    || hull.bounds.maximum.x < query_bounds.minimum.x
+                    || hull.bounds.maximum.y < query_bounds.minimum.y
+                    || hull.bounds.minimum.y > query_bounds.maximum.y
+                    || hull.bounds.maximum.z < query_bounds.minimum.z
+                    || hull.bounds.minimum.z > query_bounds.maximum.z
+                {
+                    return;
+                }
+                let bounds = Aabb {
+                    minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
+                    maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
+                };
+                let mut cursor = SweepCursor::new(location, location, shape);
+                if !cursor.clip_box(bounds)
+                    || !hull
+                        .planes
+                        .iter()
+                        .copied()
+                        .all(|plane| cursor.clip_plane(plane.plane, Some(plane.node)))
+                {
+                    return;
+                }
+                for (index, plane) in hull.planes.iter().copied().enumerate() {
+                    for other in hull.planes[..index].iter().copied() {
+                        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                            if opposite_axis_signs(plane.plane.normal, other.plane.normal, axis) {
+                                cursor.clip_bevel(plane.plane, other.plane, axis);
+                            }
                         }
                     }
                 }
-            }
-            if !cursor.no_hit {
-                return true;
-            }
-        }
-        false
+                if !cursor.no_hit {
+                    overlaps = true;
+                }
+            },
+        );
+        overlaps
     }
 
     pub fn line_trace(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {
@@ -749,6 +763,87 @@ impl BspCollision {
 
     pub fn zone_actor_export(&self, zone: usize) -> Option<usize> {
         self.zone_actors.get(zone).copied().flatten()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_reached_hulls(
+    nodes: &[BspNode],
+    hull_by_node: &[Option<usize>],
+    root_outside: bool,
+    start: Vec3,
+    end: Vec3,
+    extents: Vec3,
+    visit: &mut impl FnMut(usize),
+) {
+    #[allow(clippy::too_many_arguments)]
+    fn visit_node(
+        nodes: &[BspNode],
+        hull_by_node: &[Option<usize>],
+        parent: Option<usize>,
+        node: Option<usize>,
+        outside: bool,
+        start: Vec3,
+        end: Vec3,
+        extents: Vec3,
+        visit: &mut impl FnMut(usize),
+    ) {
+        let Some(index) = node else {
+            if !outside && let Some(hull) = parent.and_then(|parent| hull_by_node[parent]) {
+                visit(hull);
+            }
+            return;
+        };
+        let Some(node) = nodes.get(index) else {
+            return;
+        };
+        let normal = Vec3::from_array([node.plane[0], node.plane[1], node.plane[2]]);
+        let start_distance = normal.dot(start) - node.plane[3];
+        let end_distance = normal.dot(end) - node.plane[3];
+        let support = normal.abs().dot(extents * TRAVERSAL_EXTENT_SCALE);
+        let reaches = [
+            start_distance <= support || end_distance <= support,
+            start_distance >= -support || end_distance >= -support,
+        ];
+        let near = usize::from(start_distance >= -support);
+        let is_csg = node.vertex_count > 0 && node.flags & NODE_NOT_CSG_MASK == 0;
+
+        for side in [near, 1 - near] {
+            if !reaches[side] {
+                continue;
+            }
+            let outside = if side == 1 {
+                outside || is_csg
+            } else {
+                outside && !is_csg
+            };
+            let child = [node.back, node.front][side];
+            visit_node(
+                nodes,
+                hull_by_node,
+                Some(index),
+                usize::try_from(child).ok(),
+                outside,
+                start,
+                end,
+                extents,
+                visit,
+            );
+        }
+    }
+
+    if !nodes.is_empty() {
+        visit_node(
+            nodes,
+            hull_by_node,
+            None,
+            Some(0),
+            root_outside,
+            start,
+            end,
+            extents,
+            visit,
+        );
     }
 }
 
