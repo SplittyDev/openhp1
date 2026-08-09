@@ -574,7 +574,9 @@ impl LoadedScene {
 
         self.actors[actor_index].location = location;
         self.actor_states[actor_index].actor.location = location;
-        self.render.set_light_location(actor_index, location);
+        if self.actor_states[actor_index].is_light {
+            self.render.set_light_location(actor_index, location);
+        }
         for corona in self
             .render
             .coronas
@@ -1075,7 +1077,9 @@ impl LoadedScene {
         let transform = rotation_delta(origin, actor.rotation, rotation);
         self.actors[actor_index].rotation = rotation;
         self.actor_states[actor_index].actor.rotation = rotation;
-        self.render.set_light_rotation(actor_index, rotation);
+        if self.actor_states[actor_index].is_light {
+            self.render.set_light_rotation(actor_index, rotation);
+        }
         if let Some(mesh_transform) = &mut self.actors[actor_index].mesh_transform {
             *mesh_transform = transform * *mesh_transform;
         }
@@ -4006,6 +4010,7 @@ mod tests {
         fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
         let mut runtime = ScriptRuntime::new(&root).unwrap();
         let mut scene = particle_test_scene();
+        assert!(!scene.actor_states[0].is_light);
 
         assert_eq!(
             crate::apply_runtime_actions(
