@@ -10,5 +10,6 @@ mod types;
 
 pub use error::{Error, Result};
 pub use types::{
-    Mesh, MeshAnimationNotify, MeshAnimationSequence, MeshTriangle, MeshVertex, SkeletalAnimation,
+    Mesh, MeshAnimationNotify, MeshAnimationSequence, MeshSample, MeshTriangle, MeshVertex,
+    SkeletalAnimation,
 };

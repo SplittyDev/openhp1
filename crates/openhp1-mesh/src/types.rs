@@ -23,6 +23,13 @@ pub struct MeshTriangle {
 }
 
 #[derive(Clone, Debug)]
+pub struct MeshSample {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    pub root_motion: Vec3,
+}
+
+#[derive(Clone, Debug)]
 pub struct MeshAnimationNotify {
     pub time: f32,
     pub function: String,
@@ -73,6 +80,10 @@ impl Mesh {
             .flat_map(|mesh| mesh.bones.iter().map(|bone| bone.name.as_str()))
     }
 
+    pub fn animation_faces(&self) -> &[[usize; 3]] {
+        &self.face_vertices
+    }
+
     /// Samples a looping animation sequence at a normalized phase.
     ///
     /// Phase zero is the first frame and phase one wraps back to it.
@@ -81,6 +92,20 @@ impl Mesh {
         sequence: &MeshAnimationSequence,
         phase: f32,
     ) -> Result<Vec<MeshTriangle>> {
+        let sample = self.sample_sequence_vertices(sequence, phase)?;
+        sample_triangles(
+            &self.triangles,
+            &self.face_vertices,
+            &sample.positions,
+            &sample.normals,
+        )
+    }
+
+    pub fn sample_sequence_vertices(
+        &self,
+        sequence: &MeshAnimationSequence,
+        phase: f32,
+    ) -> Result<MeshSample> {
         if !phase.is_finite() {
             return Err(Error::InvalidAnimationPhase(phase));
         }
@@ -124,7 +149,11 @@ impl Mesh {
             .zip(second_normals)
             .map(|(first, second)| first.lerp(*second, blend).normalize_or_zero())
             .collect::<Vec<_>>();
-        sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
+        Ok(MeshSample {
+            positions: vertices,
+            normals,
+            root_motion: Vec3::ZERO,
+        })
     }
 
     pub fn sample_skeletal_sequence(
@@ -133,13 +162,37 @@ impl Mesh {
         sequence: usize,
         phase: f32,
     ) -> Result<Vec<MeshTriangle>> {
+        let sample = self.sample_skeletal_vertices(animation, sequence, phase, false)?;
+        sample_triangles(
+            &self.triangles,
+            &self.face_vertices,
+            &sample.positions,
+            &sample.normals,
+        )
+    }
+
+    pub fn sample_skeletal_vertices(
+        &self,
+        animation: &SkeletalAnimation,
+        sequence: usize,
+        phase: f32,
+        extract_root_motion: bool,
+    ) -> Result<MeshSample> {
         if !phase.is_finite() {
             return Err(Error::InvalidAnimationPhase(phase));
         }
         let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
-        let vertices = animation.sample(skeletal, sequence, phase)?;
-        let normals = vertex_normals(&vertices, &self.face_vertices);
-        sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)
+        let (positions, root_motion) = if extract_root_motion {
+            animation.sample_with_root_motion(skeletal, sequence, phase)?
+        } else {
+            (animation.sample(skeletal, sequence, phase)?, Vec3::ZERO)
+        };
+        let normals = vertex_normals(&positions, &self.face_vertices);
+        Ok(MeshSample {
+            positions,
+            normals,
+            root_motion,
+        })
     }
 
     pub fn sample_skeletal_attachment(
@@ -212,16 +265,15 @@ impl Mesh {
         sequence: usize,
         phase: f32,
     ) -> Result<(Vec<MeshTriangle>, Vec3)> {
-        if !phase.is_finite() {
-            return Err(Error::InvalidAnimationPhase(phase));
-        }
-        let skeletal = self.skeletal.as_ref().ok_or(Error::NoSkeletalMesh)?;
-        let (vertices, root_motion) =
-            animation.sample_with_root_motion(skeletal, sequence, phase)?;
-        let normals = vertex_normals(&vertices, &self.face_vertices);
+        let sample = self.sample_skeletal_vertices(animation, sequence, phase, true)?;
         Ok((
-            sample_triangles(&self.triangles, &self.face_vertices, &vertices, &normals)?,
-            root_motion,
+            sample_triangles(
+                &self.triangles,
+                &self.face_vertices,
+                &sample.positions,
+                &sample.normals,
+            )?,
+            sample.root_motion,
         ))
     }
 

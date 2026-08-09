@@ -532,9 +532,9 @@ impl LoadedScene {
         animation.looping = looping;
         animation.root_motion = root_motion;
         if root_motion {
-            let (_, root_motion_position) = animation.sample()?;
+            let sample = animation.sample()?;
             animation.root_motion_position =
-                animation.transform.transform_vector3(root_motion_position);
+                animation.transform.transform_vector3(sample.root_motion);
         }
         if let Some(actor) = self.actors.get_mut(actor_index)
             && let Some(actor_animation) = actor.animation.as_mut()
@@ -1428,32 +1428,52 @@ impl LoadedScene {
                 self.hidden_actor_positions
                     .contains_key(&animation.actor_index)
             };
-            let (triangles, root_motion) = animation.sample()?;
+            let sample = animation.sample()?;
+            ensure!(
+                sample.positions.len() == sample.normals.len(),
+                "animation position and normal counts differ"
+            );
+            let positions = sample
+                .positions
+                .iter()
+                .map(|&position| animation.transform.transform_point3(position))
+                .collect::<Vec<_>>();
+            let normals = sample
+                .normals
+                .iter()
+                .map(|&normal| (animation.normal_transform * normal).normalize_or_zero())
+                .collect::<Vec<_>>();
+            let mut lit_colors = tween.is_none().then(|| vec![None; positions.len()]);
             if animation.root_motion {
-                let root_motion = animation.transform.transform_vector3(root_motion);
+                let root_motion = animation.transform.transform_vector3(sample.root_motion);
                 let delta = root_motion - animation.root_motion_position;
                 animation.root_motion_position = root_motion;
                 if delta != Vec3::ZERO {
                     self.root_motions.push((animation.actor_index, delta));
                 }
             }
+            let faces = animation.mesh.animation_faces();
             ensure!(
-                triangles.len() * 3 == animation.vertices.len(),
+                faces.len().checked_mul(3) == Some(animation.vertices.len()),
                 "animation changed actor vertex count"
             );
-            for (index, (destination, vertex)) in animation
+            for (index, (destination, &source)) in animation
                 .vertices
                 .clone()
-                .zip(triangles.into_iter().flat_map(|triangle| triangle.vertices))
+                .zip(faces.iter().flatten())
                 .enumerate()
             {
-                let target = animation.transform.transform_point3(vertex.position);
+                let target = positions
+                    .get(source)
+                    .context("animation refers to a missing mesh vertex")?;
+                let normal = normals
+                    .get(source)
+                    .context("animation refers to a missing mesh normal")?;
                 let position = animation
                     .tween_from
                     .as_ref()
                     .zip(tween)
-                    .map_or(target, |(from, tween)| from[index].lerp(target, tween));
-                let normal = (animation.normal_transform * vertex.normal).normalize_or_zero();
+                    .map_or(*target, |(from, tween)| from[index].lerp(*target, tween));
                 if collapsed {
                     self.hidden_actor_positions
                         .get_mut(&animation.actor_index)
@@ -1462,7 +1482,7 @@ impl LoadedScene {
                 } else {
                     self.render.mesh.positions[destination] = position;
                 }
-                self.render.mesh.normals[destination] = normal;
+                self.render.mesh.normals[destination] = *normal;
                 let surface = self.render.mesh.vertex_surfaces[destination];
                 let unlit = animation.unlit
                     || self
@@ -1471,8 +1491,20 @@ impl LoadedScene {
                         .get(surface)
                         .context("animated actor vertex refers to a missing material")?
                         .unlit;
-                self.render.mesh.vertex_colors[destination] =
-                    animation.lighting.color(position, normal, unlit);
+                let color = if unlit {
+                    animation.lighting.color(position, *normal, true)
+                } else if let Some(colors) = lit_colors.as_mut() {
+                    if let Some(color) = colors[source] {
+                        color
+                    } else {
+                        let color = animation.lighting.color(position, *normal, false);
+                        colors[source] = Some(color);
+                        color
+                    }
+                } else {
+                    animation.lighting.color(position, *normal, false)
+                };
+                self.render.mesh.vertex_colors[destination] = color;
             }
             if tween == Some(1.0) {
                 animation.tween_from = None;
@@ -2146,23 +2178,17 @@ impl AnimatedActorMesh {
             })
     }
 
-    fn sample(&self) -> openhp1_mesh::Result<(Vec<openhp1_mesh::MeshTriangle>, Vec3)> {
+    fn sample(&self) -> openhp1_mesh::Result<openhp1_mesh::MeshSample> {
         if let Some(animation) = &self.skeletal_animation {
-            if self.root_motion {
-                self.mesh.sample_skeletal_sequence_with_root_motion(
-                    animation,
-                    self.sequence,
-                    self.phase,
-                )
-            } else {
-                self.mesh
-                    .sample_skeletal_sequence(animation, self.sequence, self.phase)
-                    .map(|triangles| (triangles, Vec3::ZERO))
-            }
+            self.mesh.sample_skeletal_vertices(
+                animation,
+                self.sequence,
+                self.phase,
+                self.root_motion,
+            )
         } else {
             self.mesh
-                .sample_sequence(&self.mesh.animation_sequences[self.sequence], self.phase)
-                .map(|triangles| (triangles, Vec3::ZERO))
+                .sample_sequence_vertices(&self.mesh.animation_sequences[self.sequence], self.phase)
         }
     }
 
