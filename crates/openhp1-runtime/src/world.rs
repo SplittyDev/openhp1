@@ -131,6 +131,7 @@ const PROPERTY_RETURN: u32 = 0x400;
 const PROPERTY_CONFIG: u32 = 0x0000_4000;
 const PROPERTY_TRAVEL: u32 = 0x0001_0000;
 const PROPERTY_GLOBAL_CONFIG: u32 = 0x0004_0000;
+const FUNCTION_SINGULAR: u32 = 0x0000_0020;
 const FUNCTION_NATIVE: u32 = 0x0000_0400;
 const STATE_AUTO: u32 = 0x0000_0002;
 const PROBE_EVENTS: [&str; 64] = [
@@ -235,6 +236,7 @@ pub struct ScriptRuntime {
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,
     destroyed: HashSet<usize>,
+    singular_actors: HashSet<usize>,
     timers: HashMap<usize, ActorTimer>,
     timer_callbacks: usize,
     random_state: u32,

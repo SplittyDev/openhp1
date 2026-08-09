@@ -65,6 +65,7 @@ impl ScriptRuntime {
             object_actors: HashMap::default(),
             actor_objects: HashMap::default(),
             destroyed: HashSet::default(),
+            singular_actors: HashSet::default(),
             timers: HashMap::default(),
             timer_callbacks: 0,
             random_state: 0x6d2b_79f5,

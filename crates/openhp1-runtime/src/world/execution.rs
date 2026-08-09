@@ -332,6 +332,43 @@ impl ScriptRuntime {
             return Err(DispatchError::CallDepth);
         }
         let script = self.script(function)?;
+        let singular = matches!(
+            &script.metadata,
+            ScriptMetadata::Function(metadata) if metadata.flags & FUNCTION_SINGULAR != 0
+        );
+        if singular && !self.singular_actors.insert(actor) {
+            return Ok(Value::None);
+        }
+        let result = self.execute_function_body(
+            actor,
+            actor_class,
+            function,
+            arguments,
+            instance,
+            actions,
+            depth,
+            output_arguments,
+            &script,
+        );
+        if singular {
+            self.singular_actors.remove(&actor);
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_function_body(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        function: &ResolvedObject,
+        arguments: &[Value],
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+        depth: usize,
+        output_arguments: Option<&mut Vec<Value>>,
+        script: &ScriptExport,
+    ) -> DispatchResult<Value> {
         if let ScriptMetadata::Function(metadata) = &script.metadata {
             if metadata.native_index != 0 {
                 let output = self.dispatch_native_call(

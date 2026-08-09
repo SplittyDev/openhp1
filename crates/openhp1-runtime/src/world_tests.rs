@@ -1693,6 +1693,86 @@ fn final_function_calls_run_prebound_natives_and_propagate_failures() {
 }
 
 #[test]
+fn singular_functions_do_not_reenter_the_same_actor() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-singular-function-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let function = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 1,
+    };
+    runtime.class_defaults.insert(
+        object_id(&package, class.export_index),
+        InstanceState::default(),
+    );
+    let mut script = log_event_script(function.export_index, "entered");
+    let ScriptMetadata::Function(metadata) = &mut Arc::make_mut(&mut script).metadata else {
+        unreachable!()
+    };
+    metadata.flags = FUNCTION_SINGULAR;
+    runtime
+        .scripts
+        .insert(object_id(&package, function.export_index), script);
+
+    let actor = 1;
+    runtime.singular_actors.insert(actor);
+    let mut instance = InstanceState::default();
+    let mut actions = Vec::new();
+    assert_eq!(
+        runtime
+            .execute_function(
+                actor,
+                &class,
+                &function,
+                &[],
+                &mut instance,
+                &mut actions,
+                0,
+            )
+            .unwrap(),
+        Value::None
+    );
+    assert!(actions.is_empty());
+
+    runtime.singular_actors.remove(&actor);
+    runtime
+        .execute_function(
+            actor,
+            &class,
+            &function,
+            &[],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        actions,
+        [ActorAction::Log {
+            actor,
+            message: "entered".to_owned(),
+            tag: None,
+        }]
+    );
+    assert!(!runtime.singular_actors.contains(&actor));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn player_ui_state_reads_the_authored_harry_counters() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-player-ui-{}-{}",
