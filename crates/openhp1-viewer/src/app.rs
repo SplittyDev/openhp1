@@ -86,6 +86,7 @@ pub(crate) struct ViewerApp {
     renderer_settings: RendererSettings,
     volumetric_tuning: VolumetricTuning,
     fixed_resolution: Option<[u32; 2]>,
+    vertices_dirty: bool,
 }
 
 impl ViewerApp {
@@ -140,6 +141,7 @@ impl ViewerApp {
             renderer_settings,
             volumetric_tuning: VolumetricTuning::default(),
             fixed_resolution: None,
+            vertices_dirty: false,
         })
     }
 
@@ -753,7 +755,7 @@ impl ViewerApp {
         let delta_time = delta_time * self.animation_speed;
         let completed = match self.scene.tick_animations_with_completions(delta_time) {
             Ok((true, completed)) => {
-                self.update_vertices();
+                self.vertices_dirty = true;
                 completed
             }
             Ok((false, completed)) => completed,
@@ -772,7 +774,7 @@ impl ViewerApp {
                 }
             };
             match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
-                Ok((_, _, true)) => self.update_vertices(),
+                Ok((_, _, true)) => self.vertices_dirty = true,
                 Ok(_) => {}
                 Err(error) => {
                     self.load_error = Some(format!("root motion failed: {error:#}"));
@@ -789,7 +791,7 @@ impl ViewerApp {
                 }
             };
             match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
-                Ok((_, _, true)) => self.update_vertices(),
+                Ok((_, _, true)) => self.vertices_dirty = true,
                 Ok(_) => {}
                 Err(error) => {
                     self.load_error = Some(format!("animation callback failed: {error:#}"));
@@ -845,7 +847,7 @@ impl ViewerApp {
             }
         }
         match apply_runtime_actions(&mut self.scene, &mut self.runtime, actions) {
-            Ok((_, _, true)) => self.update_vertices(),
+            Ok((_, _, true)) => self.vertices_dirty = true,
             Ok(_) => {}
             Err(error) => {
                 self.load_error = Some(format!("runtime action failed: {error:#}"));
@@ -854,6 +856,7 @@ impl ViewerApp {
     }
 
     fn update_vertices(&mut self) {
+        self.vertices_dirty = false;
         let changed_lightmaps = self.scene.take_changed_lightmaps();
         let scene_updated = self
             .renderer
@@ -921,6 +924,9 @@ impl eframe::App for ViewerApp {
             self.update_camera(ui, &response, delta_time);
             self.update_animations(delta_time);
             self.update_runtime(delta_time);
+            if self.vertices_dirty {
+                self.update_vertices();
+            }
 
             let mut encoder =
                 self.state
