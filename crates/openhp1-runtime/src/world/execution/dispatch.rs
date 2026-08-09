@@ -570,6 +570,9 @@ impl ScriptRuntime {
             self.object_instances.insert(object, (class_id, instance));
             return result;
         };
+        if actor != current_actor && self.destroyed.contains(&actor) {
+            return Ok(CallOutput::value(Value::None));
+        }
         if actor == current_actor {
             return self.dispatch_call(
                 current_actor,
@@ -1548,6 +1551,46 @@ mod iterator_tests {
                 .unwrap()
                 .value,
             Value::Float(2.0),
+        );
+    }
+
+    #[test]
+    fn context_calls_ignore_destroyed_actor_receivers() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let class = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 0,
+        };
+        for actor in [7, 8] {
+            let object = runtime_actor_id(actor);
+            runtime.object_actors.insert(object.clone(), actor);
+            runtime.actor_objects.insert(actor, object);
+            runtime.actor_classes.insert(actor, object_id(&source, 0));
+        }
+        runtime.instances.insert(8, InstanceState::default());
+        runtime.destroyed.insert(8);
+        let receiver = runtime
+            .object_handle(runtime.actor_objects.get(&8).cloned().unwrap())
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .dispatch_context_call(
+                    7,
+                    &class,
+                    receiver,
+                    &source,
+                    FunctionCall::Native(RAND_RANGE),
+                    &[Value::Float(2.0), Value::Float(2.0)],
+                    &mut InstanceState::default(),
+                    &mut Vec::new(),
+                    0,
+                )
+                .unwrap()
+                .value,
+            Value::None,
         );
     }
 
