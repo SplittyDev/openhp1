@@ -1,8 +1,10 @@
 use glam::{Mat3, Vec3};
 use openhp1_map::PolyFlags;
-use openhp1_physics::{boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder};
+use openhp1_physics::{
+    BspCollision, CollisionHit, boxes_overlap, cylinders_overlap, sweep_box, sweep_cylinder,
+};
 
-use super::physics::{PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING};
+use super::physics::{PHYS_FLYING, PHYS_SWIMMING, PHYS_WALKING, two_wall_adjust};
 use super::state::event_disabled;
 use super::*;
 
@@ -816,10 +818,23 @@ impl ScriptRuntime {
     ) -> std::result::Result<Value, String> {
         let delta = Vec3::from_array(delta);
         let hit = self.try_move_actor(actor, actor_class, delta.to_array(), instance, actions)?;
+        let first_normal = hit.normal;
         let Some(aligned) = smooth_remaining_delta(delta, hit.normal, hit.fraction) else {
             return Ok(Value::Bool(hit.fraction == 1.0));
         };
         let hit = self.try_move_actor(actor, actor_class, aligned.to_array(), instance, actions)?;
+        if hit.fraction < 1.0 {
+            let corner = two_wall_adjust(
+                aligned,
+                hit.normal,
+                first_normal,
+                delta.normalize_or_zero(),
+                hit.fraction,
+            );
+            let hit =
+                self.try_move_actor(actor, actor_class, corner.to_array(), instance, actions)?;
+            return Ok(Value::Bool(hit.fraction == 1.0));
+        }
         Ok(Value::Bool(hit.fraction == 1.0))
     }
 
@@ -1393,28 +1408,7 @@ impl ScriptRuntime {
                 .collision
                 .as_ref()
                 .ok_or_else(|| "Move requires a configured BSP collision model".to_owned())?;
-            if current.brush.is_some() {
-                collision_actor_world_bounds(current).and_then(|(center, extents)| {
-                    collision.sweep_aabb(
-                        center,
-                        center + delta,
-                        (extents - Vec3::splat(0.51)).max(Vec3::ZERO),
-                    )
-                })
-            } else if current.collide_type == COLLIDE_BOX {
-                collision.sweep_aabb(
-                    current.location,
-                    current.location + delta,
-                    collision_actor_world_extents(current),
-                )
-            } else {
-                collision.sweep_cylinder(
-                    current.location,
-                    current.location + delta,
-                    current.radius,
-                    current.height,
-                )
-            }
+            sweep_world_collision(collision, current, delta)
         } else {
             None
         };
@@ -2438,6 +2432,61 @@ impl ScriptRuntime {
             cached.actor.shape_bounds = bounds;
             self.reindex_cached_collision_actor(actor);
         }
+    }
+}
+
+fn sweep_world_collision(
+    collision: &BspCollision,
+    actor: &CollisionActor,
+    delta: Vec3,
+) -> Option<CollisionHit> {
+    if actor.brush.is_some() {
+        collision_actor_world_bounds(actor).and_then(|(center, extents)| {
+            collision.sweep_aabb(
+                center,
+                center + delta,
+                (extents - Vec3::splat(0.51)).max(Vec3::ZERO),
+            )
+        })
+    } else {
+        let center = collision_actor_center(actor);
+        collision.sweep_aabb(center, center + delta, collision_actor_world_extents(actor))
+    }
+}
+
+#[cfg(test)]
+mod world_collision_tests {
+    use super::*;
+    use crate::world::tests::solid_box_collision;
+
+    #[test]
+    fn aligned_cylinder_uses_native_box_extent_against_world_bsp() {
+        let collision = solid_box_collision();
+        let start = Vec3::new(-20.0, -20.0, 0.0);
+        let end = Vec3::ZERO;
+        let actor = CollisionActor {
+            actor: 0,
+            location: start,
+            height: 1.0,
+            radius: 1.0,
+            width: 1.0,
+            rotation: Mat3::IDENTITY,
+            collide_type: 0,
+            collide_actors: false,
+            block_actors: false,
+            block_players: false,
+            player_collision: false,
+            brush: None,
+            pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
+            shape_bounds: None,
+        };
+
+        let native_extent_hit = sweep_world_collision(&collision, &actor, end - start).unwrap();
+        let rounded_cylinder_hit = collision
+            .sweep_cylinder(start, end, actor.radius, actor.height)
+            .unwrap();
+        assert!(native_extent_hit.fraction < rounded_cylinder_hit.fraction);
     }
 }
 

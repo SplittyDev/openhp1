@@ -33,7 +33,7 @@ fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
     !pushable && normal.z.abs() < 0.2
 }
 
-fn two_wall_adjust(
+pub(super) fn two_wall_adjust(
     delta: Vec3,
     hit_normal: Vec3,
     old_hit_normal: Vec3,

@@ -2453,7 +2453,7 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     fs::remove_dir_all(root).unwrap();
 }
 
-fn solid_box_collision() -> Arc<BspCollision> {
+pub(super) fn solid_box_collision() -> Arc<BspCollision> {
     let mut model = Model {
         bounds: PrimitiveBounds {
             minimum: Vec3::ZERO,
