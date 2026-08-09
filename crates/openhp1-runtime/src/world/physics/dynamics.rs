@@ -888,7 +888,7 @@ impl ScriptRuntime {
                 actions,
             )?;
             if hit.fraction == 1.0 {
-                self.set_actor_rotation(actor, class, instance, target_rotation, actions)?;
+                self.try_move_actor_rotated(actor, class, target_rotation, instance, actions)?;
                 self.set_actor_value(class, instance, "PhysAlpha", Value::Float(alpha))?;
                 if alpha == 1.0 {
                     self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;

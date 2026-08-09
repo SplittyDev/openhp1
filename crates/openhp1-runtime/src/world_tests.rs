@@ -10194,6 +10194,13 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     key_rotations[1] = StoredValue::Value(Value::Rotator([0, 16_384, 0]));
     moving_brush.insert(key_rot, StoredValue::Array(key_rotations));
 
+    runtime
+        .actor_classes
+        .insert(1, other_projectile_class_id.clone());
+    runtime.instances.insert(1, instance([20.0, 0.0, 0.0]));
+    runtime
+        .update_actor_base(1, Some(runtime.actor_objects[&0].clone()), None)
+        .unwrap();
     runtime.instances.insert(0, moving_brush);
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
@@ -10234,8 +10241,16 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         "a pawn must pass the old collision angle after a rotating door opens"
     );
     assert_eq!(doorway_hit.fraction, 1.0);
+    assert_eq!(
+        runtime.instances[&1].get(&fields["Location"]),
+        Some(&StoredValue::Value(Value::Vector([0.0, 20.0, 0.0]))),
+        "mover interpolation must rotate based actors with the mover"
+    );
 
     runtime.instances.insert(0, moving_brush);
+    runtime.update_actor_base(1, None, None).unwrap();
+    runtime.instances.remove(&1);
+    runtime.actor_bases.remove(&1);
 
     runtime
         .instances
