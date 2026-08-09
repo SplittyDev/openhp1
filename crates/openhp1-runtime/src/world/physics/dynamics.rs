@@ -947,7 +947,7 @@ impl ScriptRuntime {
             .and_then(|state| state.as_deref())
             .is_some_and(|state| state.eq_ignore_ascii_case("CutMovingTo"));
         // Keep normal PlayerPawn rotation script-controlled. HP1's CutMovingTo
-        // state and blocking latent turns both author DesiredRotation directly.
+        // state and blocking latent movement both author DesiredRotation directly.
         if player_rotation_is_script_controlled(
             player_pawn,
             scripted_movement,

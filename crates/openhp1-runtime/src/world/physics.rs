@@ -69,7 +69,10 @@ fn player_rotation_is_script_controlled(
         && !state_frames.values().any(|frame| {
             matches!(
                 frame.latent,
-                LatentAction::TurnTo(target) | LatentAction::TurnToward(target)
+                LatentAction::MoveTo(target)
+                    | LatentAction::MoveToward(target)
+                    | LatentAction::TurnTo(target)
+                    | LatentAction::TurnToward(target)
                     if target == actor
             )
         })
@@ -553,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn matching_latent_turn_overrides_script_controlled_player_rotation() {
+    fn matching_latent_movement_overrides_script_controlled_player_rotation() {
         let frame = |latent| StateFrame {
             state: ObjectId {
                 package: Arc::from("Test"),
@@ -576,7 +579,12 @@ mod tests {
         assert!(player_rotation_is_script_controlled(
             true, false, 7, &frames
         ));
-        for latent in [LatentAction::TurnTo(7), LatentAction::TurnToward(7)] {
+        for latent in [
+            LatentAction::MoveTo(7),
+            LatentAction::MoveToward(7),
+            LatentAction::TurnTo(7),
+            LatentAction::TurnToward(7),
+        ] {
             frames.insert(99, frame(latent));
             assert!(!player_rotation_is_script_controlled(
                 true, false, 7, &frames

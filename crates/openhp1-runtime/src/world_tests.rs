@@ -7823,6 +7823,9 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         ("TimeDilation", runtime_actor_id(208)),
         ("Rotation", runtime_actor_id(209)),
         ("bCanStrafe", runtime_actor_id(210)),
+        ("RotationRate", runtime_actor_id(211)),
+        ("bRotateToDesired", runtime_actor_id(212)),
+        ("bFixedRotationDir", runtime_actor_id(213)),
     ]
     .into_iter()
     .collect::<HashMap<_, _>>();
@@ -7995,6 +7998,18 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
                 fields["bCanStrafe"].clone(),
                 StoredValue::Value(Value::Bool(false)),
             ),
+            (
+                fields["RotationRate"].clone(),
+                StoredValue::Value(Value::Rotator([4096, 50_000, 3072])),
+            ),
+            (
+                fields["bRotateToDesired"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["bFixedRotationDir"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
         ]
         .into_iter()
         .collect::<InstanceState>()
@@ -8090,6 +8105,30 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         },
     );
     runtime.tick(0.0).unwrap();
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(5)), // PHYS_Rotating
+    );
+    runtime.instances.get_mut(&receiver).unwrap().insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0, 16_384, 0])),
+    );
+    let mut receiver_instance = runtime.instances.remove(&receiver).unwrap();
+    runtime
+        .tick_actor_physics(
+            receiver,
+            &class,
+            &mut receiver_instance,
+            0.02,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        receiver_instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 15_384, 0]))),
+        "latent MoveTo must rotate a PlayerPawn toward its destination"
+    );
+    runtime.instances.insert(receiver, receiver_instance);
     assert_eq!(
         runtime.instances[&receiver].get(&acceleration),
         Some(&StoredValue::Value(Value::Vector([100.0, 0.0, 0.0]))),
