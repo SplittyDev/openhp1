@@ -8,7 +8,8 @@ use std::{
 
 use glam::Vec3;
 use openhp1_render::{
-    Camera, DisplaySettings, Renderer, RendererMode, RendererSettings, unreal_to_render,
+    AmbientOcclusion, Antialiasing, Camera, DisplaySettings, Renderer, RendererMode,
+    RendererSettings, unreal_to_render,
 };
 use openhp1_scene::LoadedScene;
 
@@ -17,12 +18,25 @@ const WARMUP_FRAMES: usize = 10;
 const MEASURED_FRAMES: usize = 60;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = env::args_os()
-        .nth(1)
-        .ok_or("usage: modern_benchmark <map path> [--portal]")?;
-    let portal_view = env::args_os()
-        .nth(2)
-        .is_some_and(|value| value == "--portal");
+    let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    let path = arguments
+        .first()
+        .ok_or(
+            "usage: modern_benchmark <map path> [--baseline] [--classic] [--portal] [--retina] [--updates]",
+        )?;
+    let portal_view = arguments.iter().any(|value| value == "--portal");
+    let baseline = arguments.iter().any(|value| value == "--baseline");
+    let updates = arguments.iter().any(|value| value == "--updates");
+    let mode = if arguments.iter().any(|value| value == "--classic") {
+        RendererMode::Classic
+    } else {
+        RendererMode::Modern
+    };
+    let size = if arguments.iter().any(|value| value == "--retina") {
+        [1792, 1536]
+    } else {
+        SIZE
+    };
     let scene = LoadedScene::load(path.into())?;
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -33,16 +47,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         label: Some("OpenHP1 Modern benchmark device"),
         ..Default::default()
     }))?;
-    let settings = RendererSettings {
-        mode: RendererMode::Modern,
+    let mut settings = RendererSettings {
+        mode,
         ..Default::default()
     };
+    if baseline {
+        settings.ambient_occlusion = AmbientOcclusion::Off;
+        settings.antialiasing = Antialiasing::Off;
+        settings.bloom = false;
+        settings.volumetric_lighting = false;
+    }
     let mut renderer = Renderer::new_with_settings(
         &device,
         &queue,
         wgpu::TextureFormat::Rgba8Unorm,
         &scene.render,
-        SIZE,
+        size,
         settings,
     );
     let bounds = renderer.bounds();
@@ -63,8 +83,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("OpenHP1 Modern benchmark output"),
         size: wgpu::Extent3d {
-            width: SIZE[0],
-            height: SIZE[1],
+            width: size[0],
+            height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -77,18 +97,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_view = output.create_view(&Default::default());
 
     for _ in 0..WARMUP_FRAMES {
-        render_frame(&device, &queue, &mut renderer, &output_view, &camera);
+        render_frame(
+            &device,
+            &queue,
+            &mut renderer,
+            &output_view,
+            &camera,
+            size,
+            mode,
+            updates.then_some(&scene.render),
+        );
     }
     device.poll(wgpu::PollType::wait_indefinitely())?;
 
     let start = Instant::now();
     let mut stats = Default::default();
     for _ in 0..MEASURED_FRAMES {
-        stats = render_frame(&device, &queue, &mut renderer, &output_view, &camera);
+        stats = render_frame(
+            &device,
+            &queue,
+            &mut renderer,
+            &output_view,
+            &camera,
+            size,
+            mode,
+            updates.then_some(&scene.render),
+        );
     }
     device.poll(wgpu::PollType::wait_indefinitely())?;
     let elapsed = start.elapsed();
-    let checksum = readback_checksum(&device, &queue, &output)?;
+    let checksum = readback_checksum(&device, &queue, &output, size)?;
     println!(
         "adapter={} frames={} total_ms={:.3} ms_per_frame={:.3} draw_calls={} checksum={checksum:016x}",
         adapter.get_info().name,
@@ -160,7 +198,13 @@ fn render_frame(
     renderer: &mut Renderer,
     output: &wgpu::TextureView,
     camera: &Camera,
+    size: [u32; 2],
+    mode: RendererMode,
+    scene: Option<&openhp1_render::RenderScene>,
 ) -> openhp1_render::RenderStats {
+    if let Some(scene) = scene {
+        assert!(renderer.update_scene(queue, scene));
+    }
     renderer.advance_time(1.0 / 60.0);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("OpenHP1 Modern benchmark frame"),
@@ -170,8 +214,8 @@ fn render_frame(
         &mut encoder,
         output,
         camera,
-        SIZE,
-        DisplaySettings::for_mode(RendererMode::Modern),
+        size,
+        DisplaySettings::for_mode(mode),
     );
     queue.submit([encoder.finish()]);
     stats
@@ -181,11 +225,12 @@ fn readback_checksum(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     output: &wgpu::Texture,
+    size: [u32; 2],
 ) -> Result<u64, Box<dyn Error>> {
-    let size = u64::from(SIZE[0]) * u64::from(SIZE[1]) * 4;
+    let buffer_size = u64::from(size[0]) * u64::from(size[1]) * 4;
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("OpenHP1 Modern benchmark readback"),
-        size,
+        size: buffer_size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -198,8 +243,8 @@ fn readback_checksum(
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(SIZE[0] * 4),
-                rows_per_image: Some(SIZE[1]),
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: Some(size[1]),
             },
         },
         output.size(),
