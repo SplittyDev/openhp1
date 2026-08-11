@@ -1,0 +1,462 @@
+# Original broom input and physics behavior
+
+This note records the original PC game's interactive `BroomHarry` path from
+shipped package data and the retail `Engine.dll`. It is intended to be the
+source of truth for broom parity work in OpenHP1. It does not cover scripted
+interpolation paths except where they replace interactive flight.
+
+## Evidence standard
+
+The conclusions below come first from the locally installed retail game:
+
+| Artifact | SHA-256 | Relevant evidence |
+| --- | --- | --- |
+| `res/System/HarryPotter.u` | `5f18066ac7d6a64ba315a19753308613c0819b3944da551a17bd0f710560cf60` | `BroomHarry` source, bytecode, properties, defaults |
+| `res/System/HPBase.u` | `0cec62e098ded3a16024ee15dbc982bf9662b443f630cd19890b7b5d325bf503` | `baseHarry` input declarations and `BaseCam` states |
+| `res/System/Engine.u` | `b3661a1d2afb1f730ba5bb3cbd2a6716efaf55fd0d8cefa753b69026a8bc5a85` | `PlayerPawn.PlayerInput` script |
+| `res/System/Tut2.u` | `ee53aed1c1cd1a65ac0edf399e14b4307b978900dffca04d377fcbdc1880d88b` | broom-practice launch setup |
+| `res/System/Engine.dll` | `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc` | native input, flying physics, collisions, and banking |
+
+`Engine.dll` is the retail 32-bit x86 PE. Virtual addresses in this note assume
+its image base of `0x10300000`.
+
+The relevant compiled `HarryPotter.u` exports are:
+
+| Export | Object | Raw bytecode size |
+| ---: | --- | ---: |
+| 1577 | `BroomHarry` class | n/a |
+| 1569 | `BroomHarry.ScriptText` | n/a |
+| 937 | `BroomHarry.PlayerInput` | 97 bytes |
+| 804 | `BroomHarry.PlayerWalking` | n/a |
+| 812 | `BroomHarry.PlayerWalking.PlayerMove` | 882 bytes |
+| 820 | `BroomHarry.PlayerWalking.UpdateRotation` | 817 bytes |
+| 831 | `BroomHarry.PlayerWalking.HitWall` | 462 bytes |
+
+The decoded functions contain real control flow and native calls. Therefore the
+matching embedded source is active behavior, not merely a stale source comment.
+The source summaries below were checked against those compiled exports. Exact
+reproduction commands are at the end of this note.
+
+## End-to-end interactive tick
+
+The confirmed path is:
+
+1. Native `UInput::ReadInput` accumulates bound input properties and normalizes
+   every float input property for the frame.
+2. `BroomHarry.PlayerInput` calls `PlayerPawn.PlayerInput`, then handles broom
+   action edges and tutorial-use statistics.
+3. `BroomHarry.PlayerWalking.PlayerTick` calls only its `PlayerMove` override.
+4. `PlayerMove` chooses keyboard or mouse steering, updates pitch/yaw, chooses
+   `AirSpeed`, and sets a very large forward `Acceleration`.
+5. Native `APawn::performPhysics(DeltaTime)` snapshots the old velocity, calls
+   `physFlying` once with that same `DeltaTime`, then calls `physicsRotation`
+   once with the old-velocity snapshot.
+6. `physicsRotation` leaves the script-authored pitch/yaw alone but derives
+   broom roll from the lateral velocity change produced by `physFlying`.
+7. `BaseCam` follows the resulting pawn `Location`, `Rotation`, and
+   `ViewRotation`; camera rotation does not determine thrust direction.
+
+This ordering is conclusive. `APawn::performPhysics` is exported at RVA
+`0x28f1` and enters at VA `0x103e5520`. It snapshots `Velocity` at
+`0x103e554a..0x103e5561`, dispatches `physFlying` at `0x103e5597`, and calls
+`physicsRotation` at `0x103e565d`.
+
+## Input channels and stock bindings
+
+`baseHarry` declares dedicated broom float axes `aBroomYaw` and `aBroomPitch`,
+and byte buttons for yaw left/right, pitch up/down, boost, brake, and action.
+It also declares global-config booleans `bInvertBroomPitch` and
+`bAllowBroomMouse`. See `HPBase.u` embedded source lines 27156-27177 in the
+`strings -a | nl -ba` view.
+
+The shipped `DefUser.ini` bindings are:
+
+| Input | Broom command |
+| --- | --- |
+| Arrow left/right | `bBroomYawLeft` / `bBroomYawRight` |
+| Arrow up/down | `bBroomPitchUp` / `bBroomPitchDown` |
+| Right mouse or `A` | `bBroomBoost` |
+| Left mouse or `Z` | `bBroomBrake` |
+| Jump alias (`Ctrl` by default) | `bBroomAction` |
+| Mouse X | `Axis aBroomYaw Speed=6.0` |
+| Mouse Y | `Axis aBroomPitch Speed=-6.0` |
+
+These are at `res/System/DefUser.ini:15`, `:48-65`, `:87`, and `:108-121`.
+`bInvertBroomPitch=False` is at line 239. There is no shipped config entry,
+serialized true class default, script assignment, or map property occurrence
+for `bAllowBroomMouse`; its stock value is therefore false. The mouse axes are
+bound, but direct mouse broom steering is dormant unless a user or external
+configuration enables it.
+
+### Native axis scaling
+
+`UInput::ReadInput` is export ordinal 1734/RVA `0x22c0` and enters at VA
+`0x103a5ba0`. At `0x103a5de7` it loads `20.0` and divides it by frame
+`DeltaTime`. At `0x103a5df8..0x103a5e45` it walks the collected input
+properties, selects `UFloatProperty` values, and multiplies each by that factor.
+This applies to all float input properties, including `aBroomYaw` and
+`aBroomPitch`; it is not limited to the ordinary mouse axes.
+
+`PlayerPawn.PlayerInput` subsequently applies `MouseSensitivity * FOVScale`
+and smoothing only to `aMouseX/aMouseY` (`Engine.u` embedded source lines
+8936-8982). `BroomHarry` reads the dedicated `aBroom*` axes, so broom mouse
+steering does not inherit `PlayerPawn`'s mouse sensitivity or smoothing. It
+does inherit native all-float input normalization, the binding's `Speed=6`,
+and its own `fBroomSensitivity=1/20000`.
+
+The exact conversion between modern window-event pixels and the retail input
+device's raw units is not established by the binary. A host calibration factor
+cannot be proven from package constants alone.
+
+### `BroomHarry.PlayerInput`
+
+The override first calls `Super.PlayerInput(DeltaTime)`. It then:
+
+- turns `bBroomAction` into a rising-edge `bActioned` event and calls
+  `Referee.OnActionKeyPressed()` once per press;
+- records whether boost and brake have ever been used for tutorial hints.
+
+It does not itself turn or accelerate the pawn. The shipped source is at
+`HarryPotter.u` embedded source lines 43250-43265 and is backed by compiled
+export 937.
+
+## Scripted steering law
+
+`PostBeginPlay` always selects `PHYS_Flying` and overwrites editor values with:
+
+| Property | Runtime value |
+| --- | ---: |
+| `fRotationRateYaw` | 20,000 rotator units/s |
+| `RotationRate.Pitch` | 24,000 |
+| `RotationRate.Yaw` | 50,000 |
+| `RotationRate.Roll` | 6,000 |
+| `fBroomSensitivity` | 1/20,000 |
+
+It also clears the mouse accumulators, deceleration, impact state, and wall
+avoidance state. Evidence: `HarryPotter.u` embedded source lines 43188-43227
+and the compiled `BroomHarry` defaults.
+
+### Keyboard versus mouse
+
+Keyboard steering is rate control. Pitch control is
+`PitchUp - PitchDown`; yaw control is `YawRight - YawLeft`. Pitch is negated
+when `bInvertBroomPitch` is true. Any active keyboard button takes authority
+from the corresponding mouse accumulator and resets that accumulator.
+
+When enabled, mouse steering is positional:
+
+- pitch accumulates `aBroomPitch / 20000` (with the authored inversion rule),
+  clamps to `[-1.5, 1.5]`, removes a `0.15` deadband, and then clamps the
+  effective command to `[-1, 1]`;
+- yaw accumulates `aBroomYaw / 20000`, clamps to `[-1.5, 1.5]`, and uses a
+  wider `0.5` deadband with `0.3` subtracted after crossing it.
+
+Evidence: compiled `PlayerMove` export 812 and embedded source lines
+43604-43667; compiled `UpdateRotation` export 820 and lines 43709-43811.
+
+### Pitch
+
+The default pitch limits are 60 degrees up and down, or approximately
+`+10922.67` and `-10922.67` in 16-bit rotator space. Keyboard pitch advances
+at up to 24,000 units/s. With no keyboard pitch command it self-centers toward
+zero at the same maximum rate. Mouse pitch directly selects an angle within
+the limits instead of selecting an angular rate.
+
+Positive pitch points the broom toward positive Unreal Z. `PlayerMove` calls
+`GetAxes(Rotation,X,Y,Z)` after rotation and uses `X` as its forward direction;
+the `Pull_Up` animation is selected for positive pitch.
+
+### Yaw and wall override
+
+Player yaw is script-authored at 20,000 units/s, not the 50,000 value in
+`RotationRate.Yaw`. `UpdateRotation` updates `ViewRotation.Yaw`, copies it into
+the actor rotation with `SetRotation`, and then assigns
+`DesiredRotation = Rotation`.
+
+If the player supplies no yaw while `bHittingWall` is set, the wall-avoidance
+delta is converted into a yaw control value. The later multiplication by
+`DeltaTime` cancels the division used to construct that value; the requested
+avoidance step is therefore applied directly, subject to the `[-1,1]` command
+clamp.
+
+There is one ordering quirk: `UpdateRotation` runs before `PlayerMove` writes
+this tick's forward acceleration. If `Acceleration` is still exactly zero,
+script yaw is multiplied by `4/3` for that call.
+
+## Speed and forward acceleration
+
+Compiled class defaults establish:
+
+| Property | Value |
+| --- | ---: |
+| `AirSpeedNormal` | 400 |
+| `AirSpeedBoost` | 800 |
+| inherited `AirSpeed` | 400 |
+| inherited `AccelRate` | 1024 |
+| inherited `AirControl` | 0.25 |
+| `WallDamage` | 1 |
+
+Every interactive `PlayerMove` runs rotation first, obtains the new forward
+axis, and sets `Acceleration = 200000 * X`. Native `calcVelocity` limits that
+enormous authored vector to the pawn's `AccelRate`; it is a direction command,
+not a literal 200,000 units/s² acceleration. Thrust always follows the pawn's
+new rotation. Camera direction does not feed this calculation.
+
+The script speed policy is:
+
+```text
+if (boost or auxiliary boost) and not brake:
+    AirSpeed = 800
+else:
+    if abs(yaw control) > 0.2 or brake:
+        raise Deceleration toward 200 at nominal 80 units/s
+    else if Deceleration > 160:
+        reduce Deceleration at nominal 1000 units/s
+    else:
+        reduce Deceleration at nominal 80 units/s
+    AirSpeed = 400 - Deceleration
+```
+
+Pitch alone does not slow the broom. Sustained turning or braking therefore
+settles near speed 200. Boost does not erase stored deceleration, and brake wins
+when boost and brake are held together. `Deceleration` is an `IntProperty`
+(`HarryPotter.u` export 34), so the nominal float rates are quantized when each
+compound assignment is stored; exact small-step results can depend on tick
+size and the VM's numeric conversion.
+
+The formula is in compiled export 812 and embedded source lines 43668-43691.
+
+### Authored launch ramp
+
+`Tut2.BroomPracticeReferee.GameTrial` explicitly starts the player at
+`AirSpeed=10` and `Deceleration=AirSpeedNormal-AirSpeed`, hence 390. The same
+10/390 setup appears in the Remembrall chase and Quidditch intro paths in
+`Hub2.u`. On straight release, the high-decay branch rapidly sheds
+deceleration until 160, after which recovery is much slower. Holding yaw can
+retain the intentionally low launch speed because deceleration already exceeds
+the ordinary turning target.
+
+The tutorial assignment is in `Tut2.u` embedded source lines 603-604.
+
+## Native `PHYS_Flying`
+
+`APawn::physFlying` is export RVA `0x1ffa` and enters at VA `0x103f13a0`.
+It calls `calcVelocity` at `0x103f14ae`, using normalized acceleration, frame
+delta, pawn `AirSpeed`, and zone fluid friction. `calcVelocity` is export RVA
+`0x2365` and enters at VA `0x103eb3e0`.
+
+For the broom path, the confirmed native behavior is:
+
+- clamp/normalize the acceleration command to `AccelRate`;
+- steer existing velocity toward the commanded forward direction using zone
+  fluid friction;
+- integrate acceleration and cap a `PlayerPawn` to `AirSpeed`;
+- move with swept actor collision;
+- recompute all three velocity components from
+  `(Location - OldLocation) / DeltaTime` when not teleported.
+
+The last point is visible at `0x103f19b3..0x103f1a16`; retail flying does not
+unconditionally zero vertical velocity.
+
+### Collision slide
+
+The retail collision sequence is also explicit in `physFlying`:
+
+1. the first blocked move invokes `processHitWall` at `0x103f17fa` and projects
+   the remaining displacement onto the first hit plane;
+2. a second blocked move invokes `processHitWall` again at `0x103f1933`;
+3. it calls `AActor::TwoWallAdjust` at `0x103f194e` to resolve the two-plane
+   corner;
+4. it attempts the adjusted third move at `0x103f19a0`.
+
+`TwoWallAdjust` is therefore part of normal broom collision response, not only
+falling physics.
+
+## Native broom banking
+
+`APawn::physicsRotation` is export RVA `0x27a7` and enters at VA
+`0x103e5950`. The `DesiredRotation=Rotation` assignment prevents native pitch
+and yaw from undoing script steering, but it does **not** disable the function's
+separate roll block.
+
+For a non-walking pawn with positive `RotationRate.Roll`, the binary does the
+following:
+
+1. Compute actual frame acceleration as
+   `(post-physics Velocity - pre-physics Velocity) / DeltaTime`.
+2. If acceleration magnitude squared is greater than 10,000, transform it into
+   pawn-local axes and use the local Y/lateral component.
+3. Form a bank target of approximately
+   `local_lateral_acceleration * 28000 / AccelRate` and clamp it to
+   `+/-RotationRate.Roll`.
+4. Blend signed roll toward that target with
+   `alpha = min(1, 5 * DeltaTime)`.
+5. At or below the 10,000 threshold, blend signed roll directly toward zero with
+   `alpha = min(1, 8 * DeltaTime)`.
+
+Positive pawn-local Y acceleration produces positive encoded UE1 roll;
+negative produces negative roll. Target formation and both blends use x87
+`FISTP` under the engine's active FPU rounding mode, rather than a `fixedTurn`.
+
+The threshold constant is read at VA `0x10473810`, the high-acceleration blend
+constant 5 at `0x10476584`, the low-acceleration constant 8 at `0x104737e8`,
+and the bank scale 28,000 is an immediate at `0x103e5b48`. The broom defaults
+make the target clamp `+/-6000` and the divisor 1024.
+
+This banking response is a major part of broom feel: script yaw changes the
+forward acceleration direction, `physFlying` curves velocity toward it, and
+`physicsRotation` turns that actual lateral velocity change into visible roll.
+
+## `BroomHarry.HitWall`
+
+The script event layered on native collision:
+
+- ignores almost perfectly flat overhead ceilings (`HitNormal.Z < -0.9999`);
+- gates the initial impact sound, damage, bump animation, and referee event
+  with `bHitWall` until `AnimEnd` clears it;
+- scales impact sound and integer damage by `VSize(Velocity)/AirSpeedNormal`;
+- applies no automatic avoidance to floor-like surfaces with
+  `abs(HitNormal.Z) >= 0.985`;
+- otherwise finds the wall tangent and chooses an escape direction, preserving
+  the previous choice for one second to avoid corner oscillation;
+- caps the requested avoidance delta at `+/-0x6000` (135 degrees).
+
+The literal offset from the wall tangent is 1000 rotator units, approximately
+5.49 degrees. A source comment calls it 10 degrees, but the compiled constant
+wins. Evidence: compiled export 831 and embedded source lines 43813-43885.
+
+`Lev_Tut2.unr:BroomHarry0` (export 74) overrides `WallDamage=0`, `Physics=4`,
+`CollisionHeight=37`, and `bAlignBottom=true`. Tutorial wall hits must therefore
+still bump, sound, notify the referee, slide, and trigger avoidance, but not
+reduce health. No other broom map actor among the 14 maps containing
+`BroomHarry` overrides pitch limits, rotation rates, or normal/boost speeds.
+
+## Camera and non-interactive states
+
+`Harry.PostBeginPlay` creates an `HPBase.BaseCam`. In normal Quidditch play,
+`BaseCam.QuidditchState` uses:
+
+- `StandardTarget.TargetOffset=(100,0,50)`;
+- `CameraHeight=60`;
+- `CameraDistance=150`;
+- smoothed tracking toward `p.ViewRotation`;
+- delayed moving-camera behavior while Harry moves and the camera is unlocked,
+  otherwise stationary tracking;
+- disabled camera collision after positioning.
+
+The state is `HPBase.u` export 2790; its embedded source is at lines
+31250-31308. The camera follows the pawn after movement and does not supply the
+`Rotation` used by `GetAxes` for thrust.
+
+Special broom states intentionally replace this view:
+
+- `Catching` switches to `ReverseState`, offset `(-100,10,50)`, with target
+  pitch 5000;
+- `BroomDying` switches to `TopDownState` and uses `PHYS_Falling`;
+- scripted `FlyingOnPath`/catch transitions use `PHYS_None`, disable collision,
+  and delegate movement to an `InterpolationManager`.
+
+`Hub2` explicitly selects `QuidditchState` for normal match play. No direct
+`Tut2.u` call selecting `QuidditchState` was found. The exact authored cutscene
+or map action that establishes the tutorial camera state remains unresolved;
+it must not be assumed from the class name alone.
+
+## OpenHP1 parity implications (inspection snapshot)
+
+The following comparison describes OpenHP1 before the broom correctness fixes
+made from this research. Line numbers may move during implementation.
+
+### Conclusive mismatches
+
+1. **PlayerPawn banking is skipped.**
+   `crates/openhp1-runtime/src/world/physics/dynamics.rs` had a normal
+   `PlayerPawn` early return in `tick_rotating` around lines 1243-1252. Retail
+   always calls `physicsRotation` after `physFlying` when roll rate is positive,
+   even when current and desired rotations otherwise match. This removes the
+   original lateral-acceleration bank and roll relaxation from broom flight.
+
+2. **The physics cadence is different.**
+   `crates/openhp1-runtime/src/world/physics.rs:13,258-302` split every actor
+   physics update into fixed 0.02-second steps, rerunning flying and rotation
+   without rerunning `BroomHarry.PlayerMove`. Retail `APawn::performPhysics`
+   calls each exactly once with the incoming actor tick delta. For frame deltas
+   above 0.02, the fixed loop changes nonlinear fluid steering, acceleration
+   integration/capping, collision order, integer script-versus-physics cadence,
+   and roll blending.
+
+3. **Flying corner resolution omits the retail two-wall adjustment.**
+   `tick_flying` in
+   `crates/openhp1-runtime/src/world/physics/dynamics.rs:637-694` projected a
+   first slide and emitted a second hit, but did not apply the retail
+   `TwoWallAdjust` result before the next move. This changes corners and can
+   amplify the script's wall-avoidance behavior.
+
+### Confirmed matches or non-gaps
+
+- OpenHP1 maps input into the dedicated `aBroom*` and button properties before
+  invoking the shipped script (`world/actor/player.rs:647-665`).
+- Its shared frame normalization of float mouse axes is structurally consistent
+  with retail `UInput::ReadInput`; the additional desktop event calibration is
+  a host adaptation whose exact factor remains unproven.
+- `tick_flying` preserves all three recomputed velocity components, matching
+  the retail binary rather than reference-engine code that zeroes flying Z.
+- The script's upward-positive pitch convention and forward `GetAxes` direction
+  are shared engine semantics, not a broom-only sign exception.
+
+### Behavior that should remain authored
+
+The following are not tuning knobs to replace with host heuristics:
+
+- 20,000 script yaw rate, 24,000 pitch rate, and +/-60-degree pitch limits;
+- 400 normal speed, 800 boost speed, and the two-stage stored deceleration law;
+- the low-speed 10/390 tutorial and chase launch setup;
+- `HitWall`'s impact gate, referee event, surface tests, and one-second avoidance
+  direction memory;
+- `BaseCam` state selection and offsets;
+- `PHYS_None` interpolation and `PHYS_Falling` death transitions.
+
+## Remaining unresolved points
+
+- The retail input device's raw-unit-to-modern-window-pixel calibration is not
+  recoverable from the axis normalization alone. It needs a controlled retail
+  capture or an equivalent device-path reconstruction.
+- The exact tutorial transition into a `BaseCam` state was not located in
+  `Tut2.u`; authored cutscene/map actions need a separate trace if tutorial
+  framing remains visibly wrong.
+- `Deceleration` is integer-backed. Its exact per-tick rounding should be tested
+  through the VM conversion path if small frame-rate-dependent speed differences
+  remain after native cadence is corrected.
+- Live retail trajectories and camera recordings would still be valuable as an
+  end-to-end validation, but are not needed to establish the formulas and call
+  ordering above.
+
+## Reproduction commands
+
+These commands inspect the copyrighted local installation without modifying or
+exporting it:
+
+```sh
+target/debug/examples/package_inspect res/System/HarryPotter.u
+target/debug/examples/script_inspect res/System/HarryPotter.u 937
+target/debug/examples/script_inspect res/System/HarryPotter.u 812
+target/debug/examples/script_inspect res/System/HarryPotter.u 820
+target/debug/examples/script_inspect res/System/HarryPotter.u 831
+target/debug/examples/class_defaults res/System/HarryPotter.u 1577
+target/debug/examples/property_inspect res/Maps/Lev_Tut2.unr 74
+
+strings -a res/System/HarryPotter.u | nl -ba | sed -n '43037,44062p'
+strings -a res/System/HPBase.u | nl -ba | sed -n '27154,27178p;31250,31308p'
+strings -a res/System/Engine.u | nl -ba | sed -n '8898,9031p'
+nl -ba res/System/DefUser.ini | sed -n '1,125p;234,240p'
+
+objdump -p res/System/Engine.dll | rg 'ReadInput|performPhysics|physFlying|calcVelocity|physicsRotation|TwoWallAdjust|processHitWall'
+objdump -d -M intel --start-address=0x103e5520 --stop-address=0x103e56eb res/System/Engine.dll
+objdump -d -M intel --start-address=0x103e5950 --stop-address=0x103e5e2b res/System/Engine.dll
+objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103a5ba0 --stop-address=0x103a5e60 res/System/Engine.dll
+```
+
+SurrealEngine was consulted only after the shipped artifacts, as a licensed
+secondary cross-check. Its broad flying-velocity structure agrees with the
+retail binary, but its unconditional flying-Z reset contradicts this retail
+`Engine.dll`; the shipped binary is authoritative here.
