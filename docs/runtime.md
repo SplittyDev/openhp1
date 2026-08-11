@@ -339,12 +339,13 @@ mover hulls, so a pawn authored slightly inside a platform is based on it.
 In the original `res/System/Engine.dll`, `execSetRotation` calls
 `ULevel::MoveActor` through vtable slot `0x8c` with a zero vector and proposed
 rotator; `execSetLocation` uses FarMove slot `0x90`. OpenHP1 follows that
-shared movement path: zero-delta BSP sweeps do not create a new BSP hit, while
-rotated actor bounds use the ordinary blocking,
-`Bump`, `Touch`, and `UnTouch` processing. A successful rotation updates the
-persistent transform, collision index, and scene action; its based actors turn
-around the base's yaw, and every `Pawn` subclass receives that yaw in
-`ViewRotation`.
+shared movement path. For a non-brush actor with no based actors, retail
+`MoveActor` handles zero-delta rotation directly without collision or
+`Touch`/`UnTouch` processing. Brushes and actors carrying based actors continue
+through the full movement path so their rotated bounds block normally and their
+based actors turn around the base's yaw. A successful rotation updates the
+persistent transform, collision index, and scene action, and every `Pawn`
+subclass receives that yaw in `ViewRotation`.
 After loaded actors finish `SetInitialState`, native `InitBase` applies a
 non-`None` `AttachTag` by basing every actor with the matching `Tag` on that
 actor. Spawned actors run the same attachment step after their startup events.
