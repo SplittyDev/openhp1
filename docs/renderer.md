@@ -366,10 +366,15 @@ vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
 serialized or runtime-selected animation sequences. Their transforms use
 HP1's upward-positive pitch, so their visual forward axis matches runtime
 `GetAxes` movement. Mesh placement follows UE1's
-`(Location + PrePivot) * Rotation * DrawScale * meshToObject` transform;
-`meshToObject` retains the mesh's authored origin, scale, and rotation, without
-deriving a visual offset from the actor's collision cylinder. Mover geometry
-comes from the brush model's `Polys` export and follows UE1's
+`(Location + PrePivot + MeshAdjust) * Rotation * DrawScale * meshToObject`
+transform. `meshToObject` retains the mesh's authored origin, scale, and
+rotation. HP1's skeletal `MeshAdjust` aligns the visual and collision bottoms
+when `bAlignBottom` and `bCollideWorld` are enabled, the actor occupies a BSP
+zone, and `CollideType` is not `CT_Shape`; other actors keep their authored
+placement. Its vertical adjustment is
+`(Mesh.Origin.Z - Mesh.BoundingBox.Min.Z) * Mesh.Scale.Z * DrawScale -
+CollisionHeight - 2.5`, matching the shipped `Engine.dll`. Mover geometry comes
+from the brush model's `Polys` export and follows UE1's
 `Location * Rotation * MainScale * -PrePivot` transform; runtime mover rotation
 therefore pivots around `Location`. A `MainScale` transform with negative
 determinant also reverses the generated triangle winding so mirrored brushes

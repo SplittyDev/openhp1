@@ -14,7 +14,11 @@ pub struct ActorProperties {
     pub location: Option<Vec3>,
     pub rotation: Option<Rotator>,
     pub pre_pivot: Option<Vec3>,
+    pub zone_number: Option<u8>,
     pub collision_height: Option<f32>,
+    pub collide_type: Option<u8>,
+    pub collide_world: Option<bool>,
+    pub align_bottom: Option<bool>,
     pub physics: Option<u8>,
     pub draw_scale: Option<f32>,
     pub draw_type: Option<u8>,
@@ -77,8 +81,22 @@ impl ActorProperties {
                 ("PrePivot", PropertyKind::Struct, Some("Vector")) => {
                     properties.pre_pivot = Some(read_vec3(&mut value)?);
                 }
+                ("Region", PropertyKind::Struct, Some("PointRegion")) => {
+                    value.read_object_reference()?;
+                    value.read_i32()?;
+                    properties.zone_number = Some(value.read_u8()?);
+                }
                 ("CollisionHeight", PropertyKind::Float, _) => {
                     properties.collision_height = Some(value.read_f32()?);
+                }
+                ("CollideType", PropertyKind::Byte, _) => {
+                    properties.collide_type = Some(value.read_u8()?);
+                }
+                ("bCollideWorld", PropertyKind::Bool, _) => {
+                    properties.collide_world = property.bool_value;
+                }
+                ("bAlignBottom", PropertyKind::Bool, _) => {
+                    properties.align_bottom = property.bool_value;
                 }
                 ("Physics", PropertyKind::Byte, _) => {
                     properties.physics = Some(value.read_u8()?);

@@ -2289,6 +2289,11 @@ struct ActorState {
     location: Vec3,
     rotation: Rotator,
     pre_pivot: Vec3,
+    zone_number: u8,
+    collision_height: f32,
+    collide_type: u8,
+    collide_world: bool,
+    align_bottom: bool,
     draw_scale: f32,
     draw_type: u8,
     brush: Option<SceneObject>,
@@ -2335,6 +2340,11 @@ impl Default for ActorState {
             location: Vec3::ZERO,
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
+            zone_number: 0,
+            collision_height: 0.0,
+            collide_type: 0,
+            collide_world: false,
+            align_bottom: false,
             draw_scale: 1.0,
             draw_type: 0,
             brush: None,
@@ -2379,6 +2389,21 @@ impl ActorState {
         }
         if let Some(pre_pivot) = properties.pre_pivot {
             self.pre_pivot = pre_pivot;
+        }
+        if let Some(zone_number) = properties.zone_number {
+            self.zone_number = zone_number;
+        }
+        if let Some(collision_height) = properties.collision_height {
+            self.collision_height = collision_height;
+        }
+        if let Some(collide_type) = properties.collide_type {
+            self.collide_type = collide_type;
+        }
+        if let Some(collide_world) = properties.collide_world {
+            self.collide_world = collide_world;
+        }
+        if let Some(align_bottom) = properties.align_bottom {
+            self.align_bottom = align_bottom;
         }
         if let Some(draw_scale) = properties.draw_scale {
             self.draw_scale = draw_scale;
@@ -3349,7 +3374,19 @@ fn append_actor_mesh(
             roll: mesh.rotation_origin.z,
         },
     );
-    let local_transform = Mat4::from_scale(Vec3::splat(actor.draw_scale)) * mesh_to_object;
+    let is_skeletal_mesh = mesh_object
+        .package
+        .summary()
+        .class_name(&mesh_object.package.summary().exports[mesh_object.export_index])
+        == Some("SkeletalMesh");
+    let local_transform = Mat4::from_translation(skeletal_mesh_adjust(
+        is_skeletal_mesh,
+        mesh.bounds,
+        mesh.origin,
+        mesh.scale,
+        actor,
+    )) * Mat4::from_scale(Vec3::splat(actor.draw_scale))
+        * mesh_to_object;
     let visual_bounds = mesh.bounds.map(|(minimum, maximum)| {
         let center = local_transform.transform_point3((minimum + maximum) * 0.5);
         let extents = Mat3::from_mat4(local_transform).abs() * ((maximum - minimum) * 0.5);
@@ -3632,6 +3669,31 @@ fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
 
 fn mesh_to_object_transform(scale: Vec3, origin: Vec3, rotation_origin: Rotator) -> Mat4 {
     rotation_matrix(rotation_origin) * Mat4::from_scale(scale) * Mat4::from_translation(-origin)
+}
+
+fn skeletal_mesh_adjust(
+    is_skeletal_mesh: bool,
+    bounds: Option<(Vec3, Vec3)>,
+    origin: Vec3,
+    scale: Vec3,
+    actor: &ActorState,
+) -> Vec3 {
+    const CT_SHAPE: u8 = 3;
+    const TOLERANCE: f32 = 2.5;
+
+    if !is_skeletal_mesh
+        || !actor.align_bottom
+        || !actor.collide_world
+        || actor.zone_number == 0
+        || actor.collide_type == CT_SHAPE
+    {
+        return Vec3::ZERO;
+    }
+    let Some((minimum, _)) = bounds else {
+        return Vec3::ZERO;
+    };
+    Vec3::Z
+        * ((origin.z - minimum.z) * scale.z * actor.draw_scale - actor.collision_height - TOLERANCE)
 }
 
 fn load_materials(
@@ -5424,6 +5486,51 @@ mod tests {
             transform.transform_point3(glam::Vec3::new(1.0, 2.0, 42.0)),
             glam::Vec3::new(1.0, 2.0, 0.0)
         );
+    }
+
+    #[test]
+    fn skeletal_mesh_adjust_matches_retail_alignment_conditions() {
+        let actor = super::ActorState {
+            zone_number: 2,
+            collision_height: 50.0,
+            collide_world: true,
+            align_bottom: true,
+            draw_scale: 1.2,
+            ..Default::default()
+        };
+        let adjust = super::skeletal_mesh_adjust(
+            true,
+            Some((
+                glam::Vec3::new(-20.0, -70.0, 0.25),
+                glam::Vec3::splat(120.0),
+            )),
+            glam::Vec3::ZERO,
+            glam::Vec3::ONE,
+            &actor,
+        );
+        assert!((adjust.z - -52.8).abs() < f32::EPSILON);
+
+        for actor in [
+            super::ActorState {
+                zone_number: 0,
+                ..actor.clone()
+            },
+            super::ActorState {
+                collide_type: 3,
+                ..actor.clone()
+            },
+        ] {
+            assert_eq!(
+                super::skeletal_mesh_adjust(
+                    true,
+                    Some((glam::Vec3::ZERO, glam::Vec3::ONE)),
+                    glam::Vec3::ZERO,
+                    glam::Vec3::ONE,
+                    &actor,
+                ),
+                glam::Vec3::ZERO
+            );
+        }
     }
 
     #[test]
