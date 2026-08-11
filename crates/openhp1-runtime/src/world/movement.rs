@@ -983,6 +983,28 @@ impl ScriptRuntime {
         let previous_rotation = rotation
             .map(|_| self.actor_rotator(actor_class, instance, "Rotation"))
             .transpose()?;
+        if delta.length_squared() < 0.00000001 {
+            let rotation = rotation.expect("zero-delta movement has a rotation");
+            if previous_rotation == Some(rotation) {
+                return Ok(MovementHit {
+                    fraction: 1.0,
+                    normal: Vec3::ZERO,
+                    actor: None,
+                    node: None,
+                });
+            }
+            if current.brush.is_none() && self.based_actors(actor)?.is_empty() {
+                if let Some(actions) = actions.as_deref_mut() {
+                    self.set_actor_rotation(actor, actor_class, instance, rotation, actions)?;
+                }
+                return Ok(MovementHit {
+                    fraction: 1.0,
+                    normal: Vec3::ZERO,
+                    actor: None,
+                    node: None,
+                });
+            }
+        }
         if let Some(rotation) = rotation {
             let axes = crate::rotator_axes(rotation);
             current.rotation = Mat3::from_cols(

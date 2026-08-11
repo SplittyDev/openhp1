@@ -8548,7 +8548,7 @@ fn rot_rand_dispatches_the_extended_native_and_uses_optional_roll() {
 }
 
 #[test]
-fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
+fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-set-rotation-{}-{}",
         std::process::id(),
@@ -8721,8 +8721,9 @@ fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
     runtime
         .instances
         .insert(2, instance([4.0, 0.0, 0.0], false));
-    runtime.instances.insert(3, instance([0.0, 6.0, 0.0], true));
-    runtime.update_actor_base(2, Some(parent), None).unwrap();
+    runtime
+        .instances
+        .insert(3, instance([100.0, 0.0, 0.0], true));
 
     let execute = |runtime: &mut ScriptRuntime,
                    current_instance: &mut InstanceState,
@@ -8767,6 +8768,38 @@ fn set_rotation_uses_move_actor_for_rotated_bounds_bases_and_touches() {
     };
 
     let mut actions = Vec::new();
+    assert_eq!(
+        execute(
+            &mut runtime,
+            &mut current_instance,
+            [0, 16_384, 0],
+            &mut actions,
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        actions,
+        [ActorAction::SetRotation {
+            actor: 1,
+            rotation: [0, 16_384, 0],
+        }]
+    );
+    assert!(runtime.touching.is_empty());
+
+    current_instance.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    runtime.instances.get_mut(&3).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, 6.0, 0.0])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    runtime.update_actor_base(2, Some(parent), None).unwrap();
+    actions.clear();
+
     assert_eq!(
         execute(
             &mut runtime,
