@@ -586,6 +586,10 @@ pub enum ActorAction {
         actor: usize,
         mesh: Option<RuntimeObject>,
     },
+    SetPhysics {
+        actor: usize,
+        physics: u8,
+    },
     SetDrawScale {
         actor: usize,
         draw_scale: f32,
@@ -662,6 +666,7 @@ impl ActorAction {
             | Self::SetHidden { actor, .. }
             | Self::SetDrawType { actor, .. }
             | Self::SetMesh { actor, .. }
+            | Self::SetPhysics { actor, .. }
             | Self::SetDrawScale { actor, .. }
             | Self::SetStyle { actor, .. }
             | Self::SetScaleGlow { actor, .. }

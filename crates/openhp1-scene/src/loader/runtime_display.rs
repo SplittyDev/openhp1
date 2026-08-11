@@ -121,6 +121,21 @@ impl LoadedScene {
         self.rebuild_actor_render(actor_index, None)
     }
 
+    pub fn set_actor_physics(&mut self, actor_index: usize, physics: u8) -> Result<bool> {
+        self.actors
+            .get(actor_index)
+            .context("runtime refers to a missing scene actor")?;
+        let previous = self.actor_states[actor_index].actor.physics;
+        if previous == physics {
+            return Ok(false);
+        }
+        self.actor_states[actor_index].actor.physics = physics;
+        if (previous == 0) == (physics == 0) {
+            return Ok(false);
+        }
+        self.rebuild_current_actor_render(actor_index)
+    }
+
     pub fn set_actor_draw_scale(&mut self, actor_index: usize, draw_scale: f32) -> Result<bool> {
         ensure!(draw_scale.is_finite(), "actor draw scale is not finite");
         let actor = self

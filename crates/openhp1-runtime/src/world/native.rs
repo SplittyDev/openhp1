@@ -946,7 +946,7 @@ impl ScriptRuntime {
                         .join(", ")
                 ));
             };
-            self.set_actor_value(actor_class, instance, "Physics", Value::Byte(*physics))?;
+            self.set_actor_physics(actor, actor_class, instance, *physics, actions)?;
             if matches!(*physics, physics::PHYS_NONE | physics::PHYS_ROTATING) {
                 for property in ["Velocity", "Acceleration"] {
                     self.set_actor_value(actor_class, instance, property, Value::Vector([0.0; 3]))?;

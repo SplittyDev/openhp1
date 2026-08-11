@@ -515,8 +515,21 @@ impl ScriptRuntime {
         instance: &mut InstanceState,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
-        self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
+        self.set_actor_physics(actor, class, instance, PHYS_FALLING, actions)?;
         self.set_actor_base(actor, class, instance, None, actions)
+    }
+
+    pub(in crate::world) fn set_actor_physics(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        physics: u8,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        self.set_actor_value(class, instance, "Physics", Value::Byte(physics))?;
+        actions.push(ActorAction::SetPhysics { actor, physics });
+        Ok(())
     }
 }
 

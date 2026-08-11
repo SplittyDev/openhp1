@@ -413,7 +413,7 @@ impl ScriptRuntime {
                     velocity.z = velocity.z.max((100.0 + velocity.truncate().length()) * 0.5);
                 }
                 if self.actor_byte(class, instance, "Physics")? == PHYS_SWIMMING {
-                    self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
+                    self.set_actor_physics(actor, class, instance, PHYS_FALLING, actions)?;
                 }
             }
         }
@@ -565,7 +565,7 @@ impl ScriptRuntime {
         );
         let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
         if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
-            self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_FALLING))?;
+            self.set_actor_physics(actor, class, instance, PHYS_FALLING, actions)?;
             self.set_actor_base(actor, class, instance, None, actions)?;
         } else {
             let floor =

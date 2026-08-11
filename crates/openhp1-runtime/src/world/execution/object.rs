@@ -809,6 +809,14 @@ fn scene_property_action(
                 mesh: runtime_object_value(mesh),
             }
         }
+        (name, StoredValue::Value(Value::Byte(physics)))
+            if name.eq_ignore_ascii_case("Physics") =>
+        {
+            ActorAction::SetPhysics {
+                actor,
+                physics: *physics,
+            }
+        }
         (name, StoredValue::Value(Value::Float(draw_scale)))
             if name.eq_ignore_ascii_case("DrawScale") =>
         {

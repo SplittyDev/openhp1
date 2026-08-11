@@ -459,6 +459,14 @@ fn apply_actions(
                     runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
                 }
             }
+            ActorAction::SetPhysics { actor, physics } => {
+                stats.visibility += 1;
+                stats.visibility_changed += usize::from(scene.set_actor_physics(actor, physics)?);
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+            }
             ActorAction::SetDrawScale { actor, draw_scale } => {
                 stats.visibility += 1;
                 stats.visibility_changed +=

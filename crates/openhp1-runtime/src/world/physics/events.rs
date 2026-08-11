@@ -12,7 +12,7 @@ impl ScriptRuntime {
             .class_has_name(class, "baseHarry")
             .map_err(|error| error.to_string())?
         {
-            self.set_actor_value(class, instance, "Physics", Value::Byte(PHYS_NONE))?;
+            self.set_actor_physics(actor, class, instance, PHYS_NONE, actions)?;
             self.call_actor_event(
                 actor,
                 class,
@@ -61,11 +61,12 @@ impl ScriptRuntime {
         let pawn = self
             .class_has_name(class, "Pawn")
             .map_err(|error| error.to_string())?;
-        self.set_actor_value(
+        self.set_actor_physics(
+            actor,
             class,
             instance,
-            "Physics",
-            Value::Byte(if pawn { PHYS_WALKING } else { PHYS_NONE }),
+            if pawn { PHYS_WALKING } else { PHYS_NONE },
+            actions,
         )?;
         let base = hit_actor.and_then(|actor| self.actor_objects.get(&actor).cloned());
         self.set_actor_base(actor, class, instance, base, actions)?;

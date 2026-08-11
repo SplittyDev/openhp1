@@ -2289,7 +2289,7 @@ struct ActorState {
     location: Vec3,
     rotation: Rotator,
     pre_pivot: Vec3,
-    zone_number: u8,
+    physics: u8,
     collision_height: f32,
     collide_type: u8,
     collide_world: bool,
@@ -2340,7 +2340,7 @@ impl Default for ActorState {
             location: Vec3::ZERO,
             rotation: Rotator::default(),
             pre_pivot: Vec3::ZERO,
-            zone_number: 0,
+            physics: 0,
             collision_height: 0.0,
             collide_type: 0,
             collide_world: false,
@@ -2390,8 +2390,8 @@ impl ActorState {
         if let Some(pre_pivot) = properties.pre_pivot {
             self.pre_pivot = pre_pivot;
         }
-        if let Some(zone_number) = properties.zone_number {
-            self.zone_number = zone_number;
+        if let Some(physics) = properties.physics {
+            self.physics = physics;
         }
         if let Some(collision_height) = properties.collision_height {
             self.collision_height = collision_height;
@@ -3684,7 +3684,7 @@ fn skeletal_mesh_adjust(
     if !is_skeletal_mesh
         || !actor.align_bottom
         || !actor.collide_world
-        || actor.zone_number == 0
+        || actor.physics == 0
         || actor.collide_type == CT_SHAPE
     {
         return Vec3::ZERO;
@@ -5491,7 +5491,7 @@ mod tests {
     #[test]
     fn skeletal_mesh_adjust_matches_retail_alignment_conditions() {
         let actor = super::ActorState {
-            zone_number: 2,
+            physics: 1,
             collision_height: 50.0,
             collide_world: true,
             align_bottom: true,
@@ -5512,7 +5512,7 @@ mod tests {
 
         for actor in [
             super::ActorState {
-                zone_number: 0,
+                physics: 0,
                 ..actor.clone()
             },
             super::ActorState {

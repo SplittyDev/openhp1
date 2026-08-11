@@ -350,6 +350,14 @@ pub fn apply_runtime_actions_with(
                 }
                 bone_positions_changed = true;
             }
+            ActorAction::SetPhysics { actor, physics } => {
+                transformed |= scene.set_actor_physics(actor, physics)?;
+                runtime.clear_actor_visual_bounds(actor);
+                if let Some((minimum, maximum)) = scene.actor_visual_bounds(actor) {
+                    runtime.set_actor_visual_bounds(actor, minimum, maximum)?;
+                }
+                bone_positions_changed = true;
+            }
             ActorAction::SetDrawScale { actor, draw_scale } => {
                 transformed |= scene.set_actor_draw_scale(actor, draw_scale)?;
                 runtime.clear_actor_visual_bounds(actor);

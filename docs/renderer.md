@@ -369,9 +369,11 @@ HP1's upward-positive pitch, so their visual forward axis matches runtime
 `(Location + PrePivot + MeshAdjust) * Rotation * DrawScale * meshToObject`
 transform. `meshToObject` retains the mesh's authored origin, scale, and
 rotation. HP1's skeletal `MeshAdjust` aligns the visual and collision bottoms
-when `bAlignBottom` and `bCollideWorld` are enabled, the actor occupies a BSP
-zone, and `CollideType` is not `CT_Shape`; other actors keep their authored
-placement. Its vertical adjustment is
+when `bAlignBottom` and `bCollideWorld` are enabled, `Physics` is not
+`PHYS_None`, and `CollideType` is not `CT_Shape`; other actors keep their
+authored placement. The shipped `Engine.dll` reads the actor byte at offset
+`0x30` for this condition, and `AActor::setPhysics` writes that same byte. Its
+vertical adjustment is
 `(Mesh.Origin.Z - Mesh.BoundingBox.Min.Z) * Mesh.Scale.Z * DrawScale -
 CollisionHeight - 2.5`, matching the shipped `Engine.dll`. Mover geometry comes
 from the brush model's `Polys` export and follows UE1's
