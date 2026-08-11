@@ -255,10 +255,17 @@ impl ScriptRuntime {
         let interpolation_manager = summary
             .name(summary.exports[class.export_index].object_name)
             .eq_ignore_ascii_case("InterpolationManager");
+        if !interpolation_manager && self.actor_byte(class, instance, "Physics")? == PHYS_NONE {
+            return Ok(());
+        }
+        let pawn = self
+            .class_has_name(class, "Pawn")
+            .map_err(|error| error.to_string())?;
+        let maximum_step = if pawn { delta_time } else { PHYSICS_STEP };
         let mut time_left = delta_time;
         while time_left > 0.0 && !self.destroyed.contains(&actor) {
-            let elapsed = time_left.min(PHYSICS_STEP);
-            time_left -= PHYSICS_STEP;
+            let elapsed = time_left.min(maximum_step);
+            time_left -= maximum_step;
             if interpolation_manager {
                 self.tick_interpolation_manager(actor, class, instance, elapsed, actions)?;
                 continue;
@@ -267,6 +274,12 @@ impl ScriptRuntime {
             if mode == PHYS_NONE {
                 continue;
             }
+            let old_velocity = if pawn && matches!(mode, PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING)
+            {
+                Vec3::from_array(self.actor_vector(class, instance, "Velocity")?)
+            } else {
+                Vec3::ZERO
+            };
             match mode {
                 PHYS_WALKING => {
                     self.tick_walking(actor, class, instance, elapsed, actions)?;
@@ -298,7 +311,7 @@ impl ScriptRuntime {
                 }
                 _ => return Err(format!("physics mode {mode} is not implemented")),
             }
-            self.tick_rotating(actor, class, instance, elapsed, actions)?;
+            self.tick_rotating(actor, class, instance, elapsed, old_velocity, actions)?;
         }
         Ok(())
     }

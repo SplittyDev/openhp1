@@ -585,6 +585,12 @@ The shipped `DefUser.ini` gives vertical `aMouseY` speed `6.0` and
 only walking flattens velocity to the ground plane. This lets BroomHarry's
 authored `Acceleration = 200000 * vector(Rotation)` sustain its full vertical
 speed at the configured 60-degree pitch limits.
+Pawn physics runs once with the actor tick's full delta, matching retail
+`APawn::performPhysics`; it is not split into host-only fixed substeps. Flying
+collision performs the original first-plane slide and second-plane
+`TwoWallAdjust` before its final corner move. After movement, pawn rotation
+derives roll from actual local lateral acceleration, caps it at the authored
+`RotationRate.Roll`, blends toward the bank at 5/s, and relaxes at 8/s.
 Keyboard axes use UE1's press delta of 20; mouse axes use its raw-motion delta
 of 16, followed by the authored `Speed=6.0` and UE1's
 `DeltaTime * 150` rate normalization. Desktop raw motion receives an additional

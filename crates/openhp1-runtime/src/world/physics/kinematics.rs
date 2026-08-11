@@ -158,6 +158,29 @@ pub(super) fn clamp_pawn_pitch(desired: i32, rate: i32) -> i32 {
     }
 }
 
+pub(super) fn pawn_roll(
+    current: i32,
+    acceleration: Vec3,
+    rotation: [i32; 3],
+    acceleration_rate: f32,
+    maximum_roll: i32,
+    elapsed: f32,
+) -> i32 {
+    let current = (current as u16 as i16) as f32;
+    let (target, rate) = if acceleration.length_squared() > 10_000.0 && acceleration_rate > 0.0 {
+        let right = Vec3::from_array(crate::rotator_axes(rotation)[1]);
+        (
+            (acceleration.dot(right) * 28_000.0 / acceleration_rate)
+                .round_ties_even()
+                .clamp(-(maximum_roll as f32), maximum_roll as f32),
+            5.0,
+        )
+    } else {
+        (0.0, 8.0)
+    };
+    (current + (target - current) * (rate * elapsed).min(1.0)).round_ties_even() as i32
+}
+
 pub(super) fn turn_to_shortest(from: i32, to: i32, speed: i32) -> i32 {
     let from = from & 0xffff;
     let to = to & 0xffff;
@@ -210,6 +233,30 @@ mod tests {
         assert_eq!(clamp_pawn_pitch(-1_000, 3_072), 64_536);
         assert_eq!(clamp_pawn_pitch(16_384, 3_072), 3_072);
         assert_eq!(clamp_pawn_pitch(-16_384, 3_072), 62_464);
+    }
+
+    #[test]
+    fn pawn_roll_banks_from_lateral_acceleration_and_relaxes() {
+        assert_eq!(
+            pawn_roll(0, Vec3::Y * 1_024.0, [0, 0, 0], 1_024.0, 6_000, 0.2),
+            6_000
+        );
+        assert_eq!(
+            pawn_roll(0, -Vec3::Y * 1_024.0, [0, 0, 0], 1_024.0, 6_000, 0.2),
+            -6_000
+        );
+        assert_eq!(
+            pawn_roll(6_000, Vec3::ZERO, [0, 0, 0], 1_024.0, 6_000, 0.0625),
+            3_000
+        );
+        assert_eq!(
+            pawn_roll(6_000, Vec3::Y * 100.0, [0, 0, 0], 1_024.0, 6_000, 0.125),
+            0
+        );
+        assert_eq!(
+            pawn_roll(1, Vec3::ZERO, [0, 0, 0], 1_024.0, 6_000, 0.0625),
+            0
+        );
     }
 
     #[test]

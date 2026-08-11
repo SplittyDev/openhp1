@@ -636,20 +636,10 @@ impl ScriptRuntime {
 
         let movement_velocity = velocity + zone.velocity * (elapsed * 25.0);
         if has_movement(movement_velocity) {
-            let mut time_left = elapsed;
-            for _ in 0..5 {
-                if time_left <= 0.0 {
-                    break;
-                }
-                let mut move_delta = movement_velocity * time_left;
-                let hit =
-                    self.try_move_actor(actor, class, move_delta.to_array(), instance, actions)?;
-                time_left -= time_left * hit.fraction;
-                move_delta = movement_velocity * time_left;
-                if hit.fraction >= 1.0 {
-                    continue;
-                }
-
+            let move_delta = movement_velocity * elapsed;
+            let hit =
+                self.try_move_actor(actor, class, move_delta.to_array(), instance, actions)?;
+            if hit.fraction < 1.0 {
                 let pushable = if swimming
                     && self
                         .class_has_name(class, "PlayerPawn")
@@ -676,20 +666,43 @@ impl ScriptRuntime {
                         Value::Vector(velocity.to_array()),
                     )?;
                     self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
-                    break;
-                }
-
-                self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
-                let aligned =
-                    (move_delta - hit.normal * move_delta.dot(hit.normal)) * (1.0 - hit.fraction);
-                if move_delta.dot(aligned) < 0.0 {
-                    break;
-                }
-                let slide =
-                    self.try_move_actor(actor, class, aligned.to_array(), instance, actions)?;
-                time_left -= time_left * slide.fraction;
-                if slide.fraction < 1.0 {
-                    self.call_hit_wall(actor, class, instance, slide.normal, slide.actor, actions)?;
+                } else {
+                    self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
+                    let aligned = (move_delta - hit.normal * move_delta.dot(hit.normal))
+                        * (1.0 - hit.fraction);
+                    if move_delta.dot(aligned) >= 0.0 {
+                        let slide = self.try_move_actor(
+                            actor,
+                            class,
+                            aligned.to_array(),
+                            instance,
+                            actions,
+                        )?;
+                        if slide.fraction < 1.0 {
+                            self.call_hit_wall(
+                                actor,
+                                class,
+                                instance,
+                                slide.normal,
+                                slide.actor,
+                                actions,
+                            )?;
+                            let corner = two_wall_adjust(
+                                aligned,
+                                slide.normal,
+                                hit.normal,
+                                move_delta.normalize_or_zero(),
+                                slide.fraction,
+                            );
+                            self.try_move_actor(
+                                actor,
+                                class,
+                                corner.to_array(),
+                                instance,
+                                actions,
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -1223,6 +1236,7 @@ impl ScriptRuntime {
         class: &ResolvedObject,
         instance: &mut InstanceState,
         elapsed: f32,
+        old_velocity: Vec3,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
         let mut rotation = self.actor_rotator(class, instance, "Rotation")?;
@@ -1240,14 +1254,32 @@ impl ScriptRuntime {
                 .get(&actor)
                 .and_then(|state| state.as_deref())
                 .is_some_and(|state| state.eq_ignore_ascii_case("CutMovingTo"));
+        let physics = self.actor_byte(class, instance, "Physics")?;
+        if pawn && rate[2] > 0 && matches!(physics, PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING) {
+            let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
+            let acceleration = (velocity - old_velocity) / elapsed;
+            rotation[2] = pawn_roll(
+                rotation[2],
+                acceleration,
+                rotation,
+                self.actor_float(class, instance, "AccelRate")?,
+                rate[2],
+                elapsed,
+            );
+        }
         // Keep normal PlayerPawn rotation script-controlled. HP1's CutMovingTo
-        // state and blocking latent movement both author DesiredRotation directly.
+        // state and blocking latent movement author DesiredRotation directly;
+        // native pawn banking still runs for those normal player ticks.
         if player_rotation_is_script_controlled(
             player_pawn,
             scripted_movement,
             actor,
             &self.state_frames,
         ) {
+            if rotation != before {
+                self.set_actor_value(class, instance, "Rotation", Value::Rotator(rotation))?;
+                actions.push(ActorAction::SetRotation { actor, rotation });
+            }
             return Ok(());
         }
         if pawn {
