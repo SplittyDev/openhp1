@@ -55,6 +55,42 @@ pub(super) fn spline_vector(
     first * first_weight + second * second_weight + third * third_weight + fourth * fourth_weight
 }
 
+pub(super) fn bezier_vector(
+    start: Vec3,
+    start_control: Vec3,
+    end_control: Vec3,
+    end: Vec3,
+    alpha: f32,
+) -> Vec3 {
+    let inverse = 1.0 - alpha;
+    start * inverse.powi(3)
+        + start_control * (3.0 * inverse.powi(2) * alpha)
+        + end_control * (3.0 * inverse * alpha.powi(2))
+        + end * alpha.powi(3)
+}
+
+pub(super) fn bezier_tangent(
+    start: Vec3,
+    start_control: Vec3,
+    end_control: Vec3,
+    end: Vec3,
+    alpha: f32,
+) -> Vec3 {
+    let inverse = 1.0 - alpha;
+    (start_control - start) * (3.0 * inverse.powi(2))
+        + (end_control - start_control) * (6.0 * inverse * alpha)
+        + (end - end_control) * (3.0 * alpha.powi(2))
+}
+
+pub(super) fn direction_rotator(direction: Vec3) -> [i32; 3] {
+    let units = 65_536.0 / std::f32::consts::TAU;
+    [
+        (direction.z.atan2(direction.x.hypot(direction.y)) * units) as i32,
+        (direction.y.atan2(direction.x) * units) as i32,
+        0,
+    ]
+}
+
 pub(super) fn lerp_rotator(first: [i32; 3], second: [i32; 3], alpha: f32) -> [i32; 3] {
     std::array::from_fn(|index| {
         (first[index] as f32 * (1.0 - alpha)) as i32 + (second[index] as f32 * alpha) as i32

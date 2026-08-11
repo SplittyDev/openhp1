@@ -1,6 +1,299 @@
 use super::*;
 
 impl ScriptRuntime {
+    pub(super) fn tick_interpolation_manager(
+        &mut self,
+        manager: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        elapsed: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let Some(owner) = self.actor_object(class, instance, "Owner")? else {
+            return Ok(());
+        };
+        let Some(owner) = self.object_actors.get(&owner).copied() else {
+            return Ok(());
+        };
+        if self.destroyed.contains(&owner) {
+            return Ok(());
+        }
+
+        let mut time_left = elapsed;
+        while time_left > 0.0 && !self.destroyed.contains(&manager) {
+            let pause = self.actor_float_any(class, instance, "RemainingPause")?;
+            if pause > 0.0 {
+                let consumed = time_left.min(pause);
+                let remaining = pause - consumed;
+                self.set_actor_value(class, instance, "RemainingPause", Value::Float(remaining))?;
+                time_left -= consumed;
+                if remaining > 0.0 {
+                    break;
+                }
+                self.finish_interpolation_manager_segment(manager, class, instance, true, actions)?;
+                continue;
+            }
+
+            let rate = self.actor_float_any(class, instance, "PhysRate")?;
+            if rate == 0.0 {
+                break;
+            }
+            let Some(destination) = self.actor_object(class, instance, "Dest")? else {
+                break;
+            };
+            let Some(destination) = self.object_actors.get(&destination).copied() else {
+                break;
+            };
+            let Some(previous) = self.other_actor_object(destination, "Prev")? else {
+                break;
+            };
+            let Some(previous) = self.object_actors.get(&previous).copied() else {
+                break;
+            };
+
+            let alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
+            let owner_class = self
+                .actor_classes
+                .get(&owner)
+                .cloned()
+                .ok_or_else(|| format!("interpolation owner {owner} has no class"))?;
+            let owner_class = self
+                .resolved_object(&owner_class)
+                .map_err(|error| error.to_string())?;
+            let owner_instance = self
+                .instances
+                .get(&owner)
+                .cloned()
+                .ok_or_else(|| format!("interpolation owner {owner} instance is active"))?;
+            if !self.actor_bool(&owner_class, &owner_instance, "bInterpolating")? {
+                break;
+            }
+            let path_distance = self.other_actor_float(destination, "PathDist")?;
+            let speed = self.interpolation_manager_speed(
+                &owner_class,
+                &owner_instance,
+                previous,
+                destination,
+                alpha,
+            )?;
+            let adjusted_rate = if path_distance > 0.0 {
+                rate * speed / path_distance
+            } else {
+                rate
+            };
+            if adjusted_rate == 0.0 {
+                break;
+            }
+
+            let forward = adjusted_rate > 0.0;
+            let boundary = if forward { 1.0 } else { 0.0 };
+            let time_to_boundary = (boundary - alpha) / adjusted_rate;
+            let reached_boundary = time_to_boundary >= 0.0 && time_to_boundary <= time_left;
+            let consumed = if reached_boundary {
+                time_to_boundary
+            } else {
+                time_left
+            };
+            let next_alpha = if reached_boundary {
+                boundary
+            } else {
+                alpha + adjusted_rate * consumed
+            };
+            self.set_actor_value(class, instance, "PhysAlpha", Value::Float(next_alpha))?;
+            self.call_actor_event(
+                manager,
+                class,
+                instance,
+                "UpdateCamera",
+                vec![Value::Float(next_alpha)],
+                actions,
+            )?;
+            self.move_interpolation_manager_owner(
+                manager,
+                instance,
+                owner,
+                &owner_class,
+                previous,
+                destination,
+                next_alpha,
+                consumed,
+                actions,
+            )?;
+            time_left -= consumed;
+
+            if !reached_boundary {
+                break;
+            }
+            self.set_actor_value(
+                class,
+                instance,
+                "PhysAlpha",
+                Value::Float(if forward { 0.0 } else { 1.0 }),
+            )?;
+            self.finish_interpolation_manager_segment(manager, class, instance, forward, actions)?;
+            if self.actor_object(class, instance, "Dest")?
+                == self.actor_objects.get(&destination).cloned()
+                && self.actor_float_any(class, instance, "RemainingPause")? == 0.0
+            {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn interpolation_manager_speed(
+        &mut self,
+        owner_class: &ResolvedObject,
+        owner_instance: &InstanceState,
+        previous: usize,
+        destination: usize,
+        alpha: f32,
+    ) -> std::result::Result<f32, String> {
+        if let Some(speed) = self.optional_actor_float(owner_class, owner_instance, "IPSpeed")?
+            && speed > 0.0
+        {
+            return Ok(speed);
+        }
+        let destination_speed = self.other_actor_float(destination, "DesiredSpeed")?;
+        if destination_speed == 0.0 {
+            return Ok(Vec3::from_array(self.actor_vector(
+                owner_class,
+                owner_instance,
+                "Velocity",
+            )?)
+            .length());
+        }
+        let previous_speed = self.other_actor_float(previous, "DesiredSpeed")?;
+        Ok(previous_speed + (destination_speed - previous_speed) * alpha)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_interpolation_manager_owner(
+        &mut self,
+        manager: usize,
+        manager_instance: &mut InstanceState,
+        owner: usize,
+        owner_class: &ResolvedObject,
+        previous: usize,
+        destination: usize,
+        alpha: f32,
+        elapsed: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let start = Vec3::from_array(self.other_actor_vector(previous, "Location")?);
+        let end = Vec3::from_array(self.other_actor_vector(destination, "Location")?);
+        let start_control =
+            start + Vec3::from_array(self.other_actor_vector(previous, "StartControlPoint")?);
+        let end_control =
+            end + Vec3::from_array(self.other_actor_vector(destination, "EndControlPoint")?);
+        let location = bezier_vector(start, start_control, end_control, end, alpha);
+        let rotation = if self.other_actor_bool(destination, "bFaceMoveDirection")? {
+            direction_rotator(bezier_tangent(
+                start,
+                start_control,
+                end_control,
+                end,
+                alpha,
+            ))
+        } else {
+            lerp_rotator(
+                self.other_actor_rotator(previous, "Rotation")?,
+                self.other_actor_rotator(destination, "Rotation")?,
+                alpha,
+            )
+        };
+
+        let active_manager = std::mem::take(manager_instance);
+        self.instances.insert(manager, active_manager);
+        let mut owner_instance = self
+            .instances
+            .remove(&owner)
+            .ok_or_else(|| format!("interpolation owner {owner} instance is active"))?;
+        let result = (|| {
+            let old_location =
+                Vec3::from_array(self.actor_vector(owner_class, &owner_instance, "Location")?);
+            self.set_actor_value(
+                owner_class,
+                &mut owner_instance,
+                "OldLocation",
+                Value::Vector(old_location.to_array()),
+            )?;
+            let hit = self.try_move_actor(
+                owner,
+                owner_class,
+                (location - old_location).to_array(),
+                &mut owner_instance,
+                actions,
+            )?;
+            if hit.fraction == 1.0 {
+                self.try_move_actor_rotated(
+                    owner,
+                    owner_class,
+                    rotation,
+                    &mut owner_instance,
+                    actions,
+                )?;
+            }
+            if elapsed > 0.0 {
+                let location = Vec3::from_array(self.actor_vector(
+                    owner_class,
+                    &owner_instance,
+                    "Location",
+                )?);
+                self.set_actor_value(
+                    owner_class,
+                    &mut owner_instance,
+                    "Velocity",
+                    Value::Vector(((location - old_location) / elapsed).to_array()),
+                )?;
+            }
+            Ok(())
+        })();
+        self.instances.insert(owner, owner_instance);
+        *manager_instance = self
+            .instances
+            .remove(&manager)
+            .ok_or_else(|| format!("interpolation manager {manager} instance is active"))?;
+        result
+    }
+
+    fn finish_interpolation_manager_segment(
+        &mut self,
+        manager: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        forward: bool,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let Some(destination) = self.actor_object(class, instance, "Dest")? else {
+            return Ok(());
+        };
+        let Some(destination) = self.object_actors.get(&destination).copied() else {
+            return Ok(());
+        };
+        let manager_object = self
+            .actor_objects
+            .get(&manager)
+            .cloned()
+            .ok_or_else(|| format!("interpolation manager {manager} has no object identity"))?;
+        let manager_handle = self
+            .object_handle(manager_object)
+            .map_err(|error| error.to_string())?;
+        let active_manager = std::mem::take(instance);
+        self.instances.insert(manager, active_manager);
+        let result = self.call_other_actor_event(
+            destination,
+            "InterpolateEnd",
+            vec![Value::Object(manager_handle), Value::Bool(forward)],
+            actions,
+        );
+        *instance = self
+            .instances
+            .remove(&manager)
+            .ok_or_else(|| format!("interpolation manager {manager} instance is active"))?;
+        result
+    }
+
     pub(super) fn tick_falling(
         &mut self,
         actor: usize,

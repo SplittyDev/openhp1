@@ -251,10 +251,18 @@ impl ScriptRuntime {
         delta_time: f32,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
+        let summary = class.package.summary();
+        let interpolation_manager = summary
+            .name(summary.exports[class.export_index].object_name)
+            .eq_ignore_ascii_case("InterpolationManager");
         let mut time_left = delta_time;
         while time_left > 0.0 && !self.destroyed.contains(&actor) {
             let elapsed = time_left.min(PHYSICS_STEP);
             time_left -= PHYSICS_STEP;
+            if interpolation_manager {
+                self.tick_interpolation_manager(actor, class, instance, elapsed, actions)?;
+                continue;
+            }
             let mode = self.actor_byte(class, instance, "Physics")?;
             if mode == PHYS_NONE {
                 continue;

@@ -99,6 +99,10 @@ the receiver, so a controller's own acceleration is not changed when it drives
 another pawn.
 `FinishInterpolation` resumes the retained frame when mover physics clears
 `bInterpolating`.
+HP1's native `InterpolationManager` advances even though its own physics mode is
+`PHYS_None`. It moves its owner over each `Prev`-to-`Dest` cubic path segment,
+using `IPSpeed` or the points' desired speed and path distance, then lets the
+destination `InterpolationPoint.InterpolateEnd` choose the next point or pause.
 `Pawn.StopWaiting` zeros only a receiving pawn's pending `Sleep` delay, so the
 normal state tick resumes it without discarding its retained frame or locals.
 

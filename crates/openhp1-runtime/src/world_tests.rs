@@ -77,6 +77,243 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
     synthetic_runtime_package_with_member(class_name, "ClientTravel")
 }
 
+#[test]
+fn interpolation_manager_moves_its_owner_while_physics_is_none() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-interpolation-manager-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(
+        &package_path,
+        synthetic_runtime_package_for("InterpolationManager"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+
+    let fields = [
+        "Owner",
+        "Dest",
+        "Prev",
+        "RemainingPause",
+        "PhysRate",
+        "PhysAlpha",
+        "Physics",
+        "bInterpolating",
+        "IPSpeed",
+        "Velocity",
+        "Location",
+        "OldLocation",
+        "Rotation",
+        "StartControlPoint",
+        "EndControlPoint",
+        "bFaceMoveDirection",
+        "DesiredSpeed",
+        "PathDist",
+        "bStatic",
+        "bMovable",
+        "bCollideWorld",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+        "CollideType",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "Brush",
+        "PrePivot",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((class_id.clone(), "mainscale".to_owned()), None);
+
+    let manager = 0;
+    let owner = 1;
+    let previous = 2;
+    let destination = 3;
+    for actor in [manager, owner, previous, destination] {
+        let object = runtime_actor_id(actor);
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object);
+    }
+
+    let mut base = InstanceState::default();
+    for name in ["Owner", "Dest", "Prev", "Brush"] {
+        base.insert(fields[name].clone(), StoredValue::Object(None));
+    }
+    for name in [
+        "RemainingPause",
+        "PhysRate",
+        "PhysAlpha",
+        "IPSpeed",
+        "DesiredSpeed",
+        "PathDist",
+        "CollisionHeight",
+        "CollisionRadius",
+        "CollisionWidth",
+    ] {
+        base.insert(fields[name].clone(), StoredValue::Value(Value::Float(0.0)));
+    }
+    for name in [
+        "Velocity",
+        "Location",
+        "OldLocation",
+        "StartControlPoint",
+        "EndControlPoint",
+        "PrePivot",
+    ] {
+        base.insert(
+            fields[name].clone(),
+            StoredValue::Value(Value::Vector([0.0; 3])),
+        );
+    }
+    base.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    for name in [
+        "bInterpolating",
+        "bStatic",
+        "bCollideWorld",
+        "bCollideActors",
+        "bBlockActors",
+        "bBlockPlayers",
+        "bFaceMoveDirection",
+    ] {
+        base.insert(fields[name].clone(), StoredValue::Value(Value::Bool(false)));
+    }
+    base.insert(
+        fields["bMovable"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    for name in ["Physics", "CollideType"] {
+        base.insert(
+            fields[name].clone(),
+            StoredValue::Value(Value::Byte(physics::PHYS_NONE)),
+        );
+    }
+
+    let mut manager_instance = base.clone();
+    manager_instance.insert(
+        fields["Owner"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(owner))),
+    );
+    manager_instance.insert(
+        fields["Dest"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(destination))),
+    );
+    manager_instance.insert(
+        fields["PhysRate"].clone(),
+        StoredValue::Value(Value::Float(1.0)),
+    );
+
+    let mut owner_instance = base.clone();
+    owner_instance.insert(
+        fields["bInterpolating"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    owner_instance.insert(
+        fields["IPSpeed"].clone(),
+        StoredValue::Value(Value::Float(100.0)),
+    );
+    runtime.instances.insert(owner, owner_instance);
+
+    let mut previous_instance = base.clone();
+    previous_instance.insert(
+        fields["StartControlPoint"].clone(),
+        StoredValue::Value(Value::Vector([100.0 / 3.0, 0.0, 0.0])),
+    );
+    previous_instance.insert(
+        fields["DesiredSpeed"].clone(),
+        StoredValue::Value(Value::Float(100.0)),
+    );
+    runtime.instances.insert(previous, previous_instance);
+
+    let mut destination_instance = base;
+    destination_instance.insert(
+        fields["Prev"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(previous))),
+    );
+    destination_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([100.0, 0.0, 0.0])),
+    );
+    destination_instance.insert(
+        fields["EndControlPoint"].clone(),
+        StoredValue::Value(Value::Vector([-100.0 / 3.0, 0.0, 0.0])),
+    );
+    destination_instance.insert(
+        fields["bFaceMoveDirection"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    destination_instance.insert(
+        fields["DesiredSpeed"].clone(),
+        StoredValue::Value(Value::Float(100.0)),
+    );
+    destination_instance.insert(
+        fields["PathDist"].clone(),
+        StoredValue::Value(Value::Float(100.0)),
+    );
+    runtime.instances.insert(destination, destination_instance);
+
+    let mut actions = Vec::new();
+    runtime
+        .tick_actor_physics(manager, &class, &mut manager_instance, 0.5, &mut actions)
+        .unwrap();
+
+    assert_eq!(
+        manager_instance.get(&fields["Physics"]),
+        Some(&StoredValue::Value(Value::Byte(physics::PHYS_NONE)))
+    );
+    let Some(StoredValue::Value(Value::Float(alpha))) = manager_instance.get(&fields["PhysAlpha"])
+    else {
+        panic!("PhysAlpha must remain a float");
+    };
+    assert!((alpha - 0.5).abs() < 0.0001);
+    let Some(StoredValue::Value(Value::Vector(location))) =
+        runtime.instances[&owner].get(&fields["Location"])
+    else {
+        panic!("owner Location must remain a vector");
+    };
+    assert!((location[0] - 50.0).abs() < 0.0001);
+    assert_eq!(location[1..], [0.0, 0.0]);
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, ActorAction::SetLocation { actor: 1, .. }))
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn synthetic_runtime_package_with_member(class_name: &str, member_name: &str) -> Vec<u8> {
     synthetic_runtime_package_with_extras(class_name, member_name, &[], false)
 }
