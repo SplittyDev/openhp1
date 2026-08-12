@@ -19,6 +19,8 @@ The conclusions below come first from the locally installed retail game:
 | `res/System/HPMenu.u` | `42da2a2f43ac6a15ea87eace4ebd59a69bab7685cda854e9e7a86e7e6d9c6dbd` | configurable input-page labels and command aliases |
 | `res/Maps/Lev2_RemChase.unr` | `5f1ce9f606b68b22acafb23a664e57feff85e21b2b18101f5aa1630aa112f3e6` | authored chase actors and initial camera type |
 | `res/System/Engine.dll` | `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc` | native input, flying physics, collisions, and banking |
+| `res/System/HP.exe` | `75fea8e8ef096936bdfe11b615459ccd459492a9b164818503fbc56c1c68aea9` | protected retail host-loop labels and boundary |
+| `res/System/1/Default.ini` | `df2aa6e775d19e5ebbccbfa75fabc3346d0486b92dc9bbc0c00cd7363ff0175c` | shipped client and renderer cadence configuration |
 
 `Engine.dll` is the retail 32-bit x86 PE. Virtual addresses in this note assume
 its image base of `0x10300000`.
@@ -508,8 +510,8 @@ Retail does not freeze tween-source vertices in render/world space.
 `GetMeshCoords` at `0x1041bc57..0x1041bc79`. The tween path derives its blend
 factor from the actor animation fields at `0x1041befc..0x1041bf21`, blends the
 previous and new **bone transforms** (quaternion slerp plus translation) at
-`0x1041d40e..0x1041d520`, and stores that still-mesh-local bone result at
-`0x1041d522..0x1041d540`.
+`0x1041d422..0x1041d520`, and stores that still-mesh-local seven-float pose at
+`0x1041d522..0x1041d53f`.
 
 `USkeletalMesh::GetFrame` with the vertex-count reference is export ordinal
 1252 (thunk RVA `0x1983`, body VA `0x1041df50`). It calls `ApplyAnim` at
@@ -531,6 +533,78 @@ visible actor lagged or snapped precisely while turning even when runtime
 representation, the narrow equivalent of retail is to apply every actor
 translation/rotation delta to `tween_from` and the cached world-space bone
 positions as well as to the live animation transform.
+
+### Draw-time camera sampling
+
+Retail does not add another temporal smoothing layer after `BaseCam` updates
+its authored `Location` and `Rotation`. Harry's compiled `PlayerCalcView`
+(export 674, 44 raw bytes) only checks `ViewTarget != None` and copies
+`ViewTarget`, `ViewTarget.Location`, and `ViewTarget.Rotation` into its three
+out parameters. It retains no preceding view transform.
+
+`UGameEngine::Draw` is export ordinal 1047 (thunk RVA `0x3dfa`, body VA
+`0x1039fa40`). It copies the viewport pawn's current location and rotation into
+the `PlayerCalcView` parameter block at `0x1039fab1..0x1039faf3`, dispatches
+that event once at `0x1039faf6..0x1039fb07`, and passes the returned location
+and rotation directly to the render-base master-frame call at
+`0x1039fd9e..0x1039fdd2`. The resulting scene node goes directly to world
+rendering at `0x1039fe3a..0x1039fe43`. There is no previous camera sample,
+`DeltaSeconds`, fractional render alpha, or lerp on this Engine.dll path.
+
+`FSceneNode::ComputeRenderCoords` is export ordinal 989 (thunk RVA `0x194c`,
+body VA `0x10382f90`). It applies the supplied rotator to the selected base axes
+at `0x103831ea..0x10383209`, adds the supplied location directly into the
+coordinate origin and stores `ViewCoords` at `0x1038321a..0x1038324f`, then
+stores its transpose as `Uncoords` at `0x10383254..0x10383266`. This is spatial
+coordinate construction, not temporal interpolation. The concrete renderer
+behind `URenderBase` is outside Engine.dll, but this handoff supplies it neither
+an earlier view transform nor a time/alpha value with which to interpolate one.
+
+`UGameEngine::Tick` is a separate exported entry point (ordinal 2009, thunk RVA
+`0x3a12`, body VA `0x103a0900`). It passes the current `DeltaSeconds` into the
+level tick at `0x103a0b00..0x103a0b54`; `Draw` has no delta argument and samples
+one current simulation snapshot per call. `UGameEngine::GetMaxTickRate`
+(ordinal 1267, thunk RVA `0x17ad`, body VA `0x103a06d0`) constrains a local
+viewport's configured rate to 10 through 120 Hz at `0x103a078c..0x103a07bb`;
+the shipped client configuration sets `MinDesiredFrameRate=30`, the D3D driver
+enables page flipping and triple buffering, and the Glide driver requests a
+60 Hz refresh. `HP.exe` contains the named `MainLoop`, `UpdateWorld`, and
+`EnforceTickRate` regions, but its BitArts-protected code is not statically
+decodable. The shipped artifacts therefore establish the engine's rate limit,
+the host's intended enforcement stage, and one current snapshot per draw, but
+not a recoverable additional DeltaSeconds filtering formula.
+
+OpenHP1 likewise evaluates the compiled `PlayerCalcView` after its runtime tick
+and maps that one returned transform directly to the render camera. However,
+its host cadence is explicitly redraw-driven: every `RedrawRequested` measures
+the raw elapsed `Instant` interval (capped only at 0.1 seconds), performs exactly
+one simulation update with that entire delta, submits one frame, presents it,
+and requests the next redraw. The surface uses FIFO presentation. Its wgpu 29
+default `desired_maximum_frame_latency=2` maps to three Metal drawables, which
+permits CPU/GPU overlap but does not itself impose a 20 or 30 Hz cap.
+
+The supplied OpenHP1 capture contains 307 encoded frames over 13.083 seconds
+(23.46 fps average). Of its 306 frame intervals, 171 are 50 ms and 132 are
+approximately 33.3 ms; only two are approximately 16.7 ms, and one is 66.7 ms.
+These intervals are quantized missed slots of a 60 Hz presentation cadence.
+Because simulation is coupled one-for-one to those redraws, authored `BaseCam`
+movement is displayed in 20 or 30 Hz-sized steps even though its per-tick
+formula is continuous. A temporary deterministic 60 Hz replay of
+`Lev2_RemChase` with held turn input confirmed that the current authored path
+itself is continuous: from tick 646 onward camera yaw advanced exactly 333
+rotator units per tick, while all three location components followed a smooth
+curve through tick 759 with no jump.
+
+Therefore renderer-side camera interpolation would not reproduce retail
+Engine.dll behavior, and a map-specific `BaseCam` adjustment is not supported.
+The evidence-backed remaining camera defect is presentation-bound simulation
+cadence under load: OpenHP1 exposes every missed presentation slot directly to
+authored movement as a 33-50 ms tick. The next correction belongs in shared
+frame pacing or rendering performance, not in broom/camera constants. The
+retail evidence does not justify inventing a fixed-step or render-interpolation
+scheme before profiling identifies why OpenHP1 misses the slots. Actor-only
+snapping in the provided pre-fix recording separately matches the skeletal
+tween defect above.
 
 ## Remembrall death and restart
 
@@ -717,10 +791,32 @@ objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/Sys
 objdump -d -M intel --start-address=0x103a5ba0 --stop-address=0x103a5e60 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b3840 --stop-address=0x103b4360 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b6db0 --stop-address=0x103b71c0 res/System/Engine.dll
-objdump -p res/System/Engine.dll | rg 'ApplyAnim@USkeletalMesh|GetMeshCoords@USkeletalMesh|GetFrame@USkeletalMesh'
-objdump -d -M intel --start-address=0x1041aef0 --stop-address=0x1041b220 res/System/Engine.dll
-objdump -d -M intel --start-address=0x1041ba60 --stop-address=0x1041d770 res/System/Engine.dll
-objdump -d -M intel --start-address=0x1041df50 --stop-address=0x1041e610 res/System/Engine.dll
+objdump -p res/System/Engine.dll | rg 'ApplyAnim@USkeletalMesh|GetMeshCoords@USkeletalMesh|GetFrame@USkeletalMesh|SlerpQuat|Inverse@FCoords'
+objdump -d -M intel --start-address=0x1041ba60 --stop-address=0x1041bc90 res/System/Engine.dll
+objdump -d -M intel --start-address=0x1041d40e --stop-address=0x1041d545 res/System/Engine.dll
+objdump -d -M intel --start-address=0x1041df50 --stop-address=0x1041e145 res/System/Engine.dll
+objdump -d -M intel --start-address=0x1041e35b --stop-address=0x1041e560 res/System/Engine.dll
+target/debug/examples/script_inspect res/System/HarryPotter.u 674
+strings -a res/System/HarryPotter.u | nl -ba | sed -n '23923,23930p'
+objdump -p res/System/Engine.dll | rg 'Draw@UGameEngine|Tick@UGameEngine|eventPlayerCalcView|ComputeRenderCoords|GetViewRotation|execDrawActor'
+objdump -d -M intel --start-address=0x1039fab0 --stop-address=0x1039fe50 res/System/Engine.dll
+objdump -d -M intel --start-address=0x10382f90 --stop-address=0x10383280 res/System/Engine.dll
+objdump -d -M intel --start-address=0x10352490 --stop-address=0x103524e0 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103899b0 --stop-address=0x10389a20 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103a0ae0 --stop-address=0x103a0b60 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103a06d0 --stop-address=0x103a0890 res/System/Engine.dll
+objdump -h res/System/HP.exe
+nl -ba res/System/1/Default.ini | sed -n '85,98p;226,272p'
+
+# Temporary local diagnostic: apply held `base_x=3000`, print PlayerView for
+# ticks 640..759, run, then revert the instrumentation.
+cargo run -q -p openhp1-scene --example runtime_scan -- res/Maps/Lev2_RemChase.unr 13
+
+ffprobe -v error -select_streams v:0 -show_entries \
+  frame=best_effort_timestamp_time -of csv=p=0 \
+  '/path/to/CleanShot 2026-08-12 at 07.53.01.mp4' | \
+  awk 'NF {gsub(/,/, ""); if (previous != "") printf "%.6f\\n", $1-previous; previous=$1}' | \
+  sort -n | uniq -c
 ```
 
 SurrealEngine was consulted only after the shipped artifacts, as a licensed
