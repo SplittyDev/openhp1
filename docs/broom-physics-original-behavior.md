@@ -497,7 +497,40 @@ OpenHP1 now executes each actor's event/player, state/latent, timer/lifespan,
 and automatic-physics work together before advancing to the next actor. This
 restores the post-physics target sample used by retail without camera-distance
 tuning or render-only interpolation. Animation advancement remains a shared
-pre-pass; no ordering-sensitive animation symptom has been established here.
+pre-pass; the separate animation symptom below is a coordinate-space defect,
+not evidence that animation advancement must move into the actor-local pass.
+
+### Skeletal tween coordinate space
+
+Retail does not freeze tween-source vertices in render/world space.
+`USkeletalMesh::ApplyAnim` is export ordinal 935 (thunk RVA `0x46ba`, body VA
+`0x1041ba60`). Every call rebuilds the actor's current mesh coordinates through
+`GetMeshCoords` at `0x1041bc57..0x1041bc79`. The tween path derives its blend
+factor from the actor animation fields at `0x1041befc..0x1041bf21`, blends the
+previous and new **bone transforms** (quaternion slerp plus translation) at
+`0x1041d40e..0x1041d520`, and stores that still-mesh-local bone result at
+`0x1041d522..0x1041d540`.
+
+`USkeletalMesh::GetFrame` with the vertex-count reference is export ordinal
+1252 (thunk RVA `0x1983`, body VA `0x1041df50`). It calls `ApplyAnim` at
+`0x1041dfa8..0x1041dfb1`, then composes the cached mesh/bone pose with the
+caller's current render `FCoords` at `0x1041e002..0x1041e13d`. Only afterward
+does it transform vertices into the output coordinate space, directly at
+`0x1041e3a1..0x1041e40c` or through the weighted path at
+`0x1041e4ca..0x1041e55b`. Actor translation or rotation therefore carries the
+entire tween pose immediately; tween progress affects articulation, not how
+much of the actor's world movement reaches the displayed mesh.
+
+Before the correction, OpenHP1 captured `tween_from` from already transformed
+render vertices. Location and rotation updates advanced the live animation
+transform and displayed vertex buffer but left that source pose behind. During
+the one-second broom steering tweens, the next animation sample consequently
+lerped between an old world-space Harry and a current world-space Harry. The
+visible actor lagged or snapped precisely while turning even when runtime
+`Location` was smooth. Within OpenHP1's existing world-space tween
+representation, the narrow equivalent of retail is to apply every actor
+translation/rotation delta to `tween_from` and the cached world-space bone
+positions as well as to the live animation transform.
 
 ## Remembrall death and restart
 
@@ -684,6 +717,10 @@ objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/Sys
 objdump -d -M intel --start-address=0x103a5ba0 --stop-address=0x103a5e60 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b3840 --stop-address=0x103b4360 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b6db0 --stop-address=0x103b71c0 res/System/Engine.dll
+objdump -p res/System/Engine.dll | rg 'ApplyAnim@USkeletalMesh|GetMeshCoords@USkeletalMesh|GetFrame@USkeletalMesh'
+objdump -d -M intel --start-address=0x1041aef0 --stop-address=0x1041b220 res/System/Engine.dll
+objdump -d -M intel --start-address=0x1041ba60 --stop-address=0x1041d770 res/System/Engine.dll
+objdump -d -M intel --start-address=0x1041df50 --stop-address=0x1041e610 res/System/Engine.dll
 ```
 
 SurrealEngine was consulted only after the shipped artifacts, as a licensed
