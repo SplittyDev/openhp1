@@ -5881,6 +5881,75 @@ fn client_travel_named_native_dispatches_through_function_execution() {
 }
 
 #[test]
+fn scripted_level_server_travel_emits_a_host_travel_action() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-server-travel-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(
+        &package_path,
+        synthetic_runtime_package_with_member("LevelInfo", "ServerTravel"),
+    )
+    .unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime
+        .scripts
+        .insert(object_id(&package, 1), log_event_script(1, "server travel"));
+    for actor in [1, 2] {
+        let object = runtime_actor_id(actor);
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.actor_objects.insert(actor, object.clone());
+        runtime.object_actors.insert(object, actor);
+        runtime.instances.insert(actor, InstanceState::default());
+    }
+    let receiver = runtime
+        .object_handle(runtime.actor_objects[&2].clone())
+        .unwrap();
+    let mut caller = runtime.instances.remove(&1).unwrap();
+    let mut actions = Vec::new();
+    runtime
+        .dispatch_context_call(
+            1,
+            &class,
+            receiver,
+            &package,
+            FunctionCall::Virtual(1),
+            &[Value::String("?Restart".to_owned()), Value::Bool(false)],
+            &mut caller,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    runtime.instances.insert(1, caller);
+
+    assert!(matches!(
+        actions.last(),
+        Some(ActorAction::ClientTravel {
+            actor: 2,
+            url,
+            travel_type: 0,
+            transfer_items: false,
+        }) if url == "?Restart"
+    ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn update_url_numeric_native_dispatches_optional_defaults() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-update-url-{}-{}",

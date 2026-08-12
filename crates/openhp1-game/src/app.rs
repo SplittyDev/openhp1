@@ -941,6 +941,13 @@ impl Graphics {
             }
         }
         if let Some(url) = self.pending_level_travel.take() {
+            if console::commands::is_restart_travel(&url) {
+                return RenderOutcome::LoadLevel(
+                    self.scene.path.clone(),
+                    self.last_save_slot,
+                    None,
+                );
+            }
             match console::commands::resolve_travel(&self.scene.path, &self.scene.levels, &url) {
                 Ok(path) => match self.runtime.player_travel_state() {
                     Ok(travel) => {

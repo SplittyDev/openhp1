@@ -591,6 +591,25 @@ impl ScriptRuntime {
             package: self.packages.load_path(Path::new(class.package.as_ref()))?,
             export_index: class.export_index,
         };
+        let server_travel = match (call, arguments) {
+            (
+                FunctionCall::Virtual(name) | FunctionCall::Global(name),
+                [Value::String(url), Value::Bool(transfer_items)],
+            ) if usize::try_from(name)
+                .ok()
+                .filter(|name| *name < source.summary().names.len())
+                .is_some_and(|name| {
+                    source
+                        .summary()
+                        .name(name)
+                        .eq_ignore_ascii_case("ServerTravel")
+                })
+                && self.class_has_name(&class, "LevelInfo")? =>
+            {
+                Some((url.clone(), *transfer_items))
+            }
+            _ => None,
+        };
         let self_handle =
             self.object_handle(self.actor_objects.get(&current_actor).cloned().ok_or(
                 DispatchError::UnregisteredActor {
@@ -630,6 +649,16 @@ impl ScriptRuntime {
                 .ok_or(DispatchError::ActiveActorContext {
                     actor: current_actor,
                 })?;
+        if result.is_ok()
+            && let Some((url, transfer_items)) = server_travel
+        {
+            actions.push(ActorAction::ClientTravel {
+                actor,
+                url,
+                travel_type: 0,
+                transfer_items,
+            });
+        }
         result
     }
 

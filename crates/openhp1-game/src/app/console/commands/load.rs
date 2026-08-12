@@ -82,6 +82,10 @@ pub(in crate::app) fn resolve_travel(
     )
 }
 
+pub(in crate::app) fn is_restart_travel(url: &str) -> bool {
+    url.eq_ignore_ascii_case("?Restart")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +111,8 @@ mod tests {
             resolve_travel(current, &levels, "Lev_Tut1b?peer").unwrap(),
             levels[0]
         );
+        assert!(is_restart_travel("?restart"));
+        assert!(!is_restart_travel("Lev_Tut1b?restart"));
         for invalid in ["", "../Lev_Tut1b", "..\\Lev_Tut1b", "Readme.txt", "Outside"] {
             assert!(
                 resolve_level(current, &levels, invalid).is_err(),

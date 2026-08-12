@@ -536,6 +536,9 @@ the destination player before the automatic slot save. This preserves HP1's
 beans, house points, wizard-card array, health, and quest flags. Actor-valued
 travel properties are omitted until the runtime can remap the complete travel
 object graph; stale source-map object identities are never copied.
+`LevelInfo.ServerTravel` uses the same host action. The authored
+`ServerTravel("?Restart", false)` death path reloads the current map without
+restoring the dead player's travel state.
 `PlayerPawn.UpdateURL` emits a host action carrying the option/value for
 case-insensitive replacement and an optional `User.DefaultPlayer` persistence
 request; the runtime never mutates map packages. OpenHP1 is a local-only host, so

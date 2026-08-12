@@ -11,7 +11,7 @@ mod report;
 mod reset;
 mod respawn;
 
-pub(in crate::app) use load::resolve_travel;
+pub(in crate::app) use load::{is_restart_travel, resolve_travel};
 
 pub(super) struct Command {
     name: &'static str,
