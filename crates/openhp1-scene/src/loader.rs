@@ -603,7 +603,14 @@ impl LoadedScene {
             .iter_mut()
             .find(|animation| animation.actor_index == actor_index)
         {
-            animation.transform = Mat4::from_translation(delta) * animation.transform;
+            let transform = Mat4::from_translation(delta);
+            animation.transform = transform * animation.transform;
+            transform_animation_pose_positions(
+                &mut animation.bone_positions,
+                animation.tween_from.as_deref_mut(),
+                animation.tween_bone_positions_from.as_deref_mut(),
+                transform,
+            );
         }
         // ponytail: retain baked actor lighting until moving lights/zones are observable.
         Ok(true)
@@ -1101,6 +1108,12 @@ impl LoadedScene {
         {
             animation.transform = transform * animation.transform;
             animation.normal_transform = Mat3::from_mat4(animation.transform).inverse().transpose();
+            transform_animation_pose_positions(
+                &mut animation.bone_positions,
+                animation.tween_from.as_deref_mut(),
+                animation.tween_bone_positions_from.as_deref_mut(),
+                transform,
+            );
         }
         // ponytail: retain baked actor lighting until moving lights/zones are observable.
         Ok(true)
@@ -1762,6 +1775,21 @@ fn pre_pivot_translation(actor: &SceneActor, pre_pivot: Vec3) -> Vec3 {
 fn transform_positions(positions: &mut [Vec3], transform: Mat4) {
     for position in positions {
         *position = transform.transform_point3(*position);
+    }
+}
+
+fn transform_animation_pose_positions(
+    bone_positions: &mut [Vec3],
+    tween_positions: Option<&mut [Vec3]>,
+    tween_bone_positions: Option<&mut [Vec3]>,
+    transform: Mat4,
+) {
+    transform_positions(bone_positions, transform);
+    if let Some(positions) = tween_positions {
+        transform_positions(positions, transform);
+    }
+    if let Some(positions) = tween_bone_positions {
+        transform_positions(positions, transform);
     }
 }
 
@@ -5308,6 +5336,26 @@ mod tests {
             transform.transform_vector3(glam::Vec3::Y),
             glam::Vec3::Z * 2.0
         );
+    }
+
+    #[test]
+    fn animation_tween_pose_follows_actor_transform() {
+        let transform = glam::Mat4::from_translation(glam::Vec3::new(3.0, 4.0, 0.0))
+            * glam::Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let mut bones = [glam::Vec3::X];
+        let mut tween_positions = [glam::Vec3::Y];
+        let mut tween_bones = [glam::Vec3::new(2.0, 0.0, 0.0)];
+
+        super::transform_animation_pose_positions(
+            &mut bones,
+            Some(&mut tween_positions),
+            Some(&mut tween_bones),
+            transform,
+        );
+
+        assert!(bones[0].abs_diff_eq(glam::Vec3::new(3.0, 5.0, 0.0), 0.0001));
+        assert!(tween_positions[0].abs_diff_eq(glam::Vec3::new(2.0, 4.0, 0.0), 0.0001));
+        assert!(tween_bones[0].abs_diff_eq(glam::Vec3::new(3.0, 6.0, 0.0), 0.0001));
     }
 
     #[test]

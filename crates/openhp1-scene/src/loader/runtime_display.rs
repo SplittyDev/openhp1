@@ -223,16 +223,14 @@ impl LoadedScene {
                     Mat3::from_mat4(animation.transform).inverse().transpose();
             }
             animation.root_motion_position *= ratio;
-            if let Some(positions) = &mut animation.tween_from {
-                transform_positions(positions, transform);
-            }
+            super::transform_animation_pose_positions(
+                &mut animation.bone_positions,
+                animation.tween_from.as_deref_mut(),
+                animation.tween_bone_positions_from.as_deref_mut(),
+                transform,
+            );
             if let Some(attachment) = &mut animation.tween_attachment_from {
                 *attachment = transform * *attachment;
-            }
-            if let Some(positions) = &mut animation.tween_bone_positions_from {
-                for position in positions {
-                    *position = transform.transform_point3(*position);
-                }
             }
         }
         self.relight_actor_vertices_at(actor_index)?;
