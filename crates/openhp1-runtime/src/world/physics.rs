@@ -535,29 +535,8 @@ impl ScriptRuntime {
         physics: u8,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
-        let entering_walking =
-            physics == PHYS_WALKING && self.actor_byte(class, instance, "Physics")? == PHYS_NONE;
         self.set_actor_value(class, instance, "Physics", Value::Byte(physics))?;
-        if entering_walking {
-            self.place_walking_actor(actor, class, instance, actions)?;
-        }
         actions.push(ActorAction::SetPhysics { actor, physics });
-        Ok(())
-    }
-
-    pub(super) fn place_walking_actor(
-        &mut self,
-        actor: usize,
-        class: &ResolvedObject,
-        instance: &mut InstanceState,
-        actions: &mut Vec<ActorAction>,
-    ) -> std::result::Result<(), String> {
-        if self.collision.is_some()
-            && let Some(location) = self.find_spawn_location(class, instance)?
-            && location != Vec3::from_array(self.actor_vector(class, instance, "Location")?)
-        {
-            self.set_actor_location(actor, class, instance, location, actions)?;
-        }
         Ok(())
     }
 }
