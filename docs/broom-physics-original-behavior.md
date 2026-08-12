@@ -440,6 +440,65 @@ No direct `Tut2.u` call selecting `QuidditchState` was found. The exact authored
 cutscene or map action that establishes the first broom lesson's camera state
 remains unresolved; it must not be assumed from the class name alone.
 
+### Actor-local camera ordering and visual jitter
+
+The two reported maps serialize the same `CAM_Quiditch` camera type, but their
+relevant actors occupy opposite positions in the retail `ULevel::Actors`
+array. Decoding the shipped `Level` exports gives:
+
+| Map | Earlier actor slot | Later actor slot |
+| --- | --- | --- |
+| `Lev2_RemChase.unr` | 615: `BaseCam0` (export 683) | 616: `BroomHarry0` (export 692) |
+| `Lev_Tut2.unr` | 270: `BroomHarry0` (export 74) | 271: `BaseCam0` (export 77) |
+
+`Harry.PostBeginPlay` calls `makeCamTarget()`; compiled `Harry.makeCamTarget`
+export 675 spawns the `CamTarget` used as `StandardTarget`. The target's
+compiled `seeking.Tick` export 1830 calls `setTarget` every tick. It is therefore a
+dynamically spawned actor later than both authored actors in these startup
+paths.
+
+Retail tick ordering is actor-local rather than phase-global. `AActor::Tick`
+body `0x103b3840` advances actor animation at approximately
+`0x103b39e1..0x103b3d7a`. Its normal local path dispatches `PlayerInput` at
+`0x103b4159..0x103b417c`, dispatches `PlayerTick` at
+`0x103b417f..0x103b419b` for a player, or ordinary `Tick` at
+`0x103b4217..0x103b423a` for a normal actor. These branches are mutually
+exclusive for the active local player: the player path jumps directly to
+virtual `ProcessState` at `0x103b4248..0x103b424d`, bypassing ordinary `Tick`.
+A `PlayerPawn` without the local player object can instead take the ordinary
+actor branch. The shared path then advances `TimerRate`/`TimerCounter` and may
+dispatch `Timer` at `0x103b4250..0x103b42bb`, decrements `LifeSpan` and may
+dispatch `Expired` at `0x103b42bd..0x103b4306`, and only then calls virtual
+`performPhysics` at `0x103b4331..0x103b433c` (or the alternate branch
+`0x103b4344..0x103b434c`). Only after that actor returns does `ULevel::Tick`
+body `0x103b6db0` advance to the next ascending actor slot; the loop and virtual
+tick call are at `0x103b7177..0x103b71a2`.
+
+This ordering gives the maps deliberately different one-frame relationships:
+
+- Remembrall's camera runs before Harry, so it uses the previous completed
+  Harry position. Harry then completes script, state, and flying physics, and
+  the later spawned `CamTarget` observes that post-physics position.
+- Tutorial Harry completes physics first; the following camera observes his
+  current position, and the spawned target then observes the same position.
+
+Before the actor-order correction, OpenHP1 preserved ascending actor order only
+within global event, state, and physics phases. Consequently the spawned
+`CamTarget` always observed the pre-physics Harry position. In Remembrall the
+camera already used the preceding position by authored actor order, while its
+target was one additional physics update older. That changed
+`Normal(elevated_player_position - StandardTarget.Location)` precisely during
+translation and turns, producing an incorrect camera goal even when every
+camera constant and bytecode instruction is otherwise correct. Since Harry is
+rendered relative to that moving view, this can also present as small Harry
+screen-space jumps rather than an obvious camera-only error.
+
+OpenHP1 now executes each actor's event/player, state/latent, timer/lifespan,
+and automatic-physics work together before advancing to the next actor. This
+restores the post-physics target sample used by retail without camera-distance
+tuning or render-only interpolation. Animation advancement remains a shared
+pre-pass; no ordering-sensitive animation symptom has been established here.
+
 ## Remembrall death and restart
 
 The chase has a complete authored restart path; a dead broom rider never enters
@@ -554,13 +613,11 @@ The following are not tuning knobs to replace with host heuristics:
 - The exact tutorial transition into a `BaseCam` state was not located in
   `Tut2.u`; authored cutscene/map actions need a separate trace if tutorial
   framing remains visibly wrong.
-- The original Remembrall formulas and state selection are conclusive, but this
-  research pass did not isolate a second camera-specific OpenHP1 execution bug
-  beyond the risk of choosing the stale `GeneralMoveModeCamera` path. If the
-  active runtime already executes export 2019 exactly, the next diagnostic is
-  a frame trace of `BaseCam.Location`, `BroomHarry.Location`,
-  `StandardTarget.Location`, `p.bStationary`, and `RealCameraDistance` against
-  the formulas above; inventing a replacement follow distance is not justified.
+- After correcting actor-local tick ordering, a frame trace of
+  `BaseCam.Location`, `BroomHarry.Location`, `StandardTarget.Location`,
+  `p.bStationary`, and `RealCameraDistance` remains the appropriate validation
+  for any residual Remembrall camera error; inventing a replacement follow
+  distance is not justified.
 - `Deceleration` is integer-backed. Its exact per-tick rounding should be tested
   through the VM conversion path if small frame-rate-dependent speed differences
   remain after native cadence is corrected.
@@ -582,6 +639,7 @@ target/debug/examples/script_inspect res/System/HarryPotter.u 831
 target/debug/examples/script_inspect res/System/HarryPotter.u 892
 target/debug/examples/script_inspect res/System/HarryPotter.u 1104
 target/debug/examples/script_inspect res/System/HarryPotter.u 1306
+target/debug/examples/script_inspect res/System/HarryPotter.u 675
 target/debug/examples/class_defaults res/System/HarryPotter.u 1577
 target/debug/examples/property_inspect res/Maps/Lev_Tut2.unr 74
 
@@ -592,6 +650,7 @@ target/debug/examples/script_inspect res/System/HPBase.u 2880
 target/debug/examples/script_inspect res/System/HPBase.u 3106
 target/debug/examples/script_inspect res/System/HPBase.u 2272
 target/debug/examples/script_inspect res/System/HPBase.u 2097
+target/debug/examples/script_inspect res/System/HPBase.u 1830
 target/debug/examples/script_inspect res/System/HPBase.u 2120
 target/debug/examples/script_inspect res/System/HPBase.u 2521
 target/debug/examples/script_inspect res/System/HPBase.u 2787
@@ -623,6 +682,8 @@ objdump -d -M intel --start-address=0x103e5520 --stop-address=0x103e56eb res/Sys
 objdump -d -M intel --start-address=0x103e5950 --stop-address=0x103e5e2b res/System/Engine.dll
 objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103a5ba0 --stop-address=0x103a5e60 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103b3840 --stop-address=0x103b4360 res/System/Engine.dll
+objdump -d -M intel --start-address=0x103b6db0 --stop-address=0x103b71c0 res/System/Engine.dll
 ```
 
 SurrealEngine was consulted only after the shipped artifacts, as a licensed
