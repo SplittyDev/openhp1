@@ -3,8 +3,7 @@ use std::{
     path::Path,
 };
 
-use super::state::set_event_disabled;
-use super::*;
+use super::{physics::PHYS_WALKING, state::set_event_disabled, *};
 
 const MAGIC: [u8; 4] = *b"OHPS";
 const VERSION: u16 = 1;
@@ -503,6 +502,7 @@ impl ScriptRuntime {
             .and_then(|actor| actor.checked_add(1))
             .ok_or(DispatchError::ObjectLimit)?;
 
+        let mut actions = Vec::new();
         let actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
         for actor in actors {
             let class = self
@@ -529,9 +529,20 @@ impl ScriptRuntime {
                 .actor_object(&class, &instance, "Level")
                 .map_err(|message| DispatchError::UnresolvedObject { message })?;
             self.update_actor_base(actor, base, level)?;
+            if matches!(
+                self.instance_property(&class, &instance, "Physics")?,
+                Some(StoredValue::Value(Value::Byte(PHYS_WALKING)))
+            ) {
+                let mut instance = self
+                    .instances
+                    .remove(&actor)
+                    .ok_or(DispatchError::ActiveActorContext { actor })?;
+                let result = self.place_walking_actor(actor, &class, &mut instance, &mut actions);
+                self.instances.insert(actor, instance);
+                result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+            }
         }
 
-        let mut actions = Vec::new();
         for saved in &snapshot.actors {
             let actor = *targets
                 .get(&saved.actor)

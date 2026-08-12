@@ -2789,7 +2789,7 @@ pub(super) fn solid_box_collision() -> Arc<BspCollision> {
 }
 
 #[test]
-fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
+fn spawn_and_walking_activation_use_bsp_find_spot() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-spawn-placement-{}-{}",
         std::process::id(),
@@ -2958,6 +2958,7 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
         "Brush",
         "PrePivot",
         "MainScale",
+        "Physics",
     ]
     .into_iter()
     .enumerate()
@@ -3025,6 +3026,10 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
     defaults.insert(
         spawned_fields["CollideType"].clone(),
         StoredValue::Value(Value::Byte(2)),
+    );
+    defaults.insert(
+        spawned_fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(physics::PHYS_NONE)),
     );
     runtime
         .class_defaults
@@ -3109,6 +3114,50 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
         runtime.instances[first_actor].get(&spawned_fields["OldLocation"]),
         Some(StoredValue::Value(Value::Vector(location))) if location == first_location
     ));
+
+    let mut walking_instance = runtime.instances.remove(first_actor).unwrap();
+    walking_instance.insert(
+        spawned_fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, -0.95, 0.0])),
+    );
+    let mut walking_actions = Vec::new();
+    runtime
+        .set_actor_physics(
+            *first_actor,
+            &spawned_class,
+            &mut walking_instance,
+            physics::PHYS_WALKING,
+            &mut walking_actions,
+        )
+        .unwrap();
+    assert!(matches!(
+        walking_actions.as_slice(),
+        [
+            ActorAction::SetLocation { location, .. },
+            ActorAction::SetPhysics {
+                physics: physics::PHYS_WALKING,
+                ..
+            }
+        ] if location[1] < -7.9
+    ));
+    walking_instance.insert(
+        spawned_fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, -0.95, 0.0])),
+    );
+    let mut restored_actions = Vec::new();
+    runtime
+        .place_walking_actor(
+            *first_actor,
+            &spawned_class,
+            &mut walking_instance,
+            &mut restored_actions,
+        )
+        .unwrap();
+    assert!(matches!(
+        restored_actions.as_slice(),
+        [ActorAction::SetLocation { location, .. }] if location[1] < -7.9
+    ));
+    runtime.instances.insert(*first_actor, walking_instance);
 
     runtime.collision = Some(collision_box(Vec3::splat(100.0), Vec3::splat(101.0)));
     let (Value::Object(second_handle), _) = run_spawn(&mut runtime, *first_location) else {
