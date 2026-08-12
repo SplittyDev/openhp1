@@ -8463,6 +8463,45 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         .instances
         .insert(receiver, instance([50.0, 25.0, 0.0]));
 
+    for (field, value) in [
+        ("Physics", Value::Byte(physics::PHYS_ROTATING)),
+        ("DesiredRotation", Value::Rotator([0, 16_384, 0])),
+    ] {
+        runtime
+            .instances
+            .get_mut(&receiver)
+            .unwrap()
+            .insert(fields[field].clone(), StoredValue::Value(value));
+    }
+    let mut receiver_instance = runtime.instances.remove(&receiver).unwrap();
+    runtime
+        .tick_actor_physics(
+            receiver,
+            &class,
+            &mut receiver_instance,
+            0.02,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        receiver_instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 1_000, 0]))),
+        "PlayerPawn physics must always consume authored DesiredRotation"
+    );
+    receiver_instance.insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(physics::PHYS_WALKING)),
+    );
+    receiver_instance.insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    receiver_instance.insert(
+        fields["DesiredRotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    runtime.instances.insert(receiver, receiver_instance);
+
     runtime
         .actor_states
         .insert(caller, Some("OldState".to_owned()));

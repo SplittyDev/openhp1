@@ -1245,15 +1245,6 @@ impl ScriptRuntime {
         let pawn = self
             .class_has_name(class, "Pawn")
             .map_err(|error| error.to_string())?;
-        let player_pawn = self
-            .class_has_name(class, "PlayerPawn")
-            .map_err(|error| error.to_string())?;
-        let scripted_movement = self.latent_rotation_authored_this_tick.contains(&actor)
-            || self
-                .actor_states
-                .get(&actor)
-                .and_then(|state| state.as_deref())
-                .is_some_and(|state| state.eq_ignore_ascii_case("CutMovingTo"));
         let physics = self.actor_byte(class, instance, "Physics")?;
         if pawn && rate[2] > 0 && matches!(physics, PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING) {
             let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
@@ -1266,21 +1257,6 @@ impl ScriptRuntime {
                 rate[2],
                 elapsed,
             );
-        }
-        // Keep normal PlayerPawn rotation script-controlled. HP1's CutMovingTo
-        // state and blocking latent movement author DesiredRotation directly;
-        // native pawn banking still runs for those normal player ticks.
-        if player_rotation_is_script_controlled(
-            player_pawn,
-            scripted_movement,
-            actor,
-            &self.state_frames,
-        ) {
-            if rotation != before {
-                self.set_actor_value(class, instance, "Rotation", Value::Rotator(rotation))?;
-                actions.push(ActorAction::SetRotation { actor, rotation });
-            }
-            return Ok(());
         }
         if pawn {
             self.set_actor_value(class, instance, "bRotateToDesired", Value::Bool(true))?;

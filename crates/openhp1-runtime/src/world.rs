@@ -232,7 +232,6 @@ pub struct ScriptRuntime {
     failed_ticks: HashSet<usize>,
     failed_physics: HashMap<usize, u8>,
     physics_ticked: HashSet<usize>,
-    latent_rotation_authored_this_tick: HashSet<usize>,
     disabled_events: HashMap<(usize, String), HashSet<String>>,
     object_actors: HashMap<ObjectId, usize>,
     actor_objects: HashMap<usize, ObjectId>,

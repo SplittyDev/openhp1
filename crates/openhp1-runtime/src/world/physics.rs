@@ -58,26 +58,6 @@ pub(super) fn two_wall_adjust(
     }
 }
 
-fn player_rotation_is_script_controlled(
-    player_pawn: bool,
-    script_sets_desired_rotation: bool,
-    actor: usize,
-    state_frames: &HashMap<usize, StateFrame>,
-) -> bool {
-    player_pawn
-        && !script_sets_desired_rotation
-        && !state_frames.values().any(|frame| {
-            matches!(
-                frame.latent,
-                LatentAction::MoveTo(target)
-                    | LatentAction::MoveToward(target)
-                    | LatentAction::TurnTo(target)
-                    | LatentAction::TurnToward(target)
-                    if target == actor
-            )
-        })
-}
-
 pub(super) struct ZonePhysics {
     pub(super) gravity: Vec3,
     velocity: Vec3,
@@ -134,7 +114,6 @@ impl ScriptRuntime {
 
     pub(super) fn tick_move_to(
         &mut self,
-        actor: usize,
         class: &ResolvedObject,
         instance: &mut InstanceState,
         elapsed: f32,
@@ -158,7 +137,6 @@ impl ScriptRuntime {
             "DesiredRotation",
             Value::Rotator([pitch, yaw, 0]),
         )?;
-        self.latent_rotation_authored_this_tick.insert(actor);
         let Some(direction) = move_to_direction(physics, delta, velocity, timer) else {
             return Ok(true);
         };
@@ -184,7 +162,6 @@ impl ScriptRuntime {
 
     pub(super) fn tick_move_toward(
         &mut self,
-        actor: usize,
         class: &ResolvedObject,
         instance: &mut InstanceState,
         elapsed: f32,
@@ -198,7 +175,7 @@ impl ScriptRuntime {
         let destination = self.other_actor_vector(target, "Location")?;
         self.set_actor_value(class, instance, "Destination", Value::Vector(destination))?;
         self.set_actor_value(class, instance, "Focus", Value::Vector(destination))?;
-        self.tick_move_to(actor, class, instance, elapsed)
+        self.tick_move_to(class, instance, elapsed)
     }
 
     pub(super) fn tick_physics(
@@ -601,42 +578,5 @@ mod tests {
     #[test]
     fn upward_targets_use_positive_ue1_pitch() {
         assert_eq!(direction_pitch(Vec3::Z), 16_384);
-    }
-
-    #[test]
-    fn matching_latent_movement_overrides_script_controlled_player_rotation() {
-        let frame = |latent| StateFrame {
-            state: ObjectId {
-                package: Arc::from("Test"),
-                export_index: 0,
-            },
-            frame: FrameSnapshot::at(0),
-            latent,
-        };
-        let mut frames = HashMap::default();
-        assert!(player_rotation_is_script_controlled(
-            true, false, 7, &frames
-        ));
-        assert!(!player_rotation_is_script_controlled(
-            false, false, 7, &frames
-        ));
-        assert!(!player_rotation_is_script_controlled(
-            true, true, 7, &frames
-        ));
-        frames.insert(99, frame(LatentAction::TurnTo(8)));
-        assert!(player_rotation_is_script_controlled(
-            true, false, 7, &frames
-        ));
-        for latent in [
-            LatentAction::MoveTo(7),
-            LatentAction::MoveToward(7),
-            LatentAction::TurnTo(7),
-            LatentAction::TurnToward(7),
-        ] {
-            frames.insert(99, frame(latent));
-            assert!(!player_rotation_is_script_controlled(
-                true, false, 7, &frames
-            ));
-        }
     }
 }

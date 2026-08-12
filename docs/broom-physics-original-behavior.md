@@ -869,3 +869,68 @@ SurrealEngine was consulted only after the shipped artifacts, as a licensed
 secondary cross-check. Its broad flying-velocity structure agrees with the
 retail binary, but its unconditional flying-Z reset contradicts this retail
 `Engine.dll`; the shipped binary is authoritative here.
+
+## Remembrall mid-air stall evidence
+
+The 2026-08-12 10:20 gameplay report captures `BroomHarry0` at
+`(7533.8,7273.8,-174.9)` in `Lev2_RemChase`. A read-only replay against the
+shipped map's world Model with Harry's native world-collision half extent
+`(15,15,42)` establishes that this is open BSP space: the box does not overlap
+the world, no cardinal sweep hits within 256 units, and the straight-down box
+contact is 550.1 units away at node 4780. The closest `BlockAll` reported by
+the scene is 712.2 units away. That actor, `BlockAll27`, is centered at
+`(8178.9,7570.9,-122.9)` and serializes `CollisionRadius=1500`; its inherited
+`Keypoint` default is `CollisionHeight=10`. Harry is inside its horizontal
+radius, while the 52-unit vertical center separation exactly equals the sum of
+its 10-unit half-height and Harry's 42-unit half-height. The report captures
+Harry resting against the underside of this large authored blocker, not
+embedded in arbitrary open-space collision. It is therefore not another case
+of the collision box resting on, or being embedded in, BSP; the two-unit
+`MoveActor` margin cannot explain this occurrence.
+
+The same run's shipped script path exposes a distinct native-rotation
+requirement. Compiled `BroomHarry.PlayerWalking.PlayerMove` export 812 invokes
+the virtual `UpdateRotation` at execution offset `0x287`; shipped function
+export 820 performs `SetRotation(NewRotation)` and then assigns
+`DesiredRotation=Rotation`. Consequently the normal interactive state protects
+its directly authored pitch and yaw by giving native rotation no remaining
+delta to apply.
+
+Compiled `BroomHarry.Pursue.PlayerTick` export 868 uses the other half of that
+contract. Its bytecode calls the parent tick, computes `TargetDir`, assigns
+`DesiredRotation=Rotator(TargetDir)`, and does not call `UpdateRotation` or
+`SetRotation`; it expects native pawn rotation to turn the actor. Retail
+`APawn::physicsRotation` at `0x103e5950` has no `PlayerPawn` exclusion: before
+its physics/roll branches, it always sets the pawn rotation flags at
+`0x103e59a4..0x103e59b6`, turns current yaw toward desired yaw at
+`0x103e59bc..0x103e59d0`, and turns current pitch toward desired pitch at
+`0x103e59d3..0x103e5a08`. If any component changed, it submits the resulting
+rotation through `ULevel::MoveActor` at `0x103e5d61..0x103e5e14`.
+
+Thus globally treating a `PlayerPawn` as script-rotation-only is not retail
+behavior. It happens to preserve ordinary broom input because that script
+writes `DesiredRotation=Rotation`, but it prevents `Pursue` from turning toward
+its target. The retail invariant is simpler: run `physicsRotation` for the
+player pawn too, and let each authored state control the result through
+`DesiredRotation`.
+
+In the reported gameplay sequence, the Remembrall referee deliberately puts
+Harry into `Pursue` for the ten-second `GameBump` interval. Suppressing native
+turning makes him retain his old heading until he reaches `BlockAll27`; when
+interactive control returns, he is already pinned beneath it. The authored
+temporary input loss and the apparent invisible box are consecutive effects
+of the same missing `DesiredRotation` response.
+
+Primary-artifact reproduction commands for this finding:
+
+```text
+sed -n '1,260p' "/Users/splitty/Library/Application Support/OpenHP1/Reports/report-1786504804-519666000.md"
+target/debug/examples/package_inspect res/System/HarryPotter.u
+target/debug/examples/script_inspect res/System/HarryPotter.u 812
+target/debug/examples/script_inspect res/System/HarryPotter.u 820
+target/debug/examples/script_inspect res/System/HarryPotter.u 868
+target/debug/examples/property_inspect res/Maps/Lev2_RemChase.unr 1512
+target/debug/examples/class_defaults res/System/Engine.u 144
+strings -a res/System/HarryPotter.u | nl -ba | sed -n '43593,43812p;43942,43973p'
+objdump -d -M intel --start-address=0x103e5950 --stop-address=0x103e5e2b res/System/Engine.dll
+```
