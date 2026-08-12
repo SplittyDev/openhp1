@@ -209,36 +209,47 @@ impl ScriptRuntime {
         let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
         actors.sort_unstable();
         for actor in actors {
-            if self.destroyed.contains(&actor) || self.physics_ticked.contains(&actor) {
-                continue;
+            self.tick_actor_physics_by_id(actor, delta_time, actions)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn tick_actor_physics_by_id(
+        &mut self,
+        actor: usize,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        if self.destroyed.contains(&actor) || self.physics_ticked.contains(&actor) {
+            return Ok(());
+        }
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let mode = self
+            .actor_byte(&class, &instance, "Physics")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        let result = self.tick_actor_physics(actor, &class, &mut instance, delta_time, actions);
+        self.instances.insert(actor, instance);
+        self.physics_ticked.insert(actor);
+        match result {
+            Ok(()) => {
+                self.failed_physics.remove(&actor);
             }
-            let class = self
-                .actor_classes
-                .get(&actor)
-                .cloned()
-                .ok_or(DispatchError::UnregisteredActor { actor })?;
-            let class = self.resolved_object(&class)?;
-            let mut instance = self
-                .instances
-                .remove(&actor)
-                .ok_or(DispatchError::ActiveActorContext { actor })?;
-            let mode = self
-                .actor_byte(&class, &instance, "Physics")
-                .map_err(|message| DispatchError::UnresolvedObject { message })?;
-            let result = self.tick_actor_physics(actor, &class, &mut instance, delta_time, actions);
-            self.instances.insert(actor, instance);
-            match result {
-                Ok(()) => {
-                    self.failed_physics.remove(&actor);
-                }
-                Err(message) if self.failed_physics.insert(actor, mode) != Some(mode) => {
-                    actions.push(ActorAction::DeferredCall {
-                        actor,
-                        message: format!("Physics: {message}"),
-                    });
-                }
-                Err(_) => {}
+            Err(message) if self.failed_physics.insert(actor, mode) != Some(mode) => {
+                actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("Physics: {message}"),
+                });
             }
+            Err(_) => {}
         }
         Ok(())
     }

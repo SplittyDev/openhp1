@@ -21,247 +21,245 @@ impl ScriptRuntime {
         self.tick_level_time(delta_time)?;
         let mut actions = Vec::new();
         self.tick_animation_properties(delta_time, &mut actions);
-        let mut actors = self
-            .tick_functions
-            .iter()
-            .filter(|(actor, _)| !self.failed_ticks.contains(actor))
-            .map(|(&actor, function)| {
-                (
-                    actor,
-                    ResolvedObject {
-                        package: Arc::clone(&function.package),
-                        export_index: function.export_index,
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        actors.sort_unstable_by_key(|(actor, _)| *actor);
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
         let player = self.player_actor;
         let mut player_ticked = false;
-        for (actor, function) in actors {
+        for actor in actors {
             if self.destroyed.contains(&actor) {
                 continue;
             }
-            if !player_ticked && player.is_some_and(|player| player < actor) {
+            if player == Some(actor) {
                 self.tick_player_events(delta_time, &mut actions)?;
                 player_ticked = true;
+            } else {
+                self.tick_actor_event(actor, delta_time, &mut actions)?;
             }
-            if event_disabled(
+            self.tick_actor_state(actor, delta_time, &mut actions)?;
+            self.tick_actor_timer(actor, delta_time, &mut actions)?;
+            self.tick_actor_lifespan(actor, delta_time, &mut actions)?;
+            self.tick_actor_physics_by_id(actor, delta_time, &mut actions)?;
+        }
+        if player.is_some() && !player_ticked {
+            self.tick_player_events(delta_time, &mut actions)?;
+        }
+        // Actors spawned during this tick were not in the stable actor snapshot above.
+        self.tick_physics(delta_time, &mut actions)?;
+        Ok(actions)
+    }
+
+    fn tick_actor_event(
+        &mut self,
+        actor: usize,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        if self.failed_ticks.contains(&actor)
+            || event_disabled(
                 &self.disabled_events,
                 actor,
                 self.actor_states
                     .get(&actor)
                     .and_then(|state| state.as_deref()),
                 "Tick",
-            ) {
-                if player == Some(actor) {
-                    self.tick_player_events(delta_time, &mut actions)?;
-                    player_ticked = true;
-                }
-                continue;
-            }
-            let Some(class) = self.actor_classes.get(&actor).cloned() else {
-                continue;
-            };
-            let class = ResolvedObject {
-                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
-                export_index: class.export_index,
-            };
-            match self.execute_actor_function(actor, &class, &function, &[Value::Float(delta_time)])
-            {
-                Ok(mut actor_actions) => actions.append(&mut actor_actions),
-                Err(error) => {
-                    // ponytail: retry deterministic Tick failures only after a state change
-                    // or explicit Enable instead of failing every rendered frame.
-                    self.failed_ticks.insert(actor);
-                    actions.push(ActorAction::DeferredCall {
-                        actor,
-                        message: format!("Tick: {error}"),
-                    });
-                }
-            }
-            if player == Some(actor) {
-                self.tick_player_events(delta_time, &mut actions)?;
-                player_ticked = true;
-            }
+            )
+        {
+            return Ok(());
         }
-        if player.is_some() && !player_ticked {
-            self.tick_player_events(delta_time, &mut actions)?;
-        }
-        self.tick_lifespans(delta_time, &mut actions)?;
-
-        let mut state_actors = self.state_frames.keys().copied().collect::<Vec<_>>();
-        state_actors.sort_unstable();
-        for actor in state_actors {
-            if self.destroyed.contains(&actor) {
-                continue;
-            }
-            let latent = self.state_frames.get(&actor).map(|frame| frame.latent);
-            if matches!(
-                latent,
-                Some(
-                    LatentAction::FinishInterpolation(_)
-                        | LatentAction::MoveTo(_)
-                        | LatentAction::MoveToward(_)
-                        | LatentAction::TurnTo(_)
-                        | LatentAction::TurnToward(_)
-                )
-            ) {
-                let target = match latent {
-                    Some(
-                        LatentAction::FinishInterpolation(target)
-                        | LatentAction::MoveTo(target)
-                        | LatentAction::MoveToward(target)
-                        | LatentAction::TurnTo(target)
-                        | LatentAction::TurnToward(target),
-                    ) => target,
-                    _ => unreachable!(),
-                };
-                let Some(class) = self.actor_classes.get(&target).cloned() else {
-                    continue;
-                };
-                let class = self.resolved_object(&class)?;
-                let mut instance = self.instances.remove(&target).unwrap_or_default();
-                let result = match latent {
-                    Some(LatentAction::FinishInterpolation(_)) => self
-                        .actor_bool(&class, &instance, "bInterpolating")
-                        .map(|interpolating| !interpolating),
-                    Some(LatentAction::MoveTo(_)) => {
-                        self.tick_move_to(target, &class, &mut instance, delta_time)
-                    }
-                    Some(LatentAction::MoveToward(_)) => {
-                        self.tick_move_toward(target, &class, &mut instance, delta_time)
-                    }
-                    Some(LatentAction::TurnTo(_)) => self.tick_turn_to(&class, &mut instance),
-                    Some(LatentAction::TurnToward(_)) => {
-                        self.tick_turn_toward(&class, &mut instance)
-                    }
-                    _ => unreachable!(),
-                };
-                let completed_movement = if matches!(result, Ok(true)) {
-                    match self.actor_byte(&class, &instance, "Physics") {
-                        Ok(physics)
-                            if matches!(physics, physics::PHYS_SWIMMING | physics::PHYS_FLYING) =>
-                        {
-                            match self.actor_bool(&class, &instance, "bCanStrafe") {
-                                Ok(false) => Ok(()),
-                                Ok(true) => self.finish_latent_movement(
-                                    target,
-                                    &class,
-                                    &mut instance,
-                                    latent,
-                                ),
-                                Err(message) => Err(message),
-                            }
-                        }
-                        Ok(_) => self.finish_latent_movement(target, &class, &mut instance, latent),
-                        Err(message) => Err(message),
-                    }
-                } else {
-                    Ok(())
-                };
-                self.instances.insert(target, instance);
-                completed_movement
-                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
-                match result {
-                    Ok(true) => {
-                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
-                    }
-                    Ok(false) => {}
-                    Err(message) => {
-                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Stop;
-                        actions.push(ActorAction::DeferredCall {
-                            actor,
-                            message: format!("latent movement: {message}"),
-                        });
-                    }
-                }
-            }
-            let ready = match self.state_frames.get_mut(&actor) {
-                Some(StateFrame {
-                    latent: LatentAction::Sleep(remaining),
-                    ..
-                }) => {
-                    *remaining = (*remaining - delta_time).max(0.0);
-                    if *remaining == 0.0 {
-                        self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
-                        true
-                    } else {
-                        false
-                    }
-                }
-                Some(StateFrame {
-                    latent: LatentAction::Continue,
-                    ..
-                }) => true,
-                _ => false,
-            };
-            if !ready {
-                continue;
-            }
-            let Some(class) = self.actor_classes.get(&actor).cloned() else {
-                continue;
-            };
-            let class = ResolvedObject {
-                package: self.packages.load_path(Path::new(class.package.as_ref()))?,
-                export_index: class.export_index,
-            };
-            let mut instance = self.instances.remove(&actor).unwrap_or_default();
-            let result = self.execute_ready_state(actor, &class, &mut instance, &mut actions);
-            self.instances.insert(actor, instance);
-            if let Err(error) = result {
+        let Some(function) = self
+            .tick_functions
+            .get(&actor)
+            .map(|function| ResolvedObject {
+                package: Arc::clone(&function.package),
+                export_index: function.export_index,
+            })
+        else {
+            return Ok(());
+        };
+        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(());
+        };
+        let class = self.resolved_object(&class)?;
+        match self.execute_actor_function(actor, &class, &function, &[Value::Float(delta_time)]) {
+            Ok(mut actor_actions) => actions.append(&mut actor_actions),
+            Err(error) => {
+                // ponytail: retry deterministic Tick failures only after a state change
+                // or explicit Enable instead of failing every rendered frame.
+                self.failed_ticks.insert(actor);
                 actions.push(ActorAction::DeferredCall {
                     actor,
-                    message: format!("State: {error}"),
+                    message: format!("Tick: {error}"),
                 });
             }
         }
+        Ok(())
+    }
 
-        self.tick_physics(delta_time, &mut actions)?;
-
-        let mut actors = self.timers.keys().copied().collect::<Vec<_>>();
-        actors.sort_unstable();
-        for actor in actors {
-            let Some(timer) = self.timers.get_mut(&actor) else {
-                continue;
+    fn tick_actor_state(
+        &mut self,
+        actor: usize,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        if self.destroyed.contains(&actor) {
+            return Ok(());
+        }
+        let latent = self.state_frames.get(&actor).map(|frame| frame.latent);
+        if matches!(
+            latent,
+            Some(
+                LatentAction::FinishInterpolation(_)
+                    | LatentAction::MoveTo(_)
+                    | LatentAction::MoveToward(_)
+                    | LatentAction::TurnTo(_)
+                    | LatentAction::TurnToward(_)
+            )
+        ) {
+            let target = match latent {
+                Some(
+                    LatentAction::FinishInterpolation(target)
+                    | LatentAction::MoveTo(target)
+                    | LatentAction::MoveToward(target)
+                    | LatentAction::TurnTo(target)
+                    | LatentAction::TurnToward(target),
+                ) => target,
+                _ => unreachable!(),
             };
-            timer.remaining -= delta_time;
-            while self
-                .timers
-                .get(&actor)
-                .is_some_and(|timer| timer.remaining <= 0.0)
-            {
-                let looping = {
-                    let timer = self.timers.get_mut(&actor).unwrap();
-                    if timer.looping {
-                        timer.remaining += timer.rate;
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if !looping {
-                    self.timers.remove(&actor);
+            let Some(class) = self.actor_classes.get(&target).cloned() else {
+                return Ok(());
+            };
+            let class = self.resolved_object(&class)?;
+            let mut instance = self.instances.remove(&target).unwrap_or_default();
+            let result = match latent {
+                Some(LatentAction::FinishInterpolation(_)) => self
+                    .actor_bool(&class, &instance, "bInterpolating")
+                    .map(|interpolating| !interpolating),
+                Some(LatentAction::MoveTo(_)) => {
+                    self.tick_move_to(target, &class, &mut instance, delta_time)
                 }
-                let Some(class) = self.actor_classes.get(&actor).cloned() else {
-                    break;
-                };
-                self.timer_callbacks = self.timer_callbacks.saturating_add(1);
-                match self.dispatch_event(
-                    actor,
-                    Path::new(class.package.as_ref()),
-                    class.export_index,
-                    "Timer",
-                ) {
-                    Ok(mut actor_actions) => actions.append(&mut actor_actions),
-                    Err(error) => actions.push(ActorAction::DeferredCall {
+                Some(LatentAction::MoveToward(_)) => {
+                    self.tick_move_toward(target, &class, &mut instance, delta_time)
+                }
+                Some(LatentAction::TurnTo(_)) => self.tick_turn_to(&class, &mut instance),
+                Some(LatentAction::TurnToward(_)) => self.tick_turn_toward(&class, &mut instance),
+                _ => unreachable!(),
+            };
+            let completed_movement = if matches!(result, Ok(true)) {
+                match self.actor_byte(&class, &instance, "Physics") {
+                    Ok(physics::PHYS_SWIMMING | physics::PHYS_FLYING) => {
+                        match self.actor_bool(&class, &instance, "bCanStrafe") {
+                            Ok(false) => Ok(()),
+                            Ok(true) => {
+                                self.finish_latent_movement(target, &class, &mut instance, latent)
+                            }
+                            Err(message) => Err(message),
+                        }
+                    }
+                    Ok(_) => self.finish_latent_movement(target, &class, &mut instance, latent),
+                    Err(message) => Err(message),
+                }
+            } else {
+                Ok(())
+            };
+            self.instances.insert(target, instance);
+            completed_movement.map_err(|message| DispatchError::UnresolvedObject { message })?;
+            match result {
+                Ok(true) => {
+                    self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
+                }
+                Ok(false) => {}
+                Err(message) => {
+                    self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Stop;
+                    actions.push(ActorAction::DeferredCall {
                         actor,
-                        message: format!("Timer: {error}"),
-                    }),
+                        message: format!("latent movement: {message}"),
+                    });
                 }
             }
         }
-        Ok(actions)
+        let ready = match self.state_frames.get_mut(&actor) {
+            Some(StateFrame {
+                latent: LatentAction::Sleep(remaining),
+                ..
+            }) => {
+                *remaining = (*remaining - delta_time).max(0.0);
+                if *remaining == 0.0 {
+                    self.state_frames.get_mut(&actor).unwrap().latent = LatentAction::Continue;
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(StateFrame {
+                latent: LatentAction::Continue,
+                ..
+            }) => true,
+            _ => false,
+        };
+        if !ready {
+            return Ok(());
+        }
+        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(());
+        };
+        let class = self.resolved_object(&class)?;
+        let mut instance = self.instances.remove(&actor).unwrap_or_default();
+        let result = self.execute_ready_state(actor, &class, &mut instance, actions);
+        self.instances.insert(actor, instance);
+        if let Err(error) = result {
+            actions.push(ActorAction::DeferredCall {
+                actor,
+                message: format!("State: {error}"),
+            });
+        }
+        Ok(())
+    }
+
+    fn tick_actor_timer(
+        &mut self,
+        actor: usize,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        let Some(timer) = self.timers.get_mut(&actor) else {
+            return Ok(());
+        };
+        timer.remaining -= delta_time;
+        while self
+            .timers
+            .get(&actor)
+            .is_some_and(|timer| timer.remaining <= 0.0)
+        {
+            let looping = {
+                let timer = self.timers.get_mut(&actor).unwrap();
+                if timer.looping {
+                    timer.remaining += timer.rate;
+                    true
+                } else {
+                    false
+                }
+            };
+            if !looping {
+                self.timers.remove(&actor);
+            }
+            let Some(class) = self.actor_classes.get(&actor).cloned() else {
+                break;
+            };
+            self.timer_callbacks = self.timer_callbacks.saturating_add(1);
+            match self.dispatch_event(
+                actor,
+                Path::new(class.package.as_ref()),
+                class.export_index,
+                "Timer",
+            ) {
+                Ok(mut actor_actions) => actions.append(&mut actor_actions),
+                Err(error) => actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("Timer: {error}"),
+                }),
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::world) fn finish_latent_movement(
@@ -601,60 +599,54 @@ impl ScriptRuntime {
         }
     }
 
-    fn tick_lifespans(
+    fn tick_actor_lifespan(
         &mut self,
+        actor: usize,
         delta_time: f32,
         actions: &mut Vec<ActorAction>,
     ) -> DispatchResult<()> {
-        let mut actors = self
-            .actor_classes
-            .iter()
-            .filter(|(actor, _)| !self.destroyed.contains(actor))
-            .map(|(&actor, class)| (actor, class.clone()))
-            .collect::<Vec<_>>();
-        actors.sort_unstable_by_key(|(actor, _)| *actor);
-        let mut expired = Vec::new();
-        for (actor, class) in actors {
-            let class = self.resolved_object(&class)?;
-            let Some(field) = self.find_property(&class, "LifeSpan", 0)? else {
-                continue;
-            };
-            let Some(StoredValue::Value(Value::Float(lifespan))) = self
-                .instances
-                .get_mut(&actor)
-                .and_then(|instance| instance.get_mut(&field))
-            else {
-                continue;
-            };
-            if advance_lifespan(lifespan, delta_time) {
-                expired.push((actor, class));
-            }
+        if self.destroyed.contains(&actor) {
+            return Ok(());
         }
-
-        for (actor, class) in expired {
-            match self.dispatch_event(
+        let Some(class) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(());
+        };
+        let class = self.resolved_object(&class)?;
+        let Some(field) = self.find_property(&class, "LifeSpan", 0)? else {
+            return Ok(());
+        };
+        let Some(StoredValue::Value(Value::Float(lifespan))) = self
+            .instances
+            .get_mut(&actor)
+            .and_then(|instance| instance.get_mut(&field))
+        else {
+            return Ok(());
+        };
+        if !advance_lifespan(lifespan, delta_time) {
+            return Ok(());
+        }
+        match self.dispatch_event(
+            actor,
+            Path::new(class.package.summary().source.as_ref()),
+            class.export_index,
+            "Expired",
+        ) {
+            Ok(mut expired_actions) => actions.append(&mut expired_actions),
+            Err(error) => actions.push(ActorAction::DeferredCall {
                 actor,
-                Path::new(class.package.summary().source.as_ref()),
-                class.export_index,
-                "Expired",
-            ) {
-                Ok(mut expired_actions) => actions.append(&mut expired_actions),
-                Err(error) => actions.push(ActorAction::DeferredCall {
-                    actor,
-                    message: format!("Expired: {error}"),
-                }),
-            }
-            if self.destroyed.contains(&actor) {
-                continue;
-            }
-            let mut instance = self
-                .instances
-                .remove(&actor)
-                .ok_or(DispatchError::ActiveActorContext { actor })?;
-            let result = self.destroy_actor(actor, &class, &mut instance, actions);
-            self.instances.insert(actor, instance);
-            result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+                message: format!("Expired: {error}"),
+            }),
         }
+        if self.destroyed.contains(&actor) {
+            return Ok(());
+        }
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = self.destroy_actor(actor, &class, &mut instance, actions);
+        self.instances.insert(actor, instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
         Ok(())
     }
 

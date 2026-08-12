@@ -5652,7 +5652,7 @@ fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
 }
 
 #[test]
-fn autonomous_physics_dispatches_from_tick_without_double_advancing() {
+fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-autonomous-physics-{}-{}",
         std::process::id(),
@@ -5766,10 +5766,12 @@ fn autonomous_physics_dispatches_from_tick_without_double_advancing() {
 
     let level = 0;
     let actor = 1;
+    let later_actor = 2;
     runtime.actor_classes.insert(level, class_id.clone());
-    runtime.actor_classes.insert(actor, class_id);
+    runtime.actor_classes.insert(actor, class_id.clone());
+    runtime.actor_classes.insert(later_actor, class_id);
     runtime.level_info = Some(level);
-    runtime.tick_functions.insert(actor, function);
+    runtime.tick_functions.insert(later_actor, function);
     runtime.instances.insert(
         level,
         [
@@ -5816,17 +5818,54 @@ fn autonomous_physics_dispatches_from_tick_without_double_advancing() {
         .into_iter()
         .collect(),
     );
+    runtime.instances.insert(
+        later_actor,
+        [
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(5)),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0; 3])),
+            ),
+            (
+                fields["RotationRate"].clone(),
+                StoredValue::Value(Value::Rotator([0, 2_000, 0])),
+            ),
+            (
+                fields["bRotateToDesired"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bFixedRotationDir"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     assert_eq!(
         runtime.tick(0.02).unwrap(),
-        [ActorAction::SetRotation {
-            actor,
-            rotation: [0, 20, 0],
-        }]
+        [
+            ActorAction::SetRotation {
+                actor,
+                rotation: [0, 20, 0],
+            },
+            ActorAction::SetRotation {
+                actor: later_actor,
+                rotation: [0, 40, 0],
+            },
+        ]
     );
     assert_eq!(
         runtime.instances[&actor].get(&fields["Rotation"]),
         Some(&StoredValue::Value(Value::Rotator([0, 20, 0])))
+    );
+    assert_eq!(
+        runtime.instances[&later_actor].get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0, 40, 0])))
     );
     fs::remove_dir_all(root).unwrap();
 }
