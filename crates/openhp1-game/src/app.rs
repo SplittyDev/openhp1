@@ -704,7 +704,7 @@ impl Graphics {
         {
             config.format = linear_format;
         }
-        config.present_mode = wgpu::PresentMode::Fifo;
+        config.present_mode = wgpu::PresentMode::AutoNoVsync;
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
         let presentation = Presentation::new(&device, config.format, graphics_settings.resolution);

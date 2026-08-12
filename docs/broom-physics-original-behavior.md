@@ -575,13 +575,22 @@ the host's intended enforcement stage, and one current snapshot per draw, but
 not a recoverable additional DeltaSeconds filtering formula.
 
 OpenHP1 likewise evaluates the compiled `PlayerCalcView` after its runtime tick
-and maps that one returned transform directly to the render camera. However,
-its host cadence is explicitly redraw-driven: every `RedrawRequested` measures
-the raw elapsed `Instant` interval (capped only at 0.1 seconds), performs exactly
-one simulation update with that entire delta, submits one frame, presents it,
-and requests the next redraw. The surface uses FIFO presentation. Its wgpu 29
-default `desired_maximum_frame_latency=2` maps to three Metal drawables, which
-permits CPU/GPU overlap but does not itself impose a 20 or 30 Hz cap.
+and maps that one returned transform directly to the render camera. Its host
+cadence is explicitly redraw-driven: every `RedrawRequested` measures the raw
+elapsed `Instant` interval (capped only at 0.1 seconds), performs exactly one
+simulation update with that entire delta, submits one frame, presents it, and
+requests the next redraw.
+
+The game originally forced FIFO presentation. A 10-second Metal System Trace
+of the optimized Classic renderer in `Lev2_RemChase` measured 305 present
+requests over 10.250 seconds (29.66 fps). The main thread spent most sampled
+time waiting in `CAMetalLayer.nextDrawable`, while the GPU's labeled sky, BSP,
+overlay, and presentation passes together occupied only about 0.07 ms per
+frame. Changing drawable count and polling the event loop did not improve the
+cadence. Disabling display sync in the same optimized process produced 271
+present requests over 3.268 seconds (82.63 fps) and was visibly smooth. The
+shared game surface now requests wgpu `AutoNoVsync`, which selects immediate
+presentation on Metal and gracefully falls back on backends without it.
 
 The supplied OpenHP1 capture contains 307 encoded frames over 13.083 seconds
 (23.46 fps average). Of its 306 frame intervals, 171 are 50 ms and 132 are
@@ -597,14 +606,12 @@ curve through tick 759 with no jump.
 
 Therefore renderer-side camera interpolation would not reproduce retail
 Engine.dll behavior, and a map-specific `BaseCam` adjustment is not supported.
-The evidence-backed remaining camera defect is presentation-bound simulation
-cadence under load: OpenHP1 exposes every missed presentation slot directly to
-authored movement as a 33-50 ms tick. The next correction belongs in shared
-frame pacing or rendering performance, not in broom/camera constants. The
-retail evidence does not justify inventing a fixed-step or render-interpolation
-scheme before profiling identifies why OpenHP1 misses the slots. Actor-only
-snapping in the provided pre-fix recording separately matches the skeletal
-tween defect above.
+The remaining whole-view jitter was presentation-bound simulation cadence:
+forced FIFO exposed every missed slot directly to authored movement as a
+33-50 ms tick. Unsynchronized presentation fixes that shared host problem
+without inventing a fixed-step, render interpolation, or camera-specific
+workaround. Actor-only snapping in the provided pre-fix recording separately
+matches the skeletal tween defect above.
 
 ## Remembrall death and restart
 
