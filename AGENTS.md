@@ -142,6 +142,10 @@ Keep the focused notes in
 - For original-game behavior, inspect the shipped packages first: embedded
   UnrealScript, compiled bytecode and class defaults, configuration, and native
   binaries. Use reference engines only after that evidence is exhausted.
+- Not a single line of engine code may be written without concrete evidence
+  from the original game engine, shipped UnrealScript, or `Engine.dll`,
+  whichever applies. Engine logic must behave identically to the original;
+  workarounds without concrete original-game evidence are explicitly forbidden.
 - Treat embedded source comments and property dumps as leads, not active
   behavior; verify them against compiled defaults or bytecode before changing
   compatibility behavior. Do not tune guessed heuristics before tracing the
