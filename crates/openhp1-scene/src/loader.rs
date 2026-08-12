@@ -4357,6 +4357,49 @@ mod tests {
     }
 
     #[test]
+    fn display_rebuild_does_not_start_the_default_mesh_animation() {
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+        let state = scene.actor_states[0].actor.clone();
+        let super::LoadedScene {
+            actor_render,
+            actors,
+            render,
+            animations,
+            sprites,
+            water_animations,
+            ..
+        } = &mut scene;
+        super::append_scene_actor_render(
+            actor_render,
+            &mut actors[0],
+            &state,
+            false,
+            0,
+            &mut render.mesh,
+            &mut render.textures,
+            &mut render.surface_materials,
+            animations,
+            sprites,
+            water_animations,
+        );
+        assert!(scene.actors[0].animation.is_none());
+        assert_eq!(scene.animations.len(), 1);
+
+        scene.set_actor_physics(0, 2).unwrap();
+
+        assert!(scene.actors[0].animation.is_none());
+    }
+
+    #[test]
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
         let mut emitter = ParticleEmitter {
             actor: 0,

@@ -484,11 +484,12 @@ impl LoadedScene {
                 "actor render range is outside the scene mesh"
             );
         }
-        let playback = self
-            .animations
-            .iter()
-            .find(|animation| animation.actor_index == actor_index)
-            .map(AnimationPlayback::from);
+        let playback = actor.animation.as_ref().and_then(|_| {
+            self.animations
+                .iter()
+                .find(|animation| animation.actor_index == actor_index)
+                .map(AnimationPlayback::from)
+        });
         let mut state = self.actor_states[actor_index].actor.clone();
         if let Some(mesh) = mesh_override {
             state.draw_type = 2;
