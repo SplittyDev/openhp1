@@ -577,11 +577,10 @@ A/D or left/right turn, right click/Control jump, and left click/Alt cast.
 The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
 `bBroomPitchUp`/`bBroomPitchDown`; its `bInvertBroomPitch` default is false.
 OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
-pitch up and S to pitch down. A/D and left/right feed broom yaw. Broom boost
-and brake use the active `User.ini` `Engine.Input` commands, including changes
-made by the authored options menu. The pristine shipped bindings boost with
-right click or A and brake with left click or Z; ordinary jump activates broom
-action.
+pitch up and S to pitch down. A/D and left/right feed broom yaw. As displayed
+by OpenHP1's options page, Z boosts and X brakes; this avoids conflicting with
+the added A/D steering controls. Ordinary jump activates broom action but does
+not boost.
 This is the original non-inverted behavior when `bInvertBroomPitch` is false;
 setting it true gives flight-stick controls (W/down and S/up) and reverses mouse
 broom pitch too.

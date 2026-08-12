@@ -420,9 +420,8 @@ impl InputState {
             jump: self.jump_requested,
             broom_pitch_up,
             broom_pitch_down,
-            broom_boost: self.boost_mouse
-                || pressed(&self.keys, &[KeyCode::ShiftLeft, KeyCode::ShiftRight]) != 0.0,
-            broom_brake: self.cast_mouse || pressed(&self.keys, &[KeyCode::KeyZ]) != 0.0,
+            broom_boost: pressed(&self.keys, &[KeyCode::KeyZ]) != 0.0,
+            broom_brake: pressed(&self.keys, &[KeyCode::KeyX]) != 0.0,
         };
         self.mouse_delta = (0.0, 0.0);
         self.cast_requested = false;
@@ -431,33 +430,6 @@ impl InputState {
         self.space_release_requested = false;
         self.jump_requested = false;
         input
-    }
-
-    fn player_input_with_bindings(
-        &mut self,
-        delta_time: f32,
-        mut binding: impl FnMut(&str) -> Option<String>,
-    ) -> PlayerInput {
-        let boost = self.bound_broom_action("Button bBroomBoost", &mut binding);
-        let brake = self.bound_broom_action("Button bBroomBrake", &mut binding);
-        let mut input = self.player_input(delta_time);
-        input.broom_boost = boost;
-        input.broom_brake = brake;
-        input
-    }
-
-    fn bound_broom_action(
-        &self,
-        action: &str,
-        binding: &mut impl FnMut(&str) -> Option<String>,
-    ) -> bool {
-        (self.boost_mouse && binding_runs(binding("RightMouse"), action))
-            || (self.cast_mouse && binding_runs(binding("LeftMouse"), action))
-            || self
-                .keys
-                .iter()
-                .filter_map(|key| unreal_key_name(*key))
-                .any(|key| binding_runs(binding(key), action))
     }
 
     fn clear(&mut self) {
@@ -471,57 +443,6 @@ impl InputState {
         self.space_release_requested = false;
         self.jump_requested = false;
     }
-}
-
-fn binding_runs(binding: Option<String>, action: &str) -> bool {
-    binding.is_some_and(|commands| {
-        commands
-            .split('|')
-            .any(|command| command.trim().eq_ignore_ascii_case(action))
-    })
-}
-
-fn unreal_key_name(key: KeyCode) -> Option<&'static str> {
-    Some(match key {
-        KeyCode::KeyA => "A",
-        KeyCode::KeyB => "B",
-        KeyCode::KeyC => "C",
-        KeyCode::KeyD => "D",
-        KeyCode::KeyE => "E",
-        KeyCode::KeyF => "F",
-        KeyCode::KeyG => "G",
-        KeyCode::KeyH => "H",
-        KeyCode::KeyI => "I",
-        KeyCode::KeyJ => "J",
-        KeyCode::KeyK => "K",
-        KeyCode::KeyL => "L",
-        KeyCode::KeyM => "M",
-        KeyCode::KeyN => "N",
-        KeyCode::KeyO => "O",
-        KeyCode::KeyP => "P",
-        KeyCode::KeyQ => "Q",
-        KeyCode::KeyR => "R",
-        KeyCode::KeyS => "S",
-        KeyCode::KeyT => "T",
-        KeyCode::KeyU => "U",
-        KeyCode::KeyV => "V",
-        KeyCode::KeyW => "W",
-        KeyCode::KeyX => "X",
-        KeyCode::KeyY => "Y",
-        KeyCode::KeyZ => "Z",
-        KeyCode::ArrowLeft => "Left",
-        KeyCode::ArrowUp => "Up",
-        KeyCode::ArrowRight => "Right",
-        KeyCode::ArrowDown => "Down",
-        KeyCode::Space => "Space",
-        KeyCode::ShiftLeft => "LShift",
-        KeyCode::ShiftRight => "RShift",
-        KeyCode::ControlLeft => "LControl",
-        KeyCode::ControlRight => "RControl",
-        KeyCode::AltLeft => "Alt",
-        KeyCode::AltRight => "Alt",
-        _ => return None,
-    })
 }
 
 fn mouse_axis(delta: f64, delta_time: f32, speed: f32) -> f32 {
@@ -923,14 +844,10 @@ impl Graphics {
                 delta_time,
                 (self.renderer.bounds().radius() * 0.35).max(200.0),
             );
-            let _ = self.input.player_input_with_bindings(delta_time, |key| {
-                self.console.config_value("User", "Engine.Input", key)
-            });
+            let _ = self.input.player_input(delta_time);
             PlayerInput::default()
         } else {
-            self.input.player_input_with_bindings(delta_time, |key| {
-                self.console.config_value("User", "Engine.Input", key)
-            })
+            self.input.player_input(delta_time)
         };
         if !self.game_ui.pauses_game() {
             for _ in 0..ticks {
@@ -2050,7 +1967,7 @@ mod tests {
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
         assert!(!player.alt_fire_released);
-        assert!(player.broom_brake);
+        assert!(!player.broom_brake);
         assert!(!input.player_input(1.0 / 60.0).alt_fire_pressed);
 
         input.set_mouse_button(MouseButton::Left, ElementState::Released);
@@ -2061,10 +1978,10 @@ mod tests {
         input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
         let player = input.player_input(1.0 / 60.0);
         assert!(player.jump);
-        assert!(player.broom_boost);
+        assert!(!player.broom_boost);
         let player = input.player_input(1.0 / 60.0);
         assert!(!player.jump);
-        assert!(player.broom_boost);
+        assert!(!player.broom_boost);
         input.set_mouse_button(MouseButton::Right, ElementState::Released);
         assert!(!input.player_input(1.0 / 60.0).broom_boost);
         input.set_key(KeyCode::AltLeft, ElementState::Pressed);
@@ -2072,32 +1989,11 @@ mod tests {
         assert!(player.alt_fire);
         assert!(player.alt_fire_pressed);
         assert!(!player.broom_brake);
-        input.set_key(KeyCode::ShiftLeft, ElementState::Pressed);
-        assert!(input.player_input(1.0 / 60.0).broom_boost);
-    }
-
-    #[test]
-    fn broom_speed_uses_the_active_unreal_bindings() {
-        let mut input = InputState::default();
-        input.set_key(KeyCode::KeyX, ElementState::Pressed);
         input.set_key(KeyCode::KeyZ, ElementState::Pressed);
-        input.set_mouse_button(MouseButton::Right, ElementState::Pressed);
-        let configured = |key: &str| match key {
-            "X" => Some("Button bBroomBoost".to_owned()),
-            "Z" => Some("Button bBroomBrake".to_owned()),
-            "RightMouse" => Some("Jump".to_owned()),
-            _ => None,
-        };
-
-        let player = input.player_input_with_bindings(1.0 / 60.0, configured);
-        assert!(player.broom_boost);
-        assert!(player.broom_brake);
-
-        input.set_key(KeyCode::KeyX, ElementState::Released);
+        assert!(input.player_input(1.0 / 60.0).broom_boost);
         input.set_key(KeyCode::KeyZ, ElementState::Released);
-        let player = input.player_input_with_bindings(1.0 / 60.0, configured);
-        assert!(!player.broom_boost);
-        assert!(!player.broom_brake);
+        input.set_key(KeyCode::KeyX, ElementState::Pressed);
+        assert!(input.player_input(1.0 / 60.0).broom_brake);
     }
 
     #[test]
