@@ -327,9 +327,12 @@ spawn placement remain separate shape-specific paths.
 
 ### Original BSP traversal limits eligible hulls
 
-`MoveActor` body `0x103aa3a0` passes the collision-box center as `Start`, that
-center plus the requested delta as `End`, and the box half extent to
-`ULevel::MultiLineCheck` at `0x103aa90c`. It passes Harry's actor-collision bit,
+`MoveActor` body `0x103aa3a0` passes the collision-box center as `Start`, the
+box half extent, and an endpoint extended by its native movement margin to
+`ULevel::MultiLineCheck` at `0x103aa90c`. The exact two-unit extension and
+result-time remap are documented in
+[`broom-physics-original-behavior.md`](broom-physics-original-behavior.md#native-moveactor-contact-margin).
+It passes Harry's actor-collision bit,
 the active `LevelInfo` because `bCollideWorld` is set, and a literal
 `ExtraNodeFlags=0`. `MultiLineCheck` body `0x103ac620` performs the world
 `UModel::LineCheck` first, with `Actor=None`, before considering actor-hash

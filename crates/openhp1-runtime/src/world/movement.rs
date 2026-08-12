@@ -14,6 +14,8 @@ mod properties;
 use collision::*;
 
 const ACTOR_TRACE_MARGIN: f32 = 1.0;
+const MOVE_TRACE_PADDING: f32 = 2.0;
+const MOVE_HIT_EPSILON: f32 = 0.0001;
 const COLLIDE_BOX: u8 = 2;
 const COLLIDE_SHAPE: u8 = 3;
 
@@ -1014,7 +1016,14 @@ impl ScriptRuntime {
             );
         }
         let collide_world = self.actor_bool(actor_class, instance, "bCollideWorld")?;
-        let (blocking_hit, hits) = {
+        let delta_length = delta.length();
+        let trace_padding = if current.brush.is_none() && delta_length > MOVE_HIT_EPSILON {
+            MOVE_TRACE_PADDING
+        } else {
+            0.0
+        };
+        let trace_delta = delta + delta.normalize_or_zero() * trace_padding;
+        let (mut blocking_hit, hits) = {
             let mut evaluation = match actions.as_deref_mut() {
                 Some(actions) => MovementEvaluation::Real {
                     actions,
@@ -1024,13 +1033,17 @@ impl ScriptRuntime {
             };
             self.movement_hit(
                 &current,
-                delta,
+                trace_delta,
                 collide_world,
                 actor,
                 instance,
                 &mut evaluation,
             )?
         };
+        if blocking_hit.fraction < 1.0 && trace_padding > 0.0 {
+            blocking_hit.fraction =
+                move_hit_fraction(blocking_hit.fraction, delta_length, trace_padding);
+        }
         let blocking_actor = blocking_hit.actor;
 
         let Some(actions) = actions.as_mut() else {
@@ -2476,6 +2489,15 @@ fn sweep_world_collision(
     }
 }
 
+fn move_hit_fraction(trace_fraction: f32, delta_length: f32, trace_padding: f32) -> f32 {
+    let fraction = ((delta_length + trace_padding) * trace_fraction - trace_padding) / delta_length;
+    if fraction <= MOVE_HIT_EPSILON {
+        0.0
+    } else {
+        fraction
+    }
+}
+
 #[cfg(test)]
 mod world_collision_tests {
     use super::*;
@@ -2509,6 +2531,28 @@ mod world_collision_tests {
             .sweep_cylinder(start, end, actor.radius, actor.height)
             .unwrap();
         assert!(native_extent_hit.fraction < rounded_cylinder_hit.fraction);
+    }
+
+    #[test]
+    fn native_move_trace_leaves_surface_clearance() {
+        let collision = solid_box_collision();
+        let start = Vec3::new(-20.0, 0.0, 0.0);
+        let delta = Vec3::new(20.0, 0.0, 0.0);
+        let extents = Vec3::ONE;
+        let trace_delta = delta + delta.normalize() * MOVE_TRACE_PADDING;
+        let hit = collision
+            .sweep_aabb(start, start + trace_delta, extents)
+            .unwrap();
+        let fraction = move_hit_fraction(hit.fraction, delta.length(), MOVE_TRACE_PADDING);
+        let stopped = start + delta * fraction;
+
+        assert!(stopped.x + extents.x <= -12.0);
+        assert!(!collision.overlaps_aabb(stopped, extents));
+        assert!(
+            collision
+                .sweep_aabb(stopped, stopped + Vec3::Y, extents)
+                .is_none()
+        );
     }
 }
 

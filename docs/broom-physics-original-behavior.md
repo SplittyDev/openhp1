@@ -289,6 +289,41 @@ The retail collision sequence is also explicit in `physFlying`:
 `TwoWallAdjust` is therefore part of normal broom collision response, not only
 falling physics.
 
+### Native `MoveActor` contact margin
+
+Retail `ULevel::MoveActor` does not sweep an ordinary actor only from its
+collision-box center to `center + Delta`. For a nonzero requested delta it
+computes `length = |Delta|` and `unit = Delta / length` at
+`0x103aa602..0x103aa663`. The local margin is normally the immediate float
+`2.0` written at `0x103aa68f`; it is zero only on the branch at
+`0x103aa666..0x103aa68d` for an actor with a non-null primitive at offset
+`0x168`, whose class is `ABrush` (`PrivateStaticClass` VA `0x105e91a0`), and
+whose object-flags byte at offset `0x28` has bit zero clear. `BroomHarry` takes
+the ordinary two-unit path.
+
+At `0x103aa696..0x103aa6dc`, `MoveActor` forms
+`extended_delta = Delta + margin * unit`. The arguments assembled at
+`0x103aa89d..0x103aa90c` call `ULevel::MultiLineCheck` with the collision-box
+half extent, `Start = collision-box center`, and
+`End = Start + extended_delta`. Thus the two units extend the trace beyond the
+requested endpoint; they do not shift its start.
+
+When the selected hit has `Time < 1.0` and the final `MoveActor` integer
+argument is zero, `0x103aaad2..0x103aab13` converts the time from that extended
+trace back to the requested delta:
+
+```text
+adjusted_time = ((length + margin) * trace_time - margin) / length
+```
+
+If the result is at most `0.0001`, `0x103aab16..0x103aab38` stores zero and
+returns false. Otherwise `0x103aab3b..0x103aab6b` moves by
+`Delta * adjusted_time`. The constants are `1.0` at VA `0x1046dd9c`, `0.0001`
+at `0x1047381c`, and the immediate `2.0` encoding `0x40000000` at
+`0x103aa68f`. This is a separate native movement clearance above the lower BSP
+line-check tolerances; omitting it can leave a flying collision box slightly
+inside a surface so its next tangential sweep becomes a zero-time hit.
+
 ## Native broom banking
 
 `APawn::physicsRotation` is export RVA `0x27a7` and enters at VA
@@ -798,6 +833,10 @@ objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/Sys
 objdump -d -M intel --start-address=0x103a5ba0 --stop-address=0x103a5e60 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b3840 --stop-address=0x103b4360 res/System/Engine.dll
 objdump -d -M intel --start-address=0x103b6db0 --stop-address=0x103b71c0 res/System/Engine.dll
+objdump -p res/System/Engine.dll | rg 'MoveActor@ULevel|MultiLineCheck@ULevel'
+objdump -d -M intel res/System/Engine.dll | sed -n '/^103aa602:/,/^103aab76:/p'
+xxd -g 4 -l 4 -s 0x16dd9c res/System/Engine.dll
+xxd -g 4 -l 4 -s 0x17381c res/System/Engine.dll
 objdump -p res/System/Engine.dll | rg 'ApplyAnim@USkeletalMesh|GetMeshCoords@USkeletalMesh|GetFrame@USkeletalMesh|SlerpQuat|Inverse@FCoords'
 objdump -d -M intel --start-address=0x1041ba60 --stop-address=0x1041bc90 res/System/Engine.dll
 objdump -d -M intel --start-address=0x1041d40e --stop-address=0x1041d545 res/System/Engine.dll
