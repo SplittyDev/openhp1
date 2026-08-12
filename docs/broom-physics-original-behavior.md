@@ -15,6 +15,9 @@ The conclusions below come first from the locally installed retail game:
 | `res/System/HPBase.u` | `0cec62e098ded3a16024ee15dbc982bf9662b443f630cd19890b7b5d325bf503` | `baseHarry` input declarations and `BaseCam` states |
 | `res/System/Engine.u` | `b3661a1d2afb1f730ba5bb3cbd2a6716efaf55fd0d8cefa753b69026a8bc5a85` | `PlayerPawn.PlayerInput` script |
 | `res/System/Tut2.u` | `ee53aed1c1cd1a65ac0edf399e14b4307b978900dffca04d377fcbdc1880d88b` | broom-practice launch setup |
+| `res/System/Hub2.u` | `b44c845961a45d6b34577a59309c569c4c8236ec9ff7f7bb82526e7f499e39d1` | Remembrall referee, camera transitions, and loss flow |
+| `res/System/HPMenu.u` | `42da2a2f43ac6a15ea87eace4ebd59a69bab7685cda854e9e7a86e7e6d9c6dbd` | configurable input-page labels and command aliases |
+| `res/Maps/Lev2_RemChase.unr` | `5f1ce9f606b68b22acafb23a664e57feff85e21b2b18101f5aa1630aa112f3e6` | authored chase actors and initial camera type |
 | `res/System/Engine.dll` | `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc` | native input, flying physics, collisions, and banking |
 
 `Engine.dll` is the retail 32-bit x86 PE. Virtual addresses in this note assume
@@ -87,6 +90,18 @@ serialized true class default, script assignment, or map property occurrence
 for `bAllowBroomMouse`; its stock value is therefore false. The mouse axes are
 bound, but direct mouse broom steering is dormant unless a user or external
 configuration enables it.
+
+Those are installation defaults, not fixed retail controls. Compiled
+`HPMenu.FEOptionsPage` defaults name rows 6 and 7 `Speed up` and `Slow down`,
+and associate them with `button bBroomBoost` and `button bBroomBrake`.
+`LoadExistingKeys()` enumerates `KEYNAME`/`KEYBINDING` for every input and
+matches the command aliases; `SetKey()` rewrites the selected binding with
+`SET Input`. Consequently an options page showing `Z`/`X` is conclusive
+evidence that the active user configuration has rebound speed-up/slow-down to
+those keys. It is not evidence that `DefUser.ini` shipped that way: the shipped
+file binds speed-up to `A` and right mouse, slow-down to `Z` and left mouse,
+and leaves `X` empty. The engine acts on the bound `bBroomBoost` and
+`bBroomBrake` properties regardless of which keys produced them.
 
 ### Native axis scaling
 
@@ -333,33 +348,129 @@ reduce health. No other broom map actor among the 14 maps containing
 
 ## Camera and non-interactive states
 
-`Harry.PostBeginPlay` creates an `HPBase.BaseCam`. In normal Quidditch play,
-`BaseCam.QuidditchState` uses:
+`Harry.PostBeginPlay` establishes an `HPBase.BaseCam` view and creates a
+`CamTarget` used as `StandardTarget`. `Lev2_RemChase.unr` serializes
+`BaseCam0` (export 683) with `CameraType` byte 1. The compiled enum establishes
+byte 1 as `CAM_Quiditch`, so `BaseCam.SetCamera()` selects `QuidditchState`;
+this state is not inferred merely from the map's theme.
+`BaseCam.PostBeginPlayIP` initially sets `CameraDistance=80`, `CameraSpeed=2`,
+`CameraRotSpeed=10`, and `RealCameraDistance=80` before calling `SetCamera()`.
+
+`QuidditchState.BeginState` (compiled export 2521) then establishes:
 
 - `StandardTarget.TargetOffset=(100,0,50)`;
 - `CameraHeight=60`;
 - `CameraDistance=150`;
-- smoothed tracking toward `p.ViewRotation`;
-- delayed moving-camera behavior while Harry moves and the camera is unlocked,
-  otherwise stationary tracking;
-- disabled camera collision after positioning.
+- `CameraAimOffsetState=(0,0,0)`.
 
-The state is `HPBase.u` export 2790; its embedded source is at lines
-31250-31308. The camera follows the pawn after movement and does not supply the
-`Rotation` used by `GetAxes` for thrust.
+The compiled `QuidditchState.PositionCamera` is materially different from a
+plausible reading of the embedded source. Export 2019 always calls, in order,
+`GeneralStationaryModeCamera(DeltaTime)`, `CheckCollisionState(DeltaTime)`, and
+`SetCollisionState()`. It contains no call to `GeneralMoveModeCamera`. The
+compiled `FarState.PositionCamera` export 2880 provides the control comparison:
+its moving branch calls name-table entry 298 (`GeneralMoveModeCamera`) and its
+other branch calls entry 113 (`GeneralStationaryModeCamera`); Quidditch export
+2019 calls only entry 113. Therefore the apparent moving/stationary branch in
+the embedded Quidditch source is stale. In particular, the 16-position history
+and `trackingDistance` are not on the active normal Remembrall camera path.
+
+For a moving broom, the active camera goal from compiled
+`GeneralStationaryModeCamera` export 3106 is:
+
+```text
+elevated = p.Location
+elevated.Z += p.TargetEyeHeight + CameraHeight
+elevated.Z -= 10                         # while p.bStationary is false
+direction = Normal(elevated - p.StandardTarget.Location)
+goal = p.Location
+     + direction * RealCameraDistance
+     + (CameraOffset >> locRot)
+trackingPoint = goal - camera.Location
+```
+
+`CameraOffset` is zero in the chase map/default path. Normal Quidditch movement
+then calls `throttleTrack`, which scales `trackingPoint` by
+`min(1, CameraSpeed*DeltaTime)`, hence `min(1, 2*DeltaTime)`, and passes that
+delta to `MoveSmooth`. `smoothRotate` separately advances camera yaw toward
+`p.ViewRotation.Yaw` by `10*DeltaTime` times the yaw difference, clamped to
+`+/-1024` rotator units per call; it copies roll but does not make player thrust
+follow the camera.
+
+Compiled `CamTarget.seeking.setTarget` export 2097 computes its normal desired
+point as `p.Location + (TargetOffset >> p.ViewRotation)`. The bytecode contains
+only that rotated-offset expression, not the embedded source's apparent
+velocity-prediction expression. It moves only the portion of the error beyond
+30 units and therefore deliberately retains at most 30 units of target lag.
+
+Compiled `CheckCollisionState` export 2272 is only 23 raw bytes. It may clear
+`bCollide` when `CameraCanSee(p)` fails, but then unconditionally assigns
+`RealCameraDistance=CameraDistance`. The embedded source's apparent temporary
+30-unit distance and four-second recovery are not compiled. `SetCollisionState`
+then disables camera collision. Thus the normal chase's target distance remains
+150 after the first positioning update; that first update can still use the
+initial `RealCameraDistance=80` before `CheckCollisionState` synchronizes it to
+the state's 150. Retail does not intentionally collapse it toward Harry because
+of a wall.
+
+The camera follows the pawn after movement and does not supply the `Rotation`
+used by `GetAxes` for thrust. A parity implementation must reproduce the live
+target, fixed 150-unit goal, and the authored tracking filter. Substituting the
+unused historical `GeneralMoveModeCamera` path can leave the camera following
+an old pawn position and can put a fast broom at or behind the camera.
 
 Special broom states intentionally replace this view:
 
 - `Catching` switches to `ReverseState`, offset `(-100,10,50)`, with target
   pitch 5000;
-- `BroomDying` switches to `TopDownState` and uses `PHYS_Falling`;
+- `BroomDying` switches to `TopDownState` and uses `PHYS_Falling`. Top-down
+  export 2120 tracks `p.Location+(0,0,200)` through the same
+  `min(1,2*DeltaTime)` filter; its begin state sets target offset `(25,0,0)`,
+  camera height 200, and collision off;
 - scripted `FlyingOnPath`/catch transitions use `PHYS_None`, disable collision,
   and delegate movement to an `InterpolationManager`.
 
-`Hub2` explicitly selects `QuidditchState` for normal match play. No direct
-`Tut2.u` call selecting `QuidditchState` was found. The exact authored cutscene
-or map action that establishes the tutorial camera state remains unresolved;
-it must not be assumed from the class name alone.
+The Remembrall referee has one deliberate close-camera exception. During
+`GameBump` it switches to `StandardState`, distance 50, height 100, target
+offset `(100,10,50)`, and target rotation `(0x1000,0x1000,0)`. Its ten-second
+timer restores `QuidditchState`, distance 150, height 60, and offset
+`(100,0,50)`. Normal chase flight is QuidditchState, while this short bump-Draco
+prompt is legitimately closer.
+
+No direct `Tut2.u` call selecting `QuidditchState` was found. The exact authored
+cutscene or map action that establishes the first broom lesson's camera state
+remains unresolved; it must not be assumed from the class name alone.
+
+## Remembrall death and restart
+
+The chase has a complete authored restart path; a dead broom rider never enters
+an endless floor-slide state in the retail scripts:
+
+1. `BroomHarry.KillHarry` (compiled export 1104) enters `BroomDying`.
+2. The `BroomDying` state (export 882) plays `Fall`, waits for the animation,
+   calls `Referee.OnPlayerDying()`, loops `Hang`, changes the camera to
+   `TopDownState`, selects `PHYS_Falling`, and starts a one-shot ten-second
+   timer.
+3. Native falling physics calls the state's compiled `Landed(HitNormal)` export
+   1306 when the falling collision resolves against a walkable floor.
+   `Landed` plays `Q_Harry_Crash`, calls `Referee.OnPlayersDeath()`, and cancels
+   the timer. It does not wait for horizontal velocity to reach zero.
+4. If no floor landing occurs, compiled `Timer` export 892 calls the same
+   `OnPlayersDeath()` after ten seconds.
+5. `RemembrallReferee.GamePlay.OnPlayersDeath` (compiled `Hub2.u` export 646)
+   enters `GameLost`; state export 657 sleeps 0.5 seconds and calls
+   `Level.Game.RestartGame()`.
+6. Compiled `Engine.GameInfo.RestartGame` export 3999 calls
+   `Level.ServerTravel("?Restart", false)`. Compiled `LevelInfo.ServerTravel`
+   export 3666 stores `NextURL="?Restart"` and `bNextItems=false`, then calls
+   `Game.ProcessServerTravel`. In a non-network game compiled export 5085 sets
+   `Level.NextSwitchCountdown=0`; the native engine consumes that pending URL
+   and reloads the current map.
+
+`OnPlayerDying` is only the pre-landing notification here. RemembrallReferee
+does not override it to restart the game. The landing event or watchdog invokes
+the distinct plural `OnPlayersDeath`, and the referee owns the delayed restart.
+The normal latency is therefore landing plus 0.5 seconds; if no landing is
+reported, the watchdog path is about 10.5 seconds.
 
 ## OpenHP1 parity implications (inspection snapshot)
 
@@ -390,6 +501,26 @@ made from this research. Line numbers may move during implementation.
    first slide and emitted a second hit, but did not apply the retail
    `TwoWallAdjust` result before the next move. This changes corners and can
    amplify the script's wall-avoidance behavior.
+
+4. **Broom speed bindings are hard-coded instead of using active input
+   bindings.** `crates/openhp1-game/src/app.rs` maps right mouse or Shift to
+   boost and left mouse or Z to brake. Shift is not a shipped boost default,
+   A is omitted, and X cannot become brake through the options binding shown to
+   the player. The UI in `app/ui.rs` displays Z and X as static text while the
+   runtime input remains right-mouse/Shift and left-mouse/Z. Retail instead
+   resolves whatever keys currently bind `bBroomBoost`/`bBroomBrake`.
+
+5. **Authored `?Restart` server travel is not consumed by the host.** OpenHP1
+   implements `PlayerPawn.ClientTravel` as an `ActorAction::ClientTravel`, but
+   has no corresponding action or game-loop consumer for the
+   `LevelInfo.NextURL`/`NextSwitchCountdown` set by compiled `ServerTravel` and
+   `ProcessServerTravel`. Consequently the Remembrall loss path can reach
+   `GameInfo.RestartGame` and prepare `?Restart` without reloading the map.
+   OpenHP1's `phys_landed` changes a still-falling pawn to `PHYS_Walking` and,
+   correctly for an ordinary pawn landing, retains pawn velocity. In this
+   failure case that retained velocity manifests exactly as the reported dead
+   Harry sliding along the floor after `BroomDying.Landed` has canceled its
+   watchdog timer.
 
 ### Confirmed matches or non-gaps
 
@@ -423,6 +554,13 @@ The following are not tuning knobs to replace with host heuristics:
 - The exact tutorial transition into a `BaseCam` state was not located in
   `Tut2.u`; authored cutscene/map actions need a separate trace if tutorial
   framing remains visibly wrong.
+- The original Remembrall formulas and state selection are conclusive, but this
+  research pass did not isolate a second camera-specific OpenHP1 execution bug
+  beyond the risk of choosing the stale `GeneralMoveModeCamera` path. If the
+  active runtime already executes export 2019 exactly, the next diagnostic is
+  a frame trace of `BaseCam.Location`, `BroomHarry.Location`,
+  `StandardTarget.Location`, `p.bStationary`, and `RealCameraDistance` against
+  the formulas above; inventing a replacement follow distance is not justified.
 - `Deceleration` is integer-backed. Its exact per-tick rounding should be tested
   through the VM conversion path if small frame-rate-dependent speed differences
   remain after native cadence is corrected.
@@ -441,15 +579,46 @@ target/debug/examples/script_inspect res/System/HarryPotter.u 937
 target/debug/examples/script_inspect res/System/HarryPotter.u 812
 target/debug/examples/script_inspect res/System/HarryPotter.u 820
 target/debug/examples/script_inspect res/System/HarryPotter.u 831
+target/debug/examples/script_inspect res/System/HarryPotter.u 892
+target/debug/examples/script_inspect res/System/HarryPotter.u 1104
+target/debug/examples/script_inspect res/System/HarryPotter.u 1306
 target/debug/examples/class_defaults res/System/HarryPotter.u 1577
 target/debug/examples/property_inspect res/Maps/Lev_Tut2.unr 74
 
+target/debug/examples/property_inspect res/Maps/Lev2_RemChase.unr 683
+target/debug/examples/property_inspect res/Maps/Lev2_RemChase.unr 692
+target/debug/examples/script_inspect res/System/HPBase.u 2019
+target/debug/examples/script_inspect res/System/HPBase.u 2880
+target/debug/examples/script_inspect res/System/HPBase.u 3106
+target/debug/examples/script_inspect res/System/HPBase.u 2272
+target/debug/examples/script_inspect res/System/HPBase.u 2097
+target/debug/examples/script_inspect res/System/HPBase.u 2120
+target/debug/examples/script_inspect res/System/HPBase.u 2521
+target/debug/examples/script_inspect res/System/HPBase.u 2787
+target/debug/examples/script_inspect res/System/HPBase.u 3676
+target/debug/examples/script_inspect res/System/HPBase.u 3681
+target/debug/examples/class_defaults res/System/HPMenu.u 408
+target/debug/examples/script_inspect res/System/HPMenu.u 1457
+target/debug/examples/script_inspect res/System/HPMenu.u 1480
+
+target/debug/examples/script_inspect res/System/Hub2.u 646
+target/debug/examples/script_inspect res/System/Hub2.u 657
+target/debug/examples/script_inspect res/System/Engine.u 3999
+target/debug/examples/script_inspect res/System/Engine.u 3666
+target/debug/examples/script_inspect res/System/Engine.u 5085
+
 strings -a res/System/HarryPotter.u | nl -ba | sed -n '43037,44062p'
-strings -a res/System/HPBase.u | nl -ba | sed -n '27154,27178p;31250,31308p'
+strings -a res/System/HPBase.u | nl -ba | sed -n '25203,25311p;27154,27178p;29242,29368p;29524,29866p;31212,31308p'
 strings -a res/System/Engine.u | nl -ba | sed -n '8898,9031p'
+strings -a res/System/Engine.u | nl -ba | sed -n '15500,15510p'
+strings -a res/System/Engine.u | nl -ba | sed -n '14945,14985p;19563,19577p'
+strings -a res/System/Hub2.u | nl -ba | sed -n '1480,1562p'
+strings -a res/System/HPMenu.u | nl -ba | sed -n '194620,195329p'
 nl -ba res/System/DefUser.ini | sed -n '1,125p;234,240p'
 
-objdump -p res/System/Engine.dll | rg 'ReadInput|performPhysics|physFlying|calcVelocity|physicsRotation|TwoWallAdjust|processHitWall'
+shasum -a 256 res/System/Hub2.u res/System/HPMenu.u res/Maps/Lev2_RemChase.unr
+
+objdump -p res/System/Engine.dll | rg 'ReadInput|performPhysics|physFlying|calcVelocity|physicsRotation|TwoWallAdjust|processHitWall|processLanded|eventLanded|ServerTravel'
 objdump -d -M intel --start-address=0x103e5520 --stop-address=0x103e56eb res/System/Engine.dll
 objdump -d -M intel --start-address=0x103e5950 --stop-address=0x103e5e2b res/System/Engine.dll
 objdump -d -M intel --start-address=0x103f13a0 --stop-address=0x103f1a30 res/System/Engine.dll
