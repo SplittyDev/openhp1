@@ -8206,7 +8206,7 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         Arc::new(ScriptExport {
             export_index: class.export_index,
             class_name: "Class".to_owned(),
-            base_field: ObjectReference::None,
+            base_field: ObjectReference::Export(3),
             next_field: ObjectReference::None,
             script_text: ObjectReference::None,
             children: ObjectReference::None,
@@ -8240,6 +8240,13 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
     runtime
         .class_defaults
         .insert(class_id.clone(), InstanceState::default());
+    let pawn_id = object_id(&package, 3);
+    runtime
+        .scripts
+        .insert(pawn_id.clone(), synthetic_class_script(3));
+    runtime
+        .class_defaults
+        .insert(pawn_id, InstanceState::default());
 
     let acceleration = object_id(&package, 1);
     let movement_state = object_id(&package, 2);
@@ -8494,11 +8501,30 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
     );
     receiver_instance.insert(
         fields["Rotation"].clone(),
-        StoredValue::Value(Value::Rotator([0; 3])),
+        StoredValue::Value(Value::Rotator([0, 0, 3_000])),
     );
     receiver_instance.insert(
         fields["DesiredRotation"].clone(),
         StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    receiver_instance.insert(
+        fields["Velocity"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    runtime
+        .tick_rotating(
+            receiver,
+            &class,
+            &mut receiver_instance,
+            0.125,
+            Vec3::ZERO,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        receiver_instance.get(&fields["Rotation"]),
+        Some(&StoredValue::Value(Value::Rotator([0; 3]))),
+        "a slowly walking pawn must relax airborne roll like retail"
     );
     runtime.instances.insert(receiver, receiver_instance);
 

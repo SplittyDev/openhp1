@@ -1230,7 +1230,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    pub(super) fn tick_rotating(
+    pub(in crate::world) fn tick_rotating(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -1246,9 +1246,13 @@ impl ScriptRuntime {
             .class_has_name(class, "Pawn")
             .map_err(|error| error.to_string())?;
         let physics = self.actor_byte(class, instance, "Physics")?;
-        if pawn && rate[2] > 0 && matches!(physics, PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING) {
+        if pawn && rate[2] > 0 {
             let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
-            let acceleration = (velocity - old_velocity) / elapsed;
+            let acceleration = if physics == PHYS_WALKING && velocity.length_squared() < 40_000.0 {
+                Vec3::ZERO
+            } else {
+                (velocity - old_velocity) / elapsed
+            };
             rotation[2] = pawn_roll(
                 rotation[2],
                 acceleration,

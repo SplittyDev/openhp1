@@ -262,8 +262,7 @@ impl ScriptRuntime {
             if mode == PHYS_NONE {
                 continue;
             }
-            let old_velocity = if pawn && matches!(mode, PHYS_FALLING | PHYS_SWIMMING | PHYS_FLYING)
-            {
+            let old_velocity = if pawn {
                 Vec3::from_array(self.actor_vector(class, instance, "Velocity")?)
             } else {
                 Vec3::ZERO

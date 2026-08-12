@@ -331,29 +331,37 @@ inside a surface so its next tangential sweep becomes a zero-time hit.
 and yaw from undoing script steering, but it does **not** disable the function's
 separate roll block.
 
-For a non-walking pawn with positive `RotationRate.Roll`, the binary does the
-following:
+For a pawn with positive `RotationRate.Roll`, the binary does the following:
 
-1. Compute actual frame acceleration as
+1. If it is walking below 200 units per second (`Velocity.SizeSquared() <
+   40000`), skip acceleration-derived banking and blend signed roll directly
+   toward zero with `alpha = min(1, 8 * DeltaTime)`.
+2. Otherwise compute actual frame acceleration as
    `(post-physics Velocity - pre-physics Velocity) / DeltaTime`.
-2. If acceleration magnitude squared is greater than 10,000, transform it into
+3. If acceleration magnitude squared is greater than 10,000, transform it into
    pawn-local axes and use the local Y/lateral component.
-3. Form a bank target of approximately
+4. Form a bank target of approximately
    `local_lateral_acceleration * 28000 / AccelRate` and clamp it to
    `+/-RotationRate.Roll`.
-4. Blend signed roll toward that target with
+5. Blend signed roll toward that target with
    `alpha = min(1, 5 * DeltaTime)`.
-5. At or below the 10,000 threshold, blend signed roll directly toward zero with
-   `alpha = min(1, 8 * DeltaTime)`.
+6. At or below the 10,000 acceleration threshold, blend signed roll directly
+   toward zero with `alpha = min(1, 8 * DeltaTime)`.
 
 Positive pawn-local Y acceleration produces positive encoded UE1 roll;
 negative produces negative roll. Target formation and both blends use x87
 `FISTP` under the engine's active FPU rounding mode, rather than a `fixedTurn`.
 
-The threshold constant is read at VA `0x10473810`, the high-acceleration blend
-constant 5 at `0x10476584`, the low-acceleration constant 8 at `0x104737e8`,
-and the bank scale 28,000 is an immediate at `0x103e5b48`. The broom defaults
-make the target clamp `+/-6000` and the divisor 1024.
+The walking speed-squared threshold is read at VA `0x10474560`; the acceleration
+threshold is read at VA `0x10473810`, the high-acceleration blend constant 5 at
+`0x10476584`, the low-acceleration constant 8 at `0x104737e8`, and the bank
+scale 28,000 is an immediate at `0x103e5b48`. The broom defaults make the target
+clamp `+/-6000` and the divisor 1024.
+
+Compiled `Harry.PlayerWalking.Landed` export 1049 calls its global landing
+handler, landing sound, and animation without writing `Rotation`. The native
+slow-walking branch therefore owns relaxing Harry's airborne roll after a
+normal jump.
 
 This banking response is a major part of broom feel: script yaw changes the
 forward acceleration direction, `physFlying` curves velocity toward it, and
