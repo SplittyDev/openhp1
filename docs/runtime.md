@@ -281,7 +281,9 @@ rather than a camera billboard, and spins about its vertical normal.
 `Gesture` assigned to
 `Pattern` places emissions along its authored point segments; `Period` selects
 the active normalized range, which is how spell lessons progressively draw
-their visible template. Authored particle modes that are not implemented are
+their visible template. `DIST_Uniform` samples `Period` when selecting the
+current segment for emission density, matching the native engine rather than
+using the range midpoint. Authored particle modes that are not implemented are
 retained as per-actor capability diagnostics rather than silently discarded.
 Particle acceleration combines authored `Gravity` with the emitter's active
 zone `ZoneGravity * GravityModifier`, falling back to `LevelInfo` when the BSP

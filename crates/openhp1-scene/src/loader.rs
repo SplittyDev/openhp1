@@ -835,6 +835,7 @@ impl LoadedScene {
                         system.config.period,
                         system.config.draw_scale,
                         system.last_location.distance(owner.location),
+                        &mut system.random,
                     ) / rate
                 } else {
                     rate * delta_time
@@ -2154,13 +2155,14 @@ fn uniform_particle_distance(
     period: ParticleFloat,
     draw_scale: f32,
     moved: f32,
+    random: &mut u32,
 ) -> f32 {
     let last = match pattern.len().checked_sub(1) {
         Some(0) | None => return moved,
         Some(last) => last,
     };
-    let midpoint = (period.base + period.random * 0.5).clamp(0.0, 1.0) * last as f32;
-    let index = (midpoint.floor() as usize).min(last - 1);
+    let position = sample_particle_float(period, random).clamp(0.0, 1.0) * last as f32;
+    let index = (position.floor() as usize).min(last - 1);
     Vec3::from_array(pattern[index]).distance(Vec3::from_array(pattern[index + 1]))
         * last as f32
         * draw_scale
@@ -4588,17 +4590,18 @@ mod tests {
             super::pattern_position(&points, 0.75),
             Some(glam::Vec3::new(0.625, 1.0, 0.0))
         );
+        let points = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [4.0, 0.0, 0.0]];
+        let period = ParticleFloat {
+            base: 0.0,
+            random: 1.0,
+        };
         assert_eq!(
-            super::uniform_particle_distance(
-                &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
-                ParticleFloat {
-                    base: 0.25,
-                    random: 0.25,
-                },
-                100.0,
-                0.0,
-            ),
-            25.0
+            super::uniform_particle_distance(&points, period, 1.0, 0.0, &mut 0),
+            2.0
+        );
+        assert_eq!(
+            super::uniform_particle_distance(&points, period, 1.0, 0.0, &mut 0x8000_0000,),
+            6.0
         );
     }
 
