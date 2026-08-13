@@ -420,8 +420,15 @@ true; accepted overlaps receive `EncroachedBy`.
 Pawn mounting follows HP1's native `APawn::Mount` path: the surface must have
 the authored `bHighLedge` flag, whether it belongs to the level BSP or an
 actor-owned brush such as a mover. The original raised, diagonal, and
-destination cylinder probes query the whole collision scene before the pawn's
-`Mount` event runs, and a successful mover mount bases the pawn on that mover.
+destination extent probes use `ULevel::SingleLineCheck` with `TRACE_Level |
+TRACE_Movers`, ignoring ordinary actors, before the pawn's `Mount` event runs.
+A successful mover mount bases the pawn on that mover. The destination is two
+units above the diagonal hit, matching the native constant.
+In the shipped `Engine.dll` (`7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc`),
+the `APawn::Mount` body at image RVA `0xEBFB0` makes all three virtual
+`ULevel::SingleLineCheck` calls with flags `0x6` and adds the `2.0f` constant
+at RVA `0x1770EC` to the diagonal hit height. `APawn::stepUp` at RVA `0xEC690`
+calls `Mount` before its own step movement.
 The flag comes from a polygon trace through the primitive that produced the hit
 because convex-hull clipping planes do not necessarily carry the visible
 surface's flags.

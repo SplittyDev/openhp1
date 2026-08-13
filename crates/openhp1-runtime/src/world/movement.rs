@@ -202,7 +202,7 @@ impl ScriptRuntime {
         Ok(fraction.map(|fraction| start.lerp(end, fraction).z))
     }
 
-    pub(in crate::world) fn test_move_actor_between(
+    pub(in crate::world) fn single_line_check_between(
         &mut self,
         actor: usize,
         class: &ResolvedObject,
@@ -210,14 +210,63 @@ impl ScriptRuntime {
         start: Vec3,
         end: Vec3,
     ) -> std::result::Result<MovementHit, String> {
-        let mut probe = instance.clone();
-        self.set_actor_value(
-            class,
-            &mut probe,
-            "Location",
-            Value::Vector(start.to_array()),
-        )?;
-        self.test_move_actor(actor, class, (end - start).to_array(), &probe)
+        let extent = collision_actor_local_extents(&self.collision_actor(actor, class, instance)?);
+        let mut nearest = self
+            .collision
+            .as_ref()
+            .and_then(|collision| collision.sweep_aabb(start, end, extent))
+            .map_or(
+                MovementHit {
+                    fraction: 1.0,
+                    normal: Vec3::ZERO,
+                    actor: None,
+                    node: None,
+                },
+                |hit| MovementHit {
+                    fraction: hit.fraction,
+                    normal: hit.normal,
+                    actor: None,
+                    node: Some(hit.node),
+                },
+            );
+        self.ensure_collision_actors(actor, instance)?;
+        for other_actor in 0..self.collision_actors.len() {
+            if other_actor == actor
+                || self.destroyed.contains(&other_actor)
+                || !self.actor_is_mover(other_actor)?
+            {
+                continue;
+            }
+            let Some(other) = self.collision_actors[other_actor]
+                .as_ref()
+                .map(|cached| cached.actor.clone())
+                .filter(|other| other.collide_actors)
+            else {
+                continue;
+            };
+            let Some(hit) = other.brush.as_ref().and_then(|brush| {
+                brush.sweep_transformed_aabb(
+                    start,
+                    end,
+                    extent,
+                    other.location,
+                    other.rotation,
+                    other.pre_pivot,
+                    other.main_scale,
+                )
+            }) else {
+                continue;
+            };
+            if hit.fraction < nearest.fraction {
+                nearest = MovementHit {
+                    fraction: hit.fraction,
+                    normal: hit.normal,
+                    actor: Some(other_actor),
+                    node: Some(hit.node),
+                };
+            }
+        }
+        Ok(nearest)
     }
 
     pub(in crate::world) fn movement_hit_has_poly_flag(

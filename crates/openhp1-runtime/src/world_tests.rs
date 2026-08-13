@@ -10733,6 +10733,28 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             .set_actor_value(&rejected_class, &mut mount_instance, name, value)
             .unwrap();
     }
+    let blocker_actor = runtime.next_actor;
+    runtime.next_actor += 1;
+    let blocker_object = runtime_actor_id(1_000);
+    runtime
+        .object_actors
+        .insert(blocker_object.clone(), blocker_actor);
+    runtime
+        .actor_objects
+        .insert(blocker_actor, blocker_object.clone());
+    runtime
+        .actor_classes
+        .insert(blocker_actor, other_projectile_class_id.clone());
+    let mut blocker = instance((mount_location + Vec3::Z * 20.0).to_array());
+    for property in ["bBlockActors", "bBlockPlayers"] {
+        blocker.insert(
+            fields[property].clone(),
+            StoredValue::Value(Value::Bool(true)),
+        );
+    }
+    runtime.instances.insert(blocker_actor, blocker);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
     let mut mount_actions = Vec::new();
     assert!(
         runtime
@@ -10744,13 +10766,19 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
                 &mut mount_actions,
             )
             .unwrap(),
-        "a reachable high-ledge mover top must mount through actor-aware traces"
+        "native level-and-mover mount traces must ignore an ordinary blocking actor"
     );
     assert_eq!(
         runtime.actor_bases.get(&1),
         Some(&Some(runtime.actor_objects[&0].clone())),
         "mounting a mover must base the pawn on that mover"
     );
+    runtime.instances.remove(&blocker_actor);
+    runtime.actor_classes.remove(&blocker_actor);
+    runtime.actor_objects.remove(&blocker_actor);
+    runtime.object_actors.remove(&blocker_object);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
     runtime
         .set_actor_base(
             1,

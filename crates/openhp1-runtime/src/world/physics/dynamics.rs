@@ -518,7 +518,7 @@ impl ScriptRuntime {
         let raised = location + up * max_height;
         let far = raised + inward * (radius * 2.0 + max_height * hit.normal.z);
         let diagonal_end = far - (up + hit.normal) * max_height;
-        let ledge = self.test_move_actor_between(actor, class, instance, far, diagonal_end)?;
+        let ledge = self.single_line_check_between(actor, class, instance, far, diagonal_end)?;
         if ledge.fraction == 1.0 {
             return Ok(false);
         }
@@ -531,13 +531,13 @@ impl ScriptRuntime {
         if ledge_location.z - location.z < minimum_rise {
             return Ok(false);
         }
-        let destination = ledge_location + Vec3::Z * 0.51;
+        let destination = ledge_location + up * 2.0;
         if self
-            .test_move_actor_between(actor, class, instance, location, raised)?
+            .single_line_check_between(actor, class, instance, location, raised)?
             .fraction
             < 1.0
             || self
-                .test_move_actor_between(actor, class, instance, raised, destination)?
+                .single_line_check_between(actor, class, instance, raised, destination)?
                 .fraction
                 < 1.0
         {
