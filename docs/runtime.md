@@ -263,8 +263,10 @@ removed, matching UE1's native `UParticle::Update` semantics.
 `ParticlesEmitted` is synchronized back into UnrealScript so the original
 `Shutdown` logic can stop finite effects. Removing a `ParticleFX` actor also
 removes its live particles. World-relative emitters
-interpolate emission between locations, while `bSystemRelative` particles
-remain attached to their moving system. `bVelocityRelative` adds the owner's
+interpolate emission between locations using an independent random within-tick
+fraction for `DIST_Random` and the native endpoint-inclusive sequence for
+`DIST_Uniform`. Source boxes rotate with the emitter. `bSystemRelative`
+particles remain attached to their moving system. `bVelocityRelative` adds the owner's
 current velocity once when each particle is emitted. Authored size growth,
 delay, and end scale, `DripTime`, and sprite `SpinRate` are applied over each
 particle's lifetime. `AlphaStart` and `AlphaEnd` are sampled per particle;

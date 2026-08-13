@@ -869,7 +869,11 @@ impl LoadedScene {
                     }
                 }
                 for index in 0..count {
-                    let fraction = (index as f32 + 0.5) / count.max(1) as f32;
+                    let fraction = match system.config.distribution {
+                        0 => random_unit(&mut system.random),
+                        1 => (index + 1) as f32 / count.max(1) as f32,
+                        _ => (index as f32 + 0.5) / count.max(1) as f32,
+                    };
                     let owner_mesh_position = (system.config.distribution == 2)
                         .then(|| {
                             system.config.owner.and_then(|owner| {
@@ -902,27 +906,30 @@ impl LoadedScene {
                                 system.last_location.lerp(owner.location, fraction)
                             }
                         });
-                    let source = if owner_mesh_position.is_some() {
-                        Vec3::ZERO
-                    } else {
-                        Vec3::new(
-                            random_signed(&mut system.random)
-                                * sample_particle_float(
-                                    system.config.source_depth,
-                                    &mut system.random,
-                                ),
-                            random_signed(&mut system.random)
-                                * sample_particle_float(
-                                    system.config.source_width,
-                                    &mut system.random,
-                                ),
-                            random_signed(&mut system.random)
-                                * sample_particle_float(
-                                    system.config.source_height,
-                                    &mut system.random,
-                                ),
-                        ) * 0.5
-                    };
+                    let source = rotate_unreal(
+                        owner.rotation,
+                        if owner_mesh_position.is_some() {
+                            Vec3::ZERO
+                        } else {
+                            Vec3::new(
+                                random_signed(&mut system.random)
+                                    * sample_particle_float(
+                                        system.config.source_depth,
+                                        &mut system.random,
+                                    ),
+                                random_signed(&mut system.random)
+                                    * sample_particle_float(
+                                        system.config.source_width,
+                                        &mut system.random,
+                                    ),
+                                random_signed(&mut system.random)
+                                    * sample_particle_float(
+                                        system.config.source_height,
+                                        &mut system.random,
+                                    ),
+                            ) * 0.5
+                        },
+                    );
                     let pattern = pattern_position(
                         &system.config.pattern,
                         system.config.period.base
@@ -4637,6 +4644,69 @@ mod tests {
         let system = &scene.particles[&0];
         assert_eq!(system.capacity, 2);
         assert_eq!(system.particles.len(), 2);
+    }
+
+    #[test]
+    fn particle_spawn_placement_uses_native_distribution_and_local_source_box() {
+        let emitter = |distribution, rate| ParticleEmitter {
+            emit: true,
+            distribution,
+            particles_alive: 0,
+            particles_per_second: ParticleFloat {
+                base: rate,
+                random: 0.0,
+            },
+            lifetime: ParticleFloat {
+                base: 10.0,
+                random: 0.0,
+            },
+            render_primitive: 1,
+            ..Default::default()
+        };
+
+        let mut random = particle_test_scene();
+        random.actors[0].location = glam::Vec3::new(10.0, 0.0, 0.0);
+        random.particles.get_mut(&0).unwrap().config = emitter(0, 2.0);
+        random.particles.get_mut(&0).unwrap().particles.clear();
+        assert!(random.tick_particles(1.0));
+        let positions = random.particles[&0]
+            .particles
+            .iter()
+            .map(|particle| particle.location.x)
+            .collect::<Vec<_>>();
+        assert_ne!(positions, [2.5, 7.5]);
+
+        let mut uniform = particle_test_scene();
+        uniform.actors[0].location = glam::Vec3::new(10.0, 0.0, 0.0);
+        uniform.particles.get_mut(&0).unwrap().config = emitter(1, 2.0);
+        uniform.particles.get_mut(&0).unwrap().particles.clear();
+        assert!(uniform.tick_particles(1.0));
+        assert_eq!(
+            uniform.particles[&0]
+                .particles
+                .iter()
+                .map(|particle| particle.location.x)
+                .collect::<Vec<_>>(),
+            [2.0, 4.0, 6.0, 8.0, 10.0]
+        );
+
+        let mut rotated = particle_test_scene();
+        rotated.actors[0].rotation = super::Rotator {
+            yaw: 16_384,
+            ..Default::default()
+        };
+        rotated.particles.get_mut(&0).unwrap().config = ParticleEmitter {
+            source_width: ParticleFloat {
+                base: 10.0,
+                random: 0.0,
+            },
+            ..emitter(0, 1.0)
+        };
+        rotated.particles.get_mut(&0).unwrap().particles.clear();
+        assert!(rotated.tick_particles(1.0));
+        let position = rotated.particles[&0].particles[0].location;
+        assert!(position.x.abs() > 0.01);
+        assert!(position.y.abs() < 1.0e-5);
     }
 
     #[test]
