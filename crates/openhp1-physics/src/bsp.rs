@@ -1,7 +1,7 @@
 //! UE1-compatible collision queries over decoded map geometry.
 
 use glam::{Mat3, Vec3};
-use openhp1_map::{BspNode, BspVertex, Model, PolyFlags, bsp_zone_at_checked};
+use openhp1_map::{BspNode, BspVertex, Model, PolyFlags};
 use openhp1_package::ObjectReference;
 use thiserror::Error;
 
@@ -38,6 +38,12 @@ pub struct BspCollision {
     vertices: Vec<BspVertex>,
     zone_actors: Vec<Option<usize>>,
     node_surfaces: Vec<Option<SurfaceHit>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BspPointRegion {
+    pub leaf: i32,
+    pub zone: usize,
 }
 
 #[cfg(test)]
@@ -765,7 +771,32 @@ impl BspCollision {
     }
 
     pub fn zone_at(&self, point: Vec3) -> Option<usize> {
-        bsp_zone_at_checked(&self.zone_nodes, self.zone_actors.len(), point)
+        self.point_region(point).map(|region| region.zone)
+    }
+
+    pub fn point_region(&self, point: Vec3) -> Option<BspPointRegion> {
+        let mut node_index = 0;
+        loop {
+            let node = self.zone_nodes.get(node_index)?;
+            let side = Vec3::from_array([node.plane[0], node.plane[1], node.plane[2]]).dot(point)
+                - node.plane[3];
+            if side >= 0.0
+                && let Ok(front) = usize::try_from(node.front)
+            {
+                node_index = front;
+            } else if side <= 0.0
+                && let Ok(back) = usize::try_from(node.back)
+            {
+                node_index = back;
+            } else {
+                let index = usize::from(side < 0.0);
+                let zone = usize::try_from(node.zones[1 - index]).ok()?;
+                return (zone < self.zone_actors.len()).then_some(BspPointRegion {
+                    leaf: node.leaves[index],
+                    zone,
+                });
+            }
+        }
     }
 
     pub fn zone_actor_export(&self, zone: usize) -> Option<usize> {

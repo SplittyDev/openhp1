@@ -89,6 +89,19 @@ Harry also has a separate pain-damage path. `HarryPotter.u` active
 That path should not be substituted for `FellOutOfWorld`; it is authored pain
 damage rather than the engine's outside-world event.
 
+`Engine.u` active `Pawn.PainTimer` export 1993 selects the pawn's foot, body,
+and head pain zones, calculates immersion depth, defaults the damage type to
+`ZonePain`, calls `TakeDamage`, and resets `PainTime` to one second. The shared
+movement path updates those three point regions, dispatching the compiled
+`FootZoneChange` and `HeadZoneChange` callbacks before storing their new
+regions. Shipped `Pawn.FootZoneChange` starts pain at `0.01` seconds;
+`Engine.dll` then subtracts `DeltaSeconds`, zeros the timer below approximately
+`0.001`, and dispatches `PainTimer`. The direct binary and bytecode trace is in
+[`pain-zone-engine-dll-evidence.md`](pain-zone-engine-dll-evidence.md). This
+keeps the authored `Lev3_Lumos.unr` `DamagePerSec=200` pain region on the
+general engine path rather than treating its coordinates as a special lethal
+volume.
+
 ## Enemy damage, fainting, and save-point reload
 
 The shipped normal-damage path is explicit:

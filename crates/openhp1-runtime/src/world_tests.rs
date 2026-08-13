@@ -78,6 +78,108 @@ fn synthetic_runtime_package_for(class_name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn pawn_region_change_and_pain_countdown_match_engine_ordering() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-pain-zone-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package_for("Pawn")).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    let fields = [
+        "Location",
+        "CollisionHeight",
+        "EyeHeight",
+        "Region",
+        "FootRegion",
+        "HeadRegion",
+        "PainTime",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    for name in ["bkillzone", "damagetype"] {
+        runtime
+            .fields
+            .insert((class_id.clone(), name.to_owned()), None);
+    }
+
+    let pawn = 1;
+    let zone = 2;
+    for actor in [pawn, zone] {
+        let object = runtime_actor_id(actor);
+        runtime.actor_classes.insert(actor, class_id.clone());
+        runtime.actor_objects.insert(actor, object.clone());
+        runtime.object_actors.insert(object, actor);
+    }
+    let mut pawn_instance = InstanceState::default();
+    pawn_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, 0.0])),
+    );
+    for name in ["CollisionHeight", "EyeHeight"] {
+        pawn_instance.insert(fields[name].clone(), StoredValue::Value(Value::Float(10.0)));
+    }
+    for name in ["Region", "FootRegion", "HeadRegion"] {
+        pawn_instance.insert(
+            fields[name].clone(),
+            StoredValue::Value(Value::Struct(std::collections::HashMap::from([(
+                "Zone".to_owned(),
+                Value::Object(0),
+            )]))),
+        );
+    }
+    pawn_instance.insert(
+        fields["PainTime"].clone(),
+        StoredValue::Value(Value::Float(0.01)),
+    );
+    runtime.collision = Some(solid_box_collision());
+    runtime.level_info = Some(zone);
+
+    let mut actions = Vec::new();
+    runtime
+        .update_pawn_regions(pawn, &class, &mut pawn_instance, &mut actions)
+        .unwrap();
+    assert!(
+        runtime
+            .advance_pawn_pain(&class, &mut pawn_instance, 0.0095)
+            .unwrap()
+    );
+    assert_eq!(
+        pawn_instance[&fields["PainTime"]],
+        StoredValue::Value(Value::Float(0.0))
+    );
+    let StoredValue::Value(Value::Struct(region)) = &pawn_instance[&fields["FootRegion"]] else {
+        panic!("FootRegion must remain a PointRegion");
+    };
+    assert_eq!(region["iLeaf"], Value::Int(0));
+    assert_eq!(region["ZoneNumber"], Value::Byte(1));
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        ActorAction::DeferredCall { message, .. } if message.starts_with("FootZoneChange:")
+    )));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn interpolation_manager_moves_its_owner_while_physics_is_none() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-interpolation-manager-{}-{}",

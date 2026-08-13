@@ -1146,6 +1146,14 @@ impl ScriptRuntime {
             }
         }
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
+        if actor_class.package.summary().exports[actor_class.export_index].serial_size != 0
+            && self.collision.is_some()
+            && self
+                .class_has_name(actor_class, "Pawn")
+                .map_err(|error| error.to_string())?
+        {
+            self.update_pawn_regions(actor, actor_class, instance, actions)?;
+        }
 
         Ok(blocking_hit)
     }

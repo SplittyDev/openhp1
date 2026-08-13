@@ -38,6 +38,7 @@ impl ScriptRuntime {
             self.tick_actor_timer(actor, delta_time, &mut actions)?;
             self.tick_actor_lifespan(actor, delta_time, &mut actions)?;
             self.tick_actor_physics_by_id(actor, delta_time, &mut actions)?;
+            self.tick_pawn_pain(actor, delta_time, &mut actions)?;
         }
         if player.is_some() && !player_ticked {
             self.tick_player_events(delta_time, &mut actions)?;
@@ -45,6 +46,220 @@ impl ScriptRuntime {
         // Actors spawned during this tick were not in the stable actor snapshot above.
         self.tick_physics(delta_time, &mut actions)?;
         Ok(actions)
+    }
+
+    fn tick_pawn_pain(
+        &mut self,
+        actor: usize,
+        delta_time: f32,
+        actions: &mut Vec<ActorAction>,
+    ) -> DispatchResult<()> {
+        if self.collision.is_none() {
+            return Ok(());
+        }
+        let Some(class_id) = self.actor_classes.get(&actor).cloned() else {
+            return Ok(());
+        };
+        let class = self.resolved_object(&class_id)?;
+        if !self.class_has_name(&class, "Pawn")? {
+            return Ok(());
+        }
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = (|| {
+            self.update_pawn_regions(actor, &class, &mut instance, actions)?;
+            self.advance_pawn_pain(&class, &mut instance, delta_time)
+        })();
+        self.instances.insert(actor, instance);
+        let pain_timer = result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        if pain_timer {
+            match self.dispatch_event(
+                actor,
+                Path::new(class_id.package.as_ref()),
+                class_id.export_index,
+                "PainTimer",
+            ) {
+                Ok(mut actor_actions) => actions.append(&mut actor_actions),
+                Err(error) => actions.push(ActorAction::DeferredCall {
+                    actor,
+                    message: format!("PainTimer: {error}"),
+                }),
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::world) fn update_pawn_regions(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+        let collision_height = self.actor_float(class, instance, "CollisionHeight")?;
+        let eye_height = self.actor_float_any(class, instance, "EyeHeight")?;
+        self.update_point_region(
+            actor,
+            class,
+            instance,
+            ("Region", "ZoneChange"),
+            location,
+            actions,
+        )?;
+        let foot = location - Vec3::Z * collision_height;
+        self.update_point_region(
+            actor,
+            class,
+            instance,
+            ("FootRegion", "FootZoneChange"),
+            foot,
+            actions,
+        )?;
+        self.update_point_region(
+            actor,
+            class,
+            instance,
+            ("HeadRegion", "HeadZoneChange"),
+            location + Vec3::Z * eye_height,
+            actions,
+        )?;
+        Ok(())
+    }
+
+    pub(in crate::world) fn advance_pawn_pain(
+        &mut self,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        delta_time: f32,
+    ) -> std::result::Result<bool, String> {
+        let pain_time = self.actor_float_any(class, instance, "PainTime")?;
+        if pain_time <= 0.0 {
+            return Ok(false);
+        }
+        let pain_time = pain_time - delta_time;
+        if pain_time < 0.001 {
+            self.set_actor_value(class, instance, "PainTime", Value::Float(0.0))?;
+            return Ok(true);
+        }
+        self.set_actor_value(class, instance, "PainTime", Value::Float(pain_time))?;
+        Ok(false)
+    }
+
+    fn update_point_region(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        instance: &mut InstanceState,
+        callback: (&str, &str),
+        location: Vec3,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<bool, String> {
+        let (property, event) = callback;
+        let collision = self
+            .collision
+            .as_deref()
+            .ok_or_else(|| "world collision is missing".to_owned())?;
+        let point_region = collision.point_region(location);
+        let zone_actor = point_region
+            .and_then(|region| collision.zone_actor_export(region.zone))
+            .and_then(|export_index| {
+                self.level_package.as_ref().and_then(|package| {
+                    self.object_actors
+                        .get(&ObjectId {
+                            package: Arc::clone(package),
+                            export_index,
+                        })
+                        .copied()
+                })
+            })
+            .or(self.level_info);
+        let zone_handle = zone_actor
+            .and_then(|zone| self.actor_objects.get(&zone).cloned())
+            .map(|zone| self.object_handle(zone))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(0);
+        let StoredValue::Value(Value::Struct(mut region)) =
+            self.required_actor_property(class, instance, property)?
+        else {
+            return Err(format!("actor property {property} is not a PointRegion"));
+        };
+        let old_zone = region
+            .get("Zone")
+            .and_then(|value| match value {
+                Value::Object(handle) => Some(handle),
+                _ => None,
+            })
+            .copied()
+            .unwrap_or(0);
+        let zone_changed = old_zone != zone_handle;
+        if zone_changed {
+            if property == "Region" && old_zone > 0 {
+                let old_zone_actor = self
+                    .actor_for_handle(old_zone)
+                    .map_err(|error| error.to_string())?;
+                self.call_zone_event(old_zone_actor, actor, instance, "ActorLeaving", actions)?;
+            }
+            self.call_actor_event(
+                actor,
+                class,
+                instance,
+                event,
+                vec![Value::Object(zone_handle)],
+                actions,
+            )?;
+        }
+        region.insert("Zone".to_owned(), Value::Object(zone_handle));
+        region.insert(
+            "iLeaf".to_owned(),
+            Value::Int(point_region.map_or(0, |region| region.leaf)),
+        );
+        region.insert(
+            "ZoneNumber".to_owned(),
+            Value::Byte(
+                point_region
+                    .and_then(|region| u8::try_from(region.zone).ok())
+                    .unwrap_or(0),
+            ),
+        );
+        self.set_actor_value(class, instance, property, Value::Struct(region))?;
+        if property == "Region"
+            && zone_changed
+            && let Some(new_zone_actor) = zone_actor
+        {
+            self.call_zone_event(new_zone_actor, actor, instance, "ActorEntered", actions)?;
+        }
+        Ok(zone_changed)
+    }
+
+    fn call_zone_event(
+        &mut self,
+        zone: usize,
+        actor: usize,
+        instance: &mut InstanceState,
+        event: &str,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let actor_handle = self
+            .object_handle(
+                self.actor_objects
+                    .get(&actor)
+                    .cloned()
+                    .ok_or(DispatchError::UnregisteredActor { actor })
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+        self.instances.insert(actor, std::mem::take(instance));
+        let result =
+            self.call_other_actor_event(zone, event, vec![Value::Object(actor_handle)], actions);
+        *instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| format!("zone event {event} lost actor {actor}"))?;
+        result
     }
 
     fn tick_actor_event(
