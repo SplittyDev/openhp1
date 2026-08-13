@@ -4912,16 +4912,24 @@ fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
         execute(&mut runtime, &mut instance, [0.0; 3], &mut actions),
         Value::Bool(true)
     );
-    assert_eq!(
-        instance.get(&fields["Location"]),
-        Some(&StoredValue::Value(Value::Vector([20.0, 0.0, 0.0])))
-    );
+    let Some(StoredValue::Value(Value::Vector(placed_location))) =
+        instance.get(&fields["Location"])
+    else {
+        panic!("SetLocation did not store its placed location");
+    };
+    let placed_location = *placed_location;
+    assert_ne!(placed_location, [20.0, 0.0, 0.0]);
+    assert!(!runtime.collision.as_ref().unwrap().overlaps_cylinder(
+        Vec3::from_array(placed_location),
+        10.0,
+        20.0,
+    ));
     assert!(matches!(
         actions.as_slice(),
         [ActorAction::SetLocation {
             actor: 0,
-            location: [20.0, 0.0, 0.0],
-        }]
+            location,
+        }] if *location == placed_location
     ));
     assert!(!runtime.touching.contains(&(0, 1)));
 
@@ -4931,10 +4939,10 @@ fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
         execute(&mut runtime, &mut instance, [0.0; 3], &mut actions),
         Value::Bool(false)
     );
-    assert_eq!(
+    assert!(matches!(
         instance.get(&fields["Location"]),
-        Some(&StoredValue::Value(Value::Vector([20.0, 0.0, 0.0])))
-    );
+        Some(StoredValue::Value(Value::Vector(location))) if *location == placed_location
+    ));
     assert!(actions.is_empty());
     fs::remove_dir_all(root).unwrap();
 }

@@ -852,53 +852,11 @@ impl ScriptRuntime {
             return Ok(Some(location));
         }
         let mut candidate = self.collision_actor(usize::MAX, class, instance)?;
-        let extents = collision_actor_local_extents(&candidate);
         let collision = self
             .collision
             .as_ref()
             .ok_or("Spawn requires a configured BSP collision model")?;
-
-        if !bsp_placement_blocked(collision, &candidate) {
-            return Ok(Some(location));
-        }
-
-        let mut adjusted = location;
-        for direction in [-1.0, 1.0] {
-            for (axis, distance) in [
-                (Vec3::X, extents.x),
-                (Vec3::Y, extents.y),
-                (Vec3::Z, extents.z),
-            ] {
-                adjust_spawn_spot(
-                    collision,
-                    &mut adjusted,
-                    location + axis * direction * distance,
-                    distance,
-                );
-            }
-        }
-        candidate.location = adjusted;
-        if !bsp_placement_blocked(collision, &candidate) {
-            return Ok(Some(adjusted));
-        }
-
-        let maximum = extents.length() + 1.0;
-        for x in [-extents.x, extents.x] {
-            for y in [-extents.y, extents.y] {
-                for z in [-extents.z, extents.z] {
-                    adjust_spawn_spot(
-                        collision,
-                        &mut adjusted,
-                        location + Vec3::new(x, y, z),
-                        maximum,
-                    );
-                }
-            }
-        }
-        candidate.location = adjusted;
-        Ok((adjusted.distance(location) <= maximum * 1.5
-            && !bsp_placement_blocked(collision, &candidate))
-        .then_some(adjusted))
+        Ok(find_placement_location(collision, &mut candidate, location))
     }
 
     pub(super) fn try_move_actor(
@@ -1649,21 +1607,8 @@ impl ScriptRuntime {
             let collision = self.collision.as_ref().ok_or_else(|| {
                 "SetLocation requires a configured BSP collision model".to_owned()
             })?;
-            let scale = candidate.radius.max(candidate.height);
-            let mut found = None;
-            'locations: for z in [0.0, 1.0, -1.0] {
-                for y in [0.0, 1.0, -1.0] {
-                    for x in [0.0, 1.0, -1.0] {
-                        let candidate_location = location + scale * Vec3::new(x, y, z);
-                        candidate.location = candidate_location;
-                        if !bsp_placement_blocked(collision, &candidate) {
-                            found = Some(candidate_location);
-                            break 'locations;
-                        }
-                    }
-                }
-            }
-            let Some(location) = found else {
+            let Some(location) = find_placement_location(collision, &mut candidate, location)
+            else {
                 return Ok(false);
             };
             location
@@ -2576,12 +2521,81 @@ mod world_collision_tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn find_spot_uses_trace_fraction_instead_of_a_full_extent_step() {
+        let collision = solid_box_collision();
+        let location = Vec3::new(11.5, 0.0, 0.0);
+        let mut actor = CollisionActor {
+            actor: 0,
+            location,
+            height: 2.0,
+            radius: 2.0,
+            width: 2.0,
+            rotation: Mat3::IDENTITY,
+            collide_type: 0,
+            collide_actors: false,
+            block_actors: false,
+            block_players: false,
+            player_collision: false,
+            brush: None,
+            pre_pivot: Vec3::ZERO,
+            main_scale: Vec3::ONE,
+            shape_bounds: None,
+        };
+
+        let placed = find_placement_location(&collision, &mut actor, location).unwrap();
+        assert!(placed.x > 12.0 && placed.x < 12.2, "{placed:?}");
+    }
 }
 
 fn adjust_spawn_spot(collision: &BspCollision, spot: &mut Vec3, target: Vec3, distance: f32) {
-    if let Some(hit) = collision.line_trace(*spot, target) {
-        *spot += hit.normal * (1.0 - hit.fraction) * distance;
+    if let Some(hit) = collision.sweep_point(*spot, target) {
+        let trace_distance = target.distance(*spot);
+        let hit_fraction = (hit.fraction + ACTOR_TRACE_MARGIN / trace_distance).min(1.0);
+        *spot += hit.normal * (1.05 - hit_fraction) * distance;
     }
+}
+
+fn find_placement_location(
+    collision: &BspCollision,
+    candidate: &mut CollisionActor,
+    location: Vec3,
+) -> Option<Vec3> {
+    candidate.location = location;
+    if !bsp_placement_blocked(collision, candidate) {
+        return Some(location);
+    }
+
+    let extents = collision_actor_local_extents(candidate);
+    let mut adjusted = location;
+    for direction in [-1.0, 1.0] {
+        for (axis, distance) in [
+            (Vec3::X, extents.x),
+            (Vec3::Y, extents.y),
+            (Vec3::Z, extents.z),
+        ] {
+            let target = adjusted + axis * direction * distance;
+            adjust_spawn_spot(collision, &mut adjusted, target, distance);
+        }
+    }
+    candidate.location = adjusted;
+    if !bsp_placement_blocked(collision, candidate) {
+        return Some(adjusted);
+    }
+
+    let maximum = extents.length() + 2.0;
+    for x in [-extents.x, extents.x] {
+        for y in [-extents.y, extents.y] {
+            for z in [-extents.z, extents.z] {
+                let target = adjusted + Vec3::new(x, y, z);
+                adjust_spawn_spot(collision, &mut adjusted, target, maximum);
+            }
+        }
+    }
+    candidate.location = adjusted;
+    (adjusted.distance(location) <= maximum * 1.5 && !bsp_placement_blocked(collision, candidate))
+        .then_some(adjusted)
 }
 
 fn bsp_placement_blocked(collision: &BspCollision, candidate: &CollisionActor) -> bool {

@@ -289,6 +289,13 @@ impl BspCollision {
         }
     }
 
+    pub fn sweep_point(&self, start: Vec3, end: Vec3) -> Option<CollisionHit> {
+        if !start.is_finite() || !end.is_finite() {
+            return None;
+        }
+        self.sweep_shape(start, end, SweepShape::Aabb(Vec3::ZERO))
+    }
+
     pub fn sweep_cylinder(
         &self,
         start: Vec3,
