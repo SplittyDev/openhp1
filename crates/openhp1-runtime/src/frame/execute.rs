@@ -520,6 +520,37 @@ impl<'a> Frame<'a> {
         if !assignment_native {
             self.current_context = self.context_parents.last().copied().unwrap_or(-1);
         }
+        if let FunctionCall::Native(index @ (0x82 | 0x84)) = function {
+            let left = self.expression(host)?;
+            let left = self.value(left, host)?.truthy()?;
+            let opcode = self.opcode()?;
+            if Opcode::from(opcode) != Opcode::Skip {
+                return Err(Error::Call {
+                    call: function,
+                    message: format!("logical native expects Skip, found opcode {opcode:#04x}"),
+                });
+            }
+            let skip = usize::from(self.read_u16()?);
+            let short_circuit = (index == 0x82 && !left) || (index == 0x84 && left);
+            let value = if short_circuit {
+                self.jump(self.instruction_pointer.saturating_add(skip))?;
+                left
+            } else {
+                let right = self.expression(host)?;
+                self.value(right, host)?.truthy()?
+            };
+            let opcode = self.opcode()?;
+            if Opcode::from(opcode) != Opcode::EndFunctionParms {
+                return Err(Error::Call {
+                    call: function,
+                    message: format!(
+                        "logical native expects EndFunctionParms, found opcode {opcode:#04x}"
+                    ),
+                });
+            }
+            self.current_context = receiver;
+            return Ok(Value::Bool(value));
+        }
         let mut arguments = Vec::new();
         while Opcode::from(self.peek()?) != Opcode::EndFunctionParms {
             arguments.push(self.expression(host)?);

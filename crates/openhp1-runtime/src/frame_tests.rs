@@ -1138,6 +1138,35 @@ fn self_context_persists_instance_state_and_null_context_short_circuits() {
 }
 
 #[test]
+fn logical_natives_skip_the_unused_operand() {
+    for (native, left, right, expected, calls) in [
+        (0x82, 0x28, true, false, 0),
+        (0x84, 0x27, false, true, 0),
+        (0x82, 0x27, false, false, 1),
+        (0x84, 0x28, true, true, 1),
+    ] {
+        let bytecode = Bytecode {
+            version: 76,
+            raw_len: 10,
+            bytes: vec![0x04, native, left, 0x18, 3, 0, 0x92, 0x16, 0x16, 0x16],
+            tokens: Vec::new(),
+        };
+        let mut frame = Frame::new(&bytecode);
+        let mut actual_calls = 0;
+        assert_eq!(
+            frame
+                .execute(|_, _| {
+                    actual_calls += 1;
+                    Ok(Value::Bool(right))
+                })
+                .unwrap(),
+            Value::Bool(expected)
+        );
+        assert_eq!(actual_calls, calls);
+    }
+}
+
+#[test]
 fn hosted_instance_reads_and_writes_without_a_frame_copy() {
     let mut bytes = vec![0x0f, 0x01];
     bytes.extend(7_i32.to_le_bytes());
