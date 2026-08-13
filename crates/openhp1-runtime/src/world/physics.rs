@@ -24,6 +24,9 @@ const PHYS_MOVING_BRUSH: u8 = 9;
 const PHYS_TRAILER: u8 = 11;
 const STEP_DOWN_FACTOR: f32 = 1.3;
 const WALKABLE_FLOOR_Z: f32 = 7071.0 / 10_000.0;
+const MIN_FLOOR_DIST: f32 = 1.9;
+const AVG_FLOOR_DIST: f32 = 2.1;
+const MAX_FLOOR_DIST: f32 = 2.4;
 
 fn direction_pitch(direction: Vec3) -> i32 {
     (direction.z.atan2(direction.x.hypot(direction.y)) * (65_536.0 / std::f32::consts::TAU)) as i32
@@ -31,6 +34,17 @@ fn direction_pitch(direction: Vec3) -> i32 {
 
 fn should_slide_walking_collision(pushable: bool, normal: Vec3) -> bool {
     !pushable && normal.z.abs() < 0.2
+}
+
+fn walking_floor_delta(step_down: Vec3, floor_fraction: f32, same_base: bool) -> Vec3 {
+    let floor_distance = step_down.length() * floor_fraction;
+    if !same_base || floor_distance > MAX_FLOOR_DIST {
+        step_down
+    } else if floor_distance < MIN_FLOOR_DIST {
+        -step_down.normalize_or_zero() * (AVG_FLOOR_DIST - floor_distance)
+    } else {
+        Vec3::ZERO
+    }
 }
 
 pub(super) fn two_wall_adjust(
@@ -385,7 +399,7 @@ impl ScriptRuntime {
         let gravity_direction = if zone.gravity.z > 0.0 { 1.0 } else { -1.0 };
         let step_height = self.actor_float(class, instance, "MaxStepHeight")?;
         let step_up = Vec3::new(0.0, 0.0, -gravity_direction * step_height);
-        let step_down = Vec3::new(0.0, 0.0, gravity_direction * step_height * STEP_DOWN_FACTOR);
+        let step_down = Vec3::new(0.0, 0.0, gravity_direction * (step_height + 2.0));
         let movement_velocity = velocity + zone.velocity * (elapsed * 25.0);
         if has_horizontal_movement(movement_velocity) {
             let mut time_left = elapsed;
@@ -501,17 +515,28 @@ impl ScriptRuntime {
         step_down: Vec3,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<bool, String> {
-        let floor = self.test_move_actor(actor, class, step_down.to_array(), instance)?;
+        let floor = self.single_line_check_actor(actor, class, step_down.to_array(), instance)?;
         if floor.fraction == 1.0 || floor.normal.z < WALKABLE_FLOOR_Z {
             self.start_falling(actor, class, instance, actions)?;
             return Ok(false);
         }
-        let floor = self.try_move_actor(actor, class, step_down.to_array(), instance, actions)?;
-        if floor.fraction != 1.0 {
-            let base = floor
-                .actor
-                .and_then(|actor| self.actor_objects.get(&actor).cloned());
-            self.set_actor_base(actor, class, instance, base, actions)?;
+        let base = match floor.actor {
+            Some(actor) => self.actor_objects.get(&actor).cloned(),
+            None if floor.node.is_some() => self.actor_object(class, instance, "Level")?,
+            None => None,
+        };
+        let same_base = self.actor_object(class, instance, "Base")? == base;
+        let delta = walking_floor_delta(step_down, floor.fraction, same_base);
+        if delta != Vec3::ZERO {
+            let floor = self.try_move_actor(actor, class, delta.to_array(), instance, actions)?;
+            if delta == step_down && floor.fraction != 1.0 {
+                let base = match floor.actor {
+                    Some(actor) => self.actor_objects.get(&actor).cloned(),
+                    None if floor.node.is_some() => self.actor_object(class, instance, "Level")?,
+                    None => None,
+                };
+                self.set_actor_base(actor, class, instance, base, actions)?;
+            }
         }
         Ok(true)
     }
@@ -535,8 +560,24 @@ impl ScriptRuntime {
         physics: u8,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
+        let entering_walking =
+            physics == PHYS_WALKING && self.actor_byte(class, instance, "Physics")? != PHYS_WALKING;
         self.set_actor_value(class, instance, "Physics", Value::Byte(physics))?;
         actions.push(ActorAction::SetPhysics { actor, physics });
+        if entering_walking {
+            let floor = self.single_line_check_actor(
+                actor,
+                class,
+                (Vec3::NEG_Z * 10.0).to_array(),
+                instance,
+            )?;
+            let base = match floor.actor {
+                Some(actor) => self.actor_objects.get(&actor).cloned(),
+                None if floor.node.is_some() => self.actor_object(class, instance, "Level")?,
+                None => None,
+            };
+            self.set_actor_base(actor, class, instance, base, actions)?;
+        }
         Ok(())
     }
 }
@@ -550,6 +591,17 @@ mod tests {
         assert!(should_slide_walking_collision(false, Vec3::X));
         assert!(!should_slide_walking_collision(true, Vec3::X));
         assert!(!should_slide_walking_collision(false, Vec3::Z));
+    }
+
+    #[test]
+    fn walking_floor_clearance_matches_original_engine_band() {
+        let step_down = Vec3::NEG_Z * 27.0;
+
+        assert_eq!(walking_floor_delta(step_down, 0.0, true), Vec3::Z * 2.1);
+        assert_eq!(walking_floor_delta(step_down, 2.0 / 27.0, true), Vec3::ZERO);
+        assert_eq!(walking_floor_delta(step_down, 2.4 / 27.0, true), Vec3::ZERO);
+        assert_eq!(walking_floor_delta(step_down, 2.5 / 27.0, true), step_down);
+        assert_eq!(walking_floor_delta(step_down, 0.0, false), step_down);
     }
 
     #[test]

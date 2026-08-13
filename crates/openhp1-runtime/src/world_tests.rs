@@ -11123,6 +11123,10 @@ fn set_physics_clears_motion_for_none_and_rotating() {
         })
         .collect::<HashMap<_, _>>();
     let mut instance = InstanceState::default();
+    instance.insert(
+        fields["Physics"].clone(),
+        StoredValue::Value(Value::Byte(physics::PHYS_FALLING)),
+    );
 
     for physics in [physics::PHYS_NONE, physics::PHYS_ROTATING] {
         instance.insert(

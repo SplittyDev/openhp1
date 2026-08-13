@@ -950,6 +950,28 @@ impl ScriptRuntime {
         self.try_move_actor_inner(actor, actor_class, delta, None, true, &mut instance, None)
     }
 
+    pub(super) fn single_line_check_actor(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        delta: [f32; 3],
+        instance: &InstanceState,
+    ) -> std::result::Result<MovementHit, String> {
+        let mut instance = instance.clone();
+        let current = self.collision_actor(actor, actor_class, &instance)?;
+        let collide_world = self.actor_bool(actor_class, &instance, "bCollideWorld")?;
+        let mut evaluation = MovementEvaluation::Query;
+        self.movement_hit(
+            &current,
+            Vec3::from_array(delta),
+            collide_world,
+            actor,
+            &mut instance,
+            &mut evaluation,
+        )
+        .map(|(hit, _)| hit)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_move_actor_inner(
         &mut self,
