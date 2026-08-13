@@ -671,6 +671,16 @@ impl ScriptRuntime {
                     "AlphaStart",
                 )?),
                 alpha_end: particle_float(self.instance_property(&class, &instance, "AlphaEnd")?),
+                alpha_delay: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "AlphaDelay",
+                )?),
+                alpha_grow_period: particle_scalar(self.instance_property(
+                    &class,
+                    &instance,
+                    "AlphaGrowPeriod",
+                )?),
                 color_delay: particle_scalar(self.instance_property(
                     &class,
                     &instance,

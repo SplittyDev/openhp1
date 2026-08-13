@@ -121,6 +121,8 @@ pub struct ParticleEmitter {
     pub color_end: ParticleColor,
     pub alpha_start: ParticleFloat,
     pub alpha_end: ParticleFloat,
+    pub alpha_delay: f32,
+    pub alpha_grow_period: f32,
     pub color_delay: f32,
     pub size_delay: f32,
     pub size_grow_period: f32,

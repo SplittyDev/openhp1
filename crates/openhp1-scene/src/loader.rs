@@ -979,6 +979,14 @@ impl LoadedScene {
                             system.config.color_end,
                             &mut system.random,
                         ),
+                        alpha_start: sample_particle_float(
+                            system.config.alpha_start,
+                            &mut system.random,
+                        ),
+                        alpha_end: sample_particle_float(
+                            system.config.alpha_end,
+                            &mut system.random,
+                        ),
                         spin: 0.0,
                         spin_rate: sample_particle_float(
                             system.config.spin_rate,
@@ -1040,7 +1048,15 @@ impl LoadedScene {
                     self.render.mesh.vertex_colors[target..target + 4].fill(
                         particle
                             .color_start
-                            .lerp(particle.color_end, color_progress),
+                            .lerp(particle.color_end, color_progress)
+                            * particle_alpha(
+                                particle.age,
+                                particle.lifetime,
+                                particle.alpha_start,
+                                particle.alpha_end,
+                                system.config.alpha_delay,
+                                system.config.alpha_grow_period,
+                            ),
                     );
                 } else {
                     self.render.mesh.positions[target..target + 4].fill(Vec3::ZERO);
@@ -1925,6 +1941,8 @@ struct Particle {
     end_scale: f32,
     color_start: Vec3,
     color_end: Vec3,
+    alpha_start: f32,
+    alpha_end: f32,
     spin: f32,
     spin_rate: f32,
     chaos_timer: f32,
@@ -2022,6 +2040,24 @@ fn sample_particle_emission_rate(emitter: &ParticleEmitter, random: &mut u32) ->
 
 fn particle_is_alive(age: f32, lifetime: f32) -> bool {
     lifetime <= 0.0 || age < lifetime
+}
+
+fn particle_alpha(
+    age: f32,
+    lifetime: f32,
+    start: f32,
+    end: f32,
+    delay: f32,
+    grow_period: f32,
+) -> f32 {
+    let grow_duration = grow_period * lifetime;
+    if grow_duration > age {
+        (start * age / grow_duration).min(start).max(0.0)
+    } else if lifetime > delay && age > delay {
+        (start + (end - start) * (age - delay) / (lifetime - delay)).max(0.0)
+    } else {
+        start.max(0.0)
+    }
 }
 
 fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
@@ -4441,6 +4477,8 @@ mod tests {
             },
             alpha_start: ParticleFloat::default(),
             alpha_end: ParticleFloat::default(),
+            alpha_delay: 0.0,
+            alpha_grow_period: 0.0,
             color_delay: 0.0,
             size_delay: 0.0,
             size_grow_period: 0.0,
@@ -4601,6 +4639,25 @@ mod tests {
     fn particle_damping_is_exponential_over_elapsed_time() {
         assert!((super::particle_damping(1.0, 1.0) - std::f32::consts::E.recip()).abs() < 1e-6);
         assert_eq!(super::particle_damping(0.0, 10.0), 1.0);
+    }
+
+    #[test]
+    fn particle_alpha_follows_native_grow_hold_and_fade_phases() {
+        let mut scene = particle_test_scene();
+        let system = scene.particles.get_mut(&0).unwrap();
+        system.config.alpha_delay = 2.0;
+        system.config.alpha_grow_period = 0.25;
+        system.particles[0].lifetime = 4.0;
+        system.particles[0].alpha_start = 1.0;
+        system.particles[0].alpha_end = 0.0;
+
+        for (delta_time, expected) in [(0.5, 0.5), (0.5, 1.0), (1.0, 1.0), (1.0, 0.5)] {
+            assert!(scene.tick_particles(delta_time));
+            assert!(
+                scene.render.mesh.vertex_colors[0].abs_diff_eq(glam::Vec3::splat(expected), 1.0e-6)
+            );
+        }
+        assert_eq!(super::particle_alpha(100.0, 0.0, 0.8, 0.0, 0.0, 0.5), 0.8);
     }
 
     #[test]
@@ -4804,6 +4861,8 @@ mod tests {
                         end_scale: 1.0,
                         color_start: glam::Vec3::ONE,
                         color_end: glam::Vec3::ONE,
+                        alpha_start: 1.0,
+                        alpha_end: 0.0,
                         spin: 0.0,
                         spin_rate: 0.0,
                         chaos_timer: 0.0,

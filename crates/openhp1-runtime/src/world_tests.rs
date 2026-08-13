@@ -11235,6 +11235,8 @@ fn particle_emitters_blend_immediate_superclass_defaults() {
         ("AlphaStart", runtime_actor_id(503)),
         ("AlphaEnd", runtime_actor_id(504)),
         ("ParentBlend", runtime_actor_id(505)),
+        ("AlphaDelay", runtime_actor_id(506)),
+        ("AlphaGrowPeriod", runtime_actor_id(507)),
     ]
     .into_iter()
     .collect::<std::collections::HashMap<_, _>>();
@@ -11252,27 +11254,36 @@ fn particle_emitters_blend_immediate_superclass_defaults() {
             ("Rand".to_owned(), Value::Float(random)),
         ])))
     };
-    let values = |rate, source_width, size_width, alpha_start, alpha_end, parent_blend| {
-        [
-            (fields["ParticlesPerSec"].clone(), float_param(rate, 0.0)),
-            (
-                fields["SourceWidth"].clone(),
-                float_param(source_width, 0.0),
-            ),
-            (fields["SizeWidth"].clone(), float_param(size_width, 0.0)),
-            (fields["AlphaStart"].clone(), float_param(alpha_start, 0.0)),
-            (fields["AlphaEnd"].clone(), float_param(alpha_end, 0.0)),
-            (
-                fields["ParentBlend"].clone(),
-                StoredValue::Value(Value::Float(parent_blend)),
-            ),
-        ]
-        .into_iter()
-        .collect::<InstanceState>()
-    };
+    let values =
+        |rate, source_width, size_width, alpha_start, alpha_end, parent_blend, delay, grow| {
+            [
+                (fields["ParticlesPerSec"].clone(), float_param(rate, 0.0)),
+                (
+                    fields["SourceWidth"].clone(),
+                    float_param(source_width, 0.0),
+                ),
+                (fields["SizeWidth"].clone(), float_param(size_width, 0.0)),
+                (fields["AlphaStart"].clone(), float_param(alpha_start, 0.0)),
+                (fields["AlphaEnd"].clone(), float_param(alpha_end, 0.0)),
+                (
+                    fields["ParentBlend"].clone(),
+                    StoredValue::Value(Value::Float(parent_blend)),
+                ),
+                (
+                    fields["AlphaDelay"].clone(),
+                    StoredValue::Value(Value::Float(delay)),
+                ),
+                (
+                    fields["AlphaGrowPeriod"].clone(),
+                    StoredValue::Value(Value::Float(grow)),
+                ),
+            ]
+            .into_iter()
+            .collect::<InstanceState>()
+        };
     runtime.class_defaults.insert(
         parent_class.clone(),
-        values(16.0, 12.0, 6.0, 0.75, 1.0, 0.0),
+        values(16.0, 12.0, 6.0, 0.75, 1.0, 0.0, 0.0, 0.0),
     );
     let child = ResolvedObject {
         package: Arc::clone(&package),
@@ -11283,7 +11294,7 @@ fn particle_emitters_blend_immediate_superclass_defaults() {
         runtime.track_actor_class(actor, &child).unwrap();
         runtime
             .instances
-            .insert(actor, values(8.0, 4.0, 2.0, 0.25, 0.5, blend));
+            .insert(actor, values(8.0, 4.0, 2.0, 0.25, 0.5, blend, 2.0, 0.25));
     }
 
     let mut emitters = runtime.particle_emitters().unwrap();
@@ -11294,6 +11305,8 @@ fn particle_emitters_blend_immediate_superclass_defaults() {
     assert_eq!(emitters[0].size_width.base, 3.0);
     assert_eq!(emitters[0].alpha_start.base, 0.375);
     assert_eq!(emitters[0].alpha_end.base, 0.625);
+    assert_eq!(emitters[0].alpha_delay, 2.0);
+    assert_eq!(emitters[0].alpha_grow_period, 0.25);
     assert_eq!(emitters[1].parent_particles_per_second.unwrap().base, 16.0);
     assert_eq!(emitters[1].source_width.base, 4.0);
 

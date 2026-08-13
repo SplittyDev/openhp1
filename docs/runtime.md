@@ -267,8 +267,13 @@ interpolate emission between locations, while `bSystemRelative` particles
 remain attached to their moving system. `bVelocityRelative` adds the owner's
 current velocity once when each particle is emitted. Authored size growth,
 delay, and end scale, `DripTime`, and sprite `SpinRate` are applied over each
-particle's lifetime. Particle velocity uses the authored exponential `Damping`
-decay. `DIST_OwnerMesh` (`Distribution=2`) samples the owner's mesh surface,
+particle's lifetime. `AlphaStart` and `AlphaEnd` are sampled per particle;
+`AlphaGrowPeriod` grows from zero to the sampled start over its authored
+lifetime fraction, then `AlphaDelay` holds the start before the native fade to
+the sampled end. The resulting nonnegative alpha modulates the particle color,
+matching `UParticle::Update` and `URender::DrawParticleSystem`. Particle
+velocity uses the authored exponential `Damping` decay. `DIST_OwnerMesh`
+(`Distribution=2`) samples the owner's mesh surface,
 including source geometry retained while `DrawType=None`; Lev_Tut2 uses that
 combination to draw each training hoop entirely from particles. A
 `PPRIM_Liquid` particle (`RenderPrimitive=2`) uses a world-horizontal quad,
