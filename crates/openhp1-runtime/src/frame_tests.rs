@@ -1147,8 +1147,8 @@ fn logical_natives_skip_the_unused_operand() {
     ] {
         let bytecode = Bytecode {
             version: 76,
-            raw_len: 10,
-            bytes: vec![0x04, native, left, 0x18, 3, 0, 0x92, 0x16, 0x16, 0x16],
+            raw_len: 9,
+            bytes: vec![0x04, native, left, 0x18, 3, 0, 0x92, 0x16, 0x16],
             tokens: Vec::new(),
         };
         let mut frame = Frame::new(&bytecode);

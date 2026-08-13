@@ -532,13 +532,13 @@ impl<'a> Frame<'a> {
             }
             let skip = usize::from(self.read_u16()?);
             let short_circuit = (index == 0x82 && !left) || (index == 0x84 && left);
-            let value = if short_circuit {
+            if short_circuit {
                 self.jump(self.instruction_pointer.saturating_add(skip))?;
-                left
-            } else {
-                let right = self.expression(host)?;
-                self.value(right, host)?.truthy()?
-            };
+                self.current_context = receiver;
+                return Ok(Value::Bool(left));
+            }
+            let right = self.expression(host)?;
+            let value = self.value(right, host)?.truthy()?;
             let opcode = self.opcode()?;
             if Opcode::from(opcode) != Opcode::EndFunctionParms {
                 return Err(Error::Call {

@@ -52,8 +52,12 @@ the encoded 16-bit skip and advances past its three-byte header at
 operand is true (`0x1013638d..0x101363a2`). When false,
 `0x101363cd..0x101363db` adds the skip count to the right-expression start,
 writes false, and stores the advanced instruction pointer without executing
-the array access. Licensed SurrealEngine independently implements natives 130
-and 132 by lazy operand evaluation in `ExpressionEvaluator.cpp`.
+the array access. The evaluated path consumes `EX_EndFunctionParms` by
+incrementing the instruction pointer at `0x101363be..0x101363c4`; the skipped
+path stores the skip target directly at `0x101363d7..0x101363db`, so that
+target is already past the terminator and must not consume it again. Licensed
+SurrealEngine independently implements natives 130 and 132 by lazy operand
+evaluation in `ExpressionEvaluator.cpp`.
 
 OpenHP1 instead consumes the `EX_Skip` count and immediately evaluates its
 child expression before dispatching scalar native 130. When `Variant` reaches
