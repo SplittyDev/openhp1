@@ -775,7 +775,7 @@ impl LoadedScene {
                     .then_some(owner.location)
                     .unwrap_or(Vec3::ZERO);
                 let wind = if system.config.damping * system.config.wind_modifier > 0.0 {
-                    if system.config.system_relative {
+                    if system.config.wind_per_particle {
                         ParticleWind::total_at(
                             &system.config.winds,
                             Some(&collision),
@@ -4484,6 +4484,7 @@ mod tests {
             size_grow_period: 0.0,
             draw_scale: 1.0,
             system_relative: false,
+            wind_per_particle: false,
             damping: 0.0,
             gravity: [0.0; 3],
             wind: [0.0; 3],
@@ -4661,7 +4662,7 @@ mod tests {
     }
 
     #[test]
-    fn system_relative_particles_sample_wind_with_native_drag() {
+    fn wind_per_particle_selects_particle_location_sampling() {
         let mut scene = particle_test_scene();
         let system = scene.particles.get_mut(&0).unwrap();
         system.config.system_relative = true;
@@ -4683,6 +4684,13 @@ mod tests {
         system.particles[0].location = glam::Vec3::new(5.0, 0.0, 0.0);
         system.particles[0].velocity = glam::Vec3::ZERO;
 
+        assert!(scene.tick_particles(1.0));
+        assert_eq!(scene.particles[&0].particles[0].velocity, glam::Vec3::ZERO);
+
+        let system = scene.particles.get_mut(&0).unwrap();
+        system.config.wind_per_particle = true;
+        system.particles[0].age = 0.0;
+        system.particles[0].location = glam::Vec3::new(5.0, 0.0, 0.0);
         assert!(scene.tick_particles(1.0));
         let particle = &scene.particles[&0].particles[0];
         let decay = (-2.0_f32).exp();

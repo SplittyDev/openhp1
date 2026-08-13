@@ -289,9 +289,9 @@ zone has no actor. `WindModifier` samples active `Wind` actors, never
 `ZoneInfo.ZoneVelocity`: a source first applies HP1's native
 `distance_squared <= (WindRadius^2)^2` gate, then its `WindRadius^2` falloff
 clamps its contribution to zero at the authored radius. BSP-blocked sources
-require `bPermeating`, and their vectors sum. World-relative particles use the
-emitter's once-per-tick sample; system-relative particles resample at each
-particle's world position.
+require `bPermeating`, and their vectors sum. Particles use the emitter's
+once-per-tick sample by default; `bWindPerParticle` resamples at each
+particle's world position, independently of `bSystemRelative`.
 Current native `Fluc` values participate; time-evolving `WindFluctuation`
 state is not yet simulated.
 When `Damping * WindModifier > 0`, wind is the terminal-velocity term of HP1's

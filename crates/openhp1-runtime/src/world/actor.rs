@@ -578,7 +578,9 @@ impl ScriptRuntime {
             let damping = particle_scalar(self.instance_property(&class, &instance, "Damping")?);
             let wind_modifier =
                 particle_scalar(self.instance_property(&class, &instance, "WindModifier")?);
-            let wind = if damping * wind_modifier > 0.0 {
+            let wind_per_particle =
+                particle_bool(self.instance_property(&class, &instance, "bWindPerParticle")?);
+            let wind = if damping * wind_modifier > 0.0 && !wind_per_particle {
                 ParticleWind::total_at(&winds, self.collision.as_deref(), location) * wind_modifier
             } else {
                 Vec3::ZERO
@@ -706,6 +708,7 @@ impl ScriptRuntime {
                     &instance,
                     "bSystemRelative",
                 )?),
+                wind_per_particle,
                 damping,
                 gravity: gravity.to_array(),
                 wind: wind.to_array(),
