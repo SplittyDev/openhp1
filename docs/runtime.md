@@ -273,7 +273,8 @@ particle's lifetime. `AlphaStart` and `AlphaEnd` are sampled per particle;
 `AlphaGrowPeriod` grows from zero to the sampled start over its authored
 lifetime fraction, then `AlphaDelay` holds the start before the native fade to
 the sampled end. The resulting nonnegative alpha modulates the particle color,
-matching `UParticle::Update` and `URender::DrawParticleSystem`. Particle
+with values below the native `0.001` cutoff collapsed to zero, matching
+`UParticle::Update` and `URender::DrawParticleSystem`. Particle
 velocity uses the authored exponential `Damping` decay. `DIST_OwnerMesh`
 (`Distribution=2`) samples the owner's mesh surface,
 including source geometry retained while `DrawType=None`; Lev_Tut2 uses that

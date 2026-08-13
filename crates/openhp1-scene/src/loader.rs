@@ -2059,13 +2059,14 @@ fn particle_alpha(
     grow_period: f32,
 ) -> f32 {
     let grow_duration = grow_period * lifetime;
-    if grow_duration > age {
+    let alpha = if grow_duration > age {
         (start * age / grow_duration).min(start).max(0.0)
     } else if lifetime > delay && age > delay {
         (start + (end - start) * (age - delay) / (lifetime - delay)).max(0.0)
     } else {
         start.max(0.0)
-    }
+    };
+    if alpha < 0.001 { 0.0 } else { alpha }
 }
 
 fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
@@ -4732,6 +4733,7 @@ mod tests {
             );
         }
         assert_eq!(super::particle_alpha(100.0, 0.0, 0.8, 0.0, 0.0, 0.5), 0.8);
+        assert_eq!(super::particle_alpha(3.999, 4.0, 1.0, 0.0, 2.0, 0.0), 0.0);
     }
 
     #[test]
