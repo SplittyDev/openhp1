@@ -429,6 +429,12 @@ the `APawn::Mount` body at image RVA `0xEBFB0` makes all three virtual
 `ULevel::SingleLineCheck` calls with flags `0x6` and adds the `2.0f` constant
 at RVA `0x1770EC` to the diagonal hit height. `APawn::stepUp` at RVA `0xEC690`
 calls `Mount` before its own step movement.
+The diagonal probe starts at the raised location plus normalized horizontal
+inward direction times `2 * CollisionRadius + MaxMountHeight * Hit.Normal.Z`.
+It ends after subtracting `MaxMountHeight * (Up + Inward * Hit.Normal.Z)`, not
+the full hit normal. The native arithmetic at RVAs `0xEC1C0..0xEC348`
+therefore leaves the endpoint exactly two collision radii inward at the pawn's
+original height for a vertical wall.
 The flag comes from a polygon trace through the primitive that produced the hit
 because convex-hull clipping planes do not necessarily carry the visible
 surface's flags.

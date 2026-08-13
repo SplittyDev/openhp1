@@ -513,11 +513,8 @@ impl ScriptRuntime {
             return Ok(false);
         }
 
-        let up = Vec3::Z;
-        let inward = Vec3::new(-hit.normal.x, -hit.normal.y, 0.0).normalize_or_zero();
-        let raised = location + up * max_height;
-        let far = raised + inward * (radius * 2.0 + max_height * hit.normal.z);
-        let diagonal_end = far - (up + hit.normal) * max_height;
+        let (raised, far, diagonal_end) =
+            mount_trace_points(location, hit.normal, radius, max_height);
         let ledge = self.single_line_check_between(actor, class, instance, far, diagonal_end)?;
         if ledge.fraction == 1.0 {
             return Ok(false);
@@ -531,7 +528,7 @@ impl ScriptRuntime {
         if ledge_location.z - location.z < minimum_rise {
             return Ok(false);
         }
-        let destination = ledge_location + up * 2.0;
+        let destination = ledge_location + Vec3::Z * 2.0;
         if self
             .single_line_check_between(actor, class, instance, location, raised)?
             .fraction
@@ -1316,5 +1313,35 @@ impl ScriptRuntime {
             actions.push(ActorAction::SetRotation { actor, rotation });
         }
         Ok(())
+    }
+}
+
+fn mount_trace_points(
+    location: Vec3,
+    hit_normal: Vec3,
+    radius: f32,
+    max_height: f32,
+) -> (Vec3, Vec3, Vec3) {
+    let up = Vec3::Z;
+    let inward = Vec3::new(-hit_normal.x, -hit_normal.y, 0.0).normalize_or_zero();
+    let raised = location + up * max_height;
+    let far = raised + inward * (radius * 2.0 + max_height * hit_normal.z);
+    let diagonal_end = far - (up + inward * hit_normal.z) * max_height;
+    (raised, far, diagonal_end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mount_trace_points;
+    use glam::Vec3;
+
+    #[test]
+    fn native_mount_trace_ends_two_radii_inward() {
+        let (raised, far, end) =
+            mount_trace_points(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 15.0, 96.5);
+
+        assert_eq!(raised, Vec3::new(0.0, 0.0, 96.5));
+        assert_eq!(far, Vec3::new(0.0, 30.0, 96.5));
+        assert_eq!(end, Vec3::new(0.0, 30.0, 0.0));
     }
 }
