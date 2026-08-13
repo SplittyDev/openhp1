@@ -384,10 +384,28 @@ Adding a cutscene-specific teleport, force-release, or collision exception
 would duplicate behavior already present in the compiled game logic and hide
 the shared runtime defect.
 
+## `Lev3_Intro` fireplace closure
+
+The fireplace dispatcher is map export 2481 (`Dispatcher0`, tag
+`FireplaceFire`). Its second trigger closes the fireplace immediately, the
+side covers after 0.5 seconds, the grate after another second, and the rear
+wall after another second. Rear-wall `Mover6`, export 2443 with tag `FireBack`,
+then takes 1.5 seconds to interpolate from its open key at
+`(-1296,-6864,456)` to its closed base at `(-1296,-6688,456)`.
+
+The 2026-08-14 report captured `Mover6` exactly at the open key while the
+fireplace, grate, and both covers were already at their closed bases. That is
+the authored dispatcher between its grate and `FireBack` steps. Offline
+`CutScene3` replays at 10 through 60 ticks per second delivered the final event
+and returned the wall and its vertices exactly to the closed base. This trace
+does not justify a map timing override; a persistent failure needs a capture
+after that final delayed dispatch rather than during its pending interval.
+
 ## Package evidence index
 
 | Package | Compiled/serialized object | Evidence |
 | --- | --- | --- |
+| `Lev3_Intro.unr` | exports 2481, 2443, 3187, 3204 | Fireplace dispatcher, rear wall, and side-cover movers |
 | `Lev_Tut1.unr` | export 2257, `CutScene52` | Cast bindings, location aliases, and every command track |
 | `Lev_Tut1.unr` | export 602, `harry0` | Player actor identity and absence of a serialized `myHUD` override |
 | `Lev_Tut1.unr` | exports 1328 and 1325 | Fred/George instances, locations, animations, and `GroundSpeed` |
