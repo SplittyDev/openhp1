@@ -74,11 +74,14 @@ compiled `EX_Skip` distance otherwise. Synthetic regressions should cover
 the post-expression instruction pointer. No Quidditch actor or array special
 case is warranted.
 
-This fixes the proven catch blocker. The report contains no nearby Snitch
-snapshot, interpolation point, manager state, or measured velocity, so it
-does not prove a separate path-speed defect. Perceived slow flight remains an
-unresolved observation and must not be "fixed" by tuning `fLaunchSpeed` or a
-map value.
+This fixes the proven catch blocker. The report itself contains no nearby
+Snitch snapshot, interpolation point, manager state, or measured velocity, so
+it did not initially prove a separate path-speed defect. A later direct launch
+did: the map's editor-time `LevelInfo.TimeSeconds = 743.39136` survived startup,
+causing the authored 240/300/360-second speed changes to fire immediately.
+The shipped `UGameEngine::LoadMap` clears the corresponding `LevelInfo` field
+at `0x1039dce1` before dispatching startup events. OpenHP1 now mirrors that
+fresh-level reset; no path or launch speed was tuned.
 
 ## Hagrid: non-retail `SetLocation` placement grid
 

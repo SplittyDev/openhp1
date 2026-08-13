@@ -33,7 +33,10 @@ pub use action::{
     ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind,
     PlayerMusic, RuntimeObject, WeaponAttachment,
 };
-pub use actor::{BossHealthUiState, FluffyHeadUiState, PlayerTravelState, PlayerUiState};
+pub use actor::{
+    BossHealthUiState, FluffyHeadUiState, HudGameKind, HudGameUiState, HudWarningUiState,
+    PlayerTravelState, PlayerUiState,
+};
 pub use error::{DispatchError, DispatchResult};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

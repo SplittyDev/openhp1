@@ -32,6 +32,10 @@ Actors use stable package/export identities. Class defaults followed by actor
 tagged-property overrides initialize persistent instance state. Remote actor
 contexts must resolve registered actor handles so field reads, writes, and
 calls affect the target actor rather than a temporary copy.
+Fresh map startup resets `LevelInfo.TimeSeconds` to zero before `InitGame`,
+sets `bBegunPlay` and `bStartup`, runs the loaded actors' startup events and
+native base initialization, then clears `bStartup`. Serialized editor-time
+values must not leak into gameplay timers.
 The intrinsic `Object.Class` field returns that registered runtime class
 identity, so authored class comparisons such as `spell.Class == class'spellFlip'`
 use the same object handles as class constants.
@@ -197,6 +201,14 @@ text over the two shipped letter textures at their authored 640x480 positions.
 Space-key edges also update `baseHarry.bSkipKeyPressed`, matching
 `HPConsole.KeyEvent`, so `baseScroll.popstate` can close the letter and release
 the player.
+
+The same bridge preserves the shipped Quidditch/Flying Keys timing game rather
+than recreating its rules in the host. While `QuidHud.bPlayQHUDGame` is true,
+the runtime mirrors `QuidHud.PostRender`'s actor lifecycle for
+`HPBase.baseQHudGame`; its compiled `Tick`, `Grab`, and match initializers remain
+authoritative. The UI snapshot exposes only the target/catch positions, grab
+state, game type, and active `baseWarning`, which the host draws with the
+shipped HUD textures at their authored 640x480 positions.
 
 `TraceActors` traces colliding actors from its authored `Start` toward `End`,
 orders hits from that start, and does not insert a BSP pseudo-actor. Starting

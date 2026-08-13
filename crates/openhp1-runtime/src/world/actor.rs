@@ -4,7 +4,10 @@ use super::*;
 mod player;
 mod tick;
 
-pub use player::{BossHealthUiState, FluffyHeadUiState, PlayerTravelState, PlayerUiState};
+pub use player::{
+    BossHealthUiState, FluffyHeadUiState, HudGameKind, HudGameUiState, HudWarningUiState,
+    PlayerTravelState, PlayerUiState,
+};
 pub(super) use tick::decode_latent_action;
 use tick::{
     particle_bool, particle_byte, particle_color, particle_float, particle_int, particle_scalar,
@@ -395,7 +398,33 @@ impl ScriptRuntime {
         for actor in actors {
             self.initialize_actor_base(actor, &mut actions)?;
         }
+        if self.level_info.is_some() {
+            self.set_level_startup(false)?;
+        }
         Ok(actions)
+    }
+
+    pub(super) fn set_level_startup(&mut self, starting: bool) -> DispatchResult<()> {
+        let actor = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = (|| {
+            if starting {
+                self.set_actor_value(&class, &mut instance, "TimeSeconds", Value::Float(0.0))?;
+                self.set_actor_value(&class, &mut instance, "bBegunPlay", Value::Bool(true))?;
+            }
+            self.set_actor_value(&class, &mut instance, "bStartup", Value::Bool(starting))
+        })();
+        self.instances.insert(actor, instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })
     }
 
     pub(super) fn initialize_actor_base(
@@ -910,6 +939,7 @@ impl ScriptRuntime {
     }
 
     pub fn initialize_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        self.set_level_startup(true)?;
         let level = self.level_info.ok_or(DispatchError::MissingLevelInfo)?;
         let level_class = self
             .actor_classes

@@ -2053,13 +2053,21 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
     fs::write(&package_path, synthetic_runtime_package_for("hedLetter")).unwrap();
     let boss_package_path = system.join("Peeves.u");
     fs::write(&boss_package_path, synthetic_runtime_package_for("Peeves")).unwrap();
+    let warning_package_path = system.join("Warning.u");
+    fs::write(
+        &warning_package_path,
+        synthetic_runtime_package_for("baseWarning"),
+    )
+    .unwrap();
 
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     let package = runtime.packages.load_path(&package_path).unwrap();
     let boss_package = runtime.packages.load_path(&boss_package_path).unwrap();
+    let warning_package = runtime.packages.load_path(&warning_package_path).unwrap();
     let popup_class_id = object_id(&package, 0);
     let class_id = object_id(&package, 5);
     let boss_class_id = object_id(&boss_package, 0);
+    let warning_class_id = object_id(&warning_package, 0);
     runtime
         .scripts
         .insert(popup_class_id.clone(), synthetic_class_script(0));
@@ -2069,6 +2077,9 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
     runtime
         .scripts
         .insert(boss_class_id.clone(), synthetic_class_script(0));
+    runtime
+        .scripts
+        .insert(warning_class_id.clone(), synthetic_class_script(0));
     let names = [
         "lifePotions",
         "MaxLifePotions",
@@ -2088,6 +2099,13 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
         "bCountingDown",
         "fCountdownTime",
         "fStartCountdown",
+        "bPlayQHUDGame",
+        "QHUDGame",
+        "HUDGameType",
+        "iTargetPos",
+        "iCatchPos",
+        "fGrabTime",
+        "bGrabbed",
     ];
     let fields = names
         .into_iter()
@@ -2110,16 +2128,30 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
         (boss_class_id.clone(), "hitcount".to_owned()),
         Some(hit_count.clone()),
     );
+    let warning_text = runtime_actor_id(202);
+    let warning_visible = runtime_actor_id(203);
+    runtime.fields.insert(
+        (warning_class_id.clone(), "displaytext".to_owned()),
+        Some(warning_text.clone()),
+    );
+    runtime.fields.insert(
+        (warning_class_id.clone(), "bshow".to_owned()),
+        Some(warning_visible.clone()),
+    );
 
     let player = 7;
     let hud = 8;
     let popup = 9;
     let boss = 10;
+    let hud_game = 11;
+    let warning = 12;
     for (actor, actor_class) in [
         (player, class_id.clone()),
         (hud, class_id.clone()),
         (popup, popup_class_id),
         (boss, boss_class_id),
+        (hud_game, class_id.clone()),
+        (warning, warning_class_id),
     ] {
         let object = runtime_actor_id(actor);
         runtime.actor_classes.insert(actor, actor_class);
@@ -2185,6 +2217,18 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
                 fields["fStartCountdown"].clone(),
                 StoredValue::Value(Value::Float(15.0)),
             ),
+            (
+                fields["bPlayQHUDGame"].clone(),
+                StoredValue::Value(Value::Bool(true)),
+            ),
+            (
+                fields["QHUDGame"].clone(),
+                StoredValue::Object(Some(runtime_actor_id(hud_game))),
+            ),
+            (
+                fields["HUDGameType"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
         ]
         .into_iter()
         .collect(),
@@ -2203,6 +2247,43 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
         [(hit_count, StoredValue::Value(Value::Float(2.0)))]
             .into_iter()
             .collect(),
+    );
+    runtime.instances.insert(
+        hud_game,
+        [
+            (
+                fields["iTargetPos"].clone(),
+                StoredValue::Value(Value::Int(37)),
+            ),
+            (
+                fields["iCatchPos"].clone(),
+                StoredValue::Value(Value::Int(48)),
+            ),
+            (
+                fields["fGrabTime"].clone(),
+                StoredValue::Value(Value::Float(0.25)),
+            ),
+            (
+                fields["bGrabbed"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    runtime.instances.insert(
+        warning,
+        [
+            (
+                warning_text,
+                StoredValue::Value(Value::String(
+                    "Press JUMP key to catch the Snitch!".to_owned(),
+                )),
+            ),
+            (warning_visible, StoredValue::Value(Value::Bool(true))),
+        ]
+        .into_iter()
+        .collect(),
     );
 
     assert_eq!(
@@ -2227,8 +2308,27 @@ fn player_ui_state_reads_authored_harry_and_hud_state() {
             house_points_ravenclaw: 15,
             countdown: Some(0.5),
             boss_health: Some(BossHealthUiState::Peeves(0.5)),
+            hud_game: Some(HudGameUiState {
+                kind: HudGameKind::Quidditch,
+                target_position: 37,
+                catch_position: 48,
+                grabbed: false,
+                grab_time: 0.25,
+            }),
+            warning: None,
             letter: Some("Harry, meet me by the greenhouse.".to_owned()),
         }
+    );
+    runtime.instances.get_mut(&hud).unwrap().insert(
+        fields["curPopup"].clone(),
+        StoredValue::Object(Some(runtime_actor_id(warning))),
+    );
+    assert_eq!(
+        runtime.player_ui_state().unwrap().warning,
+        Some(HudWarningUiState {
+            text: "Press JUMP key to catch the Snitch!".to_owned(),
+            visible: true,
+        })
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -2559,9 +2659,16 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
     let package_path = system.join("Test.u");
     fs::write(&package_path, synthetic_runtime_package()).unwrap();
+    let hud_game_package_path = system.join("HPBase.u");
+    fs::write(
+        &hud_game_package_path,
+        synthetic_runtime_package_for("baseQHudGame"),
+    )
+    .unwrap();
 
     let mut runtime = ScriptRuntime::new(&root).unwrap();
     let package = runtime.packages.load_path(&package_path).unwrap();
+    let hud_game_package = runtime.packages.load_path(&hud_game_package_path).unwrap();
     let player_class = ResolvedObject {
         package: Arc::clone(&package),
         export_index: 0,
@@ -2572,6 +2679,11 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     };
     let player_class_id = object_id(&package, player_class.export_index);
     let hud_class_id = object_id(&package, hud_class.export_index);
+    let hud_game_class = ResolvedObject {
+        package: Arc::clone(&hud_game_package),
+        export_index: 0,
+    };
+    let hud_game_class_id = object_id(&hud_game_package, hud_game_class.export_index);
     runtime.scripts.insert(
         player_class_id.clone(),
         synthetic_class_script(player_class.export_index),
@@ -2579,6 +2691,10 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
     runtime.scripts.insert(
         hud_class_id.clone(),
         synthetic_class_script(hud_class.export_index),
+    );
+    runtime.scripts.insert(
+        hud_game_class_id.clone(),
+        synthetic_class_script(hud_game_class.export_index),
     );
     for event in [
         "Tick",
@@ -2619,6 +2735,9 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
         "XLevel",
         "bCollideWorld",
         "bCollideWhenPlacing",
+        "bPlayQHUDGame",
+        "QHUDGame",
+        "HUDGameType",
     ]
     .into_iter()
     .enumerate()
@@ -2636,6 +2755,40 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
             Some(field.clone()),
         );
     }
+    let hud_game_fields = [
+        "Location",
+        "OldLocation",
+        "Rotation",
+        "DesiredRotation",
+        "Tag",
+        "Owner",
+        "Instigator",
+        "Level",
+        "XLevel",
+        "bCollideWorld",
+        "bCollideWhenPlacing",
+        "Player",
+        "iTargetPos",
+        "iCatchPos",
+        "iAimPoint",
+        "fDuration",
+        "fGrabTime",
+        "bGrabbed",
+        "bMore",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(300 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &hud_game_fields {
+        runtime.fields.insert(
+            (hud_game_class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    runtime
+        .fields
+        .insert((hud_game_class_id.clone(), "attachtag".to_owned()), None);
     runtime
         .fields
         .insert((hud_class_id.clone(), "attachtag".to_owned()), None);
@@ -2681,6 +2834,30 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
         .class_defaults
         .insert(hud_class_id.clone(), hud_defaults);
 
+    let mut hud_game_defaults = InstanceState::default();
+    for name in ["bCollideWorld", "bCollideWhenPlacing", "bGrabbed", "bMore"] {
+        hud_game_defaults.insert(
+            hud_game_fields[name].clone(),
+            StoredValue::Value(Value::Bool(false)),
+        );
+    }
+    hud_game_defaults.insert(hud_game_fields["Player"].clone(), StoredValue::Object(None));
+    for (name, value) in [("iTargetPos", 128), ("iCatchPos", 48), ("iAimPoint", 128)] {
+        hud_game_defaults.insert(
+            hud_game_fields[name].clone(),
+            StoredValue::Value(Value::Int(value)),
+        );
+    }
+    for (name, value) in [("fDuration", 30.0), ("fGrabTime", 0.0)] {
+        hud_game_defaults.insert(
+            hud_game_fields[name].clone(),
+            StoredValue::Value(Value::Float(value)),
+        );
+    }
+    runtime
+        .class_defaults
+        .insert(hud_game_class_id.clone(), hud_game_defaults);
+
     assert!(matches!(
         runtime.initialize_player_hud().unwrap().as_slice(),
         [ActorAction::SpawnActor { class_name, .. }] if class_name == "QuidHud"
@@ -2690,6 +2867,31 @@ fn player_hud_initialization_spawns_the_configured_hud_subclass_once() {
         Some(StoredValue::Object(Some(object))) if *object == runtime_actor_id(8)
     ));
     assert!(runtime.initialize_player_hud().unwrap().is_empty());
+
+    let hud = 8;
+    let hud_instance = runtime.instances.get_mut(&hud).unwrap();
+    hud_instance.insert(
+        hud_fields["bPlayQHUDGame"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    hud_instance.insert(hud_fields["QHUDGame"].clone(), StoredValue::Object(None));
+    hud_instance.insert(
+        hud_fields["HUDGameType"].clone(),
+        StoredValue::Value(Value::Byte(0)),
+    );
+    let actions = runtime.update_player_hud_game().unwrap();
+    assert!(matches!(
+        actions.as_slice(),
+        [ActorAction::SpawnActor { class_name, .. }] if class_name == "baseQHudGame"
+    ));
+    assert!(matches!(
+        runtime.instances[&hud].get(&hud_fields["QHUDGame"]),
+        Some(StoredValue::Object(Some(object))) if *object == runtime_actor_id(9)
+    ));
+    assert!(matches!(
+        runtime.instances[&9].get(&hud_game_fields["Player"]),
+        Some(StoredValue::Object(Some(object))) if *object == runtime_actor_id(player)
+    ));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -5660,7 +5862,7 @@ fn scalar_natives_distinguish_bad_operands_from_unknown_indices() {
 }
 
 #[test]
-fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
+fn startup_resets_level_time_before_automatic_physics_and_later_actor_tick() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-autonomous-physics-{}-{}",
         std::process::id(),
@@ -5752,6 +5954,8 @@ fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
     let fields = [
         "TimeSeconds",
         "TimeDilation",
+        "bBegunPlay",
+        "bStartup",
         "Physics",
         "Rotation",
         "RotationRate",
@@ -5785,7 +5989,7 @@ fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
         [
             (
                 fields["TimeSeconds"].clone(),
-                StoredValue::Value(Value::Float(0.0)),
+                StoredValue::Value(Value::Float(743.39136)),
             ),
             (
                 fields["TimeDilation"].clone(),
@@ -5794,6 +5998,14 @@ fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
             (
                 fields["Physics"].clone(),
                 StoredValue::Value(Value::Byte(0)),
+            ),
+            (
+                fields["bBegunPlay"].clone(),
+                StoredValue::Value(Value::Bool(false)),
+            ),
+            (
+                fields["bStartup"].clone(),
+                StoredValue::Value(Value::Bool(false)),
             ),
         ]
         .into_iter()
@@ -5852,6 +6064,25 @@ fn automatic_physics_precedes_later_actor_tick_without_double_advancing() {
         ]
         .into_iter()
         .collect(),
+    );
+
+    runtime.set_level_startup(true).unwrap();
+    assert_eq!(
+        runtime.instances[&level].get(&fields["TimeSeconds"]),
+        Some(&StoredValue::Value(Value::Float(0.0)))
+    );
+    assert_eq!(
+        runtime.instances[&level].get(&fields["bBegunPlay"]),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    assert_eq!(
+        runtime.instances[&level].get(&fields["bStartup"]),
+        Some(&StoredValue::Value(Value::Bool(true)))
+    );
+    runtime.set_level_startup(false).unwrap();
+    assert_eq!(
+        runtime.instances[&level].get(&fields["bStartup"]),
+        Some(&StoredValue::Value(Value::Bool(false)))
     );
 
     assert_eq!(

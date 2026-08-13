@@ -15,9 +15,9 @@ pub use player::{PlayerInput, PlayerView};
 pub use value::Value;
 pub use world::{
     ActorAction, BossHealthUiState, ConsoleCommandHost, ConsoleCommandResponse, DispatchError,
-    DispatchResult, FluffyHeadUiState, ParticleColor, ParticleEmitter, ParticleFloat,
-    ParticleTexture, ParticleWind, PlayerMusic, PlayerTravelState, PlayerUiState, RuntimeObject,
-    ScriptRuntime, WeaponAttachment,
+    DispatchResult, FluffyHeadUiState, HudGameKind, HudGameUiState, HudWarningUiState,
+    ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind, PlayerMusic,
+    PlayerTravelState, PlayerUiState, RuntimeObject, ScriptRuntime, WeaponAttachment,
 };
 
 pub(crate) use frame::{

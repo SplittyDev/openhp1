@@ -14,6 +14,27 @@ pub enum BossHealthUiState {
     Fluffy([FluffyHeadUiState; 3]),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HudGameKind {
+    Quidditch,
+    FlyingKeys,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HudGameUiState {
+    pub kind: HudGameKind,
+    pub target_position: i32,
+    pub catch_position: i32,
+    pub grabbed: bool,
+    pub grab_time: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HudWarningUiState {
+    pub text: String,
+    pub visible: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayerUiState {
     pub health: f32,
@@ -30,6 +51,8 @@ pub struct PlayerUiState {
     pub house_points_ravenclaw: i32,
     pub countdown: Option<f32>,
     pub boss_health: Option<BossHealthUiState>,
+    pub hud_game: Option<HudGameUiState>,
+    pub warning: Option<HudWarningUiState>,
     pub letter: Option<String>,
 }
 
@@ -201,8 +224,98 @@ impl ScriptRuntime {
             house_points_ravenclaw: integer("numHousePointsRavenclaw")?,
             countdown: self.player_countdown(&class, &instance)?,
             boss_health: self.player_boss_health(&class, &instance)?,
+            hud_game: self.player_hud_game(&class, &instance)?,
+            warning: self.player_warning(&class, &instance)?,
             letter: self.player_letter(&class, &instance)?,
         })
+    }
+
+    fn player_hud_game(
+        &mut self,
+        player_class: &ResolvedObject,
+        player: &InstanceState,
+    ) -> DispatchResult<Option<HudGameUiState>> {
+        let Some(hud) = self
+            .actor_object(player_class, player, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(hud) = self.object_actors.get(&hud).copied() else {
+            return Ok(None);
+        };
+        let hud_class = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        if !matches!(
+            self.instance_property(&hud_class, &hud_instance, "bPlayQHUDGame")?,
+            Some(StoredValue::Value(Value::Bool(true)))
+        ) {
+            return Ok(None);
+        }
+        let Some(game) = self
+            .actor_object(&hud_class, &hud_instance, "QHUDGame")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(game) = self.object_actors.get(&game).copied() else {
+            return Ok(None);
+        };
+        if self.destroyed.contains(&game) {
+            return Ok(None);
+        }
+        let game_class = self
+            .actor_classes
+            .get(&game)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: game })?;
+        let game_class = self.resolved_object(&game_class)?;
+        let game_instance = self
+            .instances
+            .get(&game)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: game })?;
+        let integer = |runtime: &mut Self, name: &str| match runtime.instance_property(
+            &game_class,
+            &game_instance,
+            name,
+        )? {
+            Some(StoredValue::Value(Value::Int(value))) => Ok(value),
+            value => Err(DispatchError::UnresolvedObject {
+                message: format!("HUD game {name} is {value:?}"),
+            }),
+        };
+        let kind = match self.instance_property(&hud_class, &hud_instance, "HUDGameType")? {
+            Some(StoredValue::Value(Value::Byte(0))) => HudGameKind::Quidditch,
+            Some(StoredValue::Value(Value::Byte(_))) => HudGameKind::FlyingKeys,
+            value => {
+                return Err(DispatchError::UnresolvedObject {
+                    message: format!("HUD game type is {value:?}"),
+                });
+            }
+        };
+        let grabbed = matches!(
+            self.instance_property(&game_class, &game_instance, "bGrabbed")?,
+            Some(StoredValue::Value(Value::Bool(true)))
+        );
+        Ok(Some(HudGameUiState {
+            kind,
+            target_position: integer(self, "iTargetPos")?,
+            catch_position: integer(self, "iCatchPos")?,
+            grabbed,
+            grab_time: self
+                .numeric_property(&game_class, &game_instance, "fGrabTime")?
+                .unwrap_or(0.0),
+        }))
     }
 
     fn player_countdown(
@@ -435,6 +548,69 @@ impl ScriptRuntime {
         Ok(Some(self.packages.localize("Pickup", "all", &key)))
     }
 
+    fn player_warning(
+        &mut self,
+        player_class: &ResolvedObject,
+        player: &InstanceState,
+    ) -> DispatchResult<Option<HudWarningUiState>> {
+        let Some(hud) = self
+            .actor_object(player_class, player, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(hud) = self.object_actors.get(&hud).copied() else {
+            return Ok(None);
+        };
+        let hud_class = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        let Some(popup) = self
+            .actor_object(&hud_class, &hud_instance, "curPopup")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(popup) = self.object_actors.get(&popup).copied() else {
+            return Ok(None);
+        };
+        if self.destroyed.contains(&popup) {
+            return Ok(None);
+        }
+        let popup_class = self
+            .actor_classes
+            .get(&popup)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: popup })?;
+        let popup_class = self.resolved_object(&popup_class)?;
+        if !self.class_has_name(&popup_class, "baseWarning")? {
+            return Ok(None);
+        }
+        let popup_instance = self
+            .instances
+            .get(&popup)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: popup })?;
+        let Some(StoredValue::Value(Value::String(text))) =
+            self.instance_property(&popup_class, &popup_instance, "DisplayText")?
+        else {
+            return Ok(None);
+        };
+        let visible = matches!(
+            self.instance_property(&popup_class, &popup_instance, "bShow")?,
+            Some(StoredValue::Value(Value::Bool(true)))
+        );
+        Ok(Some(HudWarningUiState { text, visible }))
+    }
+
     pub fn initialize_player_hud(&mut self) -> DispatchResult<Vec<ActorAction>> {
         let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self
@@ -491,6 +667,186 @@ impl ScriptRuntime {
         })();
         self.instances.insert(player, instance);
         result?;
+        Ok(actions)
+    }
+
+    /// Mirrors the `QuidHud.PostRender` lifecycle that UE1's renderer runs once
+    /// per presented frame. The shipped HUD game actor retains its compiled
+    /// `Tick`, `Grab`, popup, and destruction behavior.
+    pub fn update_player_hud_game(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let player_class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let player_class = self.resolved_object(&player_class)?;
+        let player_instance = self
+            .instances
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let Some(hud_object) = self
+            .actor_object(&player_class, &player_instance, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(hud) = self.object_actors.get(&hud_object).copied() else {
+            return Ok(Vec::new());
+        };
+        let hud_class_id = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class_id)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        let Some(StoredValue::Value(Value::Bool(enabled))) =
+            self.instance_property(&hud_class, &hud_instance, "bPlayQHUDGame")?
+        else {
+            return Ok(Vec::new());
+        };
+        let game_object = self
+            .actor_object(&hud_class, &hud_instance, "QHUDGame")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        let game_actor = game_object
+            .as_ref()
+            .and_then(|object| self.object_actors.get(object))
+            .copied();
+        let live_game = game_actor.filter(|actor| !self.destroyed.contains(actor));
+
+        if enabled && live_game.is_some() {
+            return Ok(Vec::new());
+        }
+
+        let mut actions = Vec::new();
+        if enabled {
+            let game_type =
+                match self.instance_property(&hud_class, &hud_instance, "HUDGameType")? {
+                    Some(StoredValue::Value(Value::Byte(0))) => "SetQuidditchMatch",
+                    Some(StoredValue::Value(Value::Byte(_))) => "SetFlyingKeys",
+                    value => {
+                        return Err(DispatchError::UnresolvedObject {
+                            message: format!("HUD game type is {value:?}"),
+                        });
+                    }
+                };
+            let game_class = self
+                .packages
+                .find_object("HPBase.baseQHudGame", "Class")?
+                .ok_or_else(|| DispatchError::UnresolvedObject {
+                    message: "HPBase.baseQHudGame is missing".to_owned(),
+                })?;
+            let game_class_handle =
+                self.object_handle(object_id(&game_class.package, game_class.export_index))?;
+            let mut hud_instance = self
+                .instances
+                .remove(&hud)
+                .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+            let spawn_result = (|| {
+                let spawned = self
+                    .spawn_actor(
+                        hud,
+                        &hud_class,
+                        &hud_class.package,
+                        &[Value::Object(game_class_handle)],
+                        &mut hud_instance,
+                        &mut actions,
+                    )
+                    .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                let game_object = match spawned {
+                    Value::Object(0) | Value::None => None,
+                    Value::Object(handle) => Some(self.object_for_handle(handle)?),
+                    value => {
+                        return Err(DispatchError::UnresolvedObject {
+                            message: format!("HUD game spawn returned {}", value.kind()),
+                        });
+                    }
+                };
+                self.set_actor_stored(
+                    &hud_class,
+                    &mut hud_instance,
+                    "QHUDGame",
+                    StoredValue::Object(game_object.clone()),
+                )
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                Ok(game_object)
+            })();
+            self.instances.insert(hud, hud_instance);
+            let game_object = spawn_result?;
+
+            let Some(game_object) = game_object else {
+                return Ok(actions);
+            };
+            let game = self
+                .object_actors
+                .get(&game_object)
+                .copied()
+                .ok_or_else(|| DispatchError::UnresolvedObject {
+                    message: "spawned HUD game has no actor".to_owned(),
+                })?;
+            let game_class_id = self
+                .actor_classes
+                .get(&game)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: game })?;
+            let game_class = self.resolved_object(&game_class_id)?;
+            let mut game_instance = self
+                .instances
+                .remove(&game)
+                .ok_or(DispatchError::ActiveActorContext { actor: game })?;
+            let set_player_result = self.set_actor_stored(
+                &game_class,
+                &mut game_instance,
+                "Player",
+                StoredValue::Object(Some(
+                    self.actor_objects
+                        .get(&player)
+                        .cloned()
+                        .ok_or(DispatchError::UnregisteredActor { actor: player })?,
+                )),
+            );
+            self.instances.insert(game, game_instance);
+            set_player_result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+            self.call_other_actor_event(game, game_type, Vec::new(), &mut actions)
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+            return Ok(actions);
+        }
+
+        if let Some(game) = live_game {
+            let game_class_id = self
+                .actor_classes
+                .get(&game)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor: game })?;
+            let game_class = self.resolved_object(&game_class_id)?;
+            let mut game_instance = self
+                .instances
+                .remove(&game)
+                .ok_or(DispatchError::ActiveActorContext { actor: game })?;
+            let result = self.destroy_actor(game, &game_class, &mut game_instance, &mut actions);
+            self.instances.insert(game, game_instance);
+            result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        if game_object.is_some() {
+            let mut hud_instance = self
+                .instances
+                .remove(&hud)
+                .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+            let clear_result = self.set_actor_stored(
+                &hud_class,
+                &mut hud_instance,
+                "QHUDGame",
+                StoredValue::Object(None),
+            );
+            self.instances.insert(hud, hud_instance);
+            clear_result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
         Ok(actions)
     }
 

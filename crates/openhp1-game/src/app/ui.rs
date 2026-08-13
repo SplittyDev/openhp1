@@ -10,7 +10,7 @@ use egui::{Align2, Color32, FontId, Id, LayerId, Order, Pos2, Rect, Sense, Textu
 use openhp1_audio::AudioClip;
 use openhp1_package::{ConfigEntry, ObjectReference, PackageStore, ResolvedObject};
 use openhp1_render::{AmbientOcclusion, Antialiasing, DisplaySettings, RendererMode, ToneMapper};
-use openhp1_runtime::{BossHealthUiState, PlayerUiState, ScriptRuntime};
+use openhp1_runtime::{BossHealthUiState, HudGameKind, PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
 use super::graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS};
@@ -362,6 +362,15 @@ struct UiTextures {
     hud_enemy_malfoy: TextureHandle,
     hud_enemy_fluffy_awake: TextureHandle,
     hud_enemy_fluffy_asleep: TextureHandle,
+    hud_game_bar: TextureHandle,
+    hud_game_bar_tip: TextureHandle,
+    hud_game_closed_hand: TextureHandle,
+    hud_game_closed_hand_key: TextureHandle,
+    hud_game_closed_hand_snitch: TextureHandle,
+    hud_game_half_open_hand: TextureHandle,
+    hud_game_open_hand: TextureHandle,
+    hud_game_key: TextureHandle,
+    hud_game_snitch: TextureHandle,
     letter: [TextureHandle; 2],
     slider_track: TextureHandle,
     slider_knob: TextureHandle,
@@ -820,6 +829,40 @@ impl GameUi {
                 "HPMenu.Icons.FluffyHeadMAsleep",
                 true,
             )?,
+            hud_game_bar: load_texture(context, &mut packages, "HPBase.Icons.HandBar", true)?,
+            hud_game_bar_tip: load_texture(context, &mut packages, "HPBase.Icons.BarTip", true)?,
+            hud_game_closed_hand: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.ClosedHand",
+                true,
+            )?,
+            hud_game_closed_hand_key: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.ClosedHandKey",
+                true,
+            )?,
+            hud_game_closed_hand_snitch: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.ClosedHandSnitch",
+                true,
+            )?,
+            hud_game_half_open_hand: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.HalfOpenHand",
+                true,
+            )?,
+            hud_game_open_hand: load_texture(
+                context,
+                &mut packages,
+                "HPBase.Icons.OpenHand",
+                true,
+            )?,
+            hud_game_key: load_texture(context, &mut packages, "HPBase.Icons.Key", true)?,
+            hud_game_snitch: load_texture(context, &mut packages, "HPBase.Icons.Snitch", true)?,
             letter: [
                 load_texture(context, &mut packages, "HPMenu.Icons.hedLetter1", true)?,
                 load_texture(context, &mut packages, "HPMenu.Icons.hedLetter2", true)?,
@@ -1278,6 +1321,90 @@ impl GameUi {
         }
         if let Some(boss) = &self.player.boss_health {
             draw_boss_health(&painter, canvas, &self.textures, boss);
+        }
+        if let Some(warning) = &self.player.warning
+            && warning.visible
+        {
+            let mut font_size = 18.0;
+            let mut galley = painter.layout_no_wrap(
+                warning.text.clone(),
+                FontId::proportional(font_size * scale),
+                Color32::WHITE,
+            );
+            for smaller in [14.0, 12.0] {
+                if galley.size().x <= (REFERENCE_SIZE.x - 32.0) * scale {
+                    break;
+                }
+                font_size = smaller;
+                galley = painter.layout_no_wrap(
+                    warning.text.clone(),
+                    FontId::proportional(font_size * scale),
+                    Color32::WHITE,
+                );
+            }
+            let text = Pos2::new(
+                canvas.center().x - galley.size().x * 0.5,
+                canvas.min.y + 16.0 * scale,
+            );
+            painter.rect_filled(
+                Rect::from_min_size(
+                    text - Vec2::splat(8.0 * scale),
+                    galley.size() + Vec2::splat(16.0 * scale),
+                ),
+                0.0,
+                Color32::from_black_alpha(128),
+            );
+            painter.galley(text, galley, Color32::WHITE);
+        }
+        if let Some(game) = self.player.hud_game {
+            let x = (REFERENCE_SIZE.x - self.textures.hud_game_bar.size_vec2().x) * 0.5;
+            let y = REFERENCE_SIZE.y - 64.0;
+            draw_texture(
+                &painter,
+                canvas.min,
+                scale,
+                &self.textures.hud_game_bar,
+                Pos2::new(x, y),
+            );
+            draw_texture(
+                &painter,
+                canvas.min,
+                scale,
+                &self.textures.hud_game_bar_tip,
+                Pos2::new(x + self.textures.hud_game_bar.size_vec2().x, y),
+            );
+            let hand = if game.grabbed {
+                match game.kind {
+                    HudGameKind::Quidditch => &self.textures.hud_game_closed_hand_snitch,
+                    HudGameKind::FlyingKeys => &self.textures.hud_game_closed_hand_key,
+                }
+            } else if game.grab_time > 0.0 {
+                &self.textures.hud_game_closed_hand
+            } else if game.target_position < game.catch_position {
+                &self.textures.hud_game_open_hand
+            } else {
+                &self.textures.hud_game_half_open_hand
+            };
+            draw_texture(
+                &painter,
+                canvas.min,
+                scale,
+                hand,
+                Pos2::new(x - 92.0, y - 11.0),
+            );
+            if !game.grabbed {
+                let target = match game.kind {
+                    HudGameKind::Quidditch => &self.textures.hud_game_snitch,
+                    HudGameKind::FlyingKeys => &self.textures.hud_game_key,
+                };
+                draw_texture(
+                    &painter,
+                    canvas.min,
+                    scale,
+                    target,
+                    Pos2::new(x + game.target_position as f32 - 64.0, y),
+                );
+            }
         }
     }
 

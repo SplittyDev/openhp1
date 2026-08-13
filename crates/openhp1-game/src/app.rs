@@ -882,6 +882,10 @@ impl Graphics {
             }
         }
         self.update_audio();
+        match self.runtime.update_player_hud_game() {
+            Ok(actions) => self.apply_actions(actions),
+            Err(error) => self.last_error = Some(format!("HUD update failed: {error}")),
+        }
         if let Ok(player) = self.runtime.player_ui_state() {
             self.game_ui.set_player_state(player);
         }
