@@ -9393,6 +9393,9 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         class_id.clone(),
         class_script(0, ObjectReference::Export(3)),
     );
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
     runtime.scripts.insert(
         object_id(&package, 3),
         class_script(3, ObjectReference::None),
@@ -9432,6 +9435,9 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
     runtime
         .fields
         .insert((class_id.clone(), "standingcount".to_owned()), None);
+    runtime
+        .fields
+        .insert((class_id.clone(), "touching".to_owned()), None);
 
     let instance = |location: [f32; 3], block_actors: bool| {
         [
@@ -9621,6 +9627,50 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         fields["bBlockActors"].clone(),
         StoredValue::Value(Value::Bool(false)),
     );
+    let touch_function = object_id(&package, 2);
+    let other_parameter = 2_i32;
+    let mut touch_bytecode = vec![0x19, 0x00];
+    touch_bytecode.extend(other_parameter.to_le_bytes());
+    touch_bytecode.extend([8, 0, 0, 0x61, 0x2f, 0x21]);
+    touch_bytecode.extend(3_i32.to_le_bytes());
+    touch_bytecode.extend([0x16, 0x04, 0x0b]);
+    runtime.scripts.insert(
+        touch_function.clone(),
+        Arc::new(ScriptExport {
+            export_index: touch_function.export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: touch_function.export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 76,
+                raw_len: touch_bytecode.len(),
+                bytes: touch_bytecode,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: 0,
+                replication_offset: None,
+            }),
+        }),
+    );
+    runtime.frame_arguments.insert(
+        touch_function.clone(),
+        Arc::new(vec![(other_parameter, 0, false)]),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "Touch", 0),
+        Some(touch_function),
+    );
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
     actions.clear();
@@ -9639,16 +9689,18 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         actor: 1,
         rotation: [0, 16_384, 0],
     }));
-    assert!(actions.iter().any(|action| {
-        matches!(
-            action,
-            ActorAction::DispatchEvent {
-                actor: 1,
-                event: "Touch",
-                ..
-            }
-        )
-    }));
+    assert!(runtime.touching.contains(&(1, 3)));
+    assert!(
+        !actions
+            .iter()
+            .any(|action| { matches!(action, ActorAction::DispatchEvent { event: "Touch", .. }) })
+    );
+    assert!(
+        !actions
+            .iter()
+            .any(|action| matches!(action, ActorAction::DeferredCall { .. })),
+        "synchronous Touch must expose the moving actor to nested context calls: {actions:#?}"
+    );
     assert_eq!(
         current_instance.get(&fields["Rotation"]),
         Some(&StoredValue::Value(Value::Rotator([0, 16_384, 0])))

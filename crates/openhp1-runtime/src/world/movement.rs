@@ -1193,8 +1193,7 @@ impl ScriptRuntime {
         {
             let pair = actor_pair(actor, hit.actor);
             if self.touching.insert(pair) {
-                self.queue_pair_event(actions, actor, hit.actor, "Touch")?;
-                self.queue_pair_event(actions, hit.actor, actor, "Touch")?;
+                self.call_movement_touch(actor, actor_class, instance, hit.actor, actions)?;
             }
         }
         self.queue_ended_touches(actor, &current, location, instance, actions)?;
@@ -2175,6 +2174,58 @@ impl ScriptRuntime {
             arguments: vec![Value::Object(handle)],
         });
         Ok(())
+    }
+
+    fn call_movement_touch(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        other: usize,
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<(), String> {
+        let other_object = self
+            .actor_objects
+            .get(&other)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {other} has no object identity"))?;
+        let other_handle = self
+            .object_handle(other_object)
+            .map_err(|error| error.to_string())?;
+        self.call_actor_event(
+            actor,
+            actor_class,
+            instance,
+            "Touch",
+            vec![Value::Object(other_handle)],
+            actions,
+        )?;
+        if self.destroyed.contains(&actor)
+            || self.destroyed.contains(&other)
+            || !self.touching.contains(&actor_pair(actor, other))
+        {
+            return Ok(());
+        }
+
+        let actor_object = self
+            .actor_objects
+            .get(&actor)
+            .cloned()
+            .ok_or_else(|| format!("runtime actor {actor} has no object identity"))?;
+        let actor_handle = self
+            .object_handle(actor_object)
+            .map_err(|error| error.to_string())?;
+        if self.instances.contains_key(&actor) {
+            return Err(DispatchError::ActiveActorContext { actor }.to_string());
+        }
+        self.instances.insert(actor, std::mem::take(instance));
+        let result =
+            self.call_other_actor_event(other, "Touch", vec![Value::Object(actor_handle)], actions);
+        *instance = self
+            .instances
+            .remove(&actor)
+            .ok_or_else(|| DispatchError::ActiveActorContext { actor }.to_string())?;
+        result
     }
 
     fn collision_actor(

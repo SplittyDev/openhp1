@@ -1,5 +1,9 @@
 use super::*;
 
+fn falling_calls_hit_wall(bounce: bool, hit_pawn: bool) -> bool {
+    bounce || !hit_pawn
+}
+
 impl ScriptRuntime {
     pub(super) fn tick_interpolation_manager(
         &mut self,
@@ -399,17 +403,26 @@ impl ScriptRuntime {
                 .transpose()
                 .map_err(|error| error.to_string())?
                 .unwrap_or(false);
-            if pawn && !hit_pawn {
-                self.try_mount(actor, class, instance, hit, actions)?;
-            }
-            if !hit_pawn {
-                self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
-            }
-
-            if self.actor_bool(class, instance, "bBounce")? {
+            let bounce = self.actor_bool(class, instance, "bBounce")?;
+            let calls_hit_wall = falling_calls_hit_wall(bounce, hit_pawn);
+            if bounce {
+                if calls_hit_wall {
+                    self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
+                }
+                if self.destroyed.contains(&actor)
+                    || self.actor_byte(class, instance, "Physics")? == PHYS_NONE
+                {
+                    return Ok(());
+                }
                 let reflected = move_delta.reflect(hit.normal);
                 self.try_move_actor(actor, class, reflected.to_array(), instance, actions)?;
                 continue;
+            }
+            if pawn && !hit_pawn {
+                self.try_mount(actor, class, instance, hit, actions)?;
+            }
+            if calls_hit_wall {
+                self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
             }
             if hit.normal.z < WALKABLE_FLOOR_Z {
                 let mut aligned =
@@ -1363,7 +1376,7 @@ fn mount_trace_points(
 
 #[cfg(test)]
 mod tests {
-    use super::mount_trace_points;
+    use super::{falling_calls_hit_wall, mount_trace_points};
     use glam::Vec3;
 
     #[test]
@@ -1374,5 +1387,11 @@ mod tests {
         assert_eq!(raised, Vec3::new(0.0, 0.0, 96.5));
         assert_eq!(far, Vec3::new(0.0, 30.0, 96.5));
         assert_eq!(end, Vec3::new(0.0, 30.0, 0.0));
+    }
+
+    #[test]
+    fn bouncing_actor_receives_hit_wall_when_it_hits_a_pawn() {
+        assert!(falling_calls_hit_wall(true, true));
+        assert!(!falling_calls_hit_wall(false, true));
     }
 }

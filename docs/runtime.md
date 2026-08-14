@@ -317,6 +317,8 @@ targeting reticle to destroy their child emitters.
 
 Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
+Walking `MoveTo` and `MoveToward` use HP1's shipped 16-unit horizontal arrival
+radius rather than the generic speed-scaled UE1 threshold.
 During latent movement, a swimming or flying pawn with `bCanStrafe=false`
 accelerates along its current `Rotation` while `DesiredRotation` turns toward
 the destination. Other pawns accelerate directly toward the destination. This
@@ -340,11 +342,20 @@ resume unless pawn rotation follows its `DesiredRotation`. This is not a claim
 that every UE1 `PlayerPawn` movement action uses generic pawn rotation.
 `MoveSmooth` first attempts the requested movement and then slides the
 untraveled delta along the collision plane; it is not an alias for `Move`.
+Actor movement delivers a new nonblocking contact's `Touch` callbacks
+synchronously, moving actor first, before returning a blocking world hit to
+physics. This preserves the native callback order when the same move then
+destroys the moving actor on world impact. The active mover remains addressable
+while the other actor's callback runs, so qualified calls back into that mover
+execute in the same native callback chain.
 Walking players use the same wall-slide response for non-pushable actor
 collisions as for BSP walls.
 Falling actors that hit a second wall use the original engine's
 `AActor::TwoWallAdjust` response, projecting the remaining movement along both
 surfaces instead of stopping in a corner.
+Falling actors with `bBounce=True` call their authored `HitWall` event directly
+for pawn collisions before applying the bounce response. Non-bouncing falls
+retain `AActor::processHitWall`'s pawn suppression.
 `Actor.SetLocation` validates its finite target before changing persistent or
 scene state. When `bCollideWorld` or `bCollideWhenPlacing` is set, the target
 cylinder or box is checked at the target and its nearby UE1 placement grid;

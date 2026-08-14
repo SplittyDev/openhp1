@@ -16,6 +16,8 @@ pub(super) fn move_to_direction(
     }
     if physics == PHYS_WALKING {
         delta.z = 0.0;
+        let distance_squared = delta.length_squared();
+        return (distance_squared >= 256.0).then(|| delta.normalize());
     }
     let distance_squared = delta.length_squared();
     if distance_squared < 1.0 || distance_squared < velocity.length_squared() * 0.05 {
@@ -283,13 +285,19 @@ mod tests {
         assert!(has_movement(Vec3::Y));
         assert!(has_movement(Vec3::Z));
         assert!(!has_movement(Vec3::ZERO));
-        assert_eq!(
-            move_to_direction(PHYS_WALKING, Vec3::new(3.0, 4.0, 100.0), Vec3::ZERO, 1.0),
-            Some(Vec3::new(0.6, 0.8, 0.0))
+        assert!(
+            move_to_direction(PHYS_WALKING, Vec3::new(30.0, 40.0, 100.0), Vec3::ZERO, 1.0)
+                .unwrap()
+                .abs_diff_eq(Vec3::new(0.6, 0.8, 0.0), 0.000001)
         );
         assert_eq!(
-            move_to_direction(PHYS_WALKING, Vec3::X, Vec3::splat(4.0), 1.0),
+            move_to_direction(PHYS_WALKING, Vec3::new(15.0, 0.0, 100.0), Vec3::ZERO, 1.0),
             None
+        );
+        assert_eq!(
+            move_to_direction(PHYS_WALKING, Vec3::X * 100.0, Vec3::X * 600.0, 1.0),
+            Some(Vec3::X),
+            "HP1 walking MoveTo must not finish at the generic speed-scaled threshold"
         );
         assert_eq!(
             move_to_direction(PHYS_WALKING, Vec3::X * 100.0, Vec3::ZERO, -0.1),
