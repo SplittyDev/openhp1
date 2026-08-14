@@ -2,6 +2,7 @@
 members = [
     "crates/openhp1-audio",
     "crates/openhp1-game",
+    "crates/openhp1-launcher",
     "crates/openhp1-map",
     "crates/openhp1-mesh",
     "crates/openhp1-package",
@@ -28,10 +29,12 @@ egui = "0.35"
 egui-wgpu = { version = "0.35", default-features = false }
 egui-winit = { version = "0.35", default-features = false, features = ["wayland", "x11"] }
 glam = "0.30"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 pollster = "0.4"
 kira = { version = "0.12", default-features = false, features = ["cpal", "mp2", "pcm", "wav"] }
 mint = "0.5"
 rustc-hash = "2.1"
+rfd = "0.17"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

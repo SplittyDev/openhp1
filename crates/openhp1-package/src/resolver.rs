@@ -26,6 +26,176 @@ pub struct ConfigEntry {
     pub values: Vec<String>,
 }
 
+const OPENHP1_CONFIG: &str = "OpenHP1.ini";
+const GAME_DATA_SECTION: &str = "OpenHP1.GameData";
+const GAME_ROOT_KEY: &str = "Root";
+
+/// A validated original-game installation and its authored startup map.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GameInstallation {
+    root: PathBuf,
+    startup_map: PathBuf,
+}
+
+impl GameInstallation {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn startup_map(&self) -> &Path {
+        &self.startup_map
+    }
+}
+
+/// Resolves the configured game root, or infers and remembers a conventional one.
+pub fn resolve_game_installation() -> Result<GameInstallation, GameInstallationError> {
+    let settings_dir = settings_dir();
+    resolve_game_installation_with(&settings_dir, inferred_game_roots()?)
+}
+
+/// Validates and stores the selected game root in `OpenHP1.ini`.
+pub fn configure_game_installation(
+    root: impl AsRef<Path>,
+) -> Result<GameInstallation, GameInstallationError> {
+    configure_game_installation_with_settings_dir(root.as_ref(), &settings_dir())
+}
+
+fn configure_game_installation_with_settings_dir(
+    root: &Path,
+    settings_dir: &Path,
+) -> Result<GameInstallation, GameInstallationError> {
+    let installation = validate_game_root(root, settings_dir)?;
+    write_game_root(settings_dir, installation.root())?;
+    Ok(installation)
+}
+
+fn resolve_game_installation_with(
+    settings_dir: &Path,
+    inferred_roots: impl IntoIterator<Item = PathBuf>,
+) -> Result<GameInstallation, GameInstallationError> {
+    if let Some(root) = configured_game_root(settings_dir)? {
+        return validate_game_root(&root, settings_dir);
+    }
+    for root in inferred_roots {
+        if let Ok(installation) = validate_game_root(&root, settings_dir) {
+            write_game_root(settings_dir, installation.root())?;
+            return Ok(installation);
+        }
+    }
+    Err(GameInstallationError::NotConfigured)
+}
+
+fn configured_game_root(settings_dir: &Path) -> Result<Option<PathBuf>, GameInstallationError> {
+    let path = settings_dir.join(OPENHP1_CONFIG);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(GameInstallationError::Io { path, source }),
+    };
+    Ok(ini_values(&contents, GAME_DATA_SECTION, GAME_ROOT_KEY)
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .map(PathBuf::from))
+}
+
+fn validate_game_root(
+    root: &Path,
+    settings_dir: &Path,
+) -> Result<GameInstallation, GameInstallationError> {
+    if !root.is_absolute() {
+        return Err(GameInstallationError::InvalidRoot {
+            root: root.to_path_buf(),
+            reason: "OpenHP1.ini requires an absolute path".to_owned(),
+        });
+    }
+    let root = root.to_path_buf();
+    let packages =
+        PackageStore::scan_game_root_with_settings_dir(&root, settings_dir).map_err(|source| {
+            GameInstallationError::InvalidRoot {
+                root: root.clone(),
+                reason: source.to_string(),
+            }
+        })?;
+    let local_map = packages.config_value("URL", "LocalMap").ok_or_else(|| {
+        GameInstallationError::InvalidRoot {
+            root: root.clone(),
+            reason: "Default.ini has no [URL] LocalMap entry".to_owned(),
+        }
+    })?;
+    let package = Path::new(&local_map)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| GameInstallationError::InvalidRoot {
+            root: root.clone(),
+            reason: format!("LocalMap `{local_map}` is not a valid package name"),
+        })?;
+    let startup_map =
+        packages
+            .package_path(package)
+            .ok_or_else(|| GameInstallationError::InvalidRoot {
+                root: root.clone(),
+                reason: format!("could not find configured startup map `{local_map}`"),
+            })?;
+    Ok(GameInstallation {
+        root,
+        startup_map: startup_map.to_path_buf(),
+    })
+}
+
+fn write_game_root(settings_dir: &Path, root: &Path) -> Result<(), GameInstallationError> {
+    let value = root
+        .to_str()
+        .filter(|value| !value.contains(['\n', '\r']))
+        .ok_or_else(|| GameInstallationError::InvalidRoot {
+            root: root.to_path_buf(),
+            reason: "the path cannot be represented in OpenHP1.ini".to_owned(),
+        })?;
+    let path = settings_dir.join(OPENHP1_CONFIG);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => return Err(GameInstallationError::Io { path, source }),
+    };
+    write_ini_atomically(
+        &path,
+        update_ini(
+            &contents,
+            &[ConfigEntry {
+                section: GAME_DATA_SECTION.to_owned(),
+                key: GAME_ROOT_KEY.to_owned(),
+                values: vec![value.to_owned()],
+            }],
+        ),
+    )
+    .map_err(GameInstallationError::Settings)
+}
+
+fn inferred_game_roots() -> Result<Vec<PathBuf>, GameInstallationError> {
+    let current_directory = env::current_dir().map_err(|source| GameInstallationError::Io {
+        path: PathBuf::from("current directory"),
+        source,
+    })?;
+    let mut roots = vec![current_directory.join("res")];
+    let executable = env::current_exe().map_err(|source| GameInstallationError::Io {
+        path: PathBuf::from("current executable"),
+        source,
+    })?;
+    if let Some(directory) = executable.parent() {
+        roots.push(directory.join("res"));
+    }
+    #[cfg(target_os = "windows")]
+    for variable in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Some(directory) = env::var_os(variable) {
+            roots.push(
+                PathBuf::from(directory)
+                    .join("EA Games")
+                    .join("Harry Potter TM"),
+            );
+        }
+    }
+    Ok(roots)
+}
+
 /// Discovers packages through `[Core.System] Paths` and caches them by their
 /// case-insensitive Unreal package name.
 pub struct PackageStore {
@@ -41,7 +211,7 @@ pub struct PackageStore {
 
 impl PackageStore {
     pub fn scan_game_root(root: impl AsRef<Path>) -> ResolveResult<Self> {
-        Self::scan_game_root_with_settings_dir(root, default_settings_dir())
+        Self::scan_game_root_with_settings_dir(root, settings_dir())
     }
 
     pub fn scan_game_root_with_settings_dir(
@@ -421,7 +591,8 @@ struct ConfigFiles {
     fallbacks: Vec<PathBuf>,
 }
 
-fn default_settings_dir() -> PathBuf {
+/// Returns the platform-specific directory for OpenHP1 settings and user data.
+pub fn settings_dir() -> PathBuf {
     if let Some(path) = env::var_os("OPENHP1_SETTINGS_DIR") {
         return PathBuf::from(path);
     }
@@ -1044,6 +1215,27 @@ pub enum ResolveError {
     },
 }
 
+#[derive(Debug, Error)]
+pub enum GameInstallationError {
+    #[error(
+        "OpenHP1 could not find the original game files; configure the folder containing `Maps` and `System`"
+    )]
+    NotConfigured,
+
+    #[error("game root `{}` is invalid: {reason}", root.display())]
+    InvalidRoot { root: PathBuf, reason: String },
+
+    #[error("failed to read `{}`: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to update OpenHP1.ini: {0}")]
+    Settings(#[source] ResolveError),
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1055,10 +1247,86 @@ mod tests {
     use crate::{
         Export, Import, NameEntry, ObjectReference, PackageHeader, PackageSummary,
         resolver::{
+            GameInstallationError, configure_game_installation_with_settings_dir,
             core_system_paths, find_export, find_import_export, import_target, localization_value,
-            remove_ini_section,
+            remove_ini_section, resolve_game_installation_with,
         },
     };
+
+    fn game_installation_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fixture = std::env::temp_dir().join(format!("openhp1-{name}-{unique}"));
+        let game_root = fixture.join("game");
+        let settings_dir = fixture.join("settings");
+        fs::create_dir_all(game_root.join("System")).unwrap();
+        fs::create_dir_all(game_root.join("Maps")).unwrap();
+        fs::create_dir_all(&settings_dir).unwrap();
+        fs::write(
+            game_root.join("System/Default.ini"),
+            "[URL]\nLocalMap=Startup.unr\n[Core.System]\nPaths=../Maps/*.unr\n",
+        )
+        .unwrap();
+        fs::write(
+            game_root.join("Maps/STARTUP.UNR"),
+            crate::PACKAGE_MAGIC.to_le_bytes(),
+        )
+        .unwrap();
+        (game_root, settings_dir)
+    }
+
+    #[test]
+    fn configures_and_resolves_the_game_root_through_openhp1_ini() {
+        let (game_root, settings_dir) = game_installation_fixture("game-root");
+        fs::write(settings_dir.join("OpenHP1.ini"), "[Keep]\nValue=1\n").unwrap();
+
+        let configured =
+            configure_game_installation_with_settings_dir(&game_root, &settings_dir).unwrap();
+        let resolved = resolve_game_installation_with(&settings_dir, []).unwrap();
+
+        assert_eq!(resolved, configured);
+        assert_eq!(resolved.root(), game_root);
+        assert_eq!(resolved.startup_map().file_name().unwrap(), "STARTUP.UNR");
+        let ini = fs::read_to_string(settings_dir.join("OpenHP1.ini")).unwrap();
+        assert!(ini.contains("[Keep]\nValue=1"));
+        assert!(ini.contains("[OpenHP1.GameData]"));
+        assert!(ini.contains(&format!("Root={}", resolved.root().display())));
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn invalid_configured_root_does_not_fall_back_to_an_inferred_root() {
+        let (game_root, settings_dir) = game_installation_fixture("bad-game-root");
+        let missing = game_root.parent().unwrap().join("missing");
+        fs::write(
+            settings_dir.join("OpenHP1.ini"),
+            format!("[OpenHP1.GameData]\nRoot={}\n", missing.display()),
+        )
+        .unwrap();
+
+        let error = resolve_game_installation_with(&settings_dir, [game_root.clone()]).unwrap_err();
+        assert!(
+            matches!(error, GameInstallationError::InvalidRoot { root, .. } if root == missing)
+        );
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn infers_and_remembers_a_valid_game_root_when_unconfigured() {
+        let (game_root, settings_dir) = game_installation_fixture("inferred-game-root");
+
+        let resolved = resolve_game_installation_with(&settings_dir, [game_root.clone()]).unwrap();
+
+        assert_eq!(resolved.root(), game_root);
+        assert!(
+            fs::read_to_string(settings_dir.join("OpenHP1.ini"))
+                .unwrap()
+                .contains(&format!("Root={}", game_root.display()))
+        );
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn reads_only_core_system_package_paths() {

@@ -24,6 +24,9 @@ so `XeGTAO`, `xegtao`, and `XeGtAo` all mean the same thing.
 A newly generated file looks like this:
 
 ```ini
+[OpenHP1.GameData]
+Root=/path/to/Harry Potter TM
+
 [OpenHP1.Renderer]
 ResolutionX=1024
 ResolutionY=768
@@ -48,6 +51,17 @@ AntiAliasing=SMAA
 Bloom=true
 VolumetricLighting=true
 ```
+
+## `[OpenHP1.GameData]`
+
+| Key | Default | Accepted values | What it does |
+| --- | --- | --- | --- |
+| `Root` | Automatically detected when possible | An absolute directory path | Selects the original game folder containing `Maps` and `System`. |
+
+The launcher validates a selected root before writing it. When `Root` is absent,
+OpenHP1 checks for a local `res` directory and the standard Windows installation
+directory. A configured but unavailable or invalid root produces an error instead
+of silently selecting different game files.
 
 ## `[OpenHP1.Renderer]`
 

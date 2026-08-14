@@ -16,7 +16,11 @@ mod tables;
 pub use error::{Error, Result};
 pub use object::{ObjectReader, ObjectStack, PropertyKind, PropertyTag};
 pub use package::Package;
-pub use resolver::{ConfigEntry, PackageStore, ResolveError, ResolveResult, ResolvedObject};
+pub use resolver::{
+    ConfigEntry, GameInstallation, GameInstallationError, PackageStore, ResolveError,
+    ResolveResult, ResolvedObject, configure_game_installation, resolve_game_installation,
+    settings_dir,
+};
 pub use summary::{
     Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PackageHeader,
     PackageSummary,

@@ -44,6 +44,11 @@ The modern renderer is exactly what it says on the package. A much more modern r
 ## Installation
 > This is heavily work-in-progress, and no pre-built binaries are available yet.
 
+OpenHP1 requires original game data but does not distribute it. Start
+`openhp1-launcher`, choose the original game folder containing `Maps` and
+`System`, then select **Play**. The launcher remembers the validated folder in
+`OpenHP1.ini`.
+
 For building the game yourself, please refer to the [Development](#development) section below.
 
 ## Development
@@ -86,6 +91,7 @@ The OpenHP1 game is a re-implementation of the original game logic. It intends t
 You can build and run the game with:
 
 ```sh
+cargo run -p openhp1-launcher # launcher and game-data configuration
 cargo run -p openhp1-game # debug build
 cargo run -p openhp1-game --release # release build
 ```
@@ -106,5 +112,6 @@ rendering notes.
 
 ### Resources
 
-Original game data belongs in the gitignored `res/` directory and must not be committed.
-We do not distribute the original game data, as that constitutes copyright infringement.
+Original game data may remain in an external folder selected through the launcher.
+For development, the gitignored `res/` directory is also detected automatically.
+Original game data must never be committed or distributed with OpenHP1.

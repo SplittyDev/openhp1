@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use app::GameApp;
+use openhp1_package::{resolve_game_installation, settings_dir};
 use openhp1_render::RendererSettings;
 use openhp1_scene::LoadedScene;
 use tracing::{info, warn};
@@ -22,7 +23,11 @@ fn main() -> Result<()> {
     info!(path = %log_path.display(), "logging game diagnostics");
 
     let options = options()?;
-    let scene = LoadedScene::load(options.level)?;
+    let level = match options.level {
+        Some(level) => level,
+        None => resolve_game_installation()?.startup_map().to_path_buf(),
+    };
+    let scene = LoadedScene::load(level)?;
     let diagnostics = scene
         .actors
         .iter()
@@ -53,7 +58,7 @@ fn main() -> Result<()> {
 }
 
 fn init_logging() -> Result<PathBuf> {
-    let directory = PathBuf::from("logs");
+    let directory = settings_dir().join("Logs");
     fs::create_dir_all(&directory).context("could not create logs directory")?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -76,7 +81,7 @@ fn init_logging() -> Result<PathBuf> {
 }
 
 struct Options {
-    level: PathBuf,
+    level: Option<PathBuf>,
     renderer: Option<RendererSettings>,
 }
 
@@ -86,16 +91,18 @@ fn options() -> Result<Options> {
 
 fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options> {
     let mut options = Options {
-        level: PathBuf::from("res/Maps/startup.unr"),
+        level: None,
         renderer: None,
     };
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         if argument == "--level" {
-            options.level = arguments
-                .next()
-                .map(PathBuf::from)
-                .context("--level requires a map path")?;
+            options.level = Some(
+                arguments
+                    .next()
+                    .map(PathBuf::from)
+                    .context("--level requires a map path")?,
+            );
             continue;
         }
         let argument = argument
@@ -129,7 +136,7 @@ mod tests {
     #[test]
     fn parses_renderer_and_level_options() {
         let defaults = options_from([]).unwrap();
-        assert_eq!(defaults.level, PathBuf::from("res/Maps/startup.unr"));
+        assert_eq!(defaults.level, None);
         assert_eq!(defaults.renderer, None);
 
         let options = options_from([
@@ -141,7 +148,10 @@ mod tests {
             OsString::from("/game/Maps/Lev2_HogFront.unr"),
         ])
         .unwrap();
-        assert_eq!(options.level, PathBuf::from("/game/Maps/Lev2_HogFront.unr"));
+        assert_eq!(
+            options.level,
+            Some(PathBuf::from("/game/Maps/Lev2_HogFront.unr"))
+        );
         let renderer = options.renderer.unwrap();
         assert_eq!(renderer.mode, RendererMode::Modern);
         assert_eq!(renderer.tone_mapper, ToneMapper::Aces);
