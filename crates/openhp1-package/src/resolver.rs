@@ -271,16 +271,25 @@ impl PackageStore {
         root: impl AsRef<Path>,
         settings_dir: impl AsRef<Path>,
     ) -> ResolveResult<Self> {
+        let root = root.as_ref();
         let settings_dir = settings_dir.as_ref();
         let path = settings_dir.join(OPENHP1_CONFIG);
         let language = read_openhp1_ini(settings_dir)
             .map_err(|source| ResolveError::Io { path, source })?
             .and_then(|contents| {
-                ini_values(&contents, GAME_DATA_SECTION, GAME_LANGUAGE_KEY)
+                let configured_root = ini_values(&contents, GAME_DATA_SECTION, GAME_ROOT_KEY)
                     .into_iter()
                     .find(|value| !value.is_empty())
+                    .map(PathBuf::from);
+                (configured_root.as_deref() == Some(root))
+                    .then(|| {
+                        ini_values(&contents, GAME_DATA_SECTION, GAME_LANGUAGE_KEY)
+                            .into_iter()
+                            .find(|value| !value.is_empty())
+                    })
+                    .flatten()
             });
-        Self::scan_game_root_with_language(root.as_ref(), settings_dir, language.as_deref())
+        Self::scan_game_root_with_language(root, settings_dir, language.as_deref())
     }
 
     fn scan_game_root_with_language(
