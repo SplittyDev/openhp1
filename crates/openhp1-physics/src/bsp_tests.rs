@@ -5,6 +5,17 @@ use openhp1_package::ObjectReference;
 use super::*;
 
 #[test]
+fn hull_clip_bounds_match_native_axis_bias() {
+    let bounds = hull_clip_bounds(Aabb {
+        minimum: Vec3::new(-10.0, -20.0, -30.0),
+        maximum: Vec3::new(10.0, 20.0, 30.0),
+    });
+
+    assert_eq!(bounds.minimum, Vec3::new(-10.1, -20.1, -30.1));
+    assert_eq!(bounds.maximum, Vec3::new(9.9, 19.9, 30.1));
+}
+
+#[test]
 fn decodes_and_sweeps_serialized_leaf_hull() {
     let mut model = empty_model();
     model.surfaces.push(BspSurface {
@@ -266,9 +277,9 @@ fn point_trace_hits_bsp_polygons_from_both_sides() {
         .sweep_aabb(Vec3::NEG_X * 10.0, Vec3::X * 10.0, Vec3::ZERO)
         .unwrap();
 
-    assert!((front.fraction - 0.45).abs() < 0.0001);
+    assert!((front.fraction - 0.475).abs() < 0.0001);
     assert_eq!(front.normal, Vec3::X);
-    assert!((back.fraction - 0.45).abs() < 0.0001);
+    assert!((back.fraction - 0.475).abs() < 0.0001);
     assert_eq!(back.normal, Vec3::NEG_X);
 }
 

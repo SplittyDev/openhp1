@@ -2050,6 +2050,7 @@ mod iterator_tests {
             "CollisionWidth",
             "Rotation",
             "CollideType",
+            "bStatic",
             "bCollideActors",
             "bBlockActors",
             "bBlockPlayers",
@@ -2128,6 +2129,10 @@ mod iterator_tests {
                 (
                     fields["bCollideActors"].clone(),
                     StoredValue::Value(Value::Bool(collide_actors)),
+                ),
+                (
+                    fields["bStatic"].clone(),
+                    StoredValue::Value(Value::Bool(false)),
                 ),
                 (
                     fields["bBlockActors"].clone(),

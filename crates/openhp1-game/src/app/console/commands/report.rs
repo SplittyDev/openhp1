@@ -223,6 +223,23 @@ fn report_text(graphics: &Graphics, issue: &str, captured: Duration) -> String {
     )
     .unwrap();
 
+    writeln!(report, "\n## Mover trace\n").unwrap();
+    match graphics.runtime.mover_trace() {
+        None => writeln!(
+            report,
+            "- Disabled; run `movertrace on` before reproducing."
+        )
+        .unwrap(),
+        Some(trace) if trace.is_empty() => {
+            writeln!(report, "- Enabled; no events captured.").unwrap()
+        }
+        Some(trace) => {
+            for event in trace {
+                writeln!(report, "- `{event}`").unwrap();
+            }
+        }
+    }
+
     writeln!(report, "\n## Capability warnings seen so far\n").unwrap();
     let mut warnings = 0;
     for (index, actor) in graphics.scene.actors.iter().enumerate() {

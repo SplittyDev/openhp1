@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::VecDeque, path::Path, sync::Arc};
 
 use glam::Vec3;
 use openhp1_audio::AudioClip;
@@ -204,6 +204,8 @@ const PROBE_EVENTS: [&str; 64] = [
     "All",
 ];
 
+const MOVER_TRACE_LIMIT: usize = 8_192;
+
 pub struct ScriptRuntime {
     packages: PackageStore,
     console_command_host: Option<Box<dyn ConsoleCommandHost>>,
@@ -269,6 +271,27 @@ pub struct ScriptRuntime {
     actor_bases: HashMap<usize, Option<ObjectId>>,
     base_children: HashMap<ObjectId, Vec<usize>>,
     touching: HashSet<(usize, usize)>,
+    mover_trace: Option<VecDeque<String>>,
+}
+
+impl ScriptRuntime {
+    pub fn set_mover_trace_enabled(&mut self, enabled: bool) {
+        self.mover_trace = enabled.then(VecDeque::new);
+    }
+
+    pub fn mover_trace(&self) -> Option<&VecDeque<String>> {
+        self.mover_trace.as_ref()
+    }
+
+    fn record_mover_trace(&mut self, event: String) {
+        let Some(trace) = &mut self.mover_trace else {
+            return;
+        };
+        if trace.len() == MOVER_TRACE_LIMIT {
+            trace.pop_front();
+        }
+        trace.push_back(event);
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

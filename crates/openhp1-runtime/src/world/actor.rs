@@ -98,6 +98,7 @@ impl ScriptRuntime {
             actor_bases: HashMap::default(),
             base_children: HashMap::default(),
             touching: HashSet::default(),
+            mover_trace: None,
         })
     }
 

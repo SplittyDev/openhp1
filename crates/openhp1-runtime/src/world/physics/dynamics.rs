@@ -1080,88 +1080,107 @@ impl ScriptRuntime {
         elapsed: f32,
         actions: &mut Vec<ActorAction>,
     ) -> std::result::Result<(), String> {
-        let old_location = self.actor_vector(class, instance, "Location")?;
-        self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
         if !self
             .class_has_name(class, "Mover")
             .map_err(|error| error.to_string())?
         {
             return Ok(());
         }
+        let old_location = self.actor_vector(class, instance, "Location")?;
+        self.set_actor_value(class, instance, "OldLocation", Value::Vector(old_location))?;
 
-        if elapsed > 0.0 && self.actor_bool(class, instance, "bCollideWorld")? {
-            let location = Vec3::from_array(old_location);
-            if let Some(zone) = self.zone_physics(location, actor, instance)?
-                && zone.gravity.length_squared() > 0.0
-            {
-                let velocity = Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
-                let parallel_velocity =
-                    zone.gravity * velocity.dot(zone.gravity) / zone.gravity.length_squared();
-                let gravity_delta =
-                    parallel_velocity * elapsed + zone.gravity * (0.5 * elapsed * elapsed);
-                self.set_actor_value(
-                    class,
-                    instance,
-                    "Velocity",
-                    Value::Vector((velocity + zone.gravity * elapsed).to_array()),
-                )?;
-
-                let hit =
-                    self.try_move_actor(actor, class, gravity_delta.to_array(), instance, actions)?;
-                let moved =
-                    Vec3::from_array(self.actor_vector(class, instance, "Location")?) - location;
-                if hit.fraction > 0.0 && moved.length_squared() > 0.0 {
-                    let key = usize::from(self.actor_byte(class, instance, "KeyNum")?).min(7);
-                    let mut key_positions =
-                        self.required_actor_property(class, instance, "KeyPos")?;
-                    let StoredValue::Array(values) = &mut key_positions else {
-                        return Err(format!("actor property KeyPos is {key_positions:?}"));
-                    };
-                    let Some(StoredValue::Value(Value::Vector(key_position))) = values.get_mut(key)
-                    else {
-                        return Err(format!(
-                            "actor property KeyPos[{key}] is missing or invalid"
-                        ));
-                    };
-                    *key_position = (Vec3::from_array(*key_position) + moved).to_array();
-                    self.set_actor_stored(class, instance, "KeyPos", key_positions)?;
-
-                    let old_position =
-                        Vec3::from_array(self.actor_vector(class, instance, "OldPos")?);
-                    self.set_actor_value(
-                        class,
-                        instance,
-                        "OldPos",
-                        Value::Vector((old_position + moved).to_array()),
-                    )?;
-                } else if hit.fraction == 0.0 && hit.normal.length_squared() > 0.0 {
-                    let base = hit
-                        .actor
-                        .and_then(|actor| self.actor_objects.get(&actor).cloned())
-                        .or_else(|| {
-                            self.level_info
-                                .and_then(|level| self.actor_objects.get(&level).cloned())
-                        });
-                    self.set_actor_base(actor, class, instance, base, actions)?;
-                }
+        if !self.actor_bool(class, instance, "bInterpolating")? {
+            if elapsed > 0.0 {
+                self.set_actor_value(class, instance, "Velocity", Value::Vector([0.0; 3]))?;
             }
+            return Ok(());
         }
 
         let mut time_left = elapsed;
-        while time_left > 0.0 {
-            if !self.actor_bool(class, instance, "bInterpolating")? {
+        loop {
+            if time_left <= 0.0 || !self.actor_bool(class, instance, "bInterpolating")? {
                 break;
             }
+            let mut gravity_moved = false;
+            if self.actor_bool(class, instance, "bCollideWorld")? {
+                let location = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+                if let Some(zone) = self.zone_physics(location, actor, instance)?
+                    && zone.gravity.length_squared() > 0.0
+                {
+                    let velocity =
+                        Vec3::from_array(self.actor_vector(class, instance, "Velocity")?);
+                    let parallel_velocity =
+                        zone.gravity * velocity.dot(zone.gravity) / zone.gravity.length_squared();
+                    let gravity_delta = parallel_velocity * time_left
+                        + zone.gravity * (0.5 * time_left * time_left);
+                    self.set_actor_value(
+                        class,
+                        instance,
+                        "Velocity",
+                        Value::Vector((velocity + zone.gravity * time_left).to_array()),
+                    )?;
+
+                    let hit = self.try_move_actor(
+                        actor,
+                        class,
+                        gravity_delta.to_array(),
+                        instance,
+                        actions,
+                    )?;
+                    let moved = Vec3::from_array(self.actor_vector(class, instance, "Location")?)
+                        - location;
+                    if hit.fraction > 0.0 && moved.length_squared() > 0.0 {
+                        gravity_moved = true;
+                        let key = usize::from(self.actor_byte(class, instance, "KeyNum")?).min(7);
+                        let mut key_positions =
+                            self.required_actor_property(class, instance, "KeyPos")?;
+                        let StoredValue::Array(values) = &mut key_positions else {
+                            return Err(format!("actor property KeyPos is {key_positions:?}"));
+                        };
+                        let Some(StoredValue::Value(Value::Vector(key_position))) =
+                            values.get_mut(key)
+                        else {
+                            return Err(format!(
+                                "actor property KeyPos[{key}] is missing or invalid"
+                            ));
+                        };
+                        *key_position = (Vec3::from_array(*key_position) + moved).to_array();
+                        self.set_actor_stored(class, instance, "KeyPos", key_positions)?;
+
+                        let old_position =
+                            Vec3::from_array(self.actor_vector(class, instance, "OldPos")?);
+                        self.set_actor_value(
+                            class,
+                            instance,
+                            "OldPos",
+                            Value::Vector((old_position + moved).to_array()),
+                        )?;
+                    } else if hit.fraction == 0.0 && hit.normal.length_squared() > 0.0 {
+                        let base = hit
+                            .actor
+                            .and_then(|actor| self.actor_objects.get(&actor).cloned())
+                            .or_else(|| {
+                                self.level_info
+                                    .and_then(|level| self.actor_objects.get(&level).cloned())
+                            });
+                        self.set_actor_base(actor, class, instance, base, actions)?;
+                    }
+                }
+            }
+
             let rate = self.actor_float_any(class, instance, "PhysRate")?;
             if rate <= 0.0 {
                 break;
             }
 
             let previous_alpha = self.actor_float_any(class, instance, "PhysAlpha")?;
-            let mut alpha = previous_alpha;
-            alpha += rate * time_left;
+            let mut alpha = previous_alpha + rate * time_left;
             if alpha > 1.0 {
-                time_left = (alpha - 1.0) / rate;
+                time_left = if previous_alpha < 1.0 {
+                    (alpha - 1.0) / rate
+                } else {
+                    0.0
+                };
                 alpha = 1.0;
             } else {
                 time_left = 0.0;
@@ -1183,6 +1202,10 @@ impl ScriptRuntime {
                 old_position + (base_position + key_position - old_position) * blend;
             let target_rotation = mover_rotation(old_rotation, base_rotation, key_rotation, blend);
             let current = Vec3::from_array(self.actor_vector(class, instance, "Location")?);
+            self.record_mover_trace(format!(
+                "interpolate actor=#{actor} key={key} alpha={previous_alpha:.6}->{alpha:.6} current={current:?} target={target_position:?} delta={:?}",
+                target_position - current,
+            ));
             let hit = self.try_move_actor(
                 actor,
                 class,
@@ -1190,10 +1213,14 @@ impl ScriptRuntime {
                 instance,
                 actions,
             )?;
+            self.record_mover_trace(format!(
+                "interpolate-result actor=#{actor} fraction={:.6} normal={:?} actor={:?} node={:?}",
+                hit.fraction, hit.normal, hit.actor, hit.node,
+            ));
             if hit.fraction == 1.0 {
                 self.try_move_actor_rotated(actor, class, target_rotation, instance, actions)?;
                 self.set_actor_value(class, instance, "PhysAlpha", Value::Float(alpha))?;
-                if alpha == 1.0 {
+                if alpha == 1.0 && !gravity_moved {
                     self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;
                     self.call_actor_event(
                         actor,
@@ -1211,7 +1238,11 @@ impl ScriptRuntime {
                     "PhysAlpha",
                     Value::Float(previous_alpha + (alpha - previous_alpha) * hit.fraction),
                 )?;
-                self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;
+                if !gravity_moved {
+                    self.set_actor_value(class, instance, "bInterpolating", Value::Bool(false))?;
+                }
+            }
+            if !gravity_moved {
                 break;
             }
         }

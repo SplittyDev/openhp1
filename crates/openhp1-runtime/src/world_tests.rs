@@ -33,6 +33,35 @@ use openhp1_physics::BspCollision;
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
 
+#[test]
+fn mover_trace_is_opt_in_and_keeps_recent_events() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-mover-trace-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::create_dir_all(root.join("System")).unwrap();
+    fs::write(
+        root.join("System/Default.ini"),
+        "[Core.System]\nPaths=*.u\n",
+    )
+    .unwrap();
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+
+    assert!(runtime.mover_trace().is_none());
+    runtime.set_mover_trace_enabled(true);
+    for event in 0..=MOVER_TRACE_LIMIT {
+        runtime.record_mover_trace(event.to_string());
+    }
+    let trace = runtime.mover_trace().unwrap();
+    assert_eq!(trace.len(), MOVER_TRACE_LIMIT);
+    assert_eq!(trace.front().map(String::as_str), Some("1"));
+    runtime.set_mover_trace_enabled(false);
+    assert!(runtime.mover_trace().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn synthetic_runtime_package() -> Vec<u8> {
     synthetic_runtime_package_for("PlayerPawn")
 }
@@ -236,6 +265,7 @@ fn interpolation_manager_moves_its_owner_while_physics_is_none() {
         "CollisionRadius",
         "CollisionWidth",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -3256,6 +3286,7 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
         "CollisionRadius",
         "CollisionWidth",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -3307,13 +3338,14 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
     for name in [
         "bCollideWorld",
         "bCollideWhenPlacing",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
     ] {
         defaults.insert(
             spawned_fields[name].clone(),
-            StoredValue::Value(Value::Bool(name != "bCollideWorld")),
+            StoredValue::Value(Value::Bool(!matches!(name, "bCollideWorld" | "bStatic"))),
         );
     }
     for (name, value) in [
@@ -3407,7 +3439,7 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
         panic!("Spawn did not emit its host action");
     };
     assert_eq!(first_location[0], 0.0);
-    assert!(first_location[1] < -7.9);
+    assert!(first_location[1].abs() > 7.9, "{first_location:?}");
     assert_eq!(first_location[2], 0.0);
     assert!(matches!(
         runtime.instances[first_actor].get(&spawned_fields["OldLocation"]),
@@ -4401,6 +4433,7 @@ fn line_of_sight_to_dispatches_numeric_native() {
         "CollisionWidth",
         "Rotation",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -4674,6 +4707,7 @@ fn actor_reachable_dispatches_check_location_and_rejects_pruned_or_blocked_route
         "CollisionWidth",
         "Rotation",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -5014,6 +5048,7 @@ fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
         "CollisionWidth",
         "Rotation",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -7069,6 +7104,7 @@ fn pick_any_target_rejects_beyond_sight_radius_without_changing_outputs() {
         "CollisionWidth",
         "Rotation",
         "CollideType",
+        "bStatic",
         "bCollideActors",
         "bBlockActors",
         "bBlockPlayers",
@@ -10844,7 +10880,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         runtime
             .actor_float_any(&mover_class, &moving_brush, "PhysAlpha")
             .unwrap(),
-        0.7941,
+        0.8011,
         "moving brushes use UE1's 0.51-unit-shrunken world collision bounds"
     );
     assert!(
@@ -10853,7 +10889,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
                 .actor_vector(&mover_class, &moving_brush, "Location")
                 .unwrap()
         )
-        .abs_diff_eq(Vec3::new(20.59, 0.0, 0.0), 1.0e-5)
+        .abs_diff_eq(Vec3::new(19.89, 0.0, 0.0), 1.0e-5)
     );
 
     runtime.instances.get_mut(&1).unwrap().insert(
@@ -10862,11 +10898,12 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     );
     runtime.collision = Some(placement_test_collision(100.0));
     for (name, value) in [
-        ("Location", Value::Vector([0.0, 0.0, 200.0])),
+        ("Location", Value::Vector([0.0, 0.0, 300.0])),
         ("Velocity", Value::Vector([0.0; 3])),
-        ("OldPos", Value::Vector([0.0, 0.0, 200.0])),
-        ("BasePos", Value::Vector([0.0, 0.0, 200.0])),
-        ("bInterpolating", Value::Bool(false)),
+        ("OldPos", Value::Vector([0.0, 0.0, 300.0])),
+        ("BasePos", Value::Vector([0.0, 0.0, 300.0])),
+        ("PhysAlpha", Value::Float(0.0)),
+        ("bInterpolating", Value::Bool(true)),
     ] {
         runtime
             .set_actor_value(&mover_class, &mut moving_brush, name, value)
@@ -10879,24 +10916,72 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
     runtime
-        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .tick_moving_brush(
+            0,
+            &mover_class,
+            &mut moving_brush,
+            1.0 / 60.0,
+            &mut Vec::new(),
+        )
         .unwrap();
+    let first_gravity_location = Vec3::from_array(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+    );
+    assert!(first_gravity_location.z < 300.0 && first_gravity_location.z > 299.0);
+    let expected_first_velocity = (first_gravity_location - Vec3::Z * 300.0) * 60.0;
+    let first_gravity_velocity = Vec3::from_array(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Velocity")
+            .unwrap(),
+    );
+    assert!(
+        first_gravity_velocity.abs_diff_eq(expected_first_velocity, 1.0e-5),
+        "performPhysics must derive mover velocity from displacement, got {first_gravity_velocity:?}"
+    );
+    assert!(
+        runtime
+            .actor_bool(&mover_class, &moving_brush, "bInterpolating")
+            .unwrap(),
+        "a gravity-moving brush must remain active across frames"
+    );
+    for _ in 0..179 {
+        runtime
+            .tick_moving_brush(
+                0,
+                &mover_class,
+                &mut moving_brush,
+                1.0 / 60.0,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        if !runtime
+            .actor_bool(&mover_class, &moving_brush, "bInterpolating")
+            .unwrap()
+        {
+            break;
+        }
+    }
+    assert!(
+        !runtime
+            .actor_bool(&mover_class, &moving_brush, "bInterpolating")
+            .unwrap(),
+        "the moving brush did not finish after reaching its support"
+    );
     let gravity_location = Vec3::from_array(
         runtime
             .actor_vector(&mover_class, &moving_brush, "Location")
             .unwrap(),
     );
-    assert!(
-        gravity_location.abs_diff_eq(Vec3::new(0.0, 0.0, 110.59), 1.0e-4),
-        "gravity location is {gravity_location:?}"
-    );
+    assert!(gravity_location.z < first_gravity_location.z);
     assert!(
         Vec3::from_array(
             runtime
                 .actor_vector(&mover_class, &moving_brush, "OldPos")
                 .unwrap()
         )
-        .abs_diff_eq(Vec3::new(0.0, 0.0, 110.59), 1.0e-4)
+        .abs_diff_eq(gravity_location, 1.0e-4)
     );
     let Some(StoredValue::Array(key_positions)) = moving_brush.get(&key_pos) else {
         panic!("KeyPos is not an array");
@@ -10904,7 +10989,24 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     let StoredValue::Value(Value::Vector(key_position)) = key_positions[1] else {
         panic!("KeyPos[1] is not a vector");
     };
-    assert!(Vec3::from_array(key_position).abs_diff_eq(Vec3::new(0.0, 0.0, -89.41), 1.0e-4));
+    assert!(Vec3::from_array(key_position).abs_diff_eq(gravity_location - Vec3::Z * 300.0, 1.0e-4));
+    runtime
+        .tick_moving_brush(0, &mover_class, &mut moving_brush, 1.0, &mut Vec::new())
+        .unwrap();
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+        gravity_location.to_array(),
+        "completed moving brushes must not keep falling"
+    );
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Velocity")
+            .unwrap(),
+        [0.0; 3],
+        "an idle moving brush must not retain a velocity that based pawns inherit"
+    );
     runtime.instances.get_mut(&1).unwrap().insert(
         fields["ZoneGravity"].clone(),
         StoredValue::Value(Value::Vector([0.0; 3])),
@@ -10972,7 +11074,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             &mut touch_actions,
         )
         .unwrap();
-    assert_eq!(touch_hit.fraction, 0.7941);
+    assert_eq!(touch_hit.fraction, 0.8011);
     for actor in [0, 1] {
         assert!(touch_actions.iter().any(|action| matches!(
             action,
@@ -11008,6 +11110,10 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         fields["Brush"].clone(),
         StoredValue::Object(Some(mover_brush.clone())),
     );
+    trigger.insert(
+        fields["bStatic"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
     runtime.instances.insert(1, trigger);
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
@@ -11028,6 +11134,12 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         [100.0, 0.0, 0.0],
         "a blocking moving brush must make ME_ReturnWhenEncroach restore the mover"
     );
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["bStatic"].clone(),
+        StoredValue::Value(Value::Bool(false)),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
     let adjacent_hit = runtime
         .try_move_actor(
             0,
@@ -11043,10 +11155,85 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             .actor_vector(&mover_class, &moving_brush, "Location")
             .unwrap(),
         [19.5, 0.0, 0.0],
-        "the native actor contact margin must allow adjacent brushes to settle"
+        "native ActorEncroachmentCheck must skip a non-static actor-owned brush"
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Location",
+            Value::Vector([1000.0, 0.0, 40.0]),
+        )
+        .unwrap();
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "bCollideWorld",
+            Value::Bool(true),
+        )
+        .unwrap();
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([1000.0, 0.0, 0.0])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let support_hit = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [0.0, 0.0, -40.0],
+            &mut moving_brush,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(support_hit.actor, Some(1));
+    assert!(
+        Vec3::from_array(
+            runtime
+                .actor_vector(&mover_class, &moving_brush, "Location")
+                .unwrap()
+        )
+        .abs_diff_eq(Vec3::new(1000.0, 0.0, 19.99), 1.0e-5),
+        "moving brushes use the native box extent and contact clearance against other brushes"
+    );
+    for (name, value) in [
+        ("Location", Value::Vector([20.0, 0.0, 500.0])),
+        ("CollideType", Value::Byte(0)),
+        ("bCollideWorld", Value::Bool(true)),
+    ] {
+        runtime
+            .set_actor_value(&mover_class, &mut moving_brush, name, value)
+            .unwrap();
+    }
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0, 0.0, 480.5])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let bridge_hit = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [-40.0, 0.0, 0.0],
+            &mut moving_brush,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(bridge_hit.fraction, 1.0);
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+        [-20.0, 0.0, 500.0],
+        "the native 0.51-unit mover extent shrink must preserve tangential travel over another mover"
     );
     for (name, value) in [
         ("Location", Value::Vector([100.0, 0.0, 0.0])),
+        ("CollideType", Value::Byte(0)),
+        ("bCollideWorld", Value::Bool(false)),
         ("PhysAlpha", Value::Float(0.0)),
         ("bInterpolating", Value::Bool(true)),
     ] {
@@ -11068,14 +11255,14 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         runtime
             .actor_vector(&mover_class, &moving_brush, "Location")
             .unwrap(),
-        [100.0, 0.0, 0.0],
-        "a blocking EncroachingOn result restores the moving brush"
+        [21.0, 0.0, 0.0],
+        "MoveActor must stop a moving brush at the blocking actor sweep"
     );
     assert_eq!(
         runtime
             .actor_float_any(&mover_class, &moving_brush, "PhysAlpha")
             .unwrap(),
-        0.0
+        0.79
     );
 
     runtime.instances.remove(&1);
@@ -11098,6 +11285,9 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         moving_brush.insert(fields["Brush"].clone(), StoredValue::Object(None)),
         Some(StoredValue::Object(Some(mover_brush)))
     );
+    runtime
+        .set_actor_base(0, &mover_class, &mut moving_brush, None, &mut Vec::new())
+        .unwrap();
     let mut key_rotations = vec![StoredValue::Value(Value::Rotator([0; 3])); 8];
     key_rotations[1] = StoredValue::Value(Value::Rotator([0, 16_384, 0]));
     moving_brush.insert(key_rot, StoredValue::Array(key_rotations));

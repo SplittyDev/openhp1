@@ -6,6 +6,7 @@ mod fly;
 mod help;
 mod here;
 mod load;
+mod movertrace;
 mod play;
 mod report;
 mod reset;
@@ -41,6 +42,7 @@ const COMMANDS: &[Command] = &[
     help::COMMAND,
     here::COMMAND,
     load::COMMAND,
+    movertrace::COMMAND,
     play::COMMAND,
     report::COMMAND,
     reset::COMMAND,

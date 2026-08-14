@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, mpsc},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -27,7 +27,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalSize, Size},
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::{Key, KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowAttributes, WindowId},
 };
@@ -46,11 +46,13 @@ mod ui;
 
 const ROTATOR_RADIANS: f32 = TAU / 65_536.0;
 const DEBUG_FAST_FORWARD_TICKS: usize = 16;
+const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
 pub(crate) struct GameApp {
     scene: Option<LoadedScene>,
     graphics: Option<Graphics>,
     renderer_override: Option<RendererSettings>,
+    next_redraw: Option<Instant>,
 }
 
 impl GameApp {
@@ -59,8 +61,13 @@ impl GameApp {
             scene: Some(scene),
             graphics: None,
             renderer_override,
+            next_redraw: None,
         }
     }
+}
+
+fn next_redraw_deadline(frame_started: Instant, now: Instant) -> Instant {
+    (frame_started + FRAME_INTERVAL).max(now)
 }
 
 impl ApplicationHandler for GameApp {
@@ -113,9 +120,12 @@ impl ApplicationHandler for GameApp {
                 self.graphics = Some(graphics);
                 return;
             }
+            self.next_redraw = None;
             match graphics.render() {
                 RenderOutcome::Continue => {
-                    graphics.window.request_redraw();
+                    let deadline = next_redraw_deadline(graphics.last_frame, Instant::now());
+                    self.next_redraw = Some(deadline);
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
                     self.graphics = Some(graphics);
                 }
                 RenderOutcome::Exit => event_loop.exit(),
@@ -276,6 +286,20 @@ impl ApplicationHandler for GameApp {
                 graphics.mouse_button(button, state);
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(deadline) = self.next_redraw else {
+            return;
+        };
+        if Instant::now() >= deadline {
+            self.next_redraw = None;
+            if let Some(graphics) = &self.graphics {
+                graphics.window.request_redraw();
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         }
     }
 
@@ -1902,6 +1926,19 @@ fn bmp_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redraw_deadline_caps_frames_at_sixty_hertz_without_sleeping_after_overruns() {
+        let started = Instant::now();
+        assert_eq!(
+            next_redraw_deadline(started, started + Duration::from_millis(1)),
+            started + FRAME_INTERVAL
+        );
+        assert_eq!(
+            next_redraw_deadline(started, started + Duration::from_millis(20)),
+            started + Duration::from_millis(20)
+        );
+    }
 
     #[test]
     fn preserves_the_authored_vertical_view_on_widescreen() {

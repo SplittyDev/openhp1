@@ -405,18 +405,37 @@ only then completes the opening sequence. OpenHP1 therefore treats relevance
 evaluation, the key-position update, state entry, and latent interpolation as
 one ordered authored path rather than replacing it with a fixed destination.
 Moving brushes with `bCollideWorld` are swept against static BSP using their
-transformed primitive bounds with each extent reduced by 0.51 units, matching
-the original `ULevel::MoveActor` path. This lets authored movers fit flush
-against level geometry while a subsequent move into the wall stops immediately.
-Before keyframe interpolation, the original `physMovingBrush` also integrates
-the mover's velocity along `ZoneGravity` and moves it by that velocity plus
-half the gravity acceleration for the tick. Any actual gravity displacement is
-added to both `OldPos` and the active `KeyPos`, so the interpolation path follows
-the falling brush. Supported movers remain fixed; a mover over an opening falls
-until its transformed brush bounds reach the BSP below.
-After a brush moves, blocking actor overlaps run the mover's synchronous
-`EncroachingOn` event and restore its previous transform when the event returns
-true; accepted overlaps receive `EncroachedBy`.
+actor collision center and extents with each extent reduced by 0.51 units,
+matching the original `UPrimitive::GetCollisionBoundingBox` and
+`ULevel::MoveActor` paths. The extent trace covers exactly the requested
+segment and applies the model line check's 0.5-unit hit pullback. This lets
+authored movers reach a flush endpoint without sampling BSP beyond it, while a
+subsequent move into the wall stops immediately.
+The model leaf-hull clip preserves the original asymmetric 0.1-unit serialized
+bound tolerance: minimum X/Y/Z move outward, maximum X/Y move inward, and
+maximum Z moves outward.
+While keyframe interpolation is active, the original `physMovingBrush` also
+integrates the mover's velocity along `ZoneGravity` and moves it by that velocity
+plus half the gravity acceleration for the tick. Any actual gravity displacement
+is added to both `OldPos` and the active `KeyPos`, so the interpolation path
+follows the falling brush. The interpolation calculation consumes the same
+mutable remaining-frame time as gravity: an unfinished interpolation normally
+reduces it to zero, so a falling mover stays active for the next game tick
+instead of completing or falling to support in one frame. Only interpolation
+overshoot can be processed again in the current tick. It returns immediately
+once `bInterpolating` clears; an idle mover does not keep falling between
+pushes.
+The outer `AActor::performPhysics` moving-brush branch then derives `Velocity`
+from the frame's realized displacement. A completed idle mover consequently
+has zero velocity on its following tick, which based pawns inherit when they
+jump.
+Moving brushes also take the collision hash's ordinary actor-primitive sweep;
+the same 0.51-unit extent reduction lets a supported brush travel tangentially
+over another mover while real side contacts still stop it. After the move,
+blocking actor overlaps run the mover's synchronous `EncroachingOn` event and
+restore its previous transform when the event returns true; matching retail
+`ActorEncroachmentCheck`, this later overlap pass skips non-static actor-owned
+brushes. Accepted remaining overlaps receive `EncroachedBy`.
 Pawn mounting follows HP1's native `APawn::Mount` path: the surface must have
 the authored `bHighLedge` flag, whether it belongs to the level BSP or an
 actor-owned brush such as a mover. The original raised, diagonal, and
@@ -679,7 +698,9 @@ The registered developer commands are:
 - `report <issue>` writes a timestamped Markdown file under the writable
   settings `Reports` directory. It records level/player/camera/runtime/renderer
   state, current errors and capability diagnostics, and named actors within
-  2048 Unreal units of the player.
+  2048 Unreal units of the player. `movertrace on` clears and starts a bounded
+  moving-brush collision trace that the next report includes; `movertrace off`
+  disables it.
 - `help [command]` is generated from the command registry.
 
 Console scrollback and command history survive fresh and saved level loads for

@@ -87,6 +87,7 @@ pub(super) fn collision_actor_from_fields(
             Vec3::from_array(rotation[2]),
         ),
         collide_type: byte(&fields.collide_type, "CollideType")?,
+        b_static: boolean(&fields.b_static, "bStatic")?,
         collide_actors: boolean(&fields.collide_actors, "bCollideActors")?,
         block_actors: boolean(&fields.block_actors, "bBlockActors")?,
         block_players: boolean(&fields.block_players, "bBlockPlayers")?,
@@ -138,6 +139,15 @@ pub(super) fn collision_actor_world_extents(actor: &CollisionActor) -> Vec3 {
     }
 }
 
+pub(super) fn collision_actor_sweep_extents(actor: &CollisionActor) -> Vec3 {
+    let extents = collision_actor_world_extents(actor);
+    if actor.brush.is_some() {
+        (extents - Vec3::splat(MOVING_BRUSH_EXTENT_SHRINK)).max(Vec3::ZERO)
+    } else {
+        extents
+    }
+}
+
 pub(super) fn collision_actor_world_bounds(actor: &CollisionActor) -> Option<(Vec3, Vec3)> {
     match &actor.brush {
         Some(brush) => brush.transformed_bounds(
@@ -170,14 +180,16 @@ pub(super) fn sweep_collision_actors(
     delta: Vec3,
 ) -> Option<CollisionSweep> {
     let current_location = collision_actor_center(current);
+    let current_extents = collision_actor_sweep_extents(current);
     if let Some(brush) = &other.brush {
-        let hit = if current.collide_type == COLLIDE_BOX
+        let hit = if current.brush.is_some()
+            || current.collide_type == COLLIDE_BOX
             || current.collide_type == COLLIDE_SHAPE && current.shape_bounds.is_some()
         {
             brush.sweep_transformed_aabb(
                 current_location,
                 current_location + delta,
-                collision_actor_world_extents(current),
+                current_extents,
                 other.location,
                 other.rotation,
                 other.pre_pivot,
@@ -187,8 +199,8 @@ pub(super) fn sweep_collision_actors(
             brush.sweep_transformed_cylinder(
                 current_location,
                 current_location + delta,
-                current.radius,
-                current.height,
+                current_extents.x,
+                current_extents.z,
                 other.location,
                 other.rotation,
                 other.pre_pivot,
@@ -206,7 +218,7 @@ pub(super) fn sweep_collision_actors(
         sweep_box(
             current_location,
             current_location + delta,
-            collision_actor_world_extents(current),
+            current_extents,
             collision_actor_center(other),
             collision_actor_local_extents(other),
             other.rotation,
@@ -218,7 +230,7 @@ pub(super) fn sweep_collision_actors(
         sweep_box(
             current_location,
             current_location + delta,
-            collision_actor_world_extents(current),
+            current_extents,
             other.location,
             collision_actor_local_extents(other),
             Mat3::IDENTITY,
@@ -394,6 +406,7 @@ mod tests {
             width: 10.0,
             rotation: Mat3::IDENTITY,
             collide_type: 0,
+            b_static: false,
             collide_actors: true,
             block_actors: false,
             block_players,

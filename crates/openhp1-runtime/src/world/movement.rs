@@ -14,6 +14,7 @@ mod properties;
 use collision::*;
 
 const ACTOR_TRACE_MARGIN: f32 = 1.0;
+const MOVING_BRUSH_EXTENT_SHRINK: f32 = 0.51;
 const MOVE_TRACE_PADDING: f32 = 2.0;
 const MOVE_HIT_EPSILON: f32 = 0.0001;
 const COLLIDE_BOX: u8 = 2;
@@ -28,6 +29,7 @@ struct CollisionActor {
     width: f32,
     rotation: Mat3,
     collide_type: u8,
+    b_static: bool,
     collide_actors: bool,
     block_actors: bool,
     block_players: bool,
@@ -68,6 +70,7 @@ pub(super) struct CollisionFields {
     width: ObjectId,
     rotation: ObjectId,
     collide_type: ObjectId,
+    b_static: ObjectId,
     collide_actors: ObjectId,
     block_actors: ObjectId,
     block_players: ObjectId,
@@ -124,6 +127,7 @@ impl ScriptRuntime {
             width: extent.y,
             rotation: Mat3::IDENTITY,
             collide_type: 0,
+            b_static: false,
             collide_actors: true,
             block_actors: false,
             block_players: false,
@@ -1239,9 +1243,11 @@ impl ScriptRuntime {
                 .as_ref()
                 .expect("indexed collision actor is missing")
                 .actor;
-            let Some((other_center, other_extents)) = collision_actor_world_bounds(other) else {
+            if other.brush.is_some() && !other.b_static {
                 continue;
-            };
+            }
+            let other_center = collision_actor_center(other);
+            let other_extents = collision_actor_world_extents(other);
             if other_center.x + other_extents.x < minimum.x
                 || other_center.y + other_extents.y < minimum.y
                 || other_center.y - other_extents.y > maximum.y
@@ -1253,11 +1259,7 @@ impl ScriptRuntime {
                     .expect("moving brush was checked")
                     .overlaps_transformed_aabb(
                         other_center,
-                        if other.brush.is_some() {
-                            (other_extents - Vec3::splat(ACTOR_TRACE_MARGIN)).max(Vec3::ZERO)
-                        } else {
-                            other_extents
-                        },
+                        other_extents,
                         mover.location,
                         mover.rotation,
                         mover.pre_pivot,
@@ -1271,6 +1273,13 @@ impl ScriptRuntime {
             } else {
                 touch_overlaps.push(candidate);
             }
+        }
+
+        if !blocking_overlaps.is_empty() || !touch_overlaps.is_empty() {
+            self.record_mover_trace(format!(
+                "encroachment actor=#{actor} location={:?} blocking={blocking_overlaps:?} touching={touch_overlaps:?}",
+                mover.location,
+            ));
         }
 
         for &other in &blocking_overlaps {
@@ -1514,7 +1523,7 @@ impl ScriptRuntime {
             }
         };
         let mut hits = Vec::new();
-        if (current.collide_actors || collide_world) && current.brush.is_none() {
+        if current.collide_actors || collide_world {
             hits = self.actor_sweeps(
                 current,
                 delta,
@@ -1539,6 +1548,27 @@ impl ScriptRuntime {
                     node: hit.node,
                 };
             }
+        }
+        if current.brush.is_some() {
+            let actor_hits = hits
+                .iter()
+                .map(|hit| {
+                    format!(
+                        "#{}@{:.6} normal={:?} blocking={} bumping={}",
+                        hit.actor, hit.fraction, hit.normal, hit.blocking, hit.bumping
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.record_mover_trace(format!(
+                "sweep actor=#{current_actor} from={:?} delta={delta:?} extent={:?} result={:.6} normal={:?} actor={:?} node={:?} hits=[{actor_hits}]",
+                current.location,
+                collision_actor_sweep_extents(current),
+                blocking_hit.fraction,
+                blocking_hit.normal,
+                blocking_hit.actor,
+                blocking_hit.node,
+            ));
         }
         Ok((blocking_hit, hits))
     }
@@ -1789,7 +1819,7 @@ impl ScriptRuntime {
     ) -> std::result::Result<Vec<ActorSweep>, String> {
         self.ensure_collision_actors(current_actor, current_instance)?;
         let end = current.location + delta;
-        let current_extents = collision_actor_world_extents(current);
+        let current_extents = collision_actor_sweep_extents(current);
         let query_minimum =
             current.location.min(end) - current_extents - Vec3::splat(ACTOR_TRACE_MARGIN);
         let query_maximum =
@@ -2514,13 +2544,11 @@ fn sweep_world_collision(
     delta: Vec3,
 ) -> Option<CollisionHit> {
     if actor.brush.is_some() {
-        collision_actor_world_bounds(actor).and_then(|(center, extents)| {
-            collision.sweep_aabb(
-                center,
-                center + delta,
-                (extents - Vec3::splat(0.51)).max(Vec3::ZERO),
-            )
-        })
+        let center = actor.location;
+        let extents = (collision_actor_local_extents(actor)
+            - Vec3::splat(MOVING_BRUSH_EXTENT_SHRINK))
+        .max(Vec3::ZERO);
+        collision.sweep_aabb(center, center + delta, extents)
     } else {
         let center = collision_actor_center(actor);
         collision.sweep_aabb(center, center + delta, collision_actor_world_extents(actor))
@@ -2554,6 +2582,7 @@ mod world_collision_tests {
             width: 1.0,
             rotation: Mat3::IDENTITY,
             collide_type: 0,
+            b_static: false,
             collide_actors: false,
             block_actors: false,
             block_players: false,
@@ -2568,7 +2597,15 @@ mod world_collision_tests {
         let rounded_cylinder_hit = collision
             .sweep_cylinder(start, end, actor.radius, actor.height)
             .unwrap();
-        assert!(native_extent_hit.fraction < rounded_cylinder_hit.fraction);
+        assert_eq!(native_extent_hit.normal, -Vec3::X);
+        assert!(rounded_cylinder_hit.normal.abs_diff_eq(
+            Vec3::new(
+                -std::f32::consts::FRAC_1_SQRT_2,
+                -std::f32::consts::FRAC_1_SQRT_2,
+                0.0
+            ),
+            0.0001
+        ));
     }
 
     #[test]
@@ -2577,6 +2614,12 @@ mod world_collision_tests {
         let start = Vec3::new(-20.0, 0.0, 0.0);
         let delta = Vec3::new(20.0, 0.0, 0.0);
         let extents = Vec3::ONE;
+        assert!(
+            collision
+                .sweep_aabb(start, Vec3::new(-11.01, 0.0, 0.0), extents)
+                .is_none(),
+            "native extent traces do not inspect beyond the requested endpoint"
+        );
         let trace_delta = delta + delta.normalize() * MOVE_TRACE_PADDING;
         let hit = collision
             .sweep_aabb(start, start + trace_delta, extents)
@@ -2605,6 +2648,7 @@ mod world_collision_tests {
             width: 2.0,
             rotation: Mat3::IDENTITY,
             collide_type: 0,
+            b_static: false,
             collide_actors: false,
             block_actors: false,
             block_players: false,

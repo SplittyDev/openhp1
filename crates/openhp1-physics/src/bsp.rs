@@ -10,7 +10,7 @@ use crate::actor::sweep_cylinder_aabb;
 const HULL_FLIP: i32 = 0x4000_0000;
 const NODE_NOT_CSG_MASK: u8 = 0x21;
 const BOX_EPSILON: f32 = 0.1;
-const TRACE_MARGIN: f32 = 1.0;
+const TRACE_PULLBACK: f32 = 0.5;
 const TRAVERSAL_EXTENT_SCALE: f32 = 1.1;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -61,6 +61,13 @@ struct ConvexHull {
 struct Aabb {
     minimum: Vec3,
     maximum: Vec3,
+}
+
+fn hull_clip_bounds(bounds: Aabb) -> Aabb {
+    Aabb {
+        minimum: bounds.minimum - Vec3::splat(BOX_EPSILON),
+        maximum: bounds.maximum + Vec3::new(-BOX_EPSILON, -BOX_EPSILON, BOX_EPSILON),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -489,12 +496,9 @@ impl BspCollision {
         if distance <= f32::EPSILON {
             return None;
         }
-        let direction = delta / distance;
-        let trace_distance = distance + TRACE_MARGIN;
-        let trace_end = start + direction * trace_distance;
         let query_bounds = Aabb {
-            minimum: start.min(trace_end) - extents,
-            maximum: start.max(trace_end) + extents,
+            minimum: start.min(end) - extents,
+            maximum: start.max(end) + extents,
         };
         let mut nearest = None;
         let hulls = &self.hulls;
@@ -516,10 +520,7 @@ impl BspCollision {
                 {
                     return;
                 }
-                let bounds = Aabb {
-                    minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
-                    maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
-                };
+                let bounds = hull_clip_bounds(hull.bounds);
                 if let Some((radius, height)) = shape.axis_aligned_cylinder()
                     && hull_is_axis_aligned_box(hull)
                 {
@@ -546,7 +547,7 @@ impl BspCollision {
                     }
                     return;
                 }
-                let mut cursor = SweepCursor::new(start, trace_end, shape);
+                let mut cursor = SweepCursor::new(start, end, shape);
                 if !cursor.clip_box(bounds) {
                     return;
                 }
@@ -567,10 +568,10 @@ impl BspCollision {
                         }
                     }
                 }
-                let Some(hit_distance) = cursor.hit_distance(trace_distance) else {
+                let Some(hit_distance) = cursor.hit_distance(distance) else {
                     return;
                 };
-                let fraction = ((hit_distance - TRACE_MARGIN).max(0.0) / distance).min(1.0);
+                let fraction = ((hit_distance - TRACE_PULLBACK).max(0.0) / distance).min(1.0);
                 let hit = CollisionHit {
                     fraction,
                     normal: cursor.hit_normal,
@@ -621,10 +622,7 @@ impl BspCollision {
                 {
                     return;
                 }
-                let bounds = Aabb {
-                    minimum: hull.bounds.minimum + Vec3::splat(BOX_EPSILON),
-                    maximum: hull.bounds.maximum - Vec3::splat(BOX_EPSILON),
-                };
+                let bounds = hull_clip_bounds(hull.bounds);
                 let mut cursor = SweepCursor::new(location, location, shape);
                 if !cursor.clip_box(bounds)
                     || !hull
@@ -659,11 +657,10 @@ impl BspCollision {
             return None;
         }
         let direction = delta / distance;
-        let trace_distance = distance + TRACE_MARGIN;
         let mut nearest = None;
-        self.line_trace_node(0, start, direction, trace_distance, &mut nearest);
+        self.line_trace_node(0, start, direction, distance, &mut nearest);
         nearest.map(|(hit_distance, normal, node)| CollisionHit {
-            fraction: ((hit_distance - TRACE_MARGIN).max(0.0) / distance).min(1.0),
+            fraction: ((hit_distance - TRACE_PULLBACK).max(0.0) / distance).min(1.0),
             normal,
             node,
         })
@@ -1040,7 +1037,7 @@ impl SweepCursor {
             && self.start_fraction > -1.0
             && self.start_fraction < self.end_fraction
             && self.end_fraction > 0.0)
-            .then(|| (self.start_fraction * trace_distance - BOX_EPSILON).max(0.0))
+            .then(|| (self.start_fraction * trace_distance).max(0.0))
     }
 }
 
