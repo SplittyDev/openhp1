@@ -10947,7 +10947,103 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     }
     moving_brush.insert(
         fields["bCollideWorld"].clone(),
+        StoredValue::Value(Value::Bool(true)),
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Location",
+            Value::Vector([100.0, 0.0, 0.0]),
+        )
+        .unwrap();
+
+    let mut trigger = instance([20.0, 0.0, 0.0]);
+    runtime.instances.insert(1, trigger.clone());
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let mut touch_actions = Vec::new();
+    let touch_hit = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [-100.0, 0.0, 0.0],
+            &mut moving_brush,
+            &mut touch_actions,
+        )
+        .unwrap();
+    assert_eq!(touch_hit.fraction, 0.7941);
+    for actor in [0, 1] {
+        assert!(touch_actions.iter().any(|action| matches!(
+            action,
+            ActorAction::DispatchEvent {
+                actor: event_actor,
+                event: "Touch",
+                ..
+            } if *event_actor == actor
+        )));
+    }
+
+    runtime.touching.clear();
+    moving_brush.insert(
+        fields["bCollideWorld"].clone(),
         StoredValue::Value(Value::Bool(false)),
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Location",
+            Value::Vector([100.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    for name in ["bBlockActors", "bBlockPlayers"] {
+        trigger.insert(fields[name].clone(), StoredValue::Value(Value::Bool(true)));
+    }
+    trigger.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([0.0; 3])),
+    );
+    trigger.insert(
+        fields["Brush"].clone(),
+        StoredValue::Object(Some(mover_brush.clone())),
+    );
+    runtime.instances.insert(1, trigger);
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let brush_block = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [-100.0, 0.0, 0.0],
+            &mut moving_brush,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(brush_block.fraction, 0.0);
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+        [100.0, 0.0, 0.0],
+        "a blocking moving brush must make ME_ReturnWhenEncroach restore the mover"
+    );
+    let adjacent_hit = runtime
+        .try_move_actor(
+            0,
+            &mover_class,
+            [-80.5, 0.0, 0.0],
+            &mut moving_brush,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(adjacent_hit.fraction, 1.0);
+    assert_eq!(
+        runtime
+            .actor_vector(&mover_class, &moving_brush, "Location")
+            .unwrap(),
+        [19.5, 0.0, 0.0],
+        "the native actor contact margin must allow adjacent brushes to settle"
     );
     for (name, value) in [
         ("Location", Value::Vector([100.0, 0.0, 0.0])),

@@ -247,8 +247,20 @@ fn actor_collision_sweep(hit: openhp1_physics::ActorCollisionHit) -> CollisionSw
 }
 
 pub(super) fn collision_actors_overlap(first: &CollisionActor, second: &CollisionActor) -> bool {
-    if first.brush.is_some() || second.brush.is_some() {
-        false
+    if let Some(brush) = &first.brush {
+        let Some((center, extents)) = collision_actor_world_bounds(second) else {
+            return false;
+        };
+        brush.overlaps_transformed_aabb(
+            center,
+            extents,
+            first.location,
+            first.rotation,
+            first.pre_pivot,
+            first.main_scale,
+        )
+    } else if second.brush.is_some() {
+        collision_actors_overlap(second, first)
     } else if second.collide_type == COLLIDE_BOX
         || second.collide_type == COLLIDE_SHAPE && second.shape_bounds.is_some()
     {

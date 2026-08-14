@@ -1149,8 +1149,7 @@ impl ScriptRuntime {
 
         let mut moved = current.clone();
         moved.location = location;
-        if blocking_hit.fraction == 1.0
-            && moved.brush.is_some()
+        if moved.brush.is_some()
             && self.moving_brush_encroached(actor, actor_class, instance, &moved, actions)?
         {
             self.set_actor_location(actor, actor_class, instance, current.location, actions)?;
@@ -1230,8 +1229,8 @@ impl ScriptRuntime {
                 collision_actor_min_x(&self.collision_actors, candidate) <= maximum.x
             });
         let candidates = self.collision_actors_by_min_x[..candidate_count].to_vec();
-        let brush = mover.brush.as_ref().expect("moving brush was checked");
-        let mut overlaps = Vec::new();
+        let mut blocking_overlaps = Vec::new();
+        let mut touch_overlaps = Vec::new();
         for candidate in candidates {
             if candidate == actor || self.destroyed.contains(&candidate) {
                 continue;
@@ -1240,9 +1239,6 @@ impl ScriptRuntime {
                 .as_ref()
                 .expect("indexed collision actor is missing")
                 .actor;
-            if other.brush.is_some() || !actors_block(mover, other) {
-                continue;
-            }
             let Some((other_center, other_extents)) = collision_actor_world_bounds(other) else {
                 continue;
             };
@@ -1251,44 +1247,62 @@ impl ScriptRuntime {
                 || other_center.y - other_extents.y > maximum.y
                 || other_center.z + other_extents.z < minimum.z
                 || other_center.z - other_extents.z > maximum.z
-                || !brush.overlaps_transformed_aabb(
-                    other_center,
-                    other_extents,
-                    mover.location,
-                    mover.rotation,
-                    mover.pre_pivot,
-                    mover.main_scale,
-                )
+                || !mover
+                    .brush
+                    .as_ref()
+                    .expect("moving brush was checked")
+                    .overlaps_transformed_aabb(
+                        other_center,
+                        if other.brush.is_some() {
+                            (other_extents - Vec3::splat(ACTOR_TRACE_MARGIN)).max(Vec3::ZERO)
+                        } else {
+                            other_extents
+                        },
+                        mover.location,
+                        mover.rotation,
+                        mover.pre_pivot,
+                        mover.main_scale,
+                    )
             {
                 continue;
             }
-            overlaps.push(candidate);
+            if actors_block(mover, other) {
+                blocking_overlaps.push(candidate);
+            } else {
+                touch_overlaps.push(candidate);
+            }
         }
 
-        for &other in &overlaps {
+        for &other in &blocking_overlaps {
             if self.mover_encroaching_on(actor, actor_class, instance, other, actions)? {
                 return Ok(true);
             }
         }
-        if overlaps.is_empty() {
-            return Ok(false);
+        if !blocking_overlaps.is_empty() {
+            let mover_handle = self
+                .actor_objects
+                .get(&actor)
+                .cloned()
+                .ok_or_else(|| format!("mover {actor} has no object identity"))
+                .and_then(|object| {
+                    self.object_handle(object)
+                        .map_err(|error| error.to_string())
+                })?;
+            for other in blocking_overlaps {
+                self.call_other_actor_event(
+                    other,
+                    "EncroachedBy",
+                    vec![Value::Object(mover_handle)],
+                    actions,
+                )?;
+            }
         }
-        let mover_handle = self
-            .actor_objects
-            .get(&actor)
-            .cloned()
-            .ok_or_else(|| format!("mover {actor} has no object identity"))
-            .and_then(|object| {
-                self.object_handle(object)
-                    .map_err(|error| error.to_string())
-            })?;
-        for other in overlaps {
-            self.call_other_actor_event(
-                other,
-                "EncroachedBy",
-                vec![Value::Object(mover_handle)],
-                actions,
-            )?;
+        for other in touch_overlaps {
+            let pair = actor_pair(actor, other);
+            if self.touching.insert(pair) {
+                self.queue_pair_event(actions, actor, other, "Touch")?;
+                self.queue_pair_event(actions, other, actor, "Touch")?;
+            }
         }
         Ok(false)
     }
