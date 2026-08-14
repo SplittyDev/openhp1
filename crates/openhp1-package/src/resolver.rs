@@ -29,12 +29,15 @@ pub struct ConfigEntry {
 const OPENHP1_CONFIG: &str = "OpenHP1.ini";
 const GAME_DATA_SECTION: &str = "OpenHP1.GameData";
 const GAME_ROOT_KEY: &str = "Root";
+const GAME_LANGUAGE_KEY: &str = "Language";
 
 /// A validated original-game installation and its authored startup map.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GameInstallation {
     root: PathBuf,
     startup_map: PathBuf,
+    language: String,
+    available_languages: Vec<String>,
 }
 
 impl GameInstallation {
@@ -44,6 +47,14 @@ impl GameInstallation {
 
     pub fn startup_map(&self) -> &Path {
         &self.startup_map
+    }
+
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    pub fn available_languages(&self) -> &[String] {
+        &self.available_languages
     }
 }
 
@@ -56,16 +67,18 @@ pub fn resolve_game_installation() -> Result<GameInstallation, GameInstallationE
 /// Validates and stores the selected game root in `OpenHP1.ini`.
 pub fn configure_game_installation(
     root: impl AsRef<Path>,
+    language: Option<&str>,
 ) -> Result<GameInstallation, GameInstallationError> {
-    configure_game_installation_with_settings_dir(root.as_ref(), &settings_dir())
+    configure_game_installation_with_settings_dir(root.as_ref(), language, &settings_dir())
 }
 
 fn configure_game_installation_with_settings_dir(
     root: &Path,
+    language: Option<&str>,
     settings_dir: &Path,
 ) -> Result<GameInstallation, GameInstallationError> {
-    let installation = validate_game_root(root, settings_dir)?;
-    write_game_root(settings_dir, installation.root())?;
+    let installation = validate_game_root(root, settings_dir, language)?;
+    write_game_installation(settings_dir, &installation)?;
     Ok(installation)
 }
 
@@ -73,34 +86,44 @@ fn resolve_game_installation_with(
     settings_dir: &Path,
     inferred_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<GameInstallation, GameInstallationError> {
-    if let Some(root) = configured_game_root(settings_dir)? {
-        return validate_game_root(&root, settings_dir);
+    let (configured_root, configured_language) = configured_game_data(settings_dir)?;
+    if let Some(root) = configured_root {
+        let installation = validate_game_root(&root, settings_dir, configured_language.as_deref())?;
+        write_game_installation(settings_dir, &installation)?;
+        return Ok(installation);
     }
     for root in inferred_roots {
-        if let Ok(installation) = validate_game_root(&root, settings_dir) {
-            write_game_root(settings_dir, installation.root())?;
+        if let Ok(installation) = validate_game_root(&root, settings_dir, None) {
+            write_game_installation(settings_dir, &installation)?;
             return Ok(installation);
         }
     }
     Err(GameInstallationError::NotConfigured)
 }
 
-fn configured_game_root(settings_dir: &Path) -> Result<Option<PathBuf>, GameInstallationError> {
+fn configured_game_data(
+    settings_dir: &Path,
+) -> Result<(Option<PathBuf>, Option<String>), GameInstallationError> {
     let path = settings_dir.join(OPENHP1_CONFIG);
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(GameInstallationError::Io { path, source }),
+    let Some(contents) = read_openhp1_ini(settings_dir)
+        .map_err(|source| GameInstallationError::Io { path, source })?
+    else {
+        return Ok((None, None));
     };
-    Ok(ini_values(&contents, GAME_DATA_SECTION, GAME_ROOT_KEY)
+    let root = ini_values(&contents, GAME_DATA_SECTION, GAME_ROOT_KEY)
         .into_iter()
         .find(|value| !value.is_empty())
-        .map(PathBuf::from))
+        .map(PathBuf::from);
+    let language = ini_values(&contents, GAME_DATA_SECTION, GAME_LANGUAGE_KEY)
+        .into_iter()
+        .find(|value| !value.is_empty());
+    Ok((root, language))
 }
 
 fn validate_game_root(
     root: &Path,
     settings_dir: &Path,
+    language: Option<&str>,
 ) -> Result<GameInstallation, GameInstallationError> {
     if !root.is_absolute() {
         return Err(GameInstallationError::InvalidRoot {
@@ -109,12 +132,20 @@ fn validate_game_root(
         });
     }
     let root = root.to_path_buf();
-    let packages =
-        PackageStore::scan_game_root_with_settings_dir(&root, settings_dir).map_err(|source| {
-            GameInstallationError::InvalidRoot {
+    let packages = PackageStore::scan_game_root_with_language(&root, settings_dir, language)
+        .map_err(|source| match source {
+            ResolveError::UnavailableLanguage {
+                language,
+                available,
+            } => GameInstallationError::InvalidLanguage {
+                root: root.clone(),
+                language,
+                available,
+            },
+            source => GameInstallationError::InvalidRoot {
                 root: root.clone(),
                 reason: source.to_string(),
-            }
+            },
         })?;
     let local_map = packages.config_value("URL", "LocalMap").ok_or_else(|| {
         GameInstallationError::InvalidRoot {
@@ -139,15 +170,21 @@ fn validate_game_root(
     Ok(GameInstallation {
         root,
         startup_map: startup_map.to_path_buf(),
+        language: packages.language.clone(),
+        available_languages: packages.available_languages.clone(),
     })
 }
 
-fn write_game_root(settings_dir: &Path, root: &Path) -> Result<(), GameInstallationError> {
-    let value = root
+fn write_game_installation(
+    settings_dir: &Path,
+    installation: &GameInstallation,
+) -> Result<(), GameInstallationError> {
+    let root = installation
+        .root()
         .to_str()
         .filter(|value| !value.contains(['\n', '\r']))
         .ok_or_else(|| GameInstallationError::InvalidRoot {
-            root: root.to_path_buf(),
+            root: installation.root().to_path_buf(),
             reason: "the path cannot be represented in OpenHP1.ini".to_owned(),
         })?;
     let path = settings_dir.join(OPENHP1_CONFIG);
@@ -160,14 +197,29 @@ fn write_game_root(settings_dir: &Path, root: &Path) -> Result<(), GameInstallat
         &path,
         update_ini(
             &contents,
-            &[ConfigEntry {
-                section: GAME_DATA_SECTION.to_owned(),
-                key: GAME_ROOT_KEY.to_owned(),
-                values: vec![value.to_owned()],
-            }],
+            &[
+                ConfigEntry {
+                    section: GAME_DATA_SECTION.to_owned(),
+                    key: GAME_ROOT_KEY.to_owned(),
+                    values: vec![root.to_owned()],
+                },
+                ConfigEntry {
+                    section: GAME_DATA_SECTION.to_owned(),
+                    key: GAME_LANGUAGE_KEY.to_owned(),
+                    values: vec![installation.language().to_owned()],
+                },
+            ],
         ),
     )
     .map_err(GameInstallationError::Settings)
+}
+
+fn read_openhp1_ini(settings_dir: &Path) -> std::io::Result<Option<String>> {
+    match fs::read_to_string(settings_dir.join(OPENHP1_CONFIG)) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(source),
+    }
 }
 
 fn inferred_game_roots() -> Result<Vec<PathBuf>, GameInstallationError> {
@@ -207,6 +259,7 @@ pub struct PackageStore {
     settings_dir: PathBuf,
     default_ini: PathBuf,
     language: String,
+    available_languages: Vec<String>,
 }
 
 impl PackageStore {
@@ -218,16 +271,49 @@ impl PackageStore {
         root: impl AsRef<Path>,
         settings_dir: impl AsRef<Path>,
     ) -> ResolveResult<Self> {
-        let root = root.as_ref();
+        let settings_dir = settings_dir.as_ref();
+        let path = settings_dir.join(OPENHP1_CONFIG);
+        let language = read_openhp1_ini(settings_dir)
+            .map_err(|source| ResolveError::Io { path, source })?
+            .and_then(|contents| {
+                ini_values(&contents, GAME_DATA_SECTION, GAME_LANGUAGE_KEY)
+                    .into_iter()
+                    .find(|value| !value.is_empty())
+            });
+        Self::scan_game_root_with_language(root.as_ref(), settings_dir, language.as_deref())
+    }
+
+    fn scan_game_root_with_language(
+        root: &Path,
+        settings_dir: &Path,
+        language: Option<&str>,
+    ) -> ResolveResult<Self> {
         let system_dir = find_child_directory(root, "System").ok_or_else(|| {
             ResolveError::MissingSystemDirectory {
                 root: root.to_path_buf(),
             }
         })?;
-        let ini_path =
-            find_default_ini(&system_dir).ok_or_else(|| ResolveError::MissingDefaultIni {
-                system: system_dir.clone(),
-            })?;
+        let languages = discover_game_languages(&system_dir)?;
+        let selected = if let Some(language) = language {
+            languages
+                .iter()
+                .find(|candidate| candidate.code.eq_ignore_ascii_case(language))
+                .ok_or_else(|| ResolveError::UnavailableLanguage {
+                    language: language.to_owned(),
+                    available: languages
+                        .iter()
+                        .map(|candidate| candidate.code.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                })?
+        } else {
+            languages
+                .first()
+                .ok_or_else(|| ResolveError::MissingDefaultIni {
+                    system: system_dir.clone(),
+                })?
+        };
+        let ini_path = selected.default_ini.clone();
         let ini = fs::read_to_string(&ini_path).map_err(|source| ResolveError::Io {
             path: ini_path.clone(),
             source,
@@ -239,8 +325,11 @@ impl PackageStore {
 
         let mut paths = HashMap::new();
         let mut localized_paths = HashMap::new();
-        let language = localization_value(&ini, "Engine.Engine", "Language")
-            .unwrap_or_else(|| "int".to_owned());
+        let language = selected.code.clone();
+        let available_languages = languages
+            .into_iter()
+            .map(|language| language.code)
+            .collect();
         let language_directory = ini_path
             .parent()
             .filter(|parent| *parent != system_dir)
@@ -260,9 +349,10 @@ impl PackageStore {
             loaded: HashMap::new(),
             localized_loaded: HashMap::new(),
             system_dir,
-            settings_dir: settings_dir.as_ref().to_path_buf(),
+            settings_dir: settings_dir.to_path_buf(),
             default_ini: ini_path,
             language,
+            available_languages,
         })
     }
 
@@ -796,19 +886,65 @@ fn find_child_directory(root: &Path, name: &str) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
-fn find_default_ini(system_dir: &Path) -> Option<PathBuf> {
-    find_file(system_dir, "Default.ini").or_else(|| {
-        let mut directories: Vec<_> = fs::read_dir(system_dir)
-            .ok()?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| entry.path())
-            .collect();
-        directories.sort();
+struct GameLanguageConfig {
+    code: String,
+    default_ini: PathBuf,
+}
+
+fn discover_game_languages(system_dir: &Path) -> ResolveResult<Vec<GameLanguageConfig>> {
+    let mut default_inis = Vec::new();
+    if let Some(default_ini) = find_file(system_dir, "Default.ini") {
+        default_inis.push(default_ini);
+    }
+    let mut directories: Vec<_> = fs::read_dir(system_dir)
+        .map_err(|source| ResolveError::Io {
+            path: system_dir.to_path_buf(),
+            source,
+        })?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    directories.sort();
+    default_inis.extend(
         directories
             .into_iter()
-            .find_map(|directory| find_file(&directory, "Default.ini"))
-    })
+            .filter_map(|directory| find_file(&directory, "Default.ini")),
+    );
+    if default_inis.is_empty() {
+        return Err(ResolveError::MissingDefaultIni {
+            system: system_dir.to_path_buf(),
+        });
+    }
+
+    let mut languages = Vec::new();
+    for default_ini in default_inis {
+        let contents = fs::read_to_string(&default_ini).map_err(|source| ResolveError::Io {
+            path: default_ini.clone(),
+            source,
+        })?;
+        let code = localization_value(&contents, "Engine.Engine", "Language")
+            .unwrap_or_else(|| "int".to_owned())
+            .to_ascii_lowercase();
+        if code.is_empty()
+            || !code
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(ResolveError::InvalidLanguageCode {
+                path: default_ini,
+                language: code,
+            });
+        }
+        if languages
+            .iter()
+            .any(|language: &GameLanguageConfig| language.code.eq_ignore_ascii_case(&code))
+        {
+            continue;
+        }
+        languages.push(GameLanguageConfig { code, default_ini });
+    }
+    Ok(languages)
 }
 
 fn find_file(directory: &Path, name: &str) -> Option<PathBuf> {
@@ -1177,6 +1313,12 @@ pub enum ResolveError {
     #[error("System directory `{}` has no Default.ini", system.display())]
     MissingDefaultIni { system: PathBuf },
 
+    #[error("Default.ini `{}` has invalid language code `{language}`", path.display())]
+    InvalidLanguageCode { path: PathBuf, language: String },
+
+    #[error("language `{language}` is not available; available languages: {available}")]
+    UnavailableLanguage { language: String, available: String },
+
     #[error("Default.ini has no [Core.System] Paths entries")]
     MissingPackagePaths,
 
@@ -1225,6 +1367,16 @@ pub enum GameInstallationError {
     #[error("game root `{}` is invalid: {reason}", root.display())]
     InvalidRoot { root: PathBuf, reason: String },
 
+    #[error(
+        "language `{language}` is not available in `{}`; available languages: {available}",
+        root.display()
+    )]
+    InvalidLanguage {
+        root: PathBuf,
+        language: String,
+        available: String,
+    },
+
     #[error("failed to read `{}`: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -1266,7 +1418,7 @@ mod tests {
         fs::create_dir_all(&settings_dir).unwrap();
         fs::write(
             game_root.join("System/Default.ini"),
-            "[URL]\nLocalMap=Startup.unr\n[Core.System]\nPaths=../Maps/*.unr\n",
+            "[URL]\nLocalMap=Startup.unr\n[Engine.Engine]\nLanguage=int\n[Core.System]\nPaths=../Maps/*.unr\n",
         )
         .unwrap();
         fs::write(
@@ -1283,16 +1435,67 @@ mod tests {
         fs::write(settings_dir.join("OpenHP1.ini"), "[Keep]\nValue=1\n").unwrap();
 
         let configured =
-            configure_game_installation_with_settings_dir(&game_root, &settings_dir).unwrap();
+            configure_game_installation_with_settings_dir(&game_root, None, &settings_dir).unwrap();
         let resolved = resolve_game_installation_with(&settings_dir, []).unwrap();
 
         assert_eq!(resolved, configured);
         assert_eq!(resolved.root(), game_root);
         assert_eq!(resolved.startup_map().file_name().unwrap(), "STARTUP.UNR");
+        assert_eq!(resolved.language(), "int");
+        assert_eq!(resolved.available_languages(), ["int"]);
         let ini = fs::read_to_string(settings_dir.join("OpenHP1.ini")).unwrap();
         assert!(ini.contains("[Keep]\nValue=1"));
         assert!(ini.contains("[OpenHP1.GameData]"));
         assert!(ini.contains(&format!("Root={}", resolved.root().display())));
+        assert!(ini.contains("Language=int"));
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn selects_and_remembers_a_language_shipped_in_a_subdirectory() {
+        let (game_root, settings_dir) = game_installation_fixture("game-language");
+        fs::remove_file(game_root.join("System/Default.ini")).unwrap();
+        for (directory, language) in [("0", "eng"), ("1", "fre")] {
+            let directory = game_root.join("System").join(directory);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("Default.ini"),
+                format!(
+                    "[URL]\nLocalMap=Startup.unr\n[Engine.Engine]\nLanguage={language}\n[Core.System]\nPaths=../Maps/*.unr\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let configured =
+            configure_game_installation_with_settings_dir(&game_root, Some("FRE"), &settings_dir)
+                .unwrap();
+        let resolved = resolve_game_installation_with(&settings_dir, []).unwrap();
+
+        assert_eq!(configured.language(), "fre");
+        assert_eq!(configured.available_languages(), ["eng", "fre"]);
+        assert_eq!(resolved, configured);
+        assert!(
+            fs::read_to_string(settings_dir.join("OpenHP1.ini"))
+                .unwrap()
+                .contains("Language=fre")
+        );
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_language_not_shipped_with_the_game_root() {
+        let (game_root, settings_dir) = game_installation_fixture("missing-language");
+
+        let error =
+            configure_game_installation_with_settings_dir(&game_root, Some("fre"), &settings_dir)
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GameInstallationError::InvalidLanguage { language, available, .. }
+                if language == "fre" && available == "int"
+        ));
         fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
     }
 

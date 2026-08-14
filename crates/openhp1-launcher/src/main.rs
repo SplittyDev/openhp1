@@ -62,16 +62,59 @@ impl Launcher {
         else {
             return;
         };
-        match configure_game_installation(&root) {
-            Ok(installation) => {
-                self.status = format!("Game files: {}", installation.root().display());
-                self.status_color = Color32::from_rgb(150, 210, 150);
-                self.installation = Some(installation);
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                self.status_color = Color32::from_rgb(240, 135, 120);
-            }
+        match configure_game_installation(&root, None) {
+            Ok(installation) => self.set_installation(installation),
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    fn select_language(&mut self, root: &PathBuf, language: &str) {
+        match configure_game_installation(root, Some(language)) {
+            Ok(installation) => self.set_installation(installation),
+            Err(error) => self.set_error(error),
+        }
+    }
+
+    fn set_installation(&mut self, installation: GameInstallation) {
+        self.status = format!("Game files: {}", installation.root().display());
+        self.status_color = Color32::from_rgb(150, 210, 150);
+        self.installation = Some(installation);
+    }
+
+    fn set_error(&mut self, error: impl std::fmt::Display) {
+        self.status = error.to_string();
+        self.status_color = Color32::from_rgb(240, 135, 120);
+    }
+
+    fn language_selector(&mut self, ui: &mut egui::Ui) {
+        let Some(installation) = &self.installation else {
+            return;
+        };
+        let root = installation.root().to_path_buf();
+        let mut selected = installation.language().to_owned();
+        let languages = installation.available_languages().to_vec();
+        let mut changed = false;
+
+        ui.horizontal(|ui| {
+            ui.add_space(((ui.available_width() - 270.0) / 2.0).max(0.0));
+            ui.label("Language");
+            egui::ComboBox::from_id_salt("game-language")
+                .width(190.0)
+                .selected_text(language_label(&selected))
+                .show_ui(ui, |ui| {
+                    for language in languages {
+                        changed |= ui
+                            .selectable_value(
+                                &mut selected,
+                                language.clone(),
+                                language_label(&language),
+                            )
+                            .changed();
+                    }
+                });
+        });
+        if changed {
+            self.select_language(&root, &selected);
         }
     }
 
@@ -100,6 +143,8 @@ impl eframe::App for Launcher {
             ui.add_space(14.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new(&self.status).color(self.status_color));
+                ui.add_space(8.0);
+                self.language_selector(ui);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     ui.add_space((ui.available_width() - 456.0) / 2.0);
@@ -153,4 +198,36 @@ fn game_executable() -> Result<PathBuf> {
         bail!("could not find {}", executable.display());
     }
     Ok(executable)
+}
+
+fn language_label(language: &str) -> String {
+    let name = match language.to_ascii_lowercase().as_str() {
+        "int" | "eng" => Some("English"),
+        "fre" => Some("French"),
+        "ger" => Some("German"),
+        "spa" => Some("Spanish"),
+        "ita" => Some("Italian"),
+        "dut" => Some("Dutch"),
+        "por" => Some("Portuguese"),
+        "pol" => Some("Polish"),
+        "rus" => Some("Russian"),
+        "hun" => Some("Hungarian"),
+        "cze" => Some("Czech"),
+        _ => None,
+    };
+    name.map_or_else(
+        || language.to_ascii_uppercase(),
+        |name| format!("{name} ({language})"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::language_label;
+
+    #[test]
+    fn labels_known_and_unknown_game_languages() {
+        assert_eq!(language_label("fre"), "French (fre)");
+        assert_eq!(language_label("xyz"), "XYZ");
+    }
 }

@@ -90,6 +90,9 @@ Detailed package and map notes live in
   magic, and resolve package names and Windows-era filenames
   case-insensitively. Do not trust only the final extension; localized files
   use suffixes such as `.int_uax`, `.spa_uax`, and `.hun_utx`.
+- Discover installed languages from shipped `Default.ini` variants and select
+  their matching localization and package-overlay directories without writing
+  to the original game installation.
 - Use a small bounds-checked archive over `Read + Seek` or an in-memory buffer.
   Validate table counts and offsets, export ranges, integer conversions, and
   allocation sizes before use.

@@ -26,6 +26,7 @@ A newly generated file looks like this:
 ```ini
 [OpenHP1.GameData]
 Root=/path/to/Harry Potter TM
+Language=eng
 
 [OpenHP1.Renderer]
 ResolutionX=1024
@@ -57,11 +58,13 @@ VolumetricLighting=true
 | Key | Default | Accepted values | What it does |
 | --- | --- | --- | --- |
 | `Root` | Automatically detected when possible | An absolute directory path | Selects the original game folder containing `Maps` and `System`. |
+| `Language` | The first language shipped with the selected game files | A language code offered by the launcher, such as `eng`, `fre`, or `ger` | Selects the original game's localized text, speech, and textures. |
 
-The launcher validates a selected root before writing it. When `Root` is absent,
-OpenHP1 checks for a local `res` directory and the standard Windows installation
-directory. A configured but unavailable or invalid root produces an error instead
-of silently selecting different game files.
+The launcher discovers languages from the selected game files and validates both
+values before writing them. When `Root` is absent, OpenHP1 checks for a local
+`res` directory and the standard Windows installation directory. A configured
+but unavailable root or language produces an error instead of silently selecting
+different game files.
 
 ## `[OpenHP1.Renderer]`
 
