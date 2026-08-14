@@ -30,7 +30,7 @@ use target::{DepthTarget, SampledTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const PIPELINES_PER_MODE: usize = 8;
-const PIPELINE_COUNT: usize = 24;
+const PIPELINE_COUNT: usize = 32;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -474,6 +474,7 @@ impl Renderer {
                 0 => SurfaceMode::Opaque,
                 1 => SurfaceMode::Translucent,
                 2 => SurfaceMode::Modulated,
+                3 => SurfaceMode::AlphaBlended,
                 _ => unreachable!(),
             };
             create_pipeline(
@@ -498,6 +499,7 @@ impl Renderer {
                     0 => SurfaceMode::Opaque,
                     1 => SurfaceMode::Translucent,
                     2 => SurfaceMode::Modulated,
+                    3 => SurfaceMode::AlphaBlended,
                     _ => unreachable!(),
                 };
                 create_pipeline(
@@ -1505,6 +1507,10 @@ mod tests {
         let modulated = blend_state(SurfaceMode::Modulated).unwrap();
         assert_eq!(modulated.color.src_factor, wgpu::BlendFactor::Dst);
         assert_eq!(modulated.color.dst_factor, wgpu::BlendFactor::Src);
+
+        let alpha = blend_state(SurfaceMode::AlphaBlended).unwrap();
+        assert_eq!(alpha.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+        assert_eq!(alpha.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
         assert_eq!(
             fragment_entry(SurfaceMode::Modulated, true, false, false),
             "fragment_blended_masked"

@@ -231,8 +231,9 @@ changes reuse the ordinary actor assembly path. Replacement geometry is
 appended while the previous bounded range is collapsed; the current animation
 sequence and phase survive display-only rebuilding. Hot scalar state stays
 in-place: `DrawScale` resizes mesh or sprite vertices and bounds,
-`AmbientGlow` and `ScaleGlow` relight the current vertex range, and `Opacity`
-updates the actor's blended materials. `Mesh=None` removes a weapon's
+`AmbientGlow` and `ScaleGlow` relight the current vertex range. `Opacity`
+updates the actor's materials in place and rebuilds them when crossing 1 to
+enter or leave HP1's alpha-blended path. `Mesh=None` removes a weapon's
 standalone geometry, while its `ThirdPersonMesh` remains independently
 attached at the pawn transform, matching UE1's carried-weapon path.
 

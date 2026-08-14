@@ -3666,10 +3666,10 @@ fn actor_surface_material(
         1.0
     };
     let Some(texture) = texture else {
-        return SurfaceMaterial {
+        return actor_opacity_material(SurfaceMaterial {
             opacity,
             ..surface_material(flags, None, None)
-        };
+        });
     };
     let key = texture.id();
     if !decoded.contains_key(&key) {
@@ -3687,15 +3687,15 @@ fn actor_surface_material(
         decoded.insert(key.clone(), value);
     }
     let Some(texture) = decoded.get(&key).and_then(Option::as_ref) else {
-        return SurfaceMaterial {
+        return actor_opacity_material(SurfaceMaterial {
             opacity,
             ..surface_material(flags, None, None)
-        };
+        });
     };
-    let mut material = SurfaceMaterial {
+    let mut material = actor_opacity_material(SurfaceMaterial {
         opacity,
         ..surface_material(flags, None, Some(texture.texture.render_flags))
-    };
+    });
     let image_key = (key.package, key.export_index, material.masked);
     let image = if let Some(index) = images.get(&image_key) {
         Some(*index)
@@ -3712,6 +3712,16 @@ fn actor_surface_material(
         }
     };
     material.texture = image;
+    material
+}
+
+fn actor_opacity_material(mut material: SurfaceMaterial) -> SurfaceMaterial {
+    if material.opacity < 1.0
+        && !matches!(material.mode, SurfaceMode::Backdrop | SurfaceMode::Hidden)
+    {
+        material.mode = SurfaceMode::AlphaBlended;
+        material.masked = false;
+    }
     material
 }
 
@@ -5633,6 +5643,20 @@ mod tests {
         );
         assert_eq!(modulated.mode, SurfaceMode::Modulated);
         assert!(modulated.masked);
+    }
+
+    #[test]
+    fn hp_actor_opacity_forces_alpha_blending() {
+        let faded = super::actor_opacity_material(crate::SurfaceMaterial {
+            opacity: 0.5,
+            masked: true,
+            ..Default::default()
+        });
+        assert_eq!(faded.mode, SurfaceMode::AlphaBlended);
+        assert!(!faded.masked);
+
+        let opaque = super::actor_opacity_material(crate::SurfaceMaterial::default());
+        assert_eq!(opaque.mode, SurfaceMode::Opaque);
     }
 
     #[test]

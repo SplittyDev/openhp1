@@ -181,21 +181,18 @@ material property would be incomplete.
 
 ### HP1-specific opacity
 
-**Game script, high confidence:** Invisible Harry propagates a live `Opacity`
+**Game script and native renderer, high confidence:** Invisible Harry propagates a live `Opacity`
 value to his weapon while fading out and back in. Tutorial Peeves actors use
 the same 0.3-to-1.0 range together with translucent style. The property is a
 float in the shipped metadata.
 
-SurrealEngine has no corresponding HP1 field, and the available UE1 display
-documentation ([UnrealWiki: Actor display][ue1-actor-display]) describes
-brightness-based translucent blending but not this extension. OpenHP1
-therefore clamps `Opacity` to 0 through 1 and multiplies the actor's blended
-source color. This is a **compatibility assumption** chosen because the
-renderer's UE1-style translucent blend derives visibility from source color
-rather than source alpha. Manual comparison with Invisible Harry and Peeves
-must validate it.
-
-[ue1-actor-display]: https://beyondunrealwiki.github.io/pages/actor-ut-display.html
+The shipped `Render.dll` mesh path checks `Opacity < 1`, adds HP's alpha flag
+and the translucent flag, multiplies vertex RGBA by `Opacity`, and replaces
+vertex alpha with `Opacity`. The shipped D3D renderer maps that combination to
+`SrcAlpha` / `OneMinusSrcAlpha` blending. OpenHP1 follows that path, clamps the
+GPU value to 0 through 1, and rebuilds actor materials only when opacity crosses
+1 so ordinary opaque, translucent, and modulated modes are restored exactly.
+Manual comparison with Invisible Harry and Peeves remains required.
 
 ### OpenHP1 implementation boundary
 

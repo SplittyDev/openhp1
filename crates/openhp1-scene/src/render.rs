@@ -62,6 +62,8 @@ pub enum SurfaceMode {
     Opaque,
     Translucent,
     Modulated,
+    /// HP1 actor opacity using source-alpha blending.
+    AlphaBlended,
     /// Samples the rendered sky zone in screen space.
     Backdrop,
     /// Not submitted to the GPU.
@@ -84,7 +86,7 @@ pub struct SurfaceMaterial {
     pub mirror: bool,
     /// Derive texture coordinates from the reflected view direction.
     pub environment_map: bool,
-    /// HP1-specific multiplier for blended source color.
+    /// HP1-specific multiplier for actor source color and alpha.
     pub opacity: f32,
     /// UE1 zone multipliers for automatic U/V texture-coordinate panning.
     pub texture_pan_speed: [f32; 2],

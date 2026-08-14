@@ -155,7 +155,7 @@ pub(super) fn blended_surfaces(
         };
         if !matches!(
             material.mode,
-            SurfaceMode::Translucent | SurfaceMode::Modulated
+            SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended
         ) {
             continue;
         }
@@ -245,6 +245,7 @@ fn pipeline_index(material: SurfaceMaterial) -> usize {
         SurfaceMode::Opaque | SurfaceMode::Backdrop | SurfaceMode::Hidden => 0,
         SurfaceMode::Translucent => 1,
         SurfaceMode::Modulated => 2,
+        SurfaceMode::AlphaBlended => 3,
     };
     mode * PIPELINES_PER_MODE
         + usize::from(material.unlit) * 4

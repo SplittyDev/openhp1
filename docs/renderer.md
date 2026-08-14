@@ -329,11 +329,14 @@ path, it uses the Quidditch map above.
 
 ## Known omissions
 
-The renderer supports opaque, masked, translucent, and modulated base
-textures. Translucent and modulated BSP surfaces use the original blend
+The renderer supports opaque, masked, translucent, modulated, and HP1
+actor-opacity base textures. Translucent and modulated BSP surfaces use the original blend
 equations, depth-test without writing depth, and are sorted by surface center
 for each frame. UE1 precedence makes translucent win when both blend flags are
 present and clears masking only for translucent surfaces.
+
+Actors with `Opacity < 1` use HP1's native `SrcAlpha` / `OneMinusSrcAlpha`
+blend, clear masking, and join the same depth-tested, non-writing sorted pass.
 
 Masked P8 textures discard palette index zero, invisible surfaces are omitted,
 and only surfaces or textures marked two-sided disable backface culling.

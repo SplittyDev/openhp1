@@ -306,9 +306,7 @@ fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
 }
 
 fn apply_opacity(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
-    // ponytail: HP's Opacity has no licensed renderer reference. Treat it as
-    // a clamped multiplier of the full translucent source color until traces
-    // disprove it; UE1's One/OneMinusSrcColor blend ignores alpha for RGB.
+    // HP1's mesh path multiplies vertex RGBA by Opacity before alpha blending.
     return color * input.vertex_color.a;
 }
 

@@ -326,10 +326,14 @@ impl LoadedScene {
         self.actors
             .get(actor_index)
             .context("runtime refers to a missing scene actor")?;
-        if self.actor_states[actor_index].actor.opacity == opacity {
+        let previous = self.actor_states[actor_index].actor.opacity;
+        if previous == opacity {
             return Ok(false);
         }
         self.actor_states[actor_index].actor.opacity = opacity;
+        if (previous < 1.0) != (opacity < 1.0) {
+            return self.rebuild_current_actor_render(actor_index);
+        }
         let Some(vertices) = self.actors[actor_index]
             .render
             .as_ref()

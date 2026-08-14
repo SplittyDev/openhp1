@@ -17,7 +17,7 @@ pub(super) fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let blended = matches!(
         material.mode,
-        SurfaceMode::Translucent | SurfaceMode::Modulated
+        SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended
     );
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 BSP pipeline"),
@@ -161,12 +161,16 @@ pub(super) fn fragment_entry(
             (SurfaceMode::Opaque, true, false) => "fragment_modern_masked",
             (SurfaceMode::Opaque, false, true) => "fragment_modern_unlit",
             (SurfaceMode::Opaque, true, true) => "fragment_modern_unlit_masked",
-            (SurfaceMode::Translucent | SurfaceMode::Modulated, false, _) => {
-                "fragment_modern_blended"
-            }
-            (SurfaceMode::Translucent | SurfaceMode::Modulated, true, _) => {
-                "fragment_modern_blended_masked"
-            }
+            (
+                SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
+                false,
+                _,
+            ) => "fragment_modern_blended",
+            (
+                SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
+                true,
+                _,
+            ) => "fragment_modern_blended_masked",
             (SurfaceMode::Backdrop | SurfaceMode::Hidden, _, _) => unreachable!(),
         };
     }
@@ -175,8 +179,16 @@ pub(super) fn fragment_entry(
         (SurfaceMode::Opaque, true, false) => "fragment_masked",
         (SurfaceMode::Opaque, false, true) => "fragment_unlit",
         (SurfaceMode::Opaque, true, true) => "fragment_unlit_masked",
-        (SurfaceMode::Translucent | SurfaceMode::Modulated, false, _) => "fragment_blended",
-        (SurfaceMode::Translucent | SurfaceMode::Modulated, true, _) => "fragment_blended_masked",
+        (
+            SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
+            false,
+            _,
+        ) => "fragment_blended",
+        (
+            SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
+            true,
+            _,
+        ) => "fragment_blended_masked",
         (SurfaceMode::Backdrop | SurfaceMode::Hidden, _, _) => unreachable!(),
     }
 }
@@ -192,6 +204,11 @@ pub(super) fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
         SurfaceMode::Modulated => wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::Dst,
             dst_factor: wgpu::BlendFactor::Src,
+            operation: wgpu::BlendOperation::Add,
+        },
+        SurfaceMode::AlphaBlended => wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::SrcAlpha,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
             operation: wgpu::BlendOperation::Add,
         },
         SurfaceMode::Backdrop | SurfaceMode::Hidden => unreachable!(),
