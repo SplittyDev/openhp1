@@ -13,6 +13,8 @@ Both export classes serialize tagged properties followed by a format name, a
 lazy-array offset in newer packages, a compact data size, and the embedded
 audio bytes. HP1 `Sound` exports contain WAV or MPEG Layer II data; all 91
 locally scanned `Music` packages also contain MPEG Layer II data.
+Version 70 and newer `Sound` exports append the native looping flag. Looping
+samples repeat their full embedded stream and remain live until `StopSound`.
 
 Original game packages remain read-only and are never copied into public tests.
 
@@ -23,3 +25,8 @@ Sound volume, pitch, radius, actor attachment, spatialization, and actor/slot
 replacement follow the values supplied by the original runtime. Global music
 and sound volume come from the audio subsystem selected by the original
 `Default.ini`. Transition fading is not implemented yet.
+Actor-channel replacement and `StopSound` stop the prior voice immediately,
+matching Galaxy rather than overlapping it with Kira's default fade.
+Actor sounds enter Kira after the configured Galaxy `Latency` delay. Replaced
+voices that never survive that output-buffer interval therefore remain silent,
+as they do with the original DirectSound path.

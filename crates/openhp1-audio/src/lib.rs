@@ -17,6 +17,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct AudioClip {
     format: Arc<str>,
     data: Arc<[u8]>,
+    looping: bool,
 }
 
 impl AudioClip {
@@ -53,9 +54,14 @@ impl AudioClip {
                 package: Arc::clone(&summary.source),
                 export: export_index,
             })?;
+        let data = Arc::from(reader.read_bytes(size)?);
+        let looping = class.eq_ignore_ascii_case("Sound")
+            && summary.header.version >= 70
+            && reader.read_u32()? != 0;
         Ok(Self {
             format: Arc::from(summary.name(format)),
-            data: Arc::from(reader.read_bytes(size)?),
+            data,
+            looping,
         })
     }
 
@@ -65,6 +71,10 @@ impl AudioClip {
 
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+
+    pub fn looping(&self) -> bool {
+        self.looping
     }
 }
 
@@ -102,17 +112,34 @@ mod tests {
         let mut payload = vec![0, 4];
         payload.extend(compact_index(data.len() as i32));
         payload.extend(data);
-        let package = package(&["None", "Core", "Class", "Sound", "wav"], payload);
+        let package = package(&["None", "Core", "Class", "Sound", "wav"], 61, payload);
 
         let clip = AudioClip::decode(&package, 0).unwrap();
 
         assert_eq!(clip.format(), "wav");
         assert_eq!(clip.data(), data);
+        assert!(!clip.looping());
     }
 
-    fn package(names: &[&str], payload: Vec<u8>) -> Package {
+    #[test]
+    fn decodes_hp1_sound_looping_flag() {
+        let data = b"RIFFtest";
+        let mut payload = vec![0, 4];
+        payload.extend(0_u32.to_le_bytes());
+        payload.extend(compact_index(data.len() as i32));
+        payload.extend(data);
+        payload.extend(1_u32.to_le_bytes());
+        let package = package(&["None", "Core", "Class", "Sound", "wav"], 76, payload);
+
+        assert!(AudioClip::decode(&package, 0).unwrap().looping());
+    }
+
+    fn package(names: &[&str], version: u16, payload: Vec<u8>) -> Package {
         let mut name_table = Vec::new();
         for name in names {
+            if version >= 64 {
+                name_table.extend(compact_index((name.len() + 1) as i32));
+            }
             name_table.extend(name.as_bytes());
             name_table.push(0);
             name_table.extend(0_u32.to_le_bytes());
@@ -122,8 +149,8 @@ mod tests {
         import_table.extend(0_i32.to_le_bytes());
         import_table.extend(compact_index(3));
 
-        const HEADER_SIZE: usize = 44;
-        let name_offset = HEADER_SIZE;
+        let header_size = if version < 68 { 44 } else { 56 };
+        let name_offset = header_size;
         let import_offset = name_offset + name_table.len();
         let export_offset = import_offset + import_table.len();
         let mut export = vec![0x81, 0];
@@ -144,20 +171,18 @@ mod tests {
 
         let mut bytes = Vec::new();
         bytes.extend(PACKAGE_MAGIC.to_le_bytes());
-        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(version.to_le_bytes());
         bytes.extend(0_u16.to_le_bytes());
         bytes.extend(0_u32.to_le_bytes());
-        for value in [
-            names.len(),
-            name_offset,
-            1,
-            export_offset,
-            1,
-            import_offset,
-            0,
-            0,
-        ] {
+        for value in [names.len(), name_offset, 1, export_offset, 1, import_offset] {
             bytes.extend((value as i32).to_le_bytes());
+        }
+        if version < 68 {
+            bytes.extend(0_i32.to_le_bytes());
+            bytes.extend(0_i32.to_le_bytes());
+        } else {
+            bytes.extend([0; 16]);
+            bytes.extend(0_i32.to_le_bytes());
         }
         bytes.extend(name_table);
         bytes.extend(import_table);

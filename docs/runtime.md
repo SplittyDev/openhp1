@@ -765,9 +765,9 @@ HP1 `TraceTexture` performs a zero-extent world BSP trace, never an actor
 trace. It returns the hit surface's base texture and writes its `Flags` out
 parameter as the surface and texture polyflags combined; a miss returns `None`
 and writes zero. `bTraceDecals` falls back to that base texture when no decal is
-attached. The runtime
-tracks non-transient actor sound channels until their WAV or MP2 duration
-expires. Authored sound volumes use UE1's compressed playback curve rather than
+attached. The runtime tracks non-transient actor sound channels until their WAV
+or MP2 duration expires; serialized looping sounds remain until `StopSound`.
+Authored sound volumes use UE1's compressed playback curve rather than
 becoming literal linear gain; for example, `1.0` remains `1.0` while `3.2`
 becomes `1.55`. An explicit zero remains silent. `ModifySound(parameter, value,
 optional sound, optional slot)` returns true only for a live actor/slot channel,

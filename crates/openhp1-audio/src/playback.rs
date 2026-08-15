@@ -1,4 +1,4 @@
-use std::{io::Cursor, sync::Arc};
+use std::{io::Cursor, sync::Arc, time::Duration};
 
 use kira::{
     AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Tween,
@@ -25,12 +25,13 @@ pub struct AudioPlayer {
     listener_orientation: [f32; 4],
     music_volume: f32,
     sound_volume: f32,
+    sound_latency: Duration,
     sounds: Vec<ActiveSound>,
     music: Option<StaticSoundHandle>,
 }
 
 impl AudioPlayer {
-    pub fn new(music_volume: f32, sound_volume: f32) -> Result<Self> {
+    pub fn new(music_volume: f32, sound_volume: f32, sound_latency: Duration) -> Result<Self> {
         let manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
             .map_err(|error| Error::Playback(error.to_string()))?;
         Ok(Self {
@@ -39,6 +40,7 @@ impl AudioPlayer {
             listener_orientation: [0.0, 0.0, 0.0, 1.0],
             music_volume,
             sound_volume,
+            sound_latency,
             sounds: Vec::new(),
             music: None,
         })
@@ -68,28 +70,31 @@ impl AudioPlayer {
                 return Ok(());
             }
             let mut sound = self.sounds.swap_remove(index);
-            sound.sound.stop(Tween::default());
+            sound.sound.stop(immediate_tween());
         }
 
         let radius = if radius > 0.0 { radius } else { 1500.0 };
+        let mut data = decoder(clip)?
+            .start_time(self.sound_latency)
+            .playback_rate(f64::from(pitch))
+            .volume(linear_volume(sound_gain(
+                self.listener_position,
+                position,
+                radius,
+                volume,
+                self.sound_volume,
+            )))
+            .panning(source_panning(
+                self.listener_position,
+                self.listener_orientation,
+                position,
+            ));
+        if clip.looping() {
+            data = data.loop_region(..);
+        }
         let sound = self
             .manager
-            .play(
-                decoder(clip)?
-                    .playback_rate(f64::from(pitch))
-                    .volume(linear_volume(sound_gain(
-                        self.listener_position,
-                        position,
-                        radius,
-                        volume,
-                        self.sound_volume,
-                    )))
-                    .panning(source_panning(
-                        self.listener_position,
-                        self.listener_orientation,
-                        position,
-                    )),
-            )
+            .play(data)
             .map_err(|error| Error::Playback(error.to_string()))?;
         self.sounds.push(ActiveSound {
             actor,
@@ -108,7 +113,7 @@ impl AudioPlayer {
                 && clip.is_none_or(|clip| sound.clip == *clip)
                 && slot.is_none_or(|slot| sound.slot == slot)
         }) {
-            sound.sound.stop(Tween::default());
+            sound.sound.stop(immediate_tween());
         }
         self.sounds
             .retain(|sound| sound.sound.state() != PlaybackState::Stopped);
@@ -207,6 +212,13 @@ fn decoder(clip: &AudioClip) -> Result<StaticSoundData> {
         .map_err(|error| Error::Playback(error.to_string()))
 }
 
+fn immediate_tween() -> Tween {
+    Tween {
+        duration: Duration::ZERO,
+        ..Tween::default()
+    }
+}
+
 fn linear_volume(volume: f32) -> Decibels {
     if volume <= 0.001 {
         Decibels::SILENCE
@@ -274,6 +286,7 @@ mod tests {
             data: Arc::from(
                 &b"RIFF\x28\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x40\x1f\0\0\x01\0\x08\0data\x04\0\0\0\x80\x80\x80\x80"[..],
             ),
+            looping: false,
         };
 
         assert_eq!(decoder(&clip).unwrap().num_frames(), 4);

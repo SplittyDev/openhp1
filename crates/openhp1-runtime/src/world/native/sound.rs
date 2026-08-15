@@ -57,7 +57,19 @@ impl ScriptRuntime {
             None => self.actor_float(actor_class, instance, "TransientSoundRadius")?,
         };
         let pitch = arguments.pitch.unwrap_or(1.0);
-        if !self.start_sound(actor, slot, sound, duration, pitch, arguments.no_override) {
+        let channel_duration = if clip.looping() {
+            f32::INFINITY
+        } else {
+            duration
+        };
+        if !self.start_sound(
+            actor,
+            slot,
+            sound,
+            channel_duration,
+            pitch,
+            arguments.no_override,
+        ) {
             return Ok(());
         }
         actions.push(ActorAction::PlaySound {

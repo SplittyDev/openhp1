@@ -615,8 +615,8 @@ impl Graphics {
         let screenshot_dir = console.settings_dir().join("Screenshots");
         let settings_dir = console.settings_dir().to_path_buf();
         let save_dir = console.settings_dir().join("Saves");
-        let (music_volume, sound_volume) = audio_volumes(&scene);
-        let mut audio = match AudioPlayer::new(music_volume, sound_volume) {
+        let (music_volume, sound_volume, sound_latency) = audio_settings(&scene);
+        let mut audio = match AudioPlayer::new(music_volume, sound_volume, sound_latency) {
             Ok(audio) => Some(audio),
             Err(error) => {
                 last_error = Some(error.to_string());
@@ -1624,7 +1624,7 @@ fn open_url(url: &str) -> std::io::Result<()> {
     command.arg(url).spawn().map(|_| ())
 }
 
-fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
+fn audio_settings(scene: &LoadedScene) -> (f32, f32, Duration) {
     let subsystem = scene
         .config_value("Engine.Engine", "AudioDevice")
         .unwrap_or_else(|| "Galaxy.GalaxyAudioSubsystem".to_owned());
@@ -1635,7 +1635,15 @@ fn audio_volumes(scene: &LoadedScene) -> (f32, f32) {
             .unwrap_or(fallback)
             / 255.0
     };
-    (volume("MusicVolume", 160.0), volume("SoundVolume", 200.0))
+    let latency = scene
+        .config_value(&subsystem, "Latency")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(40);
+    (
+        volume("MusicVolume", 160.0),
+        volume("SoundVolume", 200.0),
+        Duration::from_millis(latency),
+    )
 }
 
 fn play_audio_action(audio: Option<&mut AudioPlayer>, action: ActorAction) -> Result<()> {
