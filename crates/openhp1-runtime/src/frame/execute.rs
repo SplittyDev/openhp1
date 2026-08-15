@@ -828,12 +828,8 @@ impl<'a> Frame<'a> {
                         actual: target_value.kind(),
                     });
                 };
-                let length = values.len();
-                let element = usize::try_from(index)
-                    .ok()
-                    .and_then(|index| values.get_mut(index))
-                    .ok_or(Error::ArrayIndex { index, length })?;
-                *element = value;
+                let index = fixed_array_index(index, values.len())?;
+                values[index] = value;
                 self.assign_slot(*target, target_value, host)?;
             }
             Slot::DynArrayElement { target, index } => {

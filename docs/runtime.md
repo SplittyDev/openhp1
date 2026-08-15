@@ -337,6 +337,14 @@ sets velocity exactly to zero below 10 units per second after braking. This
 exact stop is observable by scripts that gate state progress on
 `VSize(Velocity) == 0`.
 
+Fixed UnrealScript array access clamps indices to the declared array bounds.
+This differs from dynamic arrays, whose indexed access can grow their storage.
+The shipped `Hub5.u` `ChessBoard.ChessPiecesMove.Tick` bytecode depends on this:
+after its eighth piece it increments `iPieceMove` to 8, reads the eight-element
+`PieceOrder` array for a debug message, and then performs the authored end-turn
+cleanup. Retail reaches that cleanup; treating the read as fatal leaves its
+piece camera active and prevents the next selection marker from spawning.
+
 During latent movement, a swimming or flying pawn with `bCanStrafe=false`
 accelerates along its current `Rotation` while `DesiredRotation` turns toward
 the destination. Other pawns accelerate directly toward the destination. This

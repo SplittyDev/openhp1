@@ -496,6 +496,34 @@ fn reads_and_writes_fixed_array_elements() {
 }
 
 #[test]
+fn fixed_array_indices_clamp_to_the_declared_bounds() {
+    let mut bytes = vec![0x0f, 0x1a, 0x1d];
+    bytes.extend((-1_i32).to_le_bytes());
+    bytes.push(0x00);
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.push(0x1d);
+    bytes.extend(42_i32.to_le_bytes());
+    bytes.extend([0x04, 0x1a, 0x1d]);
+    bytes.extend(8_i32.to_le_bytes());
+    bytes.push(0x00);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut frame = Frame::new(&bytecode);
+    frame.set_local(7, Value::Array(vec![Value::Int(1), Value::Int(2)]));
+
+    assert_eq!(frame.execute(|_, _| unreachable!()).unwrap(), Value::Int(2));
+    assert_eq!(
+        frame.local(7),
+        Some(&Value::Array(vec![Value::Int(42), Value::Int(2)]))
+    );
+}
+
+#[test]
 fn dynamic_arrays_grow_on_access_and_report_their_length() {
     let mut bytes = vec![0x0f, 0x10, 0x2c, 3, 0x00];
     bytes.extend(7_i32.to_le_bytes());

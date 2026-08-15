@@ -7,13 +7,14 @@ pub(super) fn array_element(value: &Value, index: i32) -> Result<Value> {
             actual: value.kind(),
         });
     };
-    values
-        .get(usize::try_from(index).unwrap_or(usize::MAX))
-        .cloned()
-        .ok_or(Error::ArrayIndex {
-            index,
-            length: values.len(),
-        })
+    Ok(values[fixed_array_index(index, values.len())?].clone())
+}
+
+pub(super) fn fixed_array_index(index: i32, length: usize) -> Result<usize> {
+    let last = length
+        .checked_sub(1)
+        .ok_or(Error::ArrayIndex { index, length })?;
+    Ok(usize::try_from(index).unwrap_or(0).min(last))
 }
 
 impl StructMember {
