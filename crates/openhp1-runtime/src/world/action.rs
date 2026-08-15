@@ -511,6 +511,10 @@ pub enum ActorAction {
         root_motion: bool,
         phase: f32,
     },
+    SetAnimationFrame {
+        actor: usize,
+        frame: f32,
+    },
     AwaitAnimation {
         actor: usize,
     },
@@ -654,6 +658,7 @@ impl ActorAction {
             Self::PlayAnimation { actor, .. }
             | Self::LoopAnimation { actor, .. }
             | Self::RestoreAnimation { actor, .. }
+            | Self::SetAnimationFrame { actor, .. }
             | Self::AwaitAnimation { actor }
             | Self::PlaySound { actor, .. }
             | Self::ModifySound { actor, .. }

@@ -875,8 +875,32 @@ fn scene_property_action(
                 opacity: *opacity,
             }
         }
+        (name, StoredValue::Value(Value::Float(frame)))
+            if name.eq_ignore_ascii_case("AnimFrame") && frame.is_finite() && *frame >= 0.0 =>
+        {
+            ActorAction::SetAnimationFrame {
+                actor,
+                frame: *frame,
+            }
+        }
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActorAction, StoredValue, Value, scene_projection_actions};
+
+    #[test]
+    fn nonnegative_anim_frame_projects_to_the_scene() {
+        assert_eq!(
+            scene_projection_actions(7, "AnimFrame", &StoredValue::Value(Value::Float(0.625)),),
+            [ActorAction::SetAnimationFrame {
+                actor: 7,
+                frame: 0.625,
+            }]
+        );
+    }
 }
 
 /// Projects a stored actor property through the shared runtime-to-scene seam.

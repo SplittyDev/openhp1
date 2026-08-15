@@ -447,7 +447,7 @@ impl LoadedScene {
         Ok(changed)
     }
 
-    fn rebuild_current_actor_render(&mut self, actor_index: usize) -> Result<bool> {
+    pub(super) fn rebuild_current_actor_render(&mut self, actor_index: usize) -> Result<bool> {
         if self.actors[actor_index].draw_type == 8 {
             return Ok(false);
         }

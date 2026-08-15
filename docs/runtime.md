@@ -3,6 +3,18 @@
 This document records durable runtime semantics that are easy to lose when
 extending native calls, actor state, or animation actions.
 
+## Direct animation-frame assignments
+
+`AnimFrame` is live animation state, not VM-only bookkeeping. The shipped
+`Hog2.u` `DevilsSnareNew.PlayRecedingAnim` bytecode starts `retract` and then
+assigns `AnimFrame = 1 -` the previous grow frame so the opposite sequence
+continues from the matching pose. The shipped `Engine.dll` `AActor::PlayAnim`
+stores the new sequence and tween parameters on the actor, while
+`USkeletalMesh::ApplyAnim` samples that actor's current `AnimFrame` directly;
+a nonnegative assignment therefore selects the authored sequence frame and
+ends the negative-frame tween. Runtime assignments to a nonnegative
+`AnimFrame` must be projected to the scene animation before its next tick.
+
 ## Module layout
 
 `openhp1-runtime` keeps its public interface in `lib.rs`. The bytecode VM is

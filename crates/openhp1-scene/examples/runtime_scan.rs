@@ -375,6 +375,9 @@ fn apply_actions(
                     unavailable_animation(scene, actor, &sequence);
                 }
             }
+            ActorAction::SetAnimationFrame { actor, frame } => {
+                scene.set_actor_animation_frame(actor, frame)?;
+            }
             ActorAction::AwaitAnimation { actor } => {
                 scene.finish_actor_animation(actor);
                 if !scene.actor_animation_playing(actor) {

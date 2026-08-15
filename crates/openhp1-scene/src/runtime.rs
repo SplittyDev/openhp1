@@ -260,6 +260,10 @@ pub fn apply_runtime_actions_with(
                 }
                 bone_positions_changed = true;
             }
+            ActorAction::SetAnimationFrame { actor, frame } => {
+                scene.set_actor_animation_frame(actor, frame)?;
+                bone_positions_changed = true;
+            }
             ActorAction::AwaitAnimation { actor } => {
                 scene.finish_actor_animation(actor);
                 if !scene.actor_animation_playing(actor) {

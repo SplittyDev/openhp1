@@ -545,6 +545,38 @@ impl LoadedScene {
         Ok(true)
     }
 
+    pub fn set_actor_animation_frame(&mut self, actor_index: usize, frame: f32) -> Result<bool> {
+        ensure!(
+            frame.is_finite() && frame >= 0.0,
+            "animation frame is invalid"
+        );
+        let Some(animation) = self
+            .animations
+            .iter_mut()
+            .find(|animation| animation.actor_index == actor_index)
+        else {
+            return Ok(false);
+        };
+        animation.phase = frame;
+        animation.tween_from = None;
+        animation.tween_attachment_from = None;
+        animation.tween_bone_positions_from = None;
+        let sample = animation.sample()?;
+        animation.bone_positions = animation.bone_positions_from(&sample);
+        if animation.root_motion {
+            animation.root_motion_position =
+                animation.transform.transform_vector3(sample.root_motion);
+        }
+        if let Some(actor_animation) = self
+            .actors
+            .get_mut(actor_index)
+            .and_then(|actor| actor.animation.as_mut())
+        {
+            actor_animation.phase = frame;
+        }
+        Ok(true)
+    }
+
     pub fn ensure_runtime_actor(&mut self, actor_index: usize) {
         while self.actors.len() <= actor_index {
             self.actors
@@ -4454,6 +4486,46 @@ mod tests {
         scene.set_actor_physics(0, 2).unwrap();
 
         assert!(scene.actors[0].animation.is_none());
+    }
+
+    #[test]
+    fn anim_frame_action_seeks_the_new_sequence_without_tweening() {
+        let (root, mut runtime) = animation_test_runtime();
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("Retract"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+        scene.rebuild_current_actor_render(0).unwrap();
+
+        crate::apply_runtime_actions(
+            &mut scene,
+            &mut runtime,
+            vec![
+                ActorAction::PlayAnimation {
+                    actor: 0,
+                    sequence: "Retract".to_owned(),
+                    rate: 1.0,
+                    tween_time: 0.2,
+                    root_motion: false,
+                },
+                ActorAction::SetAnimationFrame {
+                    actor: 0,
+                    frame: 0.625,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(scene.actors[0].animation.as_ref().unwrap().phase, 0.625);
+        assert_eq!(scene.animations[0].phase, 0.625);
+        assert!(scene.animations[0].tween_from.is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
