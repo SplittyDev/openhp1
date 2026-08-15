@@ -462,6 +462,10 @@ destination extent probes use `ULevel::SingleLineCheck` with `TRACE_Level |
 TRACE_Movers`, ignoring ordinary actors, before the pawn's `Mount` event runs.
 A successful mover mount bases the pawn on that mover. The destination is two
 units above the diagonal hit, matching the native constant.
+For an aligned-cylinder pawn, the mover portion of those probes preserves the
+same cylinder shape used by ordinary actor-owned-brush movement. Using an AABB
+only for the clearance probes makes its corners start inside angled ledge faces,
+rejecting a mount that the preceding cylinder contact allowed.
 In the shipped `Engine.dll` (`7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc`),
 the `APawn::Mount` body at image RVA `0xEBFB0` makes all three virtual
 `ULevel::SingleLineCheck` calls with flags `0x6` and adds the `2.0f` constant

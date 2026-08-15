@@ -10932,6 +10932,78 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
         )
         .unwrap();
 
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0, 8192, 0])),
+    );
+    let mut angled_instance = rejected_instance.clone();
+    angled_instance.insert(
+        fields["Location"].clone(),
+        StoredValue::Value(Value::Vector([140.0, 10.0, 0.0])),
+    );
+    angled_instance.insert(
+        fields["CollisionRadius"].clone(),
+        StoredValue::Value(Value::Float(15.0)),
+    );
+    angled_instance.insert(
+        fields["CollisionHeight"].clone(),
+        StoredValue::Value(Value::Float(44.5)),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let angled_hit = runtime
+        .try_move_actor(
+            1,
+            &rejected_class,
+            [-80.0, 0.0, 0.0],
+            &mut angled_instance,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(angled_hit.actor, Some(0));
+    assert!(
+        angled_hit.normal.x > 0.6 && angled_hit.normal.y.abs() > 0.6,
+        "angled mover normal is {:?}",
+        angled_hit.normal
+    );
+    for (name, value) in [
+        ("Rotation", Value::Rotator([0, 32_768, 0])),
+        ("MaxMountHeight", Value::Float(96.5)),
+        ("MaxStepHeight", Value::Float(4.0)),
+        ("Physics", Value::Byte(1)),
+    ] {
+        runtime
+            .set_actor_value(&rejected_class, &mut angled_instance, name, value)
+            .unwrap();
+    }
+    assert!(
+        runtime
+            .try_mount(
+                1,
+                &rejected_class,
+                &mut angled_instance,
+                angled_hit,
+                &mut Vec::new(),
+            )
+            .unwrap(),
+        "an aligned-cylinder pawn must mount a mover's angled high-ledge face"
+    );
+    runtime
+        .set_actor_base(
+            1,
+            &rejected_class,
+            &mut angled_instance,
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    runtime.instances.get_mut(&0).unwrap().insert(
+        fields["Rotation"].clone(),
+        StoredValue::Value(Value::Rotator([0; 3])),
+    );
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+
     let mut moving_brush = runtime.instances.remove(&0).unwrap();
     moving_brush.insert(
         fields["bCollideWorld"].clone(),

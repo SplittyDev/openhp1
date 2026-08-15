@@ -214,7 +214,10 @@ impl ScriptRuntime {
         start: Vec3,
         end: Vec3,
     ) -> std::result::Result<MovementHit, String> {
-        let extent = collision_actor_local_extents(&self.collision_actor(actor, class, instance)?);
+        let trace = self.collision_actor(actor, class, instance)?;
+        let extent = collision_actor_local_extents(&trace);
+        let mut mover_trace = trace.clone();
+        mover_trace.location = start;
         let mut nearest = self
             .collision
             .as_ref()
@@ -248,17 +251,10 @@ impl ScriptRuntime {
             else {
                 continue;
             };
-            let Some(hit) = other.brush.as_ref().and_then(|brush| {
-                brush.sweep_transformed_aabb(
-                    start,
-                    end,
-                    extent,
-                    other.location,
-                    other.rotation,
-                    other.pre_pivot,
-                    other.main_scale,
-                )
-            }) else {
+            if other.brush.is_none() {
+                continue;
+            }
+            let Some(hit) = sweep_collision_actors(&mover_trace, &other, end - start) else {
                 continue;
             };
             if hit.fraction < nearest.fraction {
@@ -266,7 +262,7 @@ impl ScriptRuntime {
                     fraction: hit.fraction,
                     normal: hit.normal,
                     actor: Some(other_actor),
-                    node: Some(hit.node),
+                    node: hit.node,
                 };
             }
         }
