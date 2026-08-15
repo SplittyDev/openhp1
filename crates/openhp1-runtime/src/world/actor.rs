@@ -160,23 +160,31 @@ impl ScriptRuntime {
         actor: usize,
         sequences: impl IntoIterator<Item = (String, String, f32, usize, Vec<(f32, String)>)>,
     ) -> DispatchResult<()> {
-        self.animation_sequences.insert(
-            actor,
-            sequences
-                .into_iter()
-                .map(|(sequence, group, rate, frame_count, notifications)| {
-                    (
-                        sequence.to_ascii_lowercase(),
-                        AnimationSequence {
-                            group,
-                            rate,
-                            frame_count,
-                            notifications,
-                        },
-                    )
-                })
-                .collect(),
-        );
+        let sequences = sequences
+            .into_iter()
+            .map(|(sequence, group, rate, frame_count, notifications)| {
+                (
+                    sequence.to_ascii_lowercase(),
+                    AnimationSequence {
+                        group,
+                        rate,
+                        frame_count,
+                        notifications,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        if sequences.is_empty()
+            && self.animation_sequences.contains_key(&actor)
+            && self
+                .animation_channels
+                .values()
+                .flatten()
+                .any(|channel| channel.actor == actor)
+        {
+            return Ok(());
+        }
+        self.animation_sequences.insert(actor, sequences);
         self.synchronize_animation_command(actor)
             .map_err(|message| DispatchError::UnresolvedObject { message })
     }

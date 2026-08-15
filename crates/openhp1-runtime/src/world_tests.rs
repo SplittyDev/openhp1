@@ -3605,6 +3605,20 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
     runtime.actor_objects.insert(99, source_object.clone());
     runtime.object_actors.insert(source_object.clone(), 99);
     runtime.actor_bone_names.insert(99, vec!["Head".to_owned()]);
+    runtime.animation_sequences.insert(
+        99,
+        [(
+            "attack".to_owned(),
+            AnimationSequence {
+                group: "Attack".to_owned(),
+                rate: 30.0,
+                frame_count: 20,
+                notifications: vec![(0.5, "AttackDamage".to_owned())],
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
     let mut actions = Vec::new();
     let Value::Object(channel_handle) = runtime
         .native(
@@ -3631,6 +3645,14 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
         Some(StoredValue::Object(Some(owner))) if owner == &source_object
     ));
     assert_eq!(runtime.animation_channels[&99][0].actor, channel_actor);
+    assert_eq!(
+        runtime.animation_sequences[&channel_actor]["attack"].notifications,
+        vec![(0.5, "AttackDamage".to_owned())]
+    );
+    runtime
+        .set_actor_animation_sequences(channel_actor, Vec::new())
+        .unwrap();
+    assert!(runtime.animation_sequences[&channel_actor].contains_key("attack"));
     fs::remove_dir_all(root).unwrap();
 }
 

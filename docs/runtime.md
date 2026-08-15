@@ -651,6 +651,8 @@ pawn's `Possess` calls `BroomPracticeReferee.OnPlayerPossessed`, which triggers
 the `Intro` cutscene and transfers the view to its `BaseCam`.
 Desktop input follows the original ground controls: W/S or up/down move,
 A/D or left/right turn, right click/Control jump, and left click/Alt cast.
+Ground left/right also feeds `aStrafe` at twice the `aBaseX` rate from the
+shipped bindings, preserving lateral movement while Harry's facing is fixed.
 The original `DefUser.ini` leaves W/S unbound and maps arrow up/down to
 `bBroomPitchUp`/`bBroomPitchDown`; its `bInvertBroomPitch` default is false.
 OpenHP1 retains that arrow-key mapping while its added WASD controls use W to
@@ -749,7 +751,8 @@ HP1 `CreateAnimChannel` creates the requested channel through the normal actor
 spawn lifecycle with the source actor as `Owner`, matching
 `AActor::CreateAnimChannel` in the shipped `Engine.dll`. Channel scripts such
 as `Hub5.fluffyHead` dereference that owner for the parent mesh and gameplay
-state.
+state. The channel retains the parent's animation sequences and notifications,
+matching the skeletal-mesh pointer copied by the native function.
 `PickTarget` selects visible living pawns within 2500 units using the authored
 fire direction and updates its `bestAim` and `bestDist` output parameters.
 `Object.Localize` reads case-insensitive section/key values from the package's

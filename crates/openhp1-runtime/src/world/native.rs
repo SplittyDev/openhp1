@@ -590,6 +590,12 @@ impl ScriptRuntime {
                         root_bone,
                         actor: channel_actor,
                     });
+                if let Some(sequences) = self.animation_sequences.get(&actor).cloned() {
+                    self.animation_sequences.insert(channel_actor, sequences);
+                    if self.animation_commands.contains_key(&channel_actor) {
+                        self.synchronize_animation_command(channel_actor)?;
+                    }
+                }
                 return Ok(Value::Object(*handle));
             }
             return Ok(channel);
