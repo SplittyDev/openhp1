@@ -11581,6 +11581,125 @@ fn animation_parameters_preserve_optional_tween_time() {
 }
 
 #[test]
+fn finish_anim_only_suspends_while_animation_is_in_progress() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-finish-animation-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, class.export_index);
+    let fields = [
+        ("AnimSequence", runtime_actor_id(800)),
+        ("bAnimLoop", runtime_actor_id(801)),
+        ("bAnimFinished", runtime_actor_id(802)),
+        ("AnimFrame", runtime_actor_id(803)),
+        ("AnimLast", runtime_actor_id(804)),
+        ("AnimRate", runtime_actor_id(805)),
+        ("TweenRate", runtime_actor_id(806)),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            Some(field.clone()),
+        );
+    }
+    let instance = |looping, finished, frame, last, rate| {
+        [
+            (
+                fields["AnimSequence"].clone(),
+                StoredValue::Name("holdlanternup".to_owned()),
+            ),
+            (
+                fields["bAnimLoop"].clone(),
+                StoredValue::Value(Value::Bool(looping)),
+            ),
+            (
+                fields["bAnimFinished"].clone(),
+                StoredValue::Value(Value::Bool(finished)),
+            ),
+            (
+                fields["AnimFrame"].clone(),
+                StoredValue::Value(Value::Float(frame)),
+            ),
+            (
+                fields["AnimLast"].clone(),
+                StoredValue::Value(Value::Float(last)),
+            ),
+            (
+                fields["AnimRate"].clone(),
+                StoredValue::Value(Value::Float(rate)),
+            ),
+            (
+                fields["TweenRate"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+        ]
+        .into_iter()
+        .collect::<InstanceState>()
+    };
+    runtime.active_state_actor = Some(0);
+
+    let mut completed = instance(false, true, 8.0 / 9.0, 8.0 / 9.0, 0.0);
+    let mut completed_actions = Vec::new();
+    runtime
+        .native(
+            0,
+            &class,
+            &package,
+            FINISH_ANIM,
+            &[],
+            &mut completed,
+            &mut completed_actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(runtime.pending_latent, None);
+    assert!(matches!(
+        completed_actions.as_slice(),
+        [ActorAction::AwaitAnimation { actor: 0 }]
+    ));
+
+    let mut playing = instance(true, false, 0.5, 0.9, 1.0);
+    let mut playing_actions = Vec::new();
+    runtime
+        .native(
+            0,
+            &class,
+            &package,
+            FINISH_ANIM,
+            &[],
+            &mut playing,
+            &mut playing_actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        runtime.pending_latent,
+        Some(LatentAction::FinishAnimation(0))
+    );
+    assert_eq!(
+        playing.get(&fields["bAnimLoop"]),
+        Some(&StoredValue::Value(Value::Bool(false)))
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn missing_loop_animation_is_a_no_op_through_extended_native_dispatch() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-missing-loop-animation-{}-{}",

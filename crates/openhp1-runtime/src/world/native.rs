@@ -479,11 +479,26 @@ impl ScriptRuntime {
             if self.active_state_actor.is_none() {
                 return Err("FinishAnim is only valid in state code".to_owned());
             }
-            self.set_actor_value(actor_class, instance, "bAnimLoop", Value::Bool(false))?;
+            if self.actor_bool(actor_class, instance, "bAnimLoop")? {
+                self.set_actor_value(actor_class, instance, "bAnimLoop", Value::Bool(false))?;
+                self.set_actor_value(actor_class, instance, "bAnimFinished", Value::Bool(false))?;
+            }
             if let Some(command) = self.animation_commands.get_mut(&actor) {
                 command.looping = false;
             }
-            self.pending_latent = Some(LatentAction::FinishAnimation(actor));
+            let sequence =
+                match self.required_actor_property(actor_class, instance, "AnimSequence")? {
+                    StoredValue::Name(sequence) => sequence,
+                    value => return Err(format!("actor property AnimSequence is {value:?}")),
+                };
+            let animating = !sequence.eq_ignore_ascii_case("None")
+                && (self.actor_signed_float(actor_class, instance, "AnimRate")? != 0.0
+                    || self.actor_float(actor_class, instance, "TweenRate")? != 0.0)
+                && self.actor_signed_float(actor_class, instance, "AnimFrame")?
+                    < self.actor_float(actor_class, instance, "AnimLast")?;
+            if animating {
+                self.pending_latent = Some(LatentAction::FinishAnimation(actor));
+            }
             actions.push(ActorAction::AwaitAnimation { actor });
             return Ok(Value::None);
         }
