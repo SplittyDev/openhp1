@@ -370,11 +370,7 @@ impl ScriptRuntime {
             velocity -=
                 (velocity - acceleration_direction * speed) * (zone.ground_friction * elapsed);
         } else {
-            let speed = velocity.length();
-            if speed > 0.0 {
-                let new_speed = (speed - speed * zone.ground_friction * 2.0 * elapsed).max(0.0);
-                velocity *= new_speed / speed;
-            }
+            velocity = brake_ground_velocity(velocity, zone.ground_friction, elapsed);
         }
         velocity += acceleration * elapsed;
 

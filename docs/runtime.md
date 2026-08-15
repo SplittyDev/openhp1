@@ -332,6 +332,11 @@ Walking physics advances when either horizontal velocity component is nonzero;
 axis-aligned paths must not wait for `MoveTo` to time out.
 Walking `MoveTo` and `MoveToward` use HP1's shipped 16-unit horizontal arrival
 radius rather than the generic speed-scaled UE1 threshold.
+When a walking pawn has no acceleration, HP1's native `APawn::calcVelocity`
+sets velocity exactly to zero below 10 units per second after braking. This
+exact stop is observable by scripts that gate state progress on
+`VSize(Velocity) == 0`.
+
 During latent movement, a swimming or flying pawn with `bCanStrafe=false`
 accelerates along its current `Rotation` while `DesiredRotation` turns toward
 the destination. Other pawns accelerate directly toward the destination. This

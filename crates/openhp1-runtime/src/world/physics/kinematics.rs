@@ -35,6 +35,23 @@ pub(super) fn has_movement(velocity: Vec3) -> bool {
     velocity != Vec3::ZERO
 }
 
+pub(super) fn brake_ground_velocity(
+    mut velocity: Vec3,
+    ground_friction: f32,
+    elapsed: f32,
+) -> Vec3 {
+    let speed = velocity.length();
+    if speed > 0.0 {
+        let new_speed = (speed - speed * ground_friction * 2.0 * elapsed).max(0.0);
+        velocity *= new_speed / speed;
+    }
+    if velocity.length_squared() < 100.0 {
+        Vec3::ZERO
+    } else {
+        velocity
+    }
+}
+
 pub(super) fn spline_weights(alpha: f32) -> [f32; 4] {
     let weights = [
         spline_weight(alpha + 1.0),
@@ -302,6 +319,24 @@ mod tests {
         assert_eq!(
             move_to_direction(PHYS_WALKING, Vec3::X * 100.0, Vec3::ZERO, -0.1),
             None
+        );
+    }
+
+    #[test]
+    fn stationary_walking_braking_stops_velocity_below_ten_units_per_second() {
+        assert_eq!(
+            brake_ground_velocity(Vec3::new(6.0, 8.0, 0.0), 0.0, 0.02),
+            Vec3::new(6.0, 8.0, 0.0),
+            "the original threshold is strict"
+        );
+        assert_eq!(
+            brake_ground_velocity(Vec3::new(5.9, 7.9, 0.0), 0.0, 0.02),
+            Vec3::ZERO
+        );
+        assert_eq!(
+            brake_ground_velocity(Vec3::X * 10.1, 1.0, 0.02),
+            Vec3::ZERO,
+            "the completion check follows friction"
         );
     }
 
