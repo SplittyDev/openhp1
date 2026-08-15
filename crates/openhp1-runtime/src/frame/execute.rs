@@ -278,7 +278,18 @@ impl<'a> Frame<'a> {
             Opcode::Let | Opcode::LetBool => {
                 let target = self.expression(host)?;
                 let value_expression = self.expression(host)?;
-                let value = self.value(value_expression, host)?;
+                let value = if matches!(
+                    &value_expression,
+                    Expression::Slot(Slot::Discard(Value::Vector(_)))
+                ) && matches!(
+                    &target,
+                    Expression::Slot(slot)
+                        if matches!(self.slot(slot, host)?, Some(Value::Rotator(_)))
+                ) {
+                    Value::Rotator([0; 3])
+                } else {
+                    self.value(value_expression, host)?
+                };
                 self.assign(target, value.clone(), host)?;
                 Expression::Value(value)
             }

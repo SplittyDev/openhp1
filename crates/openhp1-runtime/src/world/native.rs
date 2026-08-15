@@ -24,6 +24,14 @@ pub(super) use support::{
 use gesture::{gesture_native, gesture_points};
 
 impl ScriptRuntime {
+    pub(super) fn begin_latent_action(&mut self, actor: usize, action: LatentAction) {
+        if self.active_state_actor == Some(actor) {
+            self.pending_latent = Some(action);
+        } else if let Some(frame) = self.state_frames.get_mut(&actor) {
+            frame.latent = action;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn native(
         &mut self,
@@ -416,7 +424,8 @@ impl ScriptRuntime {
                 StoredValue::Object(None),
             )?;
             self.set_actor_value(actor_class, instance, "Focus", Value::Vector(*focus))?;
-            self.pending_latent = Some(LatentAction::TurnTo(actor));
+            self.tick_turn_to(actor_class, instance)?;
+            self.begin_latent_action(actor, LatentAction::TurnTo(actor));
             return Ok(Value::None);
         }
         if index == TURN_TOWARD {
@@ -451,7 +460,8 @@ impl ScriptRuntime {
                 StoredValue::Object(Some(target)),
             )?;
             self.set_actor_value(actor_class, instance, "Focus", Value::Vector(focus))?;
-            self.pending_latent = Some(LatentAction::TurnToward(actor));
+            self.tick_turn_to(actor_class, instance)?;
+            self.begin_latent_action(actor, LatentAction::TurnToward(actor));
             return Ok(Value::None);
         }
         if index == FINISH_ANIM {

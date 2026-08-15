@@ -1138,6 +1138,32 @@ fn self_context_persists_instance_state_and_null_context_short_circuits() {
 }
 
 #[test]
+fn null_context_preserves_rotator_assignment_type() {
+    let mut bytes = vec![0x0f, 0x01];
+    bytes.extend(7_i32.to_le_bytes());
+    bytes.extend([0x19, 0x2a, 5, 0, 12, 0x01]);
+    bytes.extend(8_i32.to_le_bytes());
+    bytes.extend([0x04, 0x01]);
+    bytes.extend(7_i32.to_le_bytes());
+    let bytecode = Bytecode {
+        version: 76,
+        raw_len: bytes.len(),
+        bytes,
+        tokens: Vec::new(),
+    };
+    let mut instance = HashMap::from([(7, Value::Rotator([1, 2, 3]))]);
+    let mut frame = Frame::new(&bytecode);
+
+    assert_eq!(
+        frame
+            .execute_with_instance(&mut instance, |_, _| unreachable!())
+            .unwrap(),
+        Value::Rotator([0; 3])
+    );
+    assert_eq!(instance.get(&7), Some(&Value::Rotator([0; 3])));
+}
+
+#[test]
 fn logical_natives_skip_the_unused_operand() {
     for (native, left, right, expected, calls) in [
         (0x82, 0x28, true, false, 0),

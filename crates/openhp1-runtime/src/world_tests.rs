@@ -34,6 +34,45 @@ use openhp1_physics::BspCollision;
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
+fn external_latent_action_suspends_its_receiver() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-latent-owner-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::create_dir_all(root.join("System")).unwrap();
+    fs::write(
+        root.join("System/Default.ini"),
+        "[Core.System]\nPaths=*.u\n",
+    )
+    .unwrap();
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let caller = 7;
+    let receiver = 8;
+    for actor in [caller, receiver] {
+        runtime.state_frames.insert(
+            actor,
+            StateFrame {
+                state: runtime_actor_id(700 + actor),
+                frame: FrameSnapshot::at(0),
+                latent: LatentAction::Continue,
+            },
+        );
+    }
+    runtime.active_state_actor = Some(caller);
+
+    runtime.begin_latent_action(receiver, LatentAction::TurnToward(receiver));
+
+    assert_eq!(runtime.pending_latent, None);
+    assert_eq!(runtime.state_frames[&caller].latent, LatentAction::Continue);
+    assert_eq!(
+        runtime.state_frames[&receiver].latent,
+        LatentAction::TurnToward(receiver)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn mover_trace_is_opt_in_and_keeps_recent_events() {
     let root = std::env::temp_dir().join(format!(
         "openhp1-runtime-mover-trace-{}-{}",

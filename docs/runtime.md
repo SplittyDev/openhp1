@@ -334,6 +334,11 @@ must not leave a newly initialized or script-moved pawn suspended above it.
 Latent `TurnTo` updates `DesiredRotation` toward `Focus` and resumes its state
 frame once the yaw is within the UE1 arrival threshold.
 Latent `TurnToward` tracks the target actor's current location while turning.
+Both actions belong to the receiving pawn's state frame, so an external call
+such as `playerHarry.TurnToward(self)` suspends Harry rather than the caller.
+Shipped `APawn::execTurnToward` (`0x10301d52` -> `0x103d9130`) writes latent
+code `0x1ff` through the receiving pawn's `StateFrame` at
+`0x103d9172..0x103d9181`, then immediately calculates its desired heading.
 Unlike ordinary pawns, `PlayerPawn` rotation normally remains script-controlled;
 generic `bRotateToDesired` physics must not turn Harry during cutscene movement.
 For HP1 compatibility, native latent `TurnTo` and `TurnToward` are the exception:
@@ -724,6 +729,13 @@ Script `Name` comparisons treat a missing object/name value as UE's canonical
 from it; non-class and incompatible objects become `None`.
 Numeric natives interpret a null-context scalar result as the typed zero value
 that UE writes into the expression result buffer.
+Assignments likewise preserve the destination type when a null context zeroes
+a 12-byte `Vector` or `Rotator` result.
+Shipped `Core.dll::execContext` (`0x10102ae0` -> `0x10133510`) reads the encoded
+skip and zero-fill size at `0x10133589..0x101335a6`, then zeroes that many bytes
+in the caller's result buffer at `0x101335c1..0x101335d5`. This distinction is
+required by `Hub4.u`'s compiled `SneakFilch.LookAround` assignment at `0x0024`,
+whose nullable `LastBaseStation.Rotation` result is a rotator, not a vector.
 Switches likewise compare an untyped null-context result as zero when their
 case values establish a numeric or boolean type.
 
