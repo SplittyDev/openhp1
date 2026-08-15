@@ -775,6 +775,10 @@ optionally filters by sound (`None` is a wildcard), and changes volume, radius,
 or pitch for parameter values 0, 1, or 2. Slot zero uses an allocated transient
 channel and is not selectable by `ModifySound`.
 
+Non-bouncing falling actors call `Landed` directly on walkable floor contacts;
+`HitWall` is reserved for wall or slope contacts. Bouncing actors still receive
+`HitWall` for every blocking contact, including floors and pawns.
+
 The release `runtime_scan` advances both world and player scripts every frame
 after `Possess`, matching the game loop closely enough to expose player-tick
 deferrals during local corpus scans.

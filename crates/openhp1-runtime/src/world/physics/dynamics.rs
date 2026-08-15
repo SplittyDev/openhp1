@@ -1,7 +1,7 @@
 use super::*;
 
-fn falling_calls_hit_wall(bounce: bool, hit_pawn: bool) -> bool {
-    bounce || !hit_pawn
+fn falling_calls_hit_wall(bounce: bool, hit_pawn: bool, hit_normal: Vec3) -> bool {
+    bounce || (!hit_pawn && hit_normal.z < WALKABLE_FLOOR_Z)
 }
 
 impl ScriptRuntime {
@@ -404,7 +404,7 @@ impl ScriptRuntime {
                 .map_err(|error| error.to_string())?
                 .unwrap_or(false);
             let bounce = self.actor_bool(class, instance, "bBounce")?;
-            let calls_hit_wall = falling_calls_hit_wall(bounce, hit_pawn);
+            let calls_hit_wall = falling_calls_hit_wall(bounce, hit_pawn, hit.normal);
             if bounce {
                 if calls_hit_wall {
                     self.call_hit_wall(actor, class, instance, hit.normal, hit.actor, actions)?;
@@ -1390,8 +1390,10 @@ mod tests {
     }
 
     #[test]
-    fn bouncing_actor_receives_hit_wall_when_it_hits_a_pawn() {
-        assert!(falling_calls_hit_wall(true, true));
-        assert!(!falling_calls_hit_wall(false, true));
+    fn falling_hit_wall_matches_native_wall_and_landing_callbacks() {
+        assert!(falling_calls_hit_wall(true, true, Vec3::Z));
+        assert!(!falling_calls_hit_wall(false, true, Vec3::X));
+        assert!(falling_calls_hit_wall(false, false, Vec3::X));
+        assert!(!falling_calls_hit_wall(false, false, Vec3::Z));
     }
 }
