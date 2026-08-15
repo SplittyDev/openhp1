@@ -1086,19 +1086,22 @@ impl LoadedScene {
                     } else {
                         0.0
                     };
-                    self.render.mesh.vertex_colors[target..target + 4].fill(
-                        particle
-                            .color_start
-                            .lerp(particle.color_end, color_progress)
-                            * particle_alpha(
-                                particle.age,
-                                particle.lifetime,
-                                particle.alpha_start,
-                                particle.alpha_end,
-                                system.config.alpha_delay,
-                                system.config.alpha_grow_period,
-                            ),
+                    let color = particle
+                        .color_start
+                        .lerp(particle.color_end, color_progress);
+                    let alpha = particle_alpha(
+                        particle.age,
+                        particle.lifetime,
+                        particle.alpha_start,
+                        particle.alpha_end,
+                        system.config.alpha_delay,
+                        system.config.alpha_grow_period,
                     );
+                    self.render.mesh.vertex_colors[target..target + 4].fill(particle_vertex_color(
+                        system.config.style,
+                        color,
+                        alpha,
+                    ));
                 } else {
                     self.render.mesh.positions[target..target + 4].fill(Vec3::ZERO);
                 }
@@ -2100,6 +2103,14 @@ fn particle_alpha(
         start.max(0.0)
     };
     if alpha < 0.001 { 0.0 } else { alpha }
+}
+
+fn particle_vertex_color(style: u8, color: Vec3, alpha: f32) -> Vec3 {
+    if style == 4 {
+        Vec3::ONE
+    } else {
+        color * alpha.min(1.0)
+    }
 }
 
 fn sample_particle_color(value: ParticleColor, random: &mut u32) -> Vec3 {
@@ -4817,6 +4828,16 @@ mod tests {
         }
         assert_eq!(super::particle_alpha(100.0, 0.0, 0.8, 0.0, 0.0, 0.5), 0.8);
         assert_eq!(super::particle_alpha(3.999, 4.0, 1.0, 0.0, 2.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn modulated_particles_use_the_d3d_white_vertex_override() {
+        let color = glam::Vec3::new(0.2, 0.4, 0.8);
+
+        assert_eq!(
+            super::particle_vertex_color(4, color, 0.25),
+            glam::Vec3::ONE
+        );
     }
 
     #[test]

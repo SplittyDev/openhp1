@@ -285,9 +285,11 @@ delay, and end scale, `DripTime`, and sprite `SpinRate` are applied over each
 particle's lifetime. `AlphaStart` and `AlphaEnd` are sampled per particle;
 `AlphaGrowPeriod` grows from zero to the sampled start over its authored
 lifetime fraction, then `AlphaDelay` holds the start before the native fade to
-the sampled end. The resulting nonnegative alpha modulates the particle color,
-with values below the native `0.001` cutoff collapsed to zero, matching
-`UParticle::Update` and `URender::DrawParticleSystem`. Particle
+the sampled end. The resulting nonnegative alpha modulates ordinary particle
+color, with values below the native `0.001` cutoff collapsed to zero. The
+shipped D3D driver overrides `STY_Modulated` triangle vertex RGBA with opaque
+white, so those particles retain the texture's neutral-gray background under
+2x modulation instead of exposing their billboard rectangles. Particle
 velocity uses the authored exponential `Damping` decay. `DIST_OwnerMesh`
 (`Distribution=2`) samples the owner's mesh surface,
 including source geometry retained while `DrawType=None`; Lev_Tut2 uses that

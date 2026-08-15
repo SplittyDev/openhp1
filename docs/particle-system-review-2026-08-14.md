@@ -86,6 +86,15 @@ updates alpha through the renderer's existing per-vertex color modulation,
 including `AlphaDelay` and `AlphaGrowPeriod`. Commit `404f7cb` applies the
 native `0.001` cutoff established by the constant at `0x10473814`.
 
+Render.dll's shared billboard vertex routine at `0x10b16ab0` computes a
+style-4-specific fade color, but the shipped D3D driver's
+`UD3DRenderDevice::DrawTriangles` ignores every submitted diffuse component
+when poly flag `0x40` is set and uploads opaque white (`0xffffffff`) instead.
+Its `SetBlending` selects `D3DBLEND_DESTCOLOR` and `D3DBLEND_SRCCOLOR`, matching
+the 2x modulation blend. OpenHP1 applies the same white vertex override so the
+texture's 128-gray background remains neutral and particle quad edges do not
+darken the framebuffer.
+
 ### `bWindPerParticle`, not `bSystemRelative`, selects wind sampling
 
 `AParticleFX::UpdateParticles` at `0x103c1f02..0x103c1f4b` samples wind once
