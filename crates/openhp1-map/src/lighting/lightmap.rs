@@ -37,6 +37,7 @@ pub struct AuthoredLight {
     pub saturation: u8,
     pub radius: u8,
     pub cone: u8,
+    pub dark: bool,
     pub volume_brightness: u8,
     pub volume_fog: u8,
     pub volume_radius: u8,
@@ -91,6 +92,7 @@ impl Model {
                         saturation: light.saturation,
                         radius: light.radius,
                         cone: light.cone,
+                        dark: light.dark,
                         volume_brightness: light.volume_brightness,
                         volume_fog: light.volume_fog,
                         volume_radius: light.volume_radius,
@@ -568,7 +570,12 @@ fn add_light(
             }
             _ => 0.0,
         };
-        *pixel += (color * illumination).min(Vec3::ONE);
+        let contribution = (color * illumination).min(Vec3::ONE);
+        if light.dark {
+            *pixel = (*pixel - contribution).max(Vec3::ZERO);
+        } else {
+            *pixel += contribution;
+        }
     }
 }
 
@@ -626,5 +633,18 @@ mod tests {
         let mut dark = [Vec3::ZERO];
         add_light(&mut dark, &locations, Vec3::X, &shadow, light);
         assert_eq!(dark[0], Vec3::ZERO);
+    }
+
+    #[test]
+    fn dark_light_subtracts_and_clamps_the_authored_contribution() {
+        let light = LightActor {
+            location: Vec3::new(25.0, 0.0, 0.0),
+            brightness: 64,
+            dark: true,
+            ..Default::default()
+        };
+        let mut pixels = [Vec3::splat(0.1)];
+        add_light(&mut pixels, &[Vec3::ZERO], Vec3::X, &[1.0], light);
+        assert_eq!(pixels[0], Vec3::ZERO);
     }
 }

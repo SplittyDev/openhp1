@@ -65,6 +65,10 @@ outside the bounds only exposes an unhelpful outer hull.
 Lit surfaces multiply their base texture by the reconstructed lightmap in
 display space using UE1's 2x modulation. This deliberately matches UE1's
 fixed-function rendering instead of applying modern linear-light sRGB math.
+Authored `bDarkLight` actors subtract their masked contribution and clamp at
+zero; the shipped `Render.dll` performs the same signed-light branch before
+accumulation. Classic reconstruction and Modern per-fragment lighting preserve
+that flag through their shared authored-light data.
 Zone-zero surfaces inherit the active `LevelInfo` ambient color. Unlit and
 lightmap-less surfaces bypass that multiply.
 

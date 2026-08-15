@@ -709,6 +709,7 @@ mod tests {
             saturation: 20,
             radius: 7,
             cone: 128,
+            dark: false,
             volume_brightness: 64,
             volume_fog: 128,
             volume_radius,

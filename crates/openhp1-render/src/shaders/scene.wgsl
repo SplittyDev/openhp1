@@ -289,7 +289,12 @@ fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
                 }
             }
         }
-        illumination += min(light.color.rgb * strength, vec3(1.0));
+        let contribution = min(light.color.rgb * strength, vec3(1.0));
+        if light.effect.y != 0u {
+            illumination = max(illumination - contribution, vec3(0.0));
+        } else {
+            illumination += contribution;
+        }
     }
     return vec4(srgb_to_linear(color.rgb * illumination * 2.0), color.a);
 }

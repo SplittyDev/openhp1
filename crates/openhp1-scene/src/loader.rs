@@ -273,6 +273,7 @@ impl LoadedScene {
                         saturation: light.saturation,
                         radius: light.radius,
                         cone: light.cone,
+                        dark: light.dark,
                         volume_brightness: light.volume_brightness,
                         volume_fog: light.volume_fog,
                         volume_radius: light.volume_radius,

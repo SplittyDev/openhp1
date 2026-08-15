@@ -16,6 +16,7 @@ struct VertexLight {
     saturation: u8,
     radius: f32,
     effect: u8,
+    dark: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -46,7 +47,8 @@ impl ActorVertexLighting {
             }
             let attenuation = 1.0 - distance / light.radius;
             let angle_attenuation = (direction / distance).dot(normal).abs();
-            color += light.color * (attenuation * angle_attenuation);
+            let contribution = light.color * (attenuation * angle_attenuation);
+            color += contribution * if light.dark { -1.0 } else { 1.0 };
         }
         (self.ambient + color * (self.scale_glow * 1.5)) * 2.0
     }
@@ -92,6 +94,7 @@ impl Model {
                 saturation: light.saturation,
                 radius: (f32::from(light.radius) + 1.0) * 25.0,
                 effect: light.effect,
+                dark: light.dark,
             });
         }
         Ok(VertexLighting {
@@ -362,7 +365,7 @@ mod tests {
 
     #[test]
     fn vertex_lighting_matches_ue1_ambient_and_radial_falloff() {
-        let lighting = ActorVertexLighting {
+        let mut lighting = ActorVertexLighting {
             ambient: Vec3::splat(0.1),
             scale_glow: 1.0,
             lights: vec![VertexLight {
@@ -373,9 +376,17 @@ mod tests {
                 saturation: 255,
                 radius: 10.0,
                 effect: 0,
+                dark: false,
             }],
         };
         assert_eq!(lighting.color(Vec3::ZERO, Vec3::X, false), Vec3::splat(0.5));
+        lighting.lights[0].dark = true;
+        assert!(
+            (lighting.color(Vec3::ZERO, Vec3::X, false) - Vec3::splat(-0.1))
+                .abs()
+                .max_element()
+                < 0.000_001
+        );
         assert_eq!(lighting.color(Vec3::ZERO, Vec3::X, true), Vec3::splat(1.2));
     }
 
@@ -392,6 +403,7 @@ mod tests {
                 saturation: 255,
                 radius: 10.0,
                 effect: 0,
+                dark: false,
             }],
         };
         assert!(!lighting.set_light_brightness(8, 0));

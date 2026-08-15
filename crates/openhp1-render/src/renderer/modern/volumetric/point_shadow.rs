@@ -614,6 +614,7 @@ mod tests {
             saturation: 0,
             radius,
             cone: 128,
+            dark: false,
             volume_brightness: 0,
             volume_fog: 0,
             volume_radius: 0,

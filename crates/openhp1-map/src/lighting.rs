@@ -20,6 +20,7 @@ struct LightActor {
     saturation: u8,
     radius: u8,
     cone: u8,
+    dark: bool,
     volume_brightness: u8,
     volume_fog: u8,
     volume_radius: u8,
@@ -39,6 +40,7 @@ impl Default for LightActor {
             saturation: 255,
             radius: 64,
             cone: 128,
+            dark: false,
             volume_brightness: 64,
             volume_fog: 0,
             volume_radius: 0,
@@ -121,6 +123,9 @@ fn decode_light(package: &Package, export_index: usize) -> Result<LightActor> {
             ("LightSaturation", PropertyKind::Byte, _) => light.saturation = value.read_u8()?,
             ("LightRadius", PropertyKind::Byte, _) => light.radius = value.read_u8()?,
             ("LightCone", PropertyKind::Byte, _) => light.cone = value.read_u8()?,
+            ("bDarkLight", PropertyKind::Bool, _) => {
+                light.dark = property.bool_value.unwrap_or(false);
+            }
             ("VolumeBrightness", PropertyKind::Byte, _) => {
                 light.volume_brightness = value.read_u8()?;
             }

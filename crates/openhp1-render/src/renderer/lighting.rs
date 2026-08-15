@@ -244,7 +244,7 @@ fn gpu_data(
                         region.x as f32 / atlas_size[0] as f32,
                         region.y as f32 / atlas_size[1] as f32,
                     ],
-                    effect: [u32::from(light.effect), 0, 0, 0],
+                    effect: [u32::from(light.effect), u32::from(light.dark), 0, 0],
                 });
             }
             GpuLightmap {
@@ -284,6 +284,7 @@ mod tests {
                     saturation: 20,
                     radius: 7,
                     cone: 128,
+                    dark: true,
                     volume_brightness: 64,
                     volume_fog: 0,
                     volume_radius: 0,
@@ -314,5 +315,6 @@ mod tests {
         assert_eq!(lights[0].position_radius, [1.0, 2.0, 3.0, 200.0]);
         assert_eq!(lights[0].visibility, [0.125, 0.125, 0.25, 0.25]);
         assert_eq!(lights[0].effect[0], 8);
+        assert_eq!(lights[0].effect[1], 1);
     }
 }
