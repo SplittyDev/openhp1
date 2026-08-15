@@ -2176,7 +2176,7 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    fn call_movement_touch(
+    pub(super) fn call_movement_touch(
         &mut self,
         actor: usize,
         actor_class: &ResolvedObject,
@@ -2200,10 +2200,7 @@ impl ScriptRuntime {
             vec![Value::Object(other_handle)],
             actions,
         )?;
-        if self.destroyed.contains(&actor)
-            || self.destroyed.contains(&other)
-            || !self.touching.contains(&actor_pair(actor, other))
-        {
+        if self.destroyed.contains(&other) || !self.touching.contains(&actor_pair(actor, other)) {
             return Ok(());
         }
 

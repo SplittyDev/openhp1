@@ -897,6 +897,10 @@ impl ConsoleCommandHost for RecordingConsole {
 }
 
 fn named_native_script(export_index: usize) -> Arc<openhp1_script::ScriptExport> {
+    native_script(export_index, 0)
+}
+
+fn native_script(export_index: usize, native_index: u16) -> Arc<openhp1_script::ScriptExport> {
     Arc::new(openhp1_script::ScriptExport {
         export_index,
         class_name: "Function".to_owned(),
@@ -915,7 +919,7 @@ fn named_native_script(export_index: usize) -> Arc<openhp1_script::ScriptExport>
         },
         metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
             parameter_size: None,
-            native_index: 0,
+            native_index,
             parameter_count: None,
             operator_precedence: 0,
             return_value_offset: None,
@@ -5325,6 +5329,129 @@ fn set_location_places_through_bytecode_and_finds_or_rejects_world_bsp() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn destroying_first_touch_actor_still_notifies_the_second_actor() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-destroying-touch-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let projectile_path = system.join("Projectile.u");
+    let trigger_path = system.join("Trigger.u");
+    fs::write(
+        &projectile_path,
+        synthetic_runtime_package_for("Projectile"),
+    )
+    .unwrap();
+    fs::write(&trigger_path, synthetic_runtime_package_for("Trigger")).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let projectile_package = runtime.packages.load_path(&projectile_path).unwrap();
+    let trigger_package = runtime.packages.load_path(&trigger_path).unwrap();
+    let projectile_class = ResolvedObject {
+        package: Arc::clone(&projectile_package),
+        export_index: 0,
+    };
+    let projectile_class_id = object_id(&projectile_package, 0);
+    let trigger_class_id = object_id(&trigger_package, 0);
+    for class in [&projectile_class_id, &trigger_class_id] {
+        runtime
+            .scripts
+            .insert(class.clone(), synthetic_class_script(0));
+        runtime
+            .class_defaults
+            .insert(class.clone(), InstanceState::default());
+    }
+    let fields = ["bStatic", "bNoDelete", "bDeleteMe", "Base", "Level"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+        .collect::<HashMap<_, _>>();
+    for class in [&projectile_class_id, &trigger_class_id] {
+        for (name, field) in &fields {
+            runtime.fields.insert(
+                (class.clone(), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+        }
+        runtime
+            .fields
+            .insert((class.clone(), "touching".to_owned()), None);
+    }
+
+    let projectile_touch = object_id(&projectile_package, 1);
+    runtime
+        .scripts
+        .insert(projectile_touch.clone(), native_script(1, DESTROY));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(projectile_class_id.clone(), None, "Touch", 0),
+        Some(projectile_touch),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(projectile_class_id.clone(), None, "Destroyed", 0),
+        None,
+    );
+    let trigger_touch = object_id(&trigger_package, 1);
+    runtime
+        .scripts
+        .insert(trigger_touch.clone(), log_event_script(1, "trigger Touch"));
+    runtime.function_lookups.insert(
+        FunctionLookup::new(trigger_class_id.clone(), None, "Touch", 0),
+        Some(trigger_touch),
+    );
+
+    for (actor, object, class) in [
+        (0, runtime_actor_id(1), projectile_class_id),
+        (1, runtime_actor_id(2), trigger_class_id),
+    ] {
+        runtime.actor_classes.insert(actor, class);
+        runtime.object_actors.insert(object.clone(), actor);
+        runtime.actor_objects.insert(actor, object);
+    }
+    let instance = [
+        (
+            fields["bStatic"].clone(),
+            StoredValue::Value(Value::Bool(false)),
+        ),
+        (
+            fields["bNoDelete"].clone(),
+            StoredValue::Value(Value::Bool(false)),
+        ),
+        (
+            fields["bDeleteMe"].clone(),
+            StoredValue::Value(Value::Bool(false)),
+        ),
+        (fields["Base"].clone(), StoredValue::Object(None)),
+        (fields["Level"].clone(), StoredValue::Object(None)),
+    ]
+    .into_iter()
+    .collect::<InstanceState>();
+    let mut projectile_instance = instance.clone();
+    runtime.instances.insert(1, instance);
+    runtime.touching.insert((0, 1));
+
+    let mut actions = Vec::new();
+    runtime
+        .call_movement_touch(
+            0,
+            &projectile_class,
+            &mut projectile_instance,
+            1,
+            &mut actions,
+        )
+        .unwrap();
+
+    assert!(runtime.destroyed.contains(&0));
+    assert!(actions.contains(&ActorAction::Log {
+        actor: 1,
+        message: "trigger Touch".to_owned(),
+        tag: None,
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
 fn placement_test_collision(half_extent: f32) -> Arc<BspCollision> {
     let mut model = Model {
         bounds: PrimitiveBounds {

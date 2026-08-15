@@ -103,9 +103,11 @@ binary is authoritative for the threshold.
 - Walking latent movement now uses the shipped 16-unit horizontal arrival
   radius. Non-walking latent movement retains its existing behavior.
 - Nonblocking contacts found by actor movement now execute `Touch`
-  synchronously, moving actor first, and do not call the second actor after
-  either participant is destroyed. While the reciprocal callback runs, the
-  active mover remains available to qualified calls such as the shipped
+  synchronously, moving actor first. Matching retail `AActor::BeginTouch`, the
+  second actor is still notified if the first actor destroys itself without
+  invalidating the touch; destruction of the second actor or removal of the
+  touch binding suppresses its callback. While the reciprocal callback runs,
+  the active mover remains available to qualified calls such as the shipped
   projectile's `HitActor.IsA(...)`. Location-based overlap updates outside
   movement retain their existing queued path.
 - Falling actors with `bBounce=True` receive `HitWall` even when the blocking
