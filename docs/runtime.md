@@ -628,6 +628,11 @@ object graph; stale source-map object identities are never copied.
 `LevelInfo.ServerTravel` uses the same host action. The authored
 `ServerTravel("?Restart", false)` death path reloads the current map without
 restoring the dead player's travel state.
+Compiled `GameInfo.ProcessServerTravel` distinguishes remote players with
+`NetConnection(P.Player)`. The local `Player` object is a `Viewport`, so the
+host bridge must make that cast false without trying to resolve its synthetic
+`<host-player>` identity as a package; the remaining standalone path then
+queues the authored travel normally.
 `PlayerPawn.UpdateURL` emits a host action carrying the option/value for
 case-insensitive replacement and an optional `User.DefaultPlayer` persistence
 request; the runtime never mutates map packages. OpenHP1 is a local-only host, so

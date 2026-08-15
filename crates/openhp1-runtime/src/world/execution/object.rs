@@ -1,5 +1,28 @@
 use super::*;
 
+pub(in crate::world) fn host_cast_value(
+    object: &ObjectId,
+    class_name: &str,
+    handle: i32,
+) -> Option<Value> {
+    let accepted = if object == &host_player_id() {
+        class_name.eq_ignore_ascii_case("Player") || class_name.eq_ignore_ascii_case("Viewport")
+    } else if object == &host_console_id() {
+        class_name.to_ascii_lowercase().ends_with("console")
+    } else if object == &host_menu_book_id() {
+        class_name.eq_ignore_ascii_case("FEBook")
+    } else if object == &host_quidditch_page_id() {
+        class_name.eq_ignore_ascii_case("FEQuidMatchPage")
+    } else {
+        return None;
+    };
+    Some(if accepted {
+        Value::Object(handle)
+    } else {
+        Value::Object(0)
+    })
+}
+
 impl ScriptRuntime {
     pub(super) fn meta_cast(
         &mut self,
@@ -77,6 +100,9 @@ impl ScriptRuntime {
                     return Ok(Value::Object(0));
                 }
                 let object = self.object_for_handle(value)?;
+                if let Some(value) = host_cast_value(&object, &path, value) {
+                    return Ok(value);
+                }
                 if self.object_actors.contains_key(&object) {
                     return Ok(Value::Object(0));
                 }
@@ -101,20 +127,8 @@ impl ScriptRuntime {
             let host = self.object_for_handle(value)?;
             let summary = target.package.summary();
             let name = summary.name(summary.exports[target.export_index].object_name);
-            let accepted = (host == host_console_id()
-                && name.to_ascii_lowercase().ends_with("console"))
-                || (host == host_menu_book_id() && name.eq_ignore_ascii_case("FEBook"))
-                || (host == host_quidditch_page_id()
-                    && name.eq_ignore_ascii_case("FEQuidMatchPage"));
-            if host == host_console_id()
-                || host == host_menu_book_id()
-                || host == host_quidditch_page_id()
-            {
-                return Ok(if accepted {
-                    Value::Object(value)
-                } else {
-                    Value::Object(0)
-                });
+            if let Some(value) = host_cast_value(&host, name, value) {
+                return Ok(value);
             }
         }
         let (value, class) = if value == -1 {

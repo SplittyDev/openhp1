@@ -20,7 +20,7 @@ use super::{
     actor::advance_lifespan,
     actor::decode_latent_action,
     actor::update_touching_array,
-    execution::portable_call_value,
+    execution::{object::host_cast_value, portable_call_value},
     native::{
         animation_parameters, bone_number, bone_position, collision_updates, log_arguments,
         next_navigation_step, noise_loudness, random_float, random_int, random_unit_vector,
@@ -32,6 +32,19 @@ use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBou
 use openhp1_physics::BspCollision;
 
 static FIXTURE_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn local_host_player_casts_as_viewport_not_net_connection() {
+    let player = host_player_id();
+    assert_eq!(
+        host_cast_value(&player, "Viewport", 7),
+        Some(Value::Object(7))
+    );
+    assert_eq!(
+        host_cast_value(&player, "NetConnection", 7),
+        Some(Value::Object(0))
+    );
+}
 
 #[test]
 fn external_latent_action_suspends_its_receiver() {
