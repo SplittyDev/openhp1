@@ -746,7 +746,10 @@ Switches likewise compare an untyped null-context result as zero when their
 case values establish a numeric or boolean type.
 
 HP1 `CreateAnimChannel` creates the requested channel through the normal actor
-spawn lifecycle so scripts can retain and own the returned object.
+spawn lifecycle with the source actor as `Owner`, matching
+`AActor::CreateAnimChannel` in the shipped `Engine.dll`. Channel scripts such
+as `Hub5.fluffyHead` dereference that owner for the parent mesh and gameplay
+state.
 `PickTarget` selects visible living pawns within 2500 units using the authored
 fire direction and updates its `bestAim` and `bestDist` output parameters.
 `Object.Localize` reads case-insensitive section/key values from the package's

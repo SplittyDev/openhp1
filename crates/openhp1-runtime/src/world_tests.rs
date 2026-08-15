@@ -3590,6 +3590,47 @@ fn spawn_bytecode_uses_bsp_find_spot_before_allocating_a_handle() {
     runtime.collision = Some(collision_box(Vec3::splat(-100.0), Vec3::splat(100.0)));
     assert_eq!(run_spawn(&mut runtime, [0.0; 3]).0, Value::Object(0));
     assert_eq!(runtime.next_actor, 3);
+    drop(run_spawn);
+
+    runtime
+        .class_defaults
+        .get_mut(&spawned_class_id)
+        .unwrap()
+        .insert(
+            spawned_fields["bCollideWhenPlacing"].clone(),
+            StoredValue::Value(Value::Bool(false)),
+        );
+    let source_object = runtime_actor_id(99);
+    runtime.actor_classes.insert(99, source_class_id.clone());
+    runtime.actor_objects.insert(99, source_object.clone());
+    runtime.object_actors.insert(source_object.clone(), 99);
+    runtime.actor_bone_names.insert(99, vec!["Head".to_owned()]);
+    let mut actions = Vec::new();
+    let Value::Object(channel_handle) = runtime
+        .native(
+            99,
+            &source_class,
+            &package,
+            CREATE_ANIM_CHANNEL,
+            &[
+                Value::Object(spawned_class_handle),
+                Value::Byte(0),
+                Value::NameText("Head".to_owned()),
+            ],
+            &mut source_instance,
+            &mut actions,
+            0,
+        )
+        .unwrap()
+    else {
+        panic!("CreateAnimChannel did not return an object handle");
+    };
+    let channel_actor = runtime.actor_for_handle(channel_handle).unwrap();
+    assert!(matches!(
+        runtime.instances[&channel_actor].get(&spawned_fields["Owner"]),
+        Some(StoredValue::Object(Some(owner))) if owner == &source_object
+    ));
+    assert_eq!(runtime.animation_channels[&99][0].actor, channel_actor);
     fs::remove_dir_all(root).unwrap();
 }
 

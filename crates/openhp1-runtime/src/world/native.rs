@@ -568,7 +568,7 @@ impl ScriptRuntime {
                 actor,
                 actor_class,
                 source,
-                std::slice::from_ref(class),
+                &[class.clone(), Value::Object(-1)],
                 instance,
                 actions,
             )?;
