@@ -385,10 +385,12 @@ rotator; `execSetLocation` uses FarMove slot `0x90`. OpenHP1 follows that
 shared movement path. For a non-brush actor with no based actors, retail
 `MoveActor` handles zero-delta rotation directly without collision or
 `Touch`/`UnTouch` processing. Brushes and actors carrying based actors continue
-through the full movement path so their rotated bounds block normally and their
-based actors turn around the base's yaw. A successful rotation updates the
-persistent transform, collision index, and scene action, and every `Pawn`
-subclass receives that yaw in `ViewRotation`.
+through transform, based-actor, and final encroachment processing, but retail
+does not run a continuous world or actor sweep when translation is zero. A
+moving brush's final overlap is instead decided by its `EncroachingOn` policy;
+accepted rotation turns based actors around the base's yaw. A successful
+rotation updates the persistent transform, collision index, and scene action,
+and every `Pawn` subclass receives that yaw in `ViewRotation`.
 After loaded actors finish `SetInitialState`, native `InitBase` applies a
 non-`None` `AttachTag` by basing every actor with the matching `Tag` on that
 actor. Spawned actors run the same attachment step after their startup events.

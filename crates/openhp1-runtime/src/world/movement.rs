@@ -1006,7 +1006,8 @@ impl ScriptRuntime {
         }
 
         let delta = Vec3::from_array(delta);
-        if delta.length_squared() < 0.00000001 && rotation.is_none() {
+        let stationary = delta.length_squared() < 0.00000001;
+        if stationary && rotation.is_none() {
             return Ok(MovementHit {
                 fraction: 1.0,
                 normal: Vec3::ZERO,
@@ -1018,7 +1019,7 @@ impl ScriptRuntime {
         let previous_rotation = rotation
             .map(|_| self.actor_rotator(actor_class, instance, "Rotation"))
             .transpose()?;
-        if delta.length_squared() < 0.00000001 {
+        if stationary {
             let rotation = rotation.expect("zero-delta movement has a rotation");
             if previous_rotation == Some(rotation) {
                 return Ok(MovementHit {
@@ -1056,7 +1057,18 @@ impl ScriptRuntime {
             0.0
         };
         let trace_delta = delta + delta.normalize_or_zero() * trace_padding;
-        let (mut blocking_hit, hits) = {
+        let (mut blocking_hit, hits) = if stationary {
+            self.ensure_collision_actors(actor, instance)?;
+            (
+                MovementHit {
+                    fraction: 1.0,
+                    normal: Vec3::ZERO,
+                    actor: None,
+                    node: None,
+                },
+                Vec::new(),
+            )
+        } else {
             let mut evaluation = match actions.as_deref_mut() {
                 Some(actions) => MovementEvaluation::Real {
                     actions,
@@ -1101,7 +1113,7 @@ impl ScriptRuntime {
             }
         }
         let location = current.location + delta * blocking_hit.fraction;
-        if delta.length_squared() >= 0.00000001 {
+        if !stationary {
             self.set_actor_location(actor, actor_class, instance, location, actions)?;
         }
         if blocking_hit.fraction == 1.0

@@ -9668,21 +9668,18 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         .into_iter()
         .collect::<InstanceState>()
     };
-    for actor in 1..=3 {
+    for actor in 1..=2 {
         let object = runtime_actor_id(actor);
         runtime.object_actors.insert(object.clone(), actor);
         runtime.actor_objects.insert(actor, object);
         runtime.actor_classes.insert(actor, class_id.clone());
     }
-    runtime.next_actor = 4;
+    runtime.next_actor = 3;
     let parent = runtime.actor_objects[&1].clone();
     let mut current_instance = instance([0.0; 3], true);
     runtime
         .instances
         .insert(2, instance([4.0, 0.0, 0.0], false));
-    runtime
-        .instances
-        .insert(3, instance([100.0, 0.0, 0.0], true));
 
     let execute = |runtime: &mut ScriptRuntime,
                    current_instance: &mut InstanceState,
@@ -9750,95 +9747,9 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         fields["Rotation"].clone(),
         StoredValue::Value(Value::Rotator([0; 3])),
     );
-    runtime.instances.get_mut(&3).unwrap().insert(
-        fields["Location"].clone(),
-        StoredValue::Value(Value::Vector([0.0, 6.0, 0.0])),
-    );
     runtime.collision_actors.clear();
     runtime.collision_actors_by_min_x.clear();
     runtime.update_actor_base(2, Some(parent), None).unwrap();
-    actions.clear();
-
-    assert_eq!(
-        execute(
-            &mut runtime,
-            &mut current_instance,
-            [0, 16_384, 0],
-            &mut actions,
-        )
-        .unwrap(),
-        Value::Bool(false)
-    );
-    assert!(actions.iter().any(|action| {
-        matches!(
-            action,
-            ActorAction::DispatchEvent {
-                actor: 1 | 3,
-                event: "Bump",
-                ..
-            }
-        )
-    }));
-    assert!(
-        !actions
-            .iter()
-            .any(|action| matches!(action, ActorAction::SetRotation { .. }))
-    );
-    assert_eq!(
-        current_instance.get(&fields["Rotation"]),
-        Some(&StoredValue::Value(Value::Rotator([0; 3])))
-    );
-
-    runtime.instances.get_mut(&3).unwrap().insert(
-        fields["bBlockActors"].clone(),
-        StoredValue::Value(Value::Bool(false)),
-    );
-    let touch_function = object_id(&package, 2);
-    let other_parameter = 2_i32;
-    let mut touch_bytecode = vec![0x19, 0x00];
-    touch_bytecode.extend(other_parameter.to_le_bytes());
-    touch_bytecode.extend([8, 0, 0, 0x61, 0x2f, 0x21]);
-    touch_bytecode.extend(3_i32.to_le_bytes());
-    touch_bytecode.extend([0x16, 0x04, 0x0b]);
-    runtime.scripts.insert(
-        touch_function.clone(),
-        Arc::new(ScriptExport {
-            export_index: touch_function.export_index,
-            class_name: "Function".to_owned(),
-            base_field: ObjectReference::None,
-            next_field: ObjectReference::None,
-            script_text: ObjectReference::None,
-            children: ObjectReference::None,
-            friendly_name: touch_function.export_index,
-            line: 0,
-            text_position: 0,
-            bytecode: Bytecode {
-                version: 76,
-                raw_len: touch_bytecode.len(),
-                bytes: touch_bytecode,
-                tokens: Vec::new(),
-            },
-            metadata: ScriptMetadata::Function(FunctionMetadata {
-                parameter_size: None,
-                native_index: 0,
-                parameter_count: None,
-                operator_precedence: 0,
-                return_value_offset: None,
-                flags: 0,
-                replication_offset: None,
-            }),
-        }),
-    );
-    runtime.frame_arguments.insert(
-        touch_function.clone(),
-        Arc::new(vec![(other_parameter, 0, false)]),
-    );
-    runtime.function_lookups.insert(
-        FunctionLookup::new(class_id.clone(), None, "Touch", 0),
-        Some(touch_function),
-    );
-    runtime.collision_actors.clear();
-    runtime.collision_actors_by_min_x.clear();
     actions.clear();
 
     assert_eq!(
@@ -9855,18 +9766,6 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         actor: 1,
         rotation: [0, 16_384, 0],
     }));
-    assert!(runtime.touching.contains(&(1, 3)));
-    assert!(
-        !actions
-            .iter()
-            .any(|action| { matches!(action, ActorAction::DispatchEvent { event: "Touch", .. }) })
-    );
-    assert!(
-        !actions
-            .iter()
-            .any(|action| matches!(action, ActorAction::DeferredCall { .. })),
-        "synchronous Touch must expose the moving actor to nested context calls: {actions:#?}"
-    );
     assert_eq!(
         current_instance.get(&fields["Rotation"]),
         Some(&StoredValue::Value(Value::Rotator([0, 16_384, 0])))
@@ -9891,16 +9790,6 @@ fn set_rotation_matches_retail_fast_path_and_moves_based_actors() {
         execute(&mut runtime, &mut current_instance, [0; 3], &mut actions,).unwrap(),
         Value::Bool(true)
     );
-    assert!(actions.iter().any(|action| {
-        matches!(
-            action,
-            ActorAction::DispatchEvent {
-                actor: 1,
-                event: "UnTouch",
-                ..
-            }
-        )
-    }));
     current_instance.insert(
         fields["bCollideWorld"].clone(),
         StoredValue::Value(Value::Bool(true)),
@@ -11351,6 +11240,67 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             .unwrap(),
         [100.0, 0.0, 0.0],
         "a blocking moving brush must make ME_ReturnWhenEncroach restore the mover"
+    );
+    runtime.scripts.insert(
+        encroaching_on.clone(),
+        function_script(encroaching_on.export_index, vec![0x04, 0x28]),
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Location",
+            Value::Vector([0.0; 3]),
+        )
+        .unwrap();
+    runtime
+        .instances
+        .get_mut(&1)
+        .unwrap()
+        .insert(fields["Brush"].clone(), StoredValue::Object(None));
+    runtime.collision_actors.clear();
+    runtime.collision_actors_by_min_x.clear();
+    let rotation = [0, 8192, 0];
+    let rotation_hit = runtime
+        .try_move_actor_rotated(
+            0,
+            &mover_class,
+            rotation,
+            &mut moving_brush,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(rotation_hit.fraction, 1.0);
+    assert_eq!(
+        runtime
+            .actor_rotator(&mover_class, &moving_brush, "Rotation")
+            .unwrap(),
+        rotation,
+        "rotation-only MoveActor must leave overlap policy to EncroachingOn"
+    );
+    runtime.scripts.insert(
+        encroaching_on.clone(),
+        function_script(encroaching_on.export_index, vec![0x04, 0x27]),
+    );
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Location",
+            Value::Vector([100.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    runtime
+        .set_actor_value(
+            &mover_class,
+            &mut moving_brush,
+            "Rotation",
+            Value::Rotator([0; 3]),
+        )
+        .unwrap();
+    runtime.instances.get_mut(&1).unwrap().insert(
+        fields["Brush"].clone(),
+        StoredValue::Object(Some(mover_brush.clone())),
     );
     runtime.instances.get_mut(&1).unwrap().insert(
         fields["bStatic"].clone(),
