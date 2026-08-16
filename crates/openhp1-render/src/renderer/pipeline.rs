@@ -32,7 +32,7 @@ pub(super) fn create_pipeline(
                 attributes: &wgpu::vertex_attr_array![
                     0 => Float32x3,
                     1 => Float32x2,
-                    2 => Float32x2,
+                    2 => Float32x4,
                     3 => Float32x2,
                     4 => Float32,
                     5 => Unorm8x4,
@@ -40,7 +40,8 @@ pub(super) fn create_pipeline(
                     7 => Float32,
                     8 => Float32x2,
                     9 => Uint32,
-                    10 => Float32x2
+                    10 => Float32x2,
+                    11 => Float32x3
                 ],
             }],
         },
@@ -108,7 +109,7 @@ pub(super) fn create_screen_pipeline(
                 attributes: &wgpu::vertex_attr_array![
                     0 => Float32x3,
                     1 => Float32x2,
-                    2 => Float32x2,
+                    2 => Float32x4,
                     3 => Float32x2,
                     4 => Float32,
                     5 => Unorm8x4,
@@ -116,7 +117,8 @@ pub(super) fn create_screen_pipeline(
                     7 => Float32,
                     8 => Float32x2,
                     9 => Uint32,
-                    10 => Float32x2
+                    10 => Float32x2,
+                    11 => Float32x3
                 ],
             }],
         },

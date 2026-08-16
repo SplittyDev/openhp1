@@ -9,6 +9,8 @@ pub struct TriangleMesh {
     /// World-space normals. Environment-mapped actor meshes use these to
     /// derive camera-relative reflection coordinates.
     pub normals: Vec<Vec3>,
+    /// BSP node-plane normals used for camera-side zone selection.
+    pub node_plane_normals: Vec<Vec3>,
     /// Raw UE texture coordinates in texels. Divide by the selected texture's
     /// dimensions before sampling a normalized GPU texture.
     pub texture_coordinates: Vec<Vec2>,
@@ -19,6 +21,8 @@ pub struct TriangleMesh {
     /// UE1's Gouraud vertex lighting.
     pub vertex_colors: Vec<Vec3>,
     pub vertex_surfaces: Vec<usize>,
+    /// Automatic pan speeds for BSP node zones 0 and 1.
+    pub texture_pan_speeds: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub triangle_surfaces: Vec<usize>,
 }
@@ -27,6 +31,7 @@ impl Model {
     pub fn triangulate(&self) -> Result<TriangleMesh> {
         let mut positions = Vec::new();
         let mut normals = Vec::new();
+        let mut node_plane_normals = Vec::new();
         let mut texture_coordinates = Vec::new();
         let mut lightmap_coordinates = Vec::new();
         let mut vertex_lightmaps = Vec::new();
@@ -57,6 +62,7 @@ impl Model {
             let normal = self.vectors
                 [index(surface_data.normal, self.vectors.len(), "surface normal")?]
             .normalize_or_zero();
+            let node_plane_normal = Vec3::from_array([node.plane[0], node.plane[1], node.plane[2]]);
             let base = self.points[index(
                 surface_data.base_point,
                 self.points.len(),
@@ -87,6 +93,7 @@ impl Model {
                     self.points[index(vertex.point, self.points.len(), "BSP vertex point")?];
                 positions.push(point);
                 normals.push(normal);
+                node_plane_normals.push(node_plane_normal);
                 texture_coordinates.push(surface_texture_coordinates(
                     point,
                     base,
@@ -122,11 +129,13 @@ impl Model {
         Ok(TriangleMesh {
             positions,
             normals,
+            node_plane_normals,
             texture_coordinates,
             lightmap_coordinates,
             vertex_lightmaps,
             vertex_colors,
             vertex_surfaces,
+            texture_pan_speeds: Vec::new(),
             indices,
             triangle_surfaces,
         })

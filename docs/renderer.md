@@ -415,8 +415,12 @@ Corona size uses UE1's fixed `0.8 * DrawScale` viewport-width fraction, and
 positions and lifetimes follow their actors. Their quads are depth-tested
 rather than using UE1's center-point BSP visibility trace.
 Water-backed `WetTexture` exports animate independently of actor scripts.
-Automatically panned BSP surfaces use their associated zone's `TexUPanSpeed` and
-`TexVPanSpeed`; zone zero inherits the active `LevelInfo` values.
+Automatically panned BSP surfaces select `Node.Zone0` or `Node.Zone1` from the
+render-pass camera side of the node plane and use that actor's `TexUPanSpeed`
+and `TexVPanSpeed`. Positive node-plane space selects `Zone1`; non-positive
+space selects `Zone0`.
+A missing zone actor falls back to `Level.Actors(0)`, the active `LevelInfo`.
+See [the original-engine evidence](texture-panning-engine-evidence.md).
 `FireTexture` previews and time-varying light effects remain static.
 Unsupported texture classes use a magenta checkerboard.
 

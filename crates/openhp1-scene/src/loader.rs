@@ -170,16 +170,12 @@ impl LoadedScene {
                 .context("failed to decode the sky zone")?
         };
         let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
-        let zone_pan_speeds =
-            load_zone_pan_speeds(&mut packages, &package, &model, &mut class_cache);
+        let (level_pan_speed, zone_pan_speeds) =
+            load_zone_pan_speeds(&mut packages, &package, &level, &model, &mut class_cache);
+        mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
         let mut water_animations = Vec::new();
-        let (mut textures, mut surface_materials) = load_materials(
-            &mut packages,
-            &package,
-            &model,
-            &zone_pan_speeds,
-            &mut water_animations,
-        );
+        let (mut textures, mut surface_materials) =
+            load_materials(&mut packages, &package, &model, &mut water_animations);
         let textured_surfaces = surface_materials
             .iter()
             .filter(|material| material.texture.is_some())
@@ -3940,38 +3936,13 @@ fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
-    zone_pan_speeds: &[Vec2],
     water_animations: &mut Vec<AnimatedWaterTexture>,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize), Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut materials = Vec::with_capacity(model.surfaces.len());
-    // ponytail: materials are surface-wide; carry pan speed per BSP node if a
-    // map gives one shared surface different front-zone speeds.
-    let mut surface_pan_speeds = vec![None; model.surfaces.len()];
-    let level_pan_speed = zone_pan_speeds.first().copied().unwrap_or(Vec2::ONE);
-    for node in &model.nodes {
-        let (Ok(surface), Ok(zone)) = (
-            usize::try_from(node.surface),
-            usize::try_from(node.zones[1]),
-        ) else {
-            continue;
-        };
-        if let Some(speed) = surface_pan_speeds.get_mut(surface)
-            && speed.is_none()
-        {
-            *speed = Some(
-                zone_pan_speeds
-                    .get(zone)
-                    .copied()
-                    .unwrap_or(level_pan_speed),
-            );
-        }
-    }
-
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
-        let pan_speed = surface_pan_speeds[surface_index].unwrap_or(level_pan_speed);
         if surface.poly_flags.contains(PolyFlags::INVISIBLE) {
             materials.push(SurfaceMaterial {
                 mode: SurfaceMode::Hidden,
@@ -3990,22 +3961,12 @@ fn load_materials(
         let resolved = match packages.resolve(map, surface.texture) {
             Ok(Some(resolved)) => resolved,
             Ok(None) => {
-                materials.push(bsp_surface_material(
-                    surface.poly_flags,
-                    None,
-                    None,
-                    pan_speed,
-                ));
+                materials.push(bsp_surface_material(surface.poly_flags, None, None));
                 continue;
             }
             Err(error) => {
                 warn!(surface_index, %error, "could not resolve surface texture");
-                materials.push(bsp_surface_material(
-                    surface.poly_flags,
-                    None,
-                    None,
-                    pan_speed,
-                ));
+                materials.push(bsp_surface_material(surface.poly_flags, None, None));
                 continue;
             }
         };
@@ -4024,17 +3985,11 @@ fn load_materials(
             decoded.insert(key.clone(), texture);
         }
         let Some(decoded_texture) = decoded.get(&key).and_then(Option::as_ref) else {
-            materials.push(bsp_surface_material(
-                surface.poly_flags,
-                None,
-                None,
-                pan_speed,
-            ));
+            materials.push(bsp_surface_material(surface.poly_flags, None, None));
             continue;
         };
         let texture_flags = decoded_texture.texture.render_flags;
-        let material =
-            bsp_surface_material(surface.poly_flags, None, Some(texture_flags), pan_speed);
+        let material = bsp_surface_material(surface.poly_flags, None, Some(texture_flags));
         let volumetric_source = is_window_texture(
             resolved
                 .package
@@ -4085,14 +4040,12 @@ fn is_window_texture(name: &str) -> bool {
 fn load_zone_pan_speeds(
     packages: &mut PackageStore,
     map: &Arc<Package>,
+    level: &Level,
     model: &Model,
     class_cache: &mut HashMap<SceneObjectId, ClassState>,
-) -> Vec<Vec2> {
-    let level_pan_speed = map
-        .summary()
-        .exports
-        .iter()
-        .position(|export| map.summary().class_name(export) == Some("LevelInfo"))
+) -> (Vec2, Vec<Vec2>) {
+    let level_pan_speed = level
+        .level_info_export()
         .and_then(
             |export_index| match actor_pan_speed(packages, map, export_index, class_cache) {
                 Ok(speed) => Some(speed),
@@ -4104,7 +4057,7 @@ fn load_zone_pan_speeds(
         )
         .unwrap_or(Vec2::ONE);
 
-    model
+    let zone_pan_speeds = model
         .zones
         .iter()
         .enumerate()
@@ -4117,7 +4070,63 @@ fn load_zone_pan_speeds(
                 level_pan_speed
             })
         })
-        .collect()
+        .collect();
+    (level_pan_speed, zone_pan_speeds)
+}
+
+fn bsp_texture_pan_speeds(
+    model: &Model,
+    level_pan_speed: Vec2,
+    zone_pan_speeds: &[Vec2],
+) -> Vec<[f32; 4]> {
+    let mut speeds = Vec::new();
+    for node in model.nodes.iter().filter(|node| node.vertex_count >= 3) {
+        let flags = usize::try_from(node.surface)
+            .ok()
+            .and_then(|surface| model.surfaces.get(surface))
+            .map_or(PolyFlags::default(), |surface| surface.poly_flags);
+        let speed = node_texture_pan_speeds(flags, node.zones, level_pan_speed, zone_pan_speeds);
+        speeds.extend(std::iter::repeat_n(speed, usize::from(node.vertex_count)));
+    }
+    speeds
+}
+
+fn node_texture_pan_speeds(
+    flags: PolyFlags,
+    zones: [i32; 2],
+    level_pan_speed: Vec2,
+    zone_pan_speeds: &[Vec2],
+) -> [f32; 4] {
+    let zone_speed = |zone| {
+        usize::try_from(zone)
+            .ok()
+            .and_then(|zone| zone_pan_speeds.get(zone))
+            .copied()
+            .unwrap_or(level_pan_speed)
+    };
+    let [zone0, zone1] = zones.map(zone_speed);
+    [
+        if flags.contains(PolyFlags::AUTO_U_PAN) {
+            zone0.x
+        } else {
+            0.0
+        },
+        if flags.contains(PolyFlags::AUTO_V_PAN) {
+            zone0.y
+        } else {
+            0.0
+        },
+        if flags.contains(PolyFlags::AUTO_U_PAN) {
+            zone1.x
+        } else {
+            0.0
+        },
+        if flags.contains(PolyFlags::AUTO_V_PAN) {
+            zone1.y
+        } else {
+            0.0
+        },
+    ]
 }
 
 fn actor_pan_speed(
@@ -4265,7 +4274,6 @@ fn surface_material(
         mirror: flags.contains(PolyFlags::MIRRORED) || texture_flags.mirrored,
         environment_map: false,
         opacity: 1.0,
-        texture_pan_speed: [0.0; 2],
         small_wavy: false,
     }
 }
@@ -4274,21 +4282,8 @@ fn bsp_surface_material(
     flags: PolyFlags,
     texture: Option<usize>,
     texture_flags: Option<TextureRenderFlags>,
-    zone_pan_speed: Vec2,
 ) -> SurfaceMaterial {
     let mut material = surface_material(flags, texture, texture_flags);
-    material.texture_pan_speed = [
-        if flags.contains(PolyFlags::AUTO_U_PAN) {
-            zone_pan_speed.x
-        } else {
-            0.0
-        },
-        if flags.contains(PolyFlags::AUTO_V_PAN) {
-            zone_pan_speed.y
-        } else {
-            0.0
-        },
-    ];
     material.small_wavy = flags.contains(PolyFlags::SMALL_WAVY);
     material
 }
@@ -5922,16 +5917,47 @@ mod tests {
     }
 
     #[test]
-    fn applies_only_requested_zone_texture_pan_axes() {
-        let material = super::bsp_surface_material(
-            PolyFlags::from_bits(PolyFlags::AUTO_V_PAN.bits() | 0x0000_2000),
-            Some(1),
-            None,
+    fn keeps_both_node_zone_speeds_and_only_requested_pan_axes() {
+        let zones = [
+            glam::Vec2::ONE,
             glam::Vec2::new(2.0, 3.5),
+            glam::Vec2::new(4.0, 5.5),
+        ];
+        assert_eq!(
+            super::node_texture_pan_speeds(
+                PolyFlags::from_bits(PolyFlags::AUTO_U_PAN.bits() | PolyFlags::AUTO_V_PAN.bits(),),
+                [1, 2],
+                glam::Vec2::ONE,
+                &zones,
+            ),
+            [2.0, 3.5, 4.0, 5.5]
         );
-        assert_eq!(material.texture_pan_speed, [0.0, 3.5]);
+        assert_eq!(
+            super::node_texture_pan_speeds(PolyFlags::AUTO_V_PAN, [1, 2], glam::Vec2::ONE, &zones,),
+            [0.0, 3.5, 0.0, 5.5]
+        );
         assert!(PolyFlags::from_bits(0x0000_2000).contains(PolyFlags::SMALL_WAVY));
+
+        let material =
+            super::bsp_surface_material(PolyFlags::from_bits(0x0000_2000), Some(1), None);
         assert!(material.small_wavy);
+    }
+
+    #[test]
+    fn missing_node_zone_uses_level_info_not_zone_zero() {
+        let level = glam::Vec2::new(6.0, 7.0);
+        let zones = [glam::Vec2::new(2.0, 3.0)];
+        let flags =
+            PolyFlags::from_bits(PolyFlags::AUTO_U_PAN.bits() | PolyFlags::AUTO_V_PAN.bits());
+
+        assert_eq!(
+            super::node_texture_pan_speeds(flags, [0, -1], level, &zones),
+            [2.0, 3.0, 6.0, 7.0]
+        );
+        assert_eq!(
+            super::node_texture_pan_speeds(flags, [99, 0], level, &zones),
+            [6.0, 7.0, 2.0, 3.0]
+        );
     }
 
     #[test]

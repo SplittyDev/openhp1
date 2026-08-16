@@ -1340,6 +1340,7 @@ mod tests {
         RenderScene {
             mesh: TriangleMesh {
                 positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+                node_plane_normals: Vec::new(),
                 texture_coordinates: vec![Vec2::ZERO; 3],
                 lightmap_coordinates: vec![Vec2::ZERO; 3],
                 indices: vec![0, 1, 2],
@@ -1347,6 +1348,7 @@ mod tests {
                 vertex_colors: vec![Vec3::ONE; 3],
                 vertex_lightmaps: vec![None; 3],
                 vertex_surfaces: vec![0; 3],
+                texture_pan_speeds: Vec::new(),
                 triangle_surfaces: vec![0],
             },
             textures: Vec::new(),

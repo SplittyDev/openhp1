@@ -63,7 +63,7 @@ struct VertexOutput {
 fn vertex_main(
     @location(0) position: vec3<f32>,
     @location(1) texture_coordinates: vec2<f32>,
-    @location(2) texture_pan_speed: vec2<f32>,
+    @location(2) texture_pan_speeds: vec4<f32>,
     @location(3) lightmap_coordinates: vec2<f32>,
     @location(4) has_lightmap: f32,
     @location(5) vertex_color: vec4<f32>,
@@ -72,6 +72,7 @@ fn vertex_main(
     @location(8) lighting_coordinates: vec2<f32>,
     @location(9) lighting_index: u32,
     @location(10) small_wavy_scale: vec2<f32>,
+    @location(11) node_plane_normal: vec3<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
@@ -88,6 +89,11 @@ fn vertex_main(
         let view_reflection = world_to_view * reflection;
         output.texture_coordinates = (view_reflection.xy + vec2(1.0)) * (128.0 / 255.0);
     } else {
+        let texture_pan_speed = select(
+            texture_pan_speeds.xy,
+            texture_pan_speeds.zw,
+            dot(camera.camera_position.xyz - position, node_plane_normal) > 0.0,
+        );
         output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;
         if any(small_wavy_scale != vec2(0.0)) {
             let time = camera.auto_uv.x / 64.0;

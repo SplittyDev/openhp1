@@ -48,7 +48,7 @@ pub struct RenderStats {
 struct Vertex {
     position: [f32; 3],
     texture_coordinates: [f32; 2],
-    texture_pan_speed: [f32; 2],
+    texture_pan_speeds: [f32; 4],
     lightmap_coordinates: [f32; 2],
     has_lightmap: f32,
     vertex_color: [u8; 4],
@@ -57,6 +57,7 @@ struct Vertex {
     lighting_coordinates: [f32; 2],
     lighting_index: u32,
     small_wavy_scale: [f32; 2],
+    node_plane_normal: [f32; 3],
 }
 
 #[repr(C)]
@@ -297,10 +298,17 @@ impl Renderer {
                         coordinates.x / dimensions[0],
                         coordinates.y / dimensions[1],
                     ],
-                    texture_pan_speed: [
-                        material.texture_pan_speed[0] / dimensions[0],
-                        material.texture_pan_speed[1] / dimensions[1],
-                    ],
+                    texture_pan_speeds: scene.mesh.texture_pan_speeds.get(vertex_index).map_or(
+                        [0.0; 4],
+                        |speeds| {
+                            [
+                                speeds[0] / dimensions[0],
+                                speeds[1] / dimensions[1],
+                                speeds[2] / dimensions[0],
+                                speeds[3] / dimensions[1],
+                            ]
+                        },
+                    ),
                     lightmap_coordinates,
                     has_lightmap: f32::from(lightmap_rectangle.is_some()),
                     vertex_color: pack_vertex_color(
@@ -329,6 +337,15 @@ impl Renderer {
                         .and_then(|index| u32::try_from(index).ok())
                         .unwrap_or(u32::MAX),
                     small_wavy_scale: normalized_small_wavy_scale(material.small_wavy, dimensions),
+                    node_plane_normal: unreal_to_render(
+                        scene
+                            .mesh
+                            .node_plane_normals
+                            .get(vertex_index)
+                            .copied()
+                            .unwrap_or(Vec3::ZERO),
+                    )
+                    .to_array(),
                 }
             })
             .collect();
@@ -1914,6 +1931,24 @@ mod tests {
     }
 
     #[test]
+    fn texture_pan_uses_node_plane_when_surface_normal_opposes_it() {
+        let shader = include_str!("shaders/scene.wgsl");
+        assert!(shader.contains(
+            "let texture_pan_speed = select(\n            texture_pan_speeds.xy,\n            texture_pan_speeds.zw,\n            dot(camera.camera_position.xyz - position, node_plane_normal) > 0.0,\n        );"
+        ));
+
+        let surface_normal = Vec3::X;
+        let node_plane_normal = Vec3::NEG_X;
+        let camera_offset = Vec3::NEG_X;
+        assert!(camera_offset.dot(surface_normal) < 0.0);
+        assert!(camera_offset.dot(node_plane_normal) > 0.0);
+        let speeds = [[1.0, 2.0], [3.0, 4.0]];
+        let select = |offset: Vec3| speeds[usize::from(offset.dot(node_plane_normal) > 0.0)];
+        assert_eq!(select(camera_offset), speeds[1]);
+        assert_eq!(select(-camera_offset), speeds[0]);
+    }
+
+    #[test]
     fn small_wavy_uses_original_formula_in_normalized_texture_units() {
         assert_eq!(
             normalized_small_wavy_scale(true, [64.0, 128.0]),
@@ -1939,7 +1974,7 @@ mod tests {
             Vertex {
                 position: [-2.0, 3.0, 1.0],
                 texture_coordinates: [0.0; 2],
-                texture_pan_speed: [0.0; 2],
+                texture_pan_speeds: [0.0; 4],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
@@ -1948,11 +1983,12 @@ mod tests {
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
                 small_wavy_scale: [0.0; 2],
+                node_plane_normal: [0.0; 3],
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
                 texture_coordinates: [0.0; 2],
-                texture_pan_speed: [0.0; 2],
+                texture_pan_speeds: [0.0; 4],
                 lightmap_coordinates: [0.0; 2],
                 has_lightmap: 0.0,
                 vertex_color: [255; 4],
@@ -1961,6 +1997,7 @@ mod tests {
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
                 small_wavy_scale: [0.0; 2],
+                node_plane_normal: [0.0; 3],
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -2300,7 +2337,7 @@ mod tests {
         Vertex {
             position: [x, y, z],
             texture_coordinates: [0.0; 2],
-            texture_pan_speed: [0.0; 2],
+            texture_pan_speeds: [0.0; 4],
             lightmap_coordinates: [0.0; 2],
             has_lightmap: 0.0,
             vertex_color: [255; 4],
@@ -2309,6 +2346,7 @@ mod tests {
             lighting_coordinates: [0.0; 2],
             lighting_index: u32::MAX,
             small_wavy_scale: [0.0; 2],
+            node_plane_normal: [0.0; 3],
         }
     }
 }

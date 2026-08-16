@@ -67,6 +67,14 @@ impl Level {
             reach_specs,
         })
     }
+
+    /// Returns the active `LevelInfo` stored in `Level.Actors(0)` by UE1.
+    pub fn level_info_export(&self) -> Option<usize> {
+        match self.actors.first() {
+            Some(ObjectReference::Export(index)) => Some(*index),
+            _ => None,
+        }
+    }
 }
 
 pub fn world_model_export(package: &Package) -> Result<usize> {
@@ -79,5 +87,23 @@ pub fn world_model_export(package: &Package) -> Result<usize> {
     match Level::decode(package, level_index)?.model {
         ObjectReference::Export(index) => Ok(index),
         reference => Err(Error::InvalidWorldModel { reference }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use openhp1_package::ObjectReference;
+
+    use super::Level;
+
+    #[test]
+    fn level_info_is_actor_zero_not_a_later_export() {
+        let level = Level {
+            actors: vec![ObjectReference::Export(7), ObjectReference::Export(3)],
+            model: ObjectReference::None,
+            reach_specs: Vec::new(),
+        };
+
+        assert_eq!(level.level_info_export(), Some(7));
     }
 }

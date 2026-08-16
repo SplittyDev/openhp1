@@ -125,8 +125,6 @@ pub struct SurfaceMaterial {
     pub environment_map: bool,
     /// HP1-specific multiplier for actor source color and alpha.
     pub opacity: f32,
-    /// UE1 zone multipliers for automatic U/V texture-coordinate panning.
-    pub texture_pan_speed: [f32; 2],
     /// Apply UE1's small sinusoidal BSP texture-coordinate motion.
     pub small_wavy: bool,
 }
@@ -143,7 +141,6 @@ impl Default for SurfaceMaterial {
             mirror: false,
             environment_map: false,
             opacity: 1.0,
-            texture_pan_speed: [0.0; 2],
             small_wavy: false,
         }
     }
