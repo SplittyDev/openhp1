@@ -231,11 +231,46 @@ commit, and live-verification fields for each item.
       current single-level paths: `openhp1-scene/src/loader.rs:4152-4154` and
       `renderer/pipeline.rs:263-270`.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
-      frame-rate properties through the shared texture-update path. Evidence:
-      `Ghidra_Engine.c:69357-69435,151578-151596`.
+      `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
+      shared texture-update path. Direct evidence:
+      `Ghidra_Engine.c:36950-37024,69357-69419,97083-97088,124915-124929`,
+      `Ghidra_Engine.c:151578-151595`, and `Ghidra_Render.c:13223-13236`.
+  - [ ] Decode the four authored properties, resolve chains by stable package
+        object identity, and reproduce null fallback, cycles, clamp/range,
+        long-delta single-step, accumulator cap, and priming semantics.
+  - [ ] Reuse incremental texture uploads for dimension-stable frames; first
+        scan all shipped chains and add texture recreation/rebinding only if a
+        referenced chain actually changes dimensions.
+  - [ ] Tick runtime textures independently of actor-mesh playback; the viewer
+        currently returns before `tick_water` when actor animation is idle at
+        `openhp1-viewer/src/app.rs:802-810`.
+  - [ ] Acceptance: synthetic decode/scheduler/cycle/prime tests; full shipped
+        chain/dimension scan; headless proof that the 16-link
+        `Hub5_Devils.ground.devilfloor1_128` loop advances and wraps at its
+        authored 20/20 rate; retail/Classic/Modern replay in `Lev5_Snare` and
+        `Lev2_Inc_A`.
 - [ ] `BASE-009` Implement exact shipped FireTexture and IceTexture procedural
-      animation after locating their owning primary binary behavior; current
-      FireTexture support is only a static snapshot.
+      animation through the same changed-texture upload seam. Direct ownership
+      evidence is in shipped `Fire.dll`, not Engine.dll or Render.dll.
+  - [ ] Decompile `UFireTexture::ConstantTimeTick` (RVA `0x82c0`) and its
+        reachable spark movement/redraw helpers. Do not promote the current
+        32-step static Fire snapshot to runtime behavior: its formula is not
+        proven by the audited Engine/Render sources.
+  - [ ] Decompile `UIceTexture::MoveIcePosition` (`0x5b40`), `BlitTexIce`
+        (`0x5e90`), `BlitIceTex` (`0x6210`), `ConstantTimeTick` (`0xa340`),
+        `Tick` (`0xa4b0`), `RenderIce` (`0xa600`), `Lock` (`0xe560`), and their
+        reachable helpers before implementing source/glass compositing,
+        panning, displacement, timing, or cache behavior.
+  - [ ] Preserve direct/inferred boundaries: Fire's ConstantTimeTick override
+        appears to use Engine's generic pacing, while Ice's Tick,
+        ConstantTimeTick, and Lock overrides prove additional hook ownership
+        but not the native formulas.
+  - [ ] Acceptance: exact recovered-state unit tests and incremental-upload
+        coverage; Fire comparisons using `Furnace` in `Lev5_Final`,
+        `ancflame1` in `Lev5_fluffy`, `lumos1` in `Lev3_DungeonB`, and
+        `owlstand1` in `Lev_Tut1`; Ice comparisons using the Snitch/Bludger
+        halos selected by shipped class defaults in `Lev2_Quid1`,
+        `Lev3_Quid2`, and representative `Quid_*` maps.
 - [ ] `CLASSIC-002` Re-evaluate Classic actor and world lighting when actors or
       lights move and when live light properties change. Evidence:
       `Ghidra_Render.c:1938-2013,22100-22606`; current partial projection:
@@ -255,7 +290,8 @@ commit, and live-verification fields for each item.
 - [ ] Audit the original render-device DLL before claiming exact sampler,
       `bNoSmooth`, mip-bias, 16-bit dithering, texture-cache, or fixed-function
       raster-precision parity; Render.dll delegates those operations.
-- [ ] Establish shipped evidence for exact FireTexture/IceTexture simulation,
+- [ ] Complete the cited shipped `Fire.dll` decompilation for exact
+      FireTexture/IceTexture simulation,
       special-lit actors, lens flares, Fatness/Wideness, specular glow, and
       runtime LOD bias before implementing them.
 - [ ] Establish exact translucent span ordering and mirror/warp recursion
