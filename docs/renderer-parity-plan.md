@@ -174,7 +174,8 @@ commit, and live-verification fields for each item.
       post-composite transform and use the shipped D3D exponent
       `1/(Brightness*2.5)`. Direct evidence: shipped `D3DDrv.dll` SHA-256
       `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`,
-      `Flush` RVA `0x10aa` → VA `0x10002e00`. D3D installs a final hardware
+      [`Flush`](../res/Ghidra_D3DDrv.c#L3430), RVA `0x10aa` → VA `0x10002e00`.
+      D3D installs a final hardware
       gamma ramp with `pow(i/255, exponent)`; OpenHP1 formerly used
       `1/(Brightness*2.0)` inside material shaders before blending
       (`renderer.rs:1715-1717`, `scene.wgsl:370-372`). This is the highest
@@ -439,7 +440,8 @@ commit, and live-verification fields for each item.
         Classic, and Modern; keep the parent open until visual acceptance.
 - [ ] `BASE-009A` Implement exact shipped IceTexture animation through the
       changed-texture upload seam as a focused feature/commit before Fire.
-      Direct `Fire.dll` evidence is complete for `MoveIcePosition`
+      Direct [`Fire.dll`](../res/Ghidra_Fire.c) evidence is complete for
+      `MoveIcePosition`
       (`0x10505b40-0x10505e4a`), `BlitTexIce` (`0x10505e90-0x10506120`),
       `BlitIceTex` (`0x10506210-0x1050643b`), `ConstantTimeTick`
       (`0x1050a340-0x1050a478`), `Tick` (`0x1050a4b0-0x1050a5c3`),
@@ -542,7 +544,7 @@ commit, and live-verification fields for each item.
       `ClientInstantFlash` 3485, `ClientFadeIn` 4280, `ClientFadeOut` 3466,
       `SetViewFlash` 3402, and `ViewFlash` 4100), Engine draw/config handling at
       `Ghidra_Engine.c:117664-117768,121781-121788`, and shipped
-      `D3DDrv.dll` `EndFlash` RVA `0x1087` -> VA `0x10008be0` (SHA-256
+      [`D3DDrv.dll` `EndFlash`](../res/Ghidra_D3DDrv.c#L3182), RVA `0x1087` -> VA `0x10008be0` (SHA-256
       `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`).
   - [x] Native cadence is pinned: `UGameEngine::Tick` dispatches `ViewFlash`
         exactly once to `Client.Viewports[0].Actor`, using the effective outer
@@ -630,7 +632,7 @@ commit, and live-verification fields for each item.
 - [ ] Use controlled retail captures before claiming spatial 16-bit dithering
       or fixed-function raster precision; D3D requests dithering, but driver
       output is implementation-dependent.
-- [x] Decompile shipped `Fire.dll` far enough to recover implementation-ready
+- [x] Decompile shipped [`Fire.dll`](../res/Ghidra_Fire.c) far enough to recover implementation-ready
       FireTexture and IceTexture simulation; the exact native addresses,
       formulas, state, ordering, and narrow unresolved hooks are recorded in
       `BASE-009A/B` and the renderer audit. This does not resolve unrelated

@@ -7,12 +7,44 @@ Status: breadth-first inventory, not a parity verdict. This document records beh
 - **R**: shipped `Render.dll` decompilation, [`res/Ghidra_Render.c`](../res/Ghidra_Render.c). A citation gives the exact decompiler line or enclosing function range.
 - **E**: shipped `Engine.dll` decompilation, [`res/Ghidra_Engine.c`](../res/Ghidra_Engine.c), followed only where `Render.dll` delegates scene-coordinate, zone, viewport-hit, or render-device behavior.
 - **C**: shipped English configuration/localization, [`res/System/0/Default.ini`](../res/System/0/Default.ini) and [`res/System/Startup.int`](../res/System/Startup.int).
-- **D**: shipped `D3DDrv.dll`, SHA-256
+- **D**: shipped `D3DDrv.dll` decompilation,
+  [`res/Ghidra_D3DDrv.c`](../res/Ghidra_D3DDrv.c), from DLL SHA-256
   `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`;
-  device claims cite exported thunk and implementation virtual addresses.
+  citations give exact decompiler lines and retain virtual addresses where useful.
+- **F**: shipped `Fire.dll` decompilation,
+  [`res/Ghidra_Fire.c`](../res/Ghidra_Fire.c), from DLL SHA-256
+  `029ff9562c68ee502ab0a02963341e2b00ab42c4e2d1a33c268f306dc3c13041`.
 - **S**: shipped `SoftDrv.dll`, SHA-256
   `323b8017418e39fa692529f20b37239a6424068cf9c31c7740bce8e4ccd00386`;
   used only where software fallback has distinct visible semantics.
+
+Durable D3D line anchors for the address citations below are
+[`ClearZ` D:1385](../res/Ghidra_D3DDrv.c#L1385),
+[`ReadPixels` D:1407](../res/Ghidra_D3DDrv.c#L1407),
+[`SetBlending` D:1651](../res/Ghidra_D3DDrv.c#L1651),
+[`DrawTriangles` D:1772](../res/Ghidra_D3DDrv.c#L1772),
+[`SetRes` D:1969](../res/Ghidra_D3DDrv.c#L1969),
+[`EndFlash` D:3182](../res/Ghidra_D3DDrv.c#L3182),
+[`Flush` D:3430](../res/Ghidra_D3DDrv.c#L3430),
+[`InitTextureStageState` D:3497](../res/Ghidra_D3DDrv.c#L3497),
+[`Unlock` D:3823](../res/Ghidra_D3DDrv.c#L3823),
+[`AdjustPolyFlags` D:3942](../res/Ghidra_D3DDrv.c#L3942),
+[`SetTexture` D:4039](../res/Ghidra_D3DDrv.c#L4039),
+[`PrecacheTexture` D:4659](../res/Ghidra_D3DDrv.c#L4659),
+[`Lock` D:4893](../res/Ghidra_D3DDrv.c#L4893),
+[`UpdateModulation` D:5807](../res/Ghidra_D3DDrv.c#L5807), and
+[`DrawComplexSurface` D:6496](../res/Ghidra_D3DDrv.c#L6496).
+Durable Fire/Ice anchors are
+[`AddSpark` F:1109](../res/Ghidra_Fire.c#L1109),
+[`RedrawSparks` F:1995](../res/Ghidra_Fire.c#L1995),
+[`MoveIcePosition` F:3654](../res/Ghidra_Fire.c#L3654),
+[`BlitTexIce` F:3748](../res/Ghidra_Fire.c#L3748),
+[`BlitIceTex` F:4143](../res/Ghidra_Fire.c#L4143),
+[`UFireTexture::ConstantTimeTick` F:5539](../res/Ghidra_Fire.c#L5539),
+[`UIceTexture::PostLoad` F:7171](../res/Ghidra_Fire.c#L7171),
+[`UIceTexture::ConstantTimeTick` F:7436](../res/Ghidra_Fire.c#L7436),
+[`UIceTexture::Tick` F:7542](../res/Ghidra_Fire.c#L7542), and
+[`RenderIce` F:7625](../res/Ghidra_Fire.c#L7625).
 
 The decompilations are primary binary evidence, but inferred class fields and unnamed helper purposes are not automatically facts. “Confirms” below means the operation is directly present; “uncertain” means names or higher-level intent still need package/default/bytecode or live differential proof.
 
@@ -71,12 +103,10 @@ else if (flags & 0x4)
 | Frame lock, clear, and presentation | [D: `Lock` `0x10001127` → `0x100030c0`; `Unlock` `0x100010cd` → `0x100038b0`; `EndFlash` `0x10001087` → `0x10008be0`; E:117743-117768] | Lock always clears depth to 1, clears color to caller `ScreenClear` only when lock flag bit 0 is set, then begins the scene. Unlock ends the scene before a window blit or fullscreen flip with `1 | (UseVSync ? 8 : 0)`. EndFlash precedes HUD/console and computes saturated `fog + scene*clamp(scale,0,1)`. OpenHP1 currently hardcodes its scene clear and lacks the shared flash pass; flash ownership and acceptance are tracked separately. Page flipping, triple buffering, cooperative-level retry, and surface allocation are nonobservable mechanisms except through presentation/resource-loss behavior. |
 | Brightness/gamma | [D: `Flush` `0x100010aa` → `0x10002e00`; `ReadPixels` `0x10001046` → `0x10008510`; S: `USoftwareRenderDevice::Lock` `0x10d010af` → `0x10d4abd0`] | D3D's final hardware gamma ramp is `pow(i/255, 1/(Brightness*2.5))`; `ReadPixels` uses a separate `1.5` inverse screenshot correction. Software instead builds shade tables from `(Brightness+0.5)/128` and conditionally clears its 555/565/888 target to `ScreenClear`. OpenHP1 Classic now leaves scene materials uncorrected through blending and applies the exact D3D exponent once in a final fullscreen pass ([classic.rs](../crates/openhp1-render/src/renderer/classic.rs), [classic_display.wgsl](../crates/openhp1-render/src/shaders/classic_display.wgsl)); focused tests cover the two reference exponents, neutral brightness, blend ordering, one-pass placement, and shader validation. The shared flash change must write the reserved Classic scene target before this pass. Modern remains on its independent HDR/tone/display path. Fixed-camera retail/Classic capture remains open. |
 
-Local reproducibility note, not a durable repository dependency: D3DDrv and
-SoftDrv were imported with Ghidra 12.1.2 `analyzeHeadless` into a temporary
-project, then exported as searchable decompilation, function, symbol, and
-listing files. The D3D artifacts had SHA-256 values
-`b61db7dc0ef7e97c964dcb12ff65d3165901747a0089dfa6c4585367e47c0ac0`
-(decompilation),
+`res/Ghidra_D3DDrv.c` is the durable searchable D3D decompilation and has
+SHA-256 `394e5ce01f218905ed90973543ac6e084fd81ec0232d6e17e853f361eefd3e29`.
+For reproduction, D3DDrv and SoftDrv were imported with Ghidra 12.1.2
+`analyzeHeadless`; the additional temporary D3D artifacts had SHA-256 values
 `b7d3f774ce16b4cc3965ec4f8383c83726c534a40db219f8d5a7296e7c07b1f4`
 (functions), `d27c22058be91ee1937ace23db98a79674019b27850bd26e047037d1784c6969`
 (symbols), and
@@ -88,8 +118,8 @@ listing files. The D3D artifacts had SHA-256 values
 and `54844a0a0e46d287cbb2d64cd9cc0e8f9736ad4c27c714e74f363ab7484101fd`.
 Reproduce by hashing the shipped DLLs, importing each PE32 binary into a local
 Ghidra project with full analysis, and exporting all functions/symbols/listing;
-the temporary project and generated files are intentionally neither linked nor
-committed.
+the remaining temporary project and generated files are intentionally neither
+linked nor committed.
 
 ## Scene frames, cameras, projection, and recursion
 
@@ -194,10 +224,10 @@ Two evidence limits apply to this matrix:
 | [ ] | Decal brightness/style | **Direct:** clipping writes grayscale `g = clamp(0.5*ScaleGlow + AmbientGlow/256, 0, 1)` to RGB and zero to alpha; Actor.Opacity is not read ([R:4284-4294](../res/Ghidra_Render.c#L4284)). Style 4 emits `0x40000040`, Style 3 emits `0x4`, and all others emit zero ([R:2802-2823](../res/Ghidra_Render.c#L2802)). | Normal decals depth-test/write; Style 3 uses `ONE/INVSRCCOLOR` without depth write; Style 4 uses `DESTCOLOR/SRCCOLOR` without depth write and D3D substitutes white diffuse. Texture polyflags do not alter decal style. | `missing` | `missing` | Ordinary `SurfaceMaterial.opacity` is not reusable as the decal formula ([render.rs:110-145](../crates/openhp1-scene/src/render.rs#L110)). Preserve the counterintuitive zero alpha and ignored Actor.Opacity rather than applying actor-material behavior. |
 | [ ] | Decal surface filtering/batching/order | **Direct:** each BSP surface owns its decal array. DrawFrame renders the saved surface, then its decals in array order against saved polygons in surface order, retaining a texture lock only for consecutive records with the same base texture; animated replacement is followed ([R:2754-2855](../res/Ghidra_Render.c#L2754)). | Decals immediately follow their owning surface. Child frames occur earlier during traversal, later dynamic-actor buckets follow, and overlays are last. This is consecutive coalescing, not global decal sorting. | `missing` | `missing` | Existing batching has no saved-poly/decal IDs and cannot insert draws after an owning BSP record ([batch.rs:94-136](../crates/openhp1-render/src/renderer/batch.rs#L94), [batch.rs:192-224](../crates/openhp1-render/src/renderer/batch.rs#L192)). Implement with the shared submission plan tracked by `BASE-016`; do not add a global decal pass. |
 
-Local Fire/Ice reproducibility note (not a durable repository dependency): the
-Ghidra headless project and generated output were kept under
-`/private/tmp/openhp1-fire-ghidra-01a00860`. The inputs were `Fire.dll`
-SHA-256 `029ff9562c68ee502ab0a02963341e2b00ab42c4e2d1a33c268f306dc3c13041`,
+`res/Ghidra_Fire.c` is the durable searchable Fire/Ice decompilation and has
+SHA-256 `07969a3a6a39e833bab70d1ec0071b0a7261ed583f40b917baad54bf0a84147f`.
+The original Ghidra headless project and supplemental generated output remain
+under `/private/tmp/openhp1-fire-ghidra-01a00860`. The inputs also included
 `Fire.u` `a4314b46702d0ebe2ad81d59c04c7791f66ef48bf150d40f01cdd30bb161df5d`,
 `Engine.dll` `7756a2a3df7198d72f4706952196bee8adb3b79edfe7c8b3a5e4d2e3593d8ebc`,
 and `res/Ghidra_Engine.gzf`
@@ -210,9 +240,8 @@ The local evidence files were `output/fire_all.c`
 `e60cbf6260f6b66ba2490a76bc1e389d10b20e4f90274650a3631f2a909c7ffb`,
 and `output/engine_texture_vtable.txt`
 `c7af83a2b41fa132f9fd6ff7d27df8b20bd3e17a1157a8e4d49512823f1adeb0`.
-The function addresses in the Fire/Ice rows and plan are virtual addresses from
-that exact `Fire.dll`; generated `/private/tmp` files are intentionally not
-linked or committed.
+The retained virtual addresses refer to that exact `Fire.dll`; supplemental
+generated `/private/tmp` files are intentionally not linked or committed.
 
 ## Lighting and volumetrics
 
