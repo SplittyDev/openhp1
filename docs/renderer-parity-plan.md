@@ -321,6 +321,11 @@ commit, and live-verification fields for each item.
 - [ ] `MOD-003` Replace Modern corona depth-test visibility with the original
       center-point BSP visibility rule. Evidence must be completed before
       implementation; current approximation: `renderer/modern.rs:599-600`.
+- [ ] `MOD-004` Add optional anisotropic texture filtering to the Modern
+      pipeline after base filtering parity is closed. Keep Classic on the
+      original linear/point min-mag and point-mip behavior with default LOD
+      bias `-0.5`; Modern anisotropy is an explicit enhancement, not a change
+      to shared material semantics.
 - [ ] `BASE-004` Reproduce BSP node/zone/span visibility for world, sky,
       reflection, warp, blended, and dynamic submissions. Evidence:
       `Ghidra_Render.c:1938-2044,6452`; current approximation:
