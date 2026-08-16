@@ -537,6 +537,17 @@ commit, and live-verification fields for each item.
         preserve actor/surface IDs on the shared submission plan and add one
         on-demand scissored integer-ID/depth pass shared by both pipelines;
         do not reproduce D3D's framebuffer-sentinel mechanism.
+- [x] `EDITOR-002` Classify `URender::GetVisibleSurfs` as an auxiliary
+      six-direction visibility query with no proved stock-game caller. The
+      helper overwrites the viewport actor's rotation with the six axial
+      directions, disables volumetric lighting while running six `OccludeBsp`
+      passes, and returns the unique union of saved surface indices without
+      drawing or restoring the final rotation.
+  - [x] No Classic/Modern implementation is required for player-facing HP1.
+        The current loaded-surface diagnostic is not claimed as equivalent. If
+        editor/viewer tooling later needs the query, build it over `BASE-016`'s
+        exact camera-dependent visible-set plan and preserve the original
+        union order and caller-visible rotation side effect.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
