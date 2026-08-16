@@ -243,20 +243,31 @@ commit, and live-verification fields for each item.
       shared texture-update path. Direct evidence:
       `Ghidra_Engine.c:36950-37024,69357-69419,97083-97088,124915-124929`,
       `Ghidra_Engine.c:151578-151595`, and `Ghidra_Render.c:13223-13236`.
-  - [ ] Decode the four authored properties, resolve chains by stable package
+  - [x] Decode the four authored properties, resolve chains by stable package
         object identity, and reproduce null fallback, cycles, clamp/range,
         long-delta single-step, accumulator cap, and priming semantics.
-  - [ ] Reuse incremental texture uploads for dimension-stable frames; first
+  - [x] Reuse incremental texture uploads for dimension-stable frames; first
         scan all shipped chains and add texture recreation/rebinding only if a
         referenced chain actually changes dimensions.
-  - [ ] Tick runtime textures independently of actor-mesh playback; the viewer
-        currently returns before `tick_water` when actor animation is idle at
-        `openhp1-viewer/src/app.rs:802-810`.
+  - [x] Tick runtime textures independently of actor-mesh playback; the viewer
+        now ticks and uploads textures before its actor-animation pause gate.
   - [ ] Acceptance: synthetic decode/scheduler/cycle/prime tests; full shipped
         chain/dimension scan; headless proof that the 16-link
         `Hub5_Devils.ground.devilfloor1_128` loop advances and wraps at its
         authored 20/20 rate; retail/Classic/Modern replay in `Lev5_Snare` and
         `Lev2_Inc_A`.
+  - [x] Implemented in `ad0ca47`: authored fields, stable chain resolution,
+        exact discrete scheduler behavior, actor-independent viewer ticking,
+        and the existing changed-index GPU upload seam are shared by Classic
+        and Modern.
+  - [x] Synthetic decode/scheduler/zero-delta/cycle/prime/scene tests passed;
+        focused nextest passed 110 tests with 2 skipped and focused check passed.
+        A read-only full-map corpus scan loaded successfully and reported 15
+        changed textures across 13 maps; all 172 regular roots were
+        dimension-compatible and the Devil's Snare root is a 16-frame 128x128
+        cycle.
+  - [ ] Replay the animated floor in `Lev5_Snare` and `Lev2_Inc_A` in retail,
+        Classic, and Modern; keep the parent open until visual acceptance.
 - [ ] `BASE-009A` Implement exact shipped IceTexture animation through the
       changed-texture upload seam as a focused feature/commit before Fire.
       Direct `Fire.dll` evidence is complete for `MoveIcePosition`
