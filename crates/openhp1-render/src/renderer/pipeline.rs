@@ -15,10 +15,6 @@ pub(super) fn create_pipeline(
     modern: bool,
     reflected: bool,
 ) -> wgpu::RenderPipeline {
-    let blended = matches!(
-        material.mode,
-        SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended
-    );
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 BSP pipeline"),
         layout: Some(layout),
@@ -57,7 +53,7 @@ pub(super) fn create_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(!blended),
+            depth_write_enabled: Some(depth_write_enabled(material.mode)),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
             bias: Default::default(),
@@ -75,7 +71,7 @@ pub(super) fn create_pipeline(
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: blend_state(material.mode),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: color_write_mask(material.mode),
             })],
         }),
         multiview_mask: None,
@@ -259,10 +255,12 @@ pub(super) fn fragment_entry(
     }
     if modern {
         return match (mode, masked, unlit) {
-            (SurfaceMode::Opaque, false, false) => "fragment_modern",
-            (SurfaceMode::Opaque, true, false) => "fragment_modern_masked",
-            (SurfaceMode::Opaque, false, true) => "fragment_modern_unlit",
-            (SurfaceMode::Opaque, true, true) => "fragment_modern_unlit_masked",
+            (SurfaceMode::Opaque | SurfaceMode::DepthOnly, false, false) => "fragment_modern",
+            (SurfaceMode::Opaque | SurfaceMode::DepthOnly, true, false) => "fragment_modern_masked",
+            (SurfaceMode::Opaque | SurfaceMode::DepthOnly, false, true) => "fragment_modern_unlit",
+            (SurfaceMode::Opaque | SurfaceMode::DepthOnly, true, true) => {
+                "fragment_modern_unlit_masked"
+            }
             (
                 SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
                 false,
@@ -277,10 +275,10 @@ pub(super) fn fragment_entry(
         };
     }
     match (mode, masked, unlit) {
-        (SurfaceMode::Opaque, false, false) => "fragment_main",
-        (SurfaceMode::Opaque, true, false) => "fragment_masked",
-        (SurfaceMode::Opaque, false, true) => "fragment_unlit",
-        (SurfaceMode::Opaque, true, true) => "fragment_unlit_masked",
+        (SurfaceMode::Opaque | SurfaceMode::DepthOnly, false, false) => "fragment_main",
+        (SurfaceMode::Opaque | SurfaceMode::DepthOnly, true, false) => "fragment_masked",
+        (SurfaceMode::Opaque | SurfaceMode::DepthOnly, false, true) => "fragment_unlit",
+        (SurfaceMode::Opaque | SurfaceMode::DepthOnly, true, true) => "fragment_unlit_masked",
         (
             SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended,
             false,
@@ -297,7 +295,7 @@ pub(super) fn fragment_entry(
 
 pub(super) fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
     let color = match mode {
-        SurfaceMode::Opaque => return None,
+        SurfaceMode::Opaque | SurfaceMode::DepthOnly => return None,
         SurfaceMode::Translucent => wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::OneMinusSrc,
@@ -319,6 +317,18 @@ pub(super) fn blend_state(mode: SurfaceMode) -> Option<wgpu::BlendState> {
         color,
         alpha: color,
     })
+}
+
+pub(super) fn depth_write_enabled(mode: SurfaceMode) -> bool {
+    matches!(mode, SurfaceMode::Opaque | SurfaceMode::DepthOnly)
+}
+
+pub(super) fn color_write_mask(mode: SurfaceMode) -> wgpu::ColorWrites {
+    if mode == SurfaceMode::DepthOnly {
+        wgpu::ColorWrites::empty()
+    } else {
+        wgpu::ColorWrites::ALL
+    }
 }
 
 pub(super) fn texture_bind_group(

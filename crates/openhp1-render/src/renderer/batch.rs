@@ -53,6 +53,9 @@ pub(super) struct MaterialBinding {
 }
 
 pub(super) fn attachment_enabled(material: SurfaceMaterial, detail_textures: bool) -> [bool; 2] {
+    if material.mode == SurfaceMode::DepthOnly {
+        return [false; 2];
+    }
     [
         material.macro_texture.is_some(),
         detail_textures
@@ -237,7 +240,10 @@ pub(super) fn blended_surfaces(
         };
         if !matches!(
             material.mode,
-            SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended
+            SurfaceMode::Translucent
+                | SurfaceMode::Modulated
+                | SurfaceMode::AlphaBlended
+                | SurfaceMode::DepthOnly
         ) {
             continue;
         }
@@ -339,6 +345,7 @@ fn pipeline_index(material: SurfaceMaterial) -> usize {
         SurfaceMode::Translucent => 1,
         SurfaceMode::Modulated => 2,
         SurfaceMode::AlphaBlended => 3,
+        SurfaceMode::DepthOnly => 4,
     };
     mode * PIPELINES_PER_MODE
         + usize::from(material.unlit) * 4

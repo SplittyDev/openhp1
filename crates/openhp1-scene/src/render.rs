@@ -120,6 +120,8 @@ pub enum SurfaceMode {
     Modulated,
     /// HP1 actor opacity using source-alpha blending.
     AlphaBlended,
+    /// Writes depth without changing the color target.
+    DepthOnly,
     /// Samples the rendered sky zone in screen space.
     Backdrop,
     /// Not submitted to the GPU.

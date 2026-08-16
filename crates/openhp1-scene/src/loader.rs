@@ -4200,10 +4200,6 @@ fn load_materials(
     let mut materials = Vec::with_capacity(model.surfaces.len());
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
         let raw_texture_present = !matches!(surface.texture, ObjectReference::None);
-        if surface.poly_flags.contains(PolyFlags::INVISIBLE) && !raw_texture_present {
-            materials.push(bsp_surface_material(surface.poly_flags, None, None));
-            continue;
-        }
         let authored = match surface.texture {
             ObjectReference::None => None,
             reference => Some(packages.resolve(map, reference)),
@@ -4259,7 +4255,11 @@ fn load_materials(
                 })
                 .collect::<Vec<_>>()
         });
-        let mut material = bsp_surface_material(surface.poly_flags, None, Some(texture_flags));
+        let mut material = bsp_surface_material(
+            surface.poly_flags,
+            None,
+            raw_texture_present.then_some(texture_flags),
+        );
         material.portal =
             bsp_root_portal(surface.poly_flags, raw_texture_present, Some(texture_flags));
         if material.mode == SurfaceMode::Hidden {
@@ -5129,7 +5129,17 @@ fn bsp_surface_material(
     texture: Option<usize>,
     texture_flags: Option<TextureRenderFlags>,
 ) -> SurfaceMaterial {
-    let mut material = surface_material(flags, texture, texture_flags);
+    let texture_flags = texture_flags.unwrap_or_default();
+    let mut material = surface_material(flags, texture, Some(texture_flags));
+    if is_hidden(flags, texture_flags)
+        && !flags.contains(PolyFlags::ALPHA_BLEND)
+        && !flags.contains(PolyFlags::TRANSLUCENT)
+        && !texture_flags.translucent
+        && !flags.contains(PolyFlags::MODULATED)
+        && !texture_flags.modulated
+    {
+        material.mode = SurfaceMode::DepthOnly;
+    }
     material.volumetric_source = flags.contains(PolyFlags::FAKE_BACKDROP);
     material.small_wavy = flags.contains(PolyFlags::SMALL_WAVY);
     material
@@ -7307,6 +7317,62 @@ mod tests {
         );
         assert_eq!(modulated.mode, SurfaceMode::Modulated);
         assert!(modulated.masked);
+    }
+
+    #[test]
+    fn bsp_invisible_writes_only_depth_without_an_effective_blend_mode() {
+        let depth_only = super::bsp_surface_material(PolyFlags::INVISIBLE, None, None);
+        assert_eq!(depth_only.mode, SurfaceMode::DepthOnly);
+
+        let masked = super::bsp_surface_material(
+            PolyFlags::from_bits(PolyFlags::INVISIBLE.bits() | PolyFlags::MASKED.bits()),
+            None,
+            None,
+        );
+        assert_eq!(masked.mode, SurfaceMode::DepthOnly);
+        assert!(masked.masked);
+
+        let texture_invisible = super::bsp_surface_material(
+            PolyFlags::PORTAL,
+            None,
+            Some(TextureRenderFlags {
+                invisible: true,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(texture_invisible.mode, SurfaceMode::DepthOnly);
+        assert!(texture_invisible.portal);
+
+        for blend in [
+            PolyFlags::TRANSLUCENT,
+            PolyFlags::MODULATED,
+            PolyFlags::ALPHA_BLEND,
+        ] {
+            let material = super::bsp_surface_material(
+                PolyFlags::from_bits(PolyFlags::INVISIBLE.bits() | blend.bits()),
+                None,
+                None,
+            );
+            assert_eq!(material.mode, SurfaceMode::Hidden);
+        }
+
+        for texture_flags in [
+            TextureRenderFlags {
+                invisible: true,
+                translucent: true,
+                ..Default::default()
+            },
+            TextureRenderFlags {
+                invisible: true,
+                modulated: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                super::bsp_surface_material(PolyFlags::default(), None, Some(texture_flags)).mode,
+                SurfaceMode::Hidden
+            );
+        }
     }
 
     #[test]

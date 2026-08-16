@@ -598,6 +598,30 @@ commit, and live-verification fields for each item.
   - [ ] Live gate: expose otherwise uncovered main-target pixels and compare
         retail, Classic, and Modern. The expected presented-frame clear is
         black.
+- [ ] `BASE-022` Preserve reachable Invisible BSP surfaces as depth-only draws
+      in the shared Classic/Modern material path. Render saves and submits the
+      effective Invisible list (`Ghidra_Render.c:7140-7210,7660-7895,2320-2767`),
+      while D3D uses `ZERO/ONE` and retains Z-write only when AlphaBlend,
+      Translucent, and Modulated are all absent
+      (`Ghidra_D3DDrv.c:1668-1753`).
+  - [x] Combine surface and root-texture Invisible/blend flags before selecting
+        BSP-only `DepthOnly`. Preserve Masked alpha discard; an effective
+        Translucent, Modulated, or AlphaBlend bit remains omitted because the
+        native path is both color-neutral and non-depth-writing. Actor-hidden
+        materials remain unchanged.
+  - [x] Submit the shared depth-only batch in the existing post-opaque special
+        surface schedule with `LessEqual`, depth writes, and no color-channel
+        writes in both pipelines. Preserve independent root-texture portal
+        provenance and warp child classification; macro/detail passes remain
+        disabled. Exact list-2 reverse traversal and span consumption remain
+        assigned to `BASE-016`.
+  - [x] Synthetic acceptance covers the surface/texture flag matrix, Masked,
+        portal provenance, batching, auxiliary suppression, and exact Classic
+        and Modern pipeline state. A read-only full-map scan found 1,277
+        node-referenced Invisible surfaces across 3,469 nodes.
+  - [ ] Live gate: compare a fixed Invisible BSP occlusion view in `Lev_Tut1`
+        between retail, Classic, and Modern, including a Masked representative
+        if the corpus supplies one.
 - [ ] `HOST-001` Implement the original viewport-size control surface in the
       existing game host: authored startup fullscreen, stored windowed and
       fullscreen sizes/color depth, arbitrary valid `SETRES`, `GETRES`, and
@@ -949,10 +973,10 @@ commit, and live-verification fields for each item.
       software clear and `(Brightness+0.5)/128` shade-table behavior from D3D's
       final `2.5` gamma ramp; temporary analysis files are not repository
       dependencies.
-- [ ] Trace Render.dll caller reachability and effective configuration before
-      promoting D3D's RenderFog/specular branch, Invisible `ZERO/ONE`
-      depth-writing branch, or AlphaBlend-only `ONE/INVSRCALPHA` branch to an
-      OpenHP1 defect. Preserve the live-confirmed actor-opacity path meanwhile.
+- [x] Trace the Render.dll Invisible caller path: effective surface and texture
+      flags reach the saved special list and later device submission. Combined
+      with D3D normalization and the 1,277-surface corpus result, this proves
+      the shared `BASE-022` depth-only requirement.
 - [ ] Correlate the now-proved macro/detail texture-info slots with their
       serialized `UTexture` properties and find shipped non-null representatives;
       exact D3D pass math and capability gates are recorded in `BASE-018`.

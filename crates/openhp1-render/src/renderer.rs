@@ -29,7 +29,7 @@ use classic::ClassicDisplay;
 use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
-use pipeline::{blend_state, fragment_entry};
+use pipeline::{blend_state, color_write_mask, depth_write_enabled, fragment_entry};
 use pipeline::{
     create_attachment_pipeline, create_pipeline, create_screen_pipeline,
     material_texture_bind_group, texture, texture_bind_group, write_texture_mips,
@@ -39,7 +39,7 @@ use target::{DepthTarget, SampledTarget};
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MAX_WARP_PORTAL_DEPTH: usize = 3;
 const PIPELINES_PER_MODE: usize = 8;
-const PIPELINE_COUNT: usize = 32;
+const PIPELINE_COUNT: usize = 40;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
 const TEXTURE_MIP_FILTER: wgpu::MipmapFilterMode = wgpu::MipmapFilterMode::Nearest;
 const CHECKERBOARD_MEMORY_BYTES: usize = 2 * 2 * 4;
@@ -785,6 +785,7 @@ impl Renderer {
                 1 => SurfaceMode::Translucent,
                 2 => SurfaceMode::Modulated,
                 3 => SurfaceMode::AlphaBlended,
+                4 => SurfaceMode::DepthOnly,
                 _ => unreachable!(),
             };
             create_pipeline(
@@ -836,6 +837,7 @@ impl Renderer {
                     1 => SurfaceMode::Translucent,
                     2 => SurfaceMode::Modulated,
                     3 => SurfaceMode::AlphaBlended,
+                    4 => SurfaceMode::DepthOnly,
                     _ => unreachable!(),
                 };
                 create_pipeline(
@@ -2876,6 +2878,64 @@ mod tests {
         assert_eq!(
             fragment_entry(SurfaceMode::Opaque, false, true, false),
             "fragment_unlit"
+        );
+    }
+
+    #[test]
+    fn depth_only_surfaces_follow_opaque_in_the_special_schedule() {
+        let material = SurfaceMaterial {
+            mode: SurfaceMode::DepthOnly,
+            masked: true,
+            macro_texture: Some(0),
+            detail_texture: Some(0),
+            ..Default::default()
+        };
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..9).collect(),
+                triangle_surfaces: vec![0, 1, 2],
+                ..Default::default()
+            },
+            textures: vec![checkerboard()],
+            lightmaps: vec![],
+            realtime_lightmaps: vec![],
+            coronas: vec![],
+            surface_materials: vec![
+                material,
+                SurfaceMaterial {
+                    mode: SurfaceMode::Hidden,
+                    ..Default::default()
+                },
+                SurfaceMaterial::default(),
+            ],
+            warp_portals: vec![],
+            sky_zone: None,
+        };
+
+        let (bindings, surfaces) = material_bindings(&scene, 1, true);
+        assert_eq!(texture_batches(&scene, &bindings, &surfaces).0, [6, 7, 8]);
+        let vertices = (0..9)
+            .map(|index| vertex_at(index as f32, 0.0, 1.0))
+            .collect::<Vec<_>>();
+        let special = blended_surfaces(&scene, 1, &vertices, &bindings, &surfaces);
+        let (indices, batches) = sorted_blended_batches(&special, Vec3::ZERO);
+        assert_eq!(indices, [0, 1, 2]);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].pipeline, 34);
+        assert_eq!(attachment_enabled(material, true), [false, false]);
+        assert!(depth_write_enabled(SurfaceMode::DepthOnly));
+        assert_eq!(
+            color_write_mask(SurfaceMode::DepthOnly),
+            wgpu::ColorWrites::empty()
+        );
+        assert!(blend_state(SurfaceMode::DepthOnly).is_none());
+        assert_eq!(
+            fragment_entry(SurfaceMode::DepthOnly, true, false, false),
+            "fragment_masked"
+        );
+        assert_eq!(
+            fragment_entry(SurfaceMode::DepthOnly, true, false, true),
+            "fragment_modern_masked"
         );
     }
 

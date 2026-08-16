@@ -60,6 +60,7 @@ impl PolyFlags {
     pub const UNLIT: Self = Self(0x0040_0000);
     pub const PORTAL: Self = Self(0x0400_0000);
     pub const MIRRORED: Self = Self(0x0800_0000);
+    pub const ALPHA_BLEND: Self = Self(0x1000_0000);
 
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits)
