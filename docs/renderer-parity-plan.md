@@ -175,15 +175,21 @@ commit, and live-verification fields for each item.
       `1/(Brightness*2.5)`. Direct evidence: shipped `D3DDrv.dll` SHA-256
       `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`,
       `Flush` RVA `0x10aa` → VA `0x10002e00`. D3D installs a final hardware
-      gamma ramp with `pow(i/255, exponent)`; OpenHP1 currently uses
+      gamma ramp with `pow(i/255, exponent)`; OpenHP1 formerly used
       `1/(Brightness*2.0)` inside material shaders before blending
       (`renderer.rs:1715-1717`, `scene.wgsl:370-372`). This is the highest
       confidence independent device gap; preserve Modern's explicit HDR/tone
       pipeline.
-  - [ ] Deterministic acceptance: `.5 -> .8`, `.6 -> 2/3`, a case that
+  - [x] Deterministic acceptance: `.5 -> .8`, `.6 -> 2/3`, a case that
         distinguishes blend-then-gamma from gamma-then-blend, disabled/neutral
         behavior, and proof that Classic applies the transform once after
-        scene blending/flash while Modern remains unchanged.
+        scene blending/flash while Modern remains unchanged. The focused tests
+        pass (70 passed, 4 skipped) without the copyrighted corpus.
+  - [x] Implemented in this change: Classic scene materials now remain
+        uncorrected through blending, then one final fullscreen display pass
+        applies `1/(Brightness*2.5)`. The separate screen-flash change owns the
+        reserved scene target immediately before this pass; Modern's HDR/tone
+        path is unchanged.
   - [ ] Live acceptance: fixed-camera retail/Classic captures at identical
         brightness values, including opaque, translucent, and modulated pixels;
         record OS/display gamma conditions.

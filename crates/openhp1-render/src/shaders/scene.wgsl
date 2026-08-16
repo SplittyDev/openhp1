@@ -2,7 +2,6 @@ struct Camera {
     view_projection: mat4x4<f32>,
     world_to_view: mat4x4<f32>,
     camera_position: vec4<f32>,
-    display_gamma: vec4<f32>,
     auto_uv: vec4<f32>,
     clip_plane: vec4<f32>,
 };
@@ -117,7 +116,7 @@ fn vertex_main(
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_display_gamma(apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates)));
+    return apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
 }
 
 @fragment
@@ -126,12 +125,12 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return apply_display_gamma(apply_lightmap(input, color));
+    return apply_lightmap(input, color);
 }
 
 @fragment
 fn fragment_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_display_gamma(apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates)));
+    return apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
 }
 
 @fragment
@@ -140,13 +139,13 @@ fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return apply_display_gamma(apply_vertex_light(input, color));
+    return apply_vertex_light(input, color);
 }
 
 @fragment
 fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
     let color = apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
-    return apply_display_gamma(apply_opacity(input, color));
+    return apply_opacity(input, color);
 }
 
 @fragment
@@ -155,13 +154,13 @@ fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     if color.a < 0.5 {
         discard;
     }
-    return apply_display_gamma(apply_opacity(input, apply_lightmap(input, color)));
+    return apply_opacity(input, apply_lightmap(input, color));
 }
 
 @fragment
 fn fragment_unlit_blended(input: VertexOutput) -> @location(0) vec4<f32> {
     let color = apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
-    return apply_display_gamma(apply_opacity(input, color));
+    return apply_opacity(input, color);
 }
 
 @fragment
@@ -170,7 +169,7 @@ fn fragment_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> 
     if color.a < 0.5 {
         discard;
     }
-    return apply_display_gamma(apply_opacity(input, apply_vertex_light(input, color)));
+    return apply_opacity(input, apply_vertex_light(input, color));
 }
 
 @fragment
@@ -365,8 +364,4 @@ fn clip_to_portal(input: VertexOutput) {
     if dot(vec4(input.world_position, 1.0), camera.clip_plane) < 0.0 {
         discard;
     }
-}
-
-fn apply_display_gamma(color: vec4<f32>) -> vec4<f32> {
-    return vec4(pow(max(color.rgb, vec3(0.0)), vec3(camera.display_gamma.x)), color.a);
 }

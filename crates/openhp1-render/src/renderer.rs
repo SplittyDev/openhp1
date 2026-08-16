@@ -12,6 +12,7 @@ use crate::{
 
 mod atlas;
 mod batch;
+mod classic;
 mod lighting;
 mod modern;
 mod pipeline;
@@ -23,6 +24,7 @@ use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
     mirror_geometries, sorted_blended_batches, texture_batches, update_blended_centers,
 };
+use classic::ClassicDisplay;
 use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
@@ -35,6 +37,8 @@ const MAX_WARP_PORTAL_DEPTH: usize = 3;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 32;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
+#[cfg(test)]
+const SCENE_SHADER: &str = include_str!("shaders/scene.wgsl");
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RenderStats {
@@ -66,7 +70,6 @@ struct CameraUniform {
     view_projection: [[f32; 4]; 4],
     world_to_view: [[f32; 4]; 4],
     camera_position: [f32; 4],
-    display_gamma: [f32; 4],
     auto_uv: [f32; 4],
     clip_plane: [f32; 4],
 }
@@ -137,6 +140,7 @@ pub struct Renderer {
     sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
     depth: DepthTarget,
+    classic_display: Option<ClassicDisplay>,
     modern: Option<ModernRenderer>,
     lighting: Option<ModernLighting>,
     sky_target: Option<SampledTarget>,
@@ -749,6 +753,8 @@ impl Renderer {
             })
             .unwrap_or_default();
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
+        let classic_display =
+            (!modern_enabled).then(|| ClassicDisplay::new(device, target_format, viewport_size));
         let modern = modern_enabled.then(|| {
             ModernRenderer::new(
                 (device, queue),
@@ -791,6 +797,7 @@ impl Renderer {
             sky_blended_index_buffer,
             blended_surfaces,
             depth,
+            classic_display,
             modern,
             lighting,
             sky_target,
@@ -1006,6 +1013,9 @@ impl Renderer {
             if let Some(modern) = self.modern.as_mut() {
                 modern.resize(device, viewport_size, &self.depth.view);
             }
+            if let Some(classic_display) = self.classic_display.as_mut() {
+                classic_display.resize(device, viewport_size);
+            }
             if self.sky_target.is_some() {
                 self.sky_target = Some(SampledTarget::new(
                     device,
@@ -1084,16 +1094,6 @@ impl Renderer {
     ) -> RenderStats {
         let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
-        let display_gamma = [
-            if self.modern.is_some() {
-                1.0
-            } else {
-                display_gamma(display.brightness)
-            },
-            0.0,
-            0.0,
-            0.0,
-        ];
         queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -1101,7 +1101,6 @@ impl Renderer {
                 view_projection: camera.view_projection(aspect).to_cols_array_2d(),
                 world_to_view: camera.view().to_cols_array_2d(),
                 camera_position: camera.position.extend(1.0).to_array(),
-                display_gamma,
                 auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                 clip_plane: Vec4::ZERO.to_array(),
             }),
@@ -1145,7 +1144,6 @@ impl Renderer {
                     view_projection: sky_camera.view_projection(aspect).to_cols_array_2d(),
                     world_to_view: sky_camera.view().to_cols_array_2d(),
                     camera_position: sky_camera.position.extend(1.0).to_array(),
-                    display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                     clip_plane: Vec4::ZERO.to_array(),
                 }),
@@ -1306,7 +1304,6 @@ impl Renderer {
                                 .to_cols_array_2d(),
                             world_to_view: nested_world_to_view.to_cols_array_2d(),
                             camera_position: nested_position.extend(1.0).to_array(),
-                            display_gamma,
                             auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                             clip_plane: nested_clip_plane.to_array(),
                         }),
@@ -1369,7 +1366,6 @@ impl Renderer {
                             .to_cols_array_2d(),
                         world_to_view: reflected_view.to_cols_array_2d(),
                         camera_position: reflected_position.extend(1.0).to_array(),
-                        display_gamma,
                         auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                         clip_plane: mirror_clip_plane(position, mirror.plane.0, mirror.plane.1)
                             .to_array(),
@@ -1433,7 +1429,6 @@ impl Renderer {
                         .to_cols_array_2d(),
                     world_to_view: world_to_view.to_cols_array_2d(),
                     camera_position: position.extend(1.0).to_array(),
-                    display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                     clip_plane: clip_plane.to_array(),
                 }),
@@ -1499,7 +1494,6 @@ impl Renderer {
                         .to_cols_array_2d(),
                     world_to_view: mirror_world_to_view.to_cols_array_2d(),
                     camera_position: mirror_camera_position.extend(1.0).to_array(),
-                    display_gamma,
                     auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
                     clip_plane: clip_plane.to_array(),
                 }),
@@ -1542,7 +1536,13 @@ impl Renderer {
         let scene_target = self
             .modern
             .as_ref()
-            .map_or(target, ModernRenderer::scene_view);
+            .map(ModernRenderer::scene_view)
+            .or_else(|| {
+                self.classic_display
+                    .as_ref()
+                    .map(ClassicDisplay::scene_view)
+            })
+            .unwrap_or(target);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 BSP render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1589,6 +1589,9 @@ impl Renderer {
                 display.contrast,
                 camera,
             );
+        } else if let Some(classic_display) = &self.classic_display {
+            classic_display.render(queue, encoder, target, display.brightness);
+            draw_calls += 1;
         }
         RenderStats {
             draw_calls,
@@ -2223,7 +2226,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_ue1_screen_brightness_to_display_gamma() {
+    fn converts_modern_screen_brightness_to_display_gamma() {
         assert_eq!(display_gamma(0.5), 1.0);
         assert_eq!(display_gamma(0.625), 0.8);
     }
