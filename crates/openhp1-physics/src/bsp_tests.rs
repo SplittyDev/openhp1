@@ -90,6 +90,7 @@ fn decodes_and_sweeps_serialized_leaf_hull() {
     assert_eq!(
         collision.surface_hit(hit.node),
         Some(SurfaceHit {
+            surface: 0,
             texture: ObjectReference::Export(3),
             poly_flags: PolyFlags::HIGH_LEDGE,
         })

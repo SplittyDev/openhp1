@@ -900,10 +900,11 @@ affects the accuracy of future opcode scans, not as a currently used level gap.
   `ParentBlend` is implemented from the original native class-default blending
   path; see
   [`spell-learning-original-behavior.md`](spell-learning-original-behavior.md#parentblend-means-superclass-defaults-not-actor-ownership).
-- `Decal.DetachDecal`, the other reserved/unsupported VM tokens, and
-  `PHYS_Spider` had no statically reachable or replay-observed shipped-level use
-  in this pass. They remain broader engine coverage gaps, not entries in this
-  level ledger.
+- The other reserved/unsupported VM tokens and `PHYS_Spider` had no statically
+  reachable or replay-observed shipped-level use in this pass. They remain
+  broader engine coverage gaps, not entries in this level ledger. Runtime BSP
+  `Decal.AttachDecal`/`DetachDecal` semantics are implemented; renderer
+  consumption and ActorShadow update policy remain separate parity work.
 
 ## Updating this ledger
 

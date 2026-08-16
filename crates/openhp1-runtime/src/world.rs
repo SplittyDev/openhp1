@@ -39,6 +39,16 @@ pub use actor::{
 };
 pub use error::{DispatchError, DispatchResult};
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct BspDecalAttachment {
+    pub actor: usize,
+    pub texture: RuntimeObject,
+    pub surface: usize,
+    /// Quad vertices relative to the authored BSP surface base point.
+    pub corners: [[f32; 3]; 4],
+    pub saved_nodes: Vec<usize>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ConsoleCommandResponse {
     pub output: String,
@@ -249,6 +259,8 @@ pub struct ScriptRuntime {
     handle_objects: Vec<ObjectId>,
     next_actor: usize,
     collision: Option<Arc<BspCollision>>,
+    bsp_decal_attachments: HashMap<usize, Vec<BspDecalAttachment>>,
+    decal_surface_lists: HashMap<usize, Vec<usize>>,
     reach_specs: Vec<NavigationReachSpec>,
     level_package: Option<Arc<str>>,
     level_info: Option<usize>,
@@ -275,6 +287,18 @@ pub struct ScriptRuntime {
 }
 
 impl ScriptRuntime {
+    pub fn bsp_decal_attachments(&self) -> impl Iterator<Item = (&usize, &[BspDecalAttachment])> {
+        self.bsp_decal_attachments
+            .iter()
+            .map(|(surface, attachments)| (surface, attachments.as_slice()))
+    }
+
+    pub fn decal_surface_list(&self, actor: usize) -> &[usize] {
+        self.decal_surface_lists
+            .get(&actor)
+            .map_or(&[], Vec::as_slice)
+    }
+
     pub fn set_mover_trace_enabled(&mut self, enabled: bool) {
         self.mover_trace = enabled.then(VecDeque::new);
     }

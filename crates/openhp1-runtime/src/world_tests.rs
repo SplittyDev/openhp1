@@ -7707,18 +7707,6 @@ fn named_native_shims_validate_their_engine_calls() {
         execution::named_native(
             &mut state_frames,
             17,
-            "Decal",
-            "DetachDecal",
-            &[],
-            &mut actions,
-            None,
-        ),
-        Some(Value::None)
-    );
-    assert_eq!(
-        execution::named_native(
-            &mut state_frames,
-            17,
             "PlayerPawn",
             "ConsoleCommand",
             &[],

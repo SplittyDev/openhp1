@@ -76,6 +76,8 @@ impl ScriptRuntime {
             handle_objects: Vec::new(),
             next_actor: 0,
             collision: None,
+            bsp_decal_attachments: HashMap::default(),
+            decal_surface_lists: HashMap::default(),
             reach_specs: Vec::new(),
             level_package: None,
             level_info: None,

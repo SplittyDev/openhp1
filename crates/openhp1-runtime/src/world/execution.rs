@@ -1,7 +1,8 @@
-use super::native::runtime_name;
+use super::native::{random_unit_vector, runtime_name};
 use super::*;
 use crate::IteratorValue;
 use glam::Vec3;
+use openhp1_map::PolyFlags;
 
 mod dispatch;
 pub(super) mod object;
@@ -461,6 +462,20 @@ impl ScriptRuntime {
                             && self.packages.load(skin_package).is_ok(),
                     ));
                 }
+                if class.eq_ignore_ascii_case("Decal")
+                    && function_name.eq_ignore_ascii_case("AttachDecal")
+                {
+                    return self
+                        .attach_decal_native(actor, actor_class, instance, arguments, actions)
+                        .map_err(|message| DispatchError::UnresolvedObject { message });
+                }
+                if class.eq_ignore_ascii_case("Decal")
+                    && function_name.eq_ignore_ascii_case("DetachDecal")
+                    && arguments.is_empty()
+                {
+                    self.detach_decal_native(actor);
+                    return Ok(Value::None);
+                }
                 if let Some(value) = named_native(
                     &mut self.state_frames,
                     actor,
@@ -667,14 +682,305 @@ pub(super) fn named_native(
         }
         return Some(Value::None);
     }
-    if class.eq_ignore_ascii_case("Decal")
-        && function.eq_ignore_ascii_case("DetachDecal")
-        && arguments.is_empty()
-    {
-        // ponytail: decals are not rendered yet, so there is no attachment to remove.
-        return Some(Value::None);
-    }
     None
+}
+
+impl ScriptRuntime {
+    fn attach_decal_native(
+        &mut self,
+        actor: usize,
+        actor_class: &ResolvedObject,
+        instance: &mut InstanceState,
+        arguments: &[Value],
+        actions: &mut Vec<ActorAction>,
+    ) -> std::result::Result<Value, String> {
+        let [Value::Float(trace_distance), Value::Vector(decal_direction)] = arguments else {
+            return Err(format!(
+                "AttachDecal expects a trace distance and decal direction, found {}",
+                arguments
+                    .iter()
+                    .map(Value::kind)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        let Some(collision) = self.collision.clone() else {
+            return Ok(Value::Object(0));
+        };
+        if self.level_package.is_none() {
+            return Ok(Value::Object(0));
+        }
+        let Some(texture) = self.actor_object(actor_class, instance, "Texture")? else {
+            actions.push(ActorAction::Log {
+                actor,
+                message: "AttachDecal: No Texture".to_owned(),
+                tag: None,
+            });
+            return Ok(Value::Object(0));
+        };
+        let mut multi_decal_level =
+            match self.required_actor_property(actor_class, instance, "MultiDecalLevel")? {
+                StoredValue::Value(Value::Int(value)) => value,
+                value => return Err(format!("actor property MultiDecalLevel is {value:?}")),
+            };
+        if multi_decal_level > 4 {
+            multi_decal_level = 4;
+            self.set_actor_value(
+                actor_class,
+                instance,
+                "MultiDecalLevel",
+                Value::Int(multi_decal_level),
+            )?;
+        }
+        let location = Vec3::from_array(self.actor_vector(actor_class, instance, "Location")?);
+        let rotation = self.actor_rotator(actor_class, instance, "Rotation")?;
+        let draw_scale = match self.required_actor_property(actor_class, instance, "DrawScale")? {
+            StoredValue::Value(Value::Float(value)) if value.is_finite() => value,
+            value => return Err(format!("actor property DrawScale is {value:?}")),
+        };
+        if !trace_distance.is_finite()
+            || !Vec3::from_array(*decal_direction).is_finite()
+            || !location.is_finite()
+        {
+            return Err("AttachDecal arguments are not finite".to_owned());
+        }
+
+        let forward = Vec3::from_array(crate::rotator_axes(rotation)[0]);
+        let trace_end = location - forward * *trace_distance;
+        let Some(hit) = collision.line_trace(location, trace_end) else {
+            return Ok(Value::Object(0));
+        };
+        let Some(surface_hit) = collision.surface_hit(hit.node) else {
+            return Ok(Value::Object(0));
+        };
+        let Some(base_surface) = collision.surface_geometry(surface_hit.surface) else {
+            return Ok(Value::Object(0));
+        };
+        if base_surface
+            .poly_flags
+            .contains(PolyFlags::from_bits(0x600))
+        {
+            return Ok(Value::Object(0));
+        }
+        let normal = base_surface.normal.normalize_or_zero();
+        if normal == Vec3::ZERO {
+            return Ok(Value::Object(0));
+        }
+        let center = project_to_plane(location, base_surface.base, normal);
+        let random_direction = Vec3::from_array(*decal_direction) == Vec3::ZERO;
+        let direction = if random_direction {
+            random_unit_vector(&mut self.random_state)
+        } else {
+            Vec3::from_array(*decal_direction)
+        };
+        let Some((first_axis, second_axis)) = decal_basis(normal, direction, !random_direction)
+        else {
+            return Ok(Value::Object(0));
+        };
+        let half_size =
+            (draw_scale * draw_scale * self.texture_u_size(&texture)?.powi(2) * 0.5).sqrt();
+        let corners = [
+            center + first_axis * half_size,
+            center + second_axis * half_size,
+            center - first_axis * half_size,
+            center - second_axis * half_size,
+        ];
+        let runtime_texture = RuntimeObject {
+            package: Arc::clone(&texture.package),
+            export_index: texture.export_index,
+        };
+        self.attach_decal_to_surface(
+            actor,
+            runtime_texture.clone(),
+            &collision,
+            base_surface,
+            corners,
+        );
+
+        if multi_decal_level > 0 {
+            for probe in decal_probe_points(corners, multi_decal_level) {
+                let Some(neighbor_hit) =
+                    collision.line_trace(probe - normal * 50.0, probe + normal * 50.0)
+                else {
+                    continue;
+                };
+                let Some(neighbor_hit) = collision.surface_hit(neighbor_hit.node) else {
+                    continue;
+                };
+                if self.decal_surface_lists[&actor].contains(&neighbor_hit.surface) {
+                    continue;
+                }
+                let Some(neighbor) = collision.surface_geometry(neighbor_hit.surface) else {
+                    continue;
+                };
+                let neighbor_normal = neighbor.normal.normalize_or_zero();
+                if !decal_neighbor_allowed(normal, neighbor_normal, neighbor.poly_flags) {
+                    continue;
+                }
+                let warped =
+                    corners.map(|corner| project_to_plane(corner, neighbor.base, neighbor_normal));
+                self.attach_decal_to_surface(
+                    actor,
+                    runtime_texture.clone(),
+                    &collision,
+                    neighbor,
+                    warped,
+                );
+            }
+        }
+        self.surface_texture_value(surface_hit.texture)
+    }
+
+    fn attach_decal_to_surface(
+        &mut self,
+        actor: usize,
+        texture: RuntimeObject,
+        collision: &BspCollision,
+        surface: openhp1_physics::SurfaceGeometry,
+        corners: [Vec3; 4],
+    ) {
+        let attachments = self
+            .bsp_decal_attachments
+            .entry(surface.surface)
+            .or_default();
+        let attachment = BspDecalAttachment {
+            actor,
+            texture,
+            surface: surface.surface,
+            corners: corners.map(|corner| (corner - surface.base).to_array()),
+            saved_nodes: collision.clipped_surface_nodes(surface.surface, corners),
+        };
+        if let Some(index) = attachments
+            .iter()
+            .position(|current| current.texture == attachment.texture)
+        {
+            attachments.insert(index, attachment);
+        } else {
+            attachments.push(attachment);
+        }
+        self.decal_surface_lists
+            .entry(actor)
+            .or_default()
+            .push(surface.surface);
+    }
+
+    fn detach_decal_native(&mut self, actor: usize) {
+        while let Some(surface) = self.decal_surface_lists.get_mut(&actor).and_then(Vec::pop) {
+            let remove_surface =
+                self.bsp_decal_attachments
+                    .get_mut(&surface)
+                    .is_some_and(|attachments| {
+                        attachments.retain(|attachment| attachment.actor != actor);
+                        attachments.is_empty()
+                    });
+            if remove_surface {
+                self.bsp_decal_attachments.remove(&surface);
+            }
+        }
+        self.decal_surface_lists.remove(&actor);
+    }
+
+    fn texture_u_size(&mut self, texture: &ObjectId) -> std::result::Result<f32, String> {
+        let texture = self
+            .resolved_object(texture)
+            .map_err(|error| error.to_string())?;
+        let export = texture
+            .package
+            .summary()
+            .exports
+            .get(texture.export_index)
+            .ok_or_else(|| format!("texture export {} is missing", texture.export_index))?;
+        let mut reader = texture
+            .package
+            .export_reader(texture.export_index)
+            .map_err(|error| error.to_string())?;
+        reader
+            .read_object_stack(export.object_flags)
+            .map_err(|error| error.to_string())?;
+        while let Some(property) = reader.next_property().map_err(|error| error.to_string())? {
+            if reader
+                .summary()
+                .name(property.name)
+                .eq_ignore_ascii_case("USize")
+                && property.kind == PropertyKind::Int
+            {
+                return reader
+                    .property_reader(&property)
+                    .read_u32()
+                    .map(|value| value as f32)
+                    .map_err(|error| error.to_string());
+            }
+        }
+        Err("decal texture has no USize".to_owned())
+    }
+
+    fn surface_texture_value(
+        &mut self,
+        texture: ObjectReference,
+    ) -> std::result::Result<Value, String> {
+        let Some(level_package) = self.level_package.clone() else {
+            return Ok(Value::Object(0));
+        };
+        let package = self
+            .packages
+            .load_path(Path::new(level_package.as_ref()))
+            .map_err(|error| error.to_string())?;
+        let Some(texture) = self
+            .packages
+            .resolve(&package, texture)
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(Value::Object(0));
+        };
+        self.object_handle(object_id(&texture.package, texture.export_index))
+            .map(Value::Object)
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn project_to_plane(point: Vec3, base: Vec3, normal: Vec3) -> Vec3 {
+    point - normal * (point - base).dot(normal)
+}
+
+fn decal_basis(normal: Vec3, direction: Vec3, provided: bool) -> Option<(Vec3, Vec3)> {
+    let projected = (direction - normal * direction.dot(normal)).normalize_or_zero();
+    if projected == Vec3::ZERO {
+        return None;
+    }
+    let perpendicular = projected.cross(normal).normalize_or_zero();
+    if perpendicular == Vec3::ZERO {
+        return None;
+    }
+    let axes = if provided {
+        (projected + perpendicular, projected - perpendicular)
+    } else {
+        (projected, perpendicular)
+    };
+    Some(axes)
+}
+
+fn decal_probe_points(corners: [Vec3; 4], level: i32) -> Vec<Vec3> {
+    if level <= 0 {
+        return Vec::new();
+    }
+    let level = level.min(4) as usize;
+    let across = corners[3] - corners[0];
+    let down = corners[1] - corners[0];
+    (0..level)
+        .flat_map(|row| {
+            (0..level).map(move |column| {
+                corners[0]
+                    + across * ((column + 1) as f32 / level as f32)
+                    + down * ((row + 1) as f32 / level as f32)
+            })
+        })
+        .collect()
+}
+
+fn decal_neighbor_allowed(base: Vec3, neighbor: Vec3, flags: PolyFlags) -> bool {
+    neighbor != Vec3::ZERO
+        && !flags.contains(PolyFlags::from_bits(0x600))
+        && base.dot(neighbor).abs() > 0.7
 }
 
 fn skin_package_is_compatible(skin_package: &str, mesh_name: &str) -> bool {

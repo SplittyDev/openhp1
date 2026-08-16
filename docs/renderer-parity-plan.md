@@ -220,11 +220,14 @@ commit, and live-verification fields for each item.
       node collection `316069-316282`. Active shipped use is actor shadows:
       714 non-null shadow owners across 40 maps. Compiled gameplay contains no
       active ecto/scorch spawn, so do not present those as authored live gates.
-  - [ ] `BASE-002A` Implement exact runtime BSP attach/detach: backward trace,
+  - [x] `BASE-002A` Implement exact runtime BSP attach/detach: backward trace,
         `0x600` auto-pan rejection, USize-only square projection, SurfList and
         saved-node identities, `MultiDecalLevel` grid/upper clamp, unique
         neighbor projection, and strict `abs(dot(normal)) > 0.7` acceptance.
-        Commit independently with synthetic adjacent/tilted BSP fixtures.
+        Runtime surface records and backward detachment are implemented with
+        synthetic adjacent coplanar/tilted fixtures. Scene consumption,
+        renderer clipping/submission, shadow updates, and live acceptance stay
+        in the following milestones; keep `BASE-002` open.
   - [ ] `BASE-002B` Implement renderer-driven ActorShadow updates: owner
         visibility and RendMap gates, stale-frame detach, translucent-owner
         suppression, one-unit move threshold, orientation changes, and exact

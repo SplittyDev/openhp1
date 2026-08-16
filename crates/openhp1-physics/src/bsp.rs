@@ -24,8 +24,18 @@ pub struct CollisionHit {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SurfaceHit {
+    pub surface: usize,
     pub texture: ObjectReference,
     pub poly_flags: PolyFlags,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceGeometry {
+    pub surface: usize,
+    pub texture: ObjectReference,
+    pub poly_flags: PolyFlags,
+    pub base: Vec3,
+    pub normal: Vec3,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +48,7 @@ pub struct BspCollision {
     vertices: Vec<BspVertex>,
     zone_actors: Vec<Option<usize>>,
     node_surfaces: Vec<Option<SurfaceHit>>,
+    surfaces: Vec<Option<SurfaceGeometry>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -277,11 +288,35 @@ impl BspCollision {
                 .map(|node| {
                     usize::try_from(node.surface)
                         .ok()
-                        .and_then(|surface| model.surfaces.get(surface))
-                        .map(|surface| SurfaceHit {
-                            texture: surface.texture,
-                            poly_flags: surface.poly_flags,
+                        .and_then(|surface_index| {
+                            model.surfaces.get(surface_index).map(|surface| SurfaceHit {
+                                surface: surface_index,
+                                texture: surface.texture,
+                                poly_flags: surface.poly_flags,
+                            })
                         })
+                })
+                .collect(),
+            surfaces: model
+                .surfaces
+                .iter()
+                .enumerate()
+                .map(|(surface_index, surface)| {
+                    let base = usize::try_from(surface.base_point)
+                        .ok()
+                        .and_then(|index| model.points.get(index))
+                        .copied()?;
+                    let normal = usize::try_from(surface.normal)
+                        .ok()
+                        .and_then(|index| model.vectors.get(index))
+                        .copied()?;
+                    Some(SurfaceGeometry {
+                        surface: surface_index,
+                        texture: surface.texture,
+                        poly_flags: surface.poly_flags,
+                        base,
+                        normal,
+                    })
                 })
                 .collect(),
         })
@@ -767,6 +802,64 @@ impl BspCollision {
         self.node_surfaces.get(node).copied().flatten()
     }
 
+    pub fn surface_geometry(&self, surface: usize) -> Option<SurfaceGeometry> {
+        self.surfaces.get(surface).copied().flatten()
+    }
+
+    /// Returns the authored BSP nodes from `surface` whose polygons overlap
+    /// the coplanar decal quad, matching the native saved-node collector.
+    pub fn clipped_surface_nodes(&self, surface: usize, corners: [Vec3; 4]) -> Vec<usize> {
+        self.zone_nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| usize::try_from(node.surface) == Ok(surface))
+            .filter(|(_, node)| node.vertex_count != 0)
+            .filter(|(_, node)| self.node_overlaps_quad(node, corners))
+            .map(|(node, _)| node)
+            .collect()
+    }
+
+    fn node_overlaps_quad(&self, node: &BspNode, corners: [Vec3; 4]) -> bool {
+        let first = match usize::try_from(node.vertex_pool) {
+            Ok(first) => first,
+            Err(_) => return false,
+        };
+        let Some(vertices) = self
+            .vertices
+            .get(first..first.saturating_add(usize::from(node.vertex_count)))
+        else {
+            return false;
+        };
+        let polygon = vertices
+            .iter()
+            .filter_map(|vertex| usize::try_from(vertex.point).ok())
+            .filter_map(|point| self.points.get(point).copied())
+            .collect::<Vec<_>>();
+        if polygon.len() < 3 {
+            return false;
+        }
+        let centroid = polygon.iter().copied().sum::<Vec3>() / polygon.len() as f32;
+        let normal = Vec3::from_array([node.plane[0], node.plane[1], node.plane[2]]);
+        let mut clipped = corners.to_vec();
+        for (&a, &b) in polygon
+            .iter()
+            .zip(polygon.iter().cycle().skip(1))
+            .take(polygon.len())
+        {
+            let edge_normal = (b - a).cross(normal);
+            let sign = if edge_normal.dot(centroid - a) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            clipped = clip_polygon(&clipped, a, edge_normal * sign);
+            if clipped.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn zone_at(&self, point: Vec3) -> Option<usize> {
         self.point_region(point).map(|region| region.zone)
     }
@@ -1049,6 +1142,27 @@ fn opposite_axis_signs(first: Vec3, second: Vec3, axis: Vec3) -> bool {
 
 fn plane_side(plane: [f32; 4], point: Vec3) -> f32 {
     Vec3::from_array([plane[0], plane[1], plane[2]]).dot(point) - plane[3]
+}
+
+fn clip_polygon(points: &[Vec3], plane_point: Vec3, inward_normal: Vec3) -> Vec<Vec3> {
+    let mut clipped = Vec::new();
+    let Some(mut previous) = points.last().copied() else {
+        return clipped;
+    };
+    let mut previous_distance = inward_normal.dot(previous - plane_point);
+    for &current in points {
+        let current_distance = inward_normal.dot(current - plane_point);
+        if (current_distance >= 0.0) != (previous_distance >= 0.0) {
+            let fraction = previous_distance / (previous_distance - current_distance);
+            clipped.push(previous + (current - previous) * fraction);
+        }
+        if current_distance >= 0.0 {
+            clipped.push(current);
+        }
+        previous = current;
+        previous_distance = current_distance;
+    }
+    clipped
 }
 
 fn ray_triangle(origin: Vec3, direction: Vec3, maximum: f32, points: [Vec3; 3]) -> Option<f32> {

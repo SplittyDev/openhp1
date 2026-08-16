@@ -1417,7 +1417,12 @@ mod iterator_tests {
             "Texture",
             "bMasked",
             "bNotSolid",
+            "USize",
+            "VSize",
             "None",
+            "Decal",
+            "AttachDecal",
+            "DetachDecal",
         ];
         let mut name_table = Vec::new();
         for name in names {
@@ -1430,7 +1435,11 @@ mod iterator_tests {
         let name_offset = HEADER_SIZE;
         let import_offset = name_offset + name_table.len();
         let import_table = [0, 1, 0, 0, 0, 0, 1];
-        let property_data = [6, 0x83, 7, 0x83, 8];
+        let mut property_data = vec![6, 0x83, 7, 0x83, 8, 0x22];
+        property_data.extend(32_u32.to_le_bytes());
+        property_data.extend([9, 0x22]);
+        property_data.extend(128_u32.to_le_bytes());
+        property_data.push(10);
         let property_offset = import_offset + import_table.len();
         let export_offset = property_offset + property_data.len();
         let mut export_table = Vec::new();
@@ -1450,6 +1459,13 @@ mod iterator_tests {
             0x40 | (property_offset as u8 & 0x3f),
             (property_offset >> 6) as u8,
         ]);
+        for (object_name, outer) in [(11_u8, 0_i32), (12, 5), (13, 5)] {
+            export_table.extend([0, 0]);
+            export_table.extend(outer.to_le_bytes());
+            export_table.push(object_name);
+            export_table.extend(0_u32.to_le_bytes());
+            export_table.push(0);
+        }
 
         let mut bytes = Vec::new();
         bytes.extend(openhp1_package::PACKAGE_MAGIC.to_le_bytes());
@@ -1459,7 +1475,7 @@ mod iterator_tests {
         for value in [
             names.len(),
             name_offset,
-            4,
+            7,
             export_offset,
             1,
             import_offset,
@@ -1483,7 +1499,7 @@ mod iterator_tests {
                 valid: false,
                 sphere: [0.0; 4],
             },
-            vectors: Vec::new(),
+            vectors: vec![Vec3::X],
             points: vec![
                 Vec3::new(0.0, -10.0, -10.0),
                 Vec3::new(0.0, 10.0, -10.0),
@@ -1531,6 +1547,175 @@ mod iterator_tests {
             root_outside: true,
             linked: false,
         }
+    }
+
+    fn adjacent_decal_model() -> Model {
+        let mut model = plane_model(ObjectReference::Export(3), PolyFlags::default());
+        model.vectors.push(Vec3::new(0.8, -0.6, 0.0));
+        model.points = vec![
+            Vec3::new(0.0, -10.0, -5.0),
+            Vec3::new(0.0, 0.0, -5.0),
+            Vec3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, -10.0, 10.0),
+            Vec3::new(0.0, -10.0, -15.0),
+            Vec3::new(0.0, 0.0, -15.0),
+            Vec3::new(0.0, 0.0, -5.0),
+            Vec3::new(0.0, -10.0, -5.0),
+            Vec3::new(0.0, 0.0, -10.0),
+            Vec3::new(11.25, 15.0, -10.0),
+            Vec3::new(11.25, 15.0, 10.0),
+            Vec3::new(0.0, 0.0, 10.0),
+        ];
+        model.vertices = (0..12).map(|point| BspVertex { point, side: -1 }).collect();
+        model.nodes = vec![
+            BspNode {
+                plane: [1.0, 0.0, 0.0, 0.0],
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 0,
+                surface: 0,
+                back: -1,
+                front: -1,
+                coplanar: 1,
+                collision_bound: -1,
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 4,
+                leaves: [0; 2],
+            },
+            BspNode {
+                plane: [1.0, 0.0, 0.0, 0.0],
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 4,
+                surface: 1,
+                back: -1,
+                front: -1,
+                coplanar: 2,
+                collision_bound: -1,
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 4,
+                leaves: [0; 2],
+            },
+            BspNode {
+                plane: [0.8, -0.6, 0.0, 0.0],
+                zone_mask: 0,
+                flags: 0,
+                vertex_pool: 8,
+                surface: 2,
+                back: -1,
+                front: -1,
+                coplanar: -1,
+                collision_bound: -1,
+                render_bound: -1,
+                zones: [0; 2],
+                vertex_count: 4,
+                leaves: [0; 2],
+            },
+        ];
+        model.surfaces = [0, 4, 8]
+            .into_iter()
+            .enumerate()
+            .map(|(surface, base_point)| BspSurface {
+                texture: ObjectReference::Export(3),
+                poly_flags: PolyFlags::default(),
+                base_point,
+                normal: i32::from(surface == 2),
+                texture_u: 0,
+                texture_v: 0,
+                light_map: -1,
+                brush_poly: -1,
+                pan_u: 0,
+                pan_v: 0,
+                brush_actor: ObjectReference::None,
+            })
+            .collect();
+        model
+    }
+
+    fn decal_instance(
+        runtime: &mut ScriptRuntime,
+        source: &Arc<Package>,
+        multi_decal_level: i32,
+        texture: Option<ObjectId>,
+    ) -> (ResolvedObject, InstanceState) {
+        let class = ResolvedObject {
+            package: Arc::clone(source),
+            export_index: 0,
+        };
+        let fields = [
+            "Texture",
+            "MultiDecalLevel",
+            "Location",
+            "Rotation",
+            "DrawScale",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let field = ObjectId {
+                package: Arc::from("<decal-fields>"),
+                export_index: index,
+            };
+            runtime.fields.insert(
+                (object_id(source, 0), name.to_ascii_lowercase()),
+                Some(field.clone()),
+            );
+            (name, field)
+        })
+        .collect::<HashMap<_, _>>();
+        let instance = [
+            (fields["Texture"].clone(), StoredValue::Object(texture)),
+            (
+                fields["MultiDecalLevel"].clone(),
+                StoredValue::Value(Value::Int(multi_decal_level)),
+            ),
+            (
+                fields["Location"].clone(),
+                StoredValue::Value(Value::Vector([10.0, 0.0, 0.0])),
+            ),
+            (
+                fields["Rotation"].clone(),
+                StoredValue::Value(Value::Rotator([0, 0, 0])),
+            ),
+            (
+                fields["DrawScale"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        (class, instance)
+    }
+
+    fn named_decal_script(export_index: usize) -> Arc<ScriptExport> {
+        Arc::new(ScriptExport {
+            export_index,
+            class_name: "Function".to_owned(),
+            base_field: ObjectReference::None,
+            next_field: ObjectReference::None,
+            script_text: ObjectReference::None,
+            children: ObjectReference::None,
+            friendly_name: export_index,
+            line: 0,
+            text_position: 0,
+            bytecode: Bytecode {
+                version: 61,
+                bytes: Vec::new(),
+                raw_len: 0,
+                tokens: Vec::new(),
+            },
+            metadata: ScriptMetadata::Function(openhp1_script::FunctionMetadata {
+                parameter_size: None,
+                native_index: 0,
+                parameter_count: None,
+                operator_precedence: 0,
+                return_value_offset: None,
+                flags: FUNCTION_NATIVE,
+                replication_offset: None,
+            }),
+        })
     }
 
     #[test]
@@ -1752,6 +1937,300 @@ mod iterator_tests {
                     | PolyFlags::NOT_SOLID.bits()) as i32
             ))
         );
+    }
+
+    #[test]
+    fn attach_decal_retains_surface_geometry_groups_texture_and_detaches_backward() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let collision = Arc::new(
+            BspCollision::from_model(&plane_model(
+                ObjectReference::Export(3),
+                PolyFlags::default(),
+            ))
+            .unwrap(),
+        );
+        runtime.collision = Some(Arc::clone(&collision));
+        runtime.level_package = Some(Arc::clone(&source.summary().source));
+        let texture = object_id(&source, 3);
+        let expected = runtime.object_handle(texture.clone()).unwrap();
+        let (class, mut instance) = decal_instance(&mut runtime, &source, 0, Some(texture.clone()));
+        let mut actions = Vec::new();
+
+        runtime
+            .scripts
+            .insert(object_id(&source, 5), named_decal_script(5));
+        let attach = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 5,
+        };
+
+        assert_eq!(
+            runtime
+                .execute_function(
+                    1,
+                    &class,
+                    &attach,
+                    &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                    &mut instance,
+                    &mut actions,
+                    0,
+                )
+                .unwrap(),
+            Value::Object(expected),
+        );
+        let attachment = &runtime.bsp_decal_attachments[&0][0];
+        assert_eq!(attachment.actor, 1);
+        assert_eq!(attachment.surface, 0);
+        assert_eq!(attachment.saved_nodes, [0]);
+        assert_eq!(runtime.decal_surface_list(1), [0]);
+        let base = collision.surface_geometry(0).unwrap().base;
+        let center = Vec3::ZERO;
+        for corner in attachment.corners {
+            let corner = base + Vec3::from_array(corner);
+            assert!((corner.distance(center) - 32.0).abs() < 1.0e-5);
+        }
+
+        let (_, mut second_instance) =
+            decal_instance(&mut runtime, &source, 0, Some(texture.clone()));
+        assert_eq!(
+            runtime
+                .attach_decal_native(
+                    2,
+                    &class,
+                    &mut second_instance,
+                    &[Value::Float(20.0), Value::Vector(Vec3::ZERO.to_array())],
+                    &mut actions,
+                )
+                .unwrap(),
+            Value::Object(expected),
+        );
+        assert_eq!(runtime.bsp_decal_attachments[&0].len(), 2);
+        assert_eq!(
+            runtime.bsp_decal_attachments[&0]
+                .iter()
+                .map(|attachment| attachment.actor)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert_eq!(runtime.decal_surface_list(2), [0]);
+
+        runtime.attach_decal_to_surface(
+            2,
+            RuntimeObject {
+                package: Arc::clone(&texture.package),
+                export_index: texture.export_index,
+            },
+            &collision,
+            collision.surface_geometry(0).unwrap(),
+            [Vec3::ZERO; 4],
+        );
+        assert_eq!(runtime.decal_surface_list(2), [0, 0]);
+        runtime
+            .scripts
+            .insert(object_id(&source, 6), named_decal_script(6));
+        let detach = ResolvedObject {
+            package: Arc::clone(&source),
+            export_index: 6,
+        };
+        runtime
+            .execute_function(
+                2,
+                &class,
+                &detach,
+                &[],
+                &mut second_instance,
+                &mut actions,
+                0,
+            )
+            .unwrap();
+        assert_eq!(runtime.bsp_decal_attachments[&0].len(), 1);
+        assert_eq!(runtime.bsp_decal_attachments[&0][0].actor, 1);
+        assert!(runtime.decal_surface_list(2).is_empty());
+        assert!(actions.is_empty());
+        runtime.detach_decal_native(1);
+        assert!(runtime.bsp_decal_attachments.is_empty());
+
+        let (_, mut negative_instance) =
+            decal_instance(&mut runtime, &source, -2, Some(texture.clone()));
+        runtime
+            .attach_decal_native(
+                3,
+                &class,
+                &mut negative_instance,
+                &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                &mut Vec::new(),
+            )
+            .unwrap();
+        assert!(
+            negative_instance
+                .values()
+                .any(|value| *value == StoredValue::Value(Value::Int(-2)))
+        );
+        assert_eq!(runtime.decal_surface_list(3), [0]);
+        runtime.detach_decal_native(3);
+
+        let (_, mut clamped_instance) = decal_instance(&mut runtime, &source, 9, Some(texture));
+        runtime
+            .attach_decal_native(
+                4,
+                &class,
+                &mut clamped_instance,
+                &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                &mut Vec::new(),
+            )
+            .unwrap();
+        assert!(
+            clamped_instance
+                .values()
+                .any(|value| *value == StoredValue::Value(Value::Int(4)))
+        );
+    }
+
+    #[test]
+    fn attach_decal_logs_missing_texture_and_preserves_probe_rules() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        runtime.collision = Some(Arc::new(
+            BspCollision::from_model(&plane_model(
+                ObjectReference::Export(3),
+                PolyFlags::default(),
+            ))
+            .unwrap(),
+        ));
+        runtime.level_package = Some(Arc::clone(&source.summary().source));
+        let (class, mut instance) = decal_instance(&mut runtime, &source, -2, None);
+        let mut actions = Vec::new();
+        assert_eq!(
+            runtime
+                .attach_decal_native(
+                    9,
+                    &class,
+                    &mut instance,
+                    &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                    &mut actions,
+                )
+                .unwrap(),
+            Value::Object(0),
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [ActorAction::Log { actor: 9, message, tag: None }]
+                if message == "AttachDecal: No Texture"
+        ));
+
+        for flags in [PolyFlags::AUTO_U_PAN, PolyFlags::AUTO_V_PAN] {
+            runtime.collision = Some(Arc::new(
+                BspCollision::from_model(&plane_model(ObjectReference::Export(3), flags)).unwrap(),
+            ));
+            let (_, mut instance) =
+                decal_instance(&mut runtime, &source, 0, Some(object_id(&source, 3)));
+            assert_eq!(
+                runtime
+                    .attach_decal_native(
+                        10,
+                        &class,
+                        &mut instance,
+                        &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                        &mut Vec::new(),
+                    )
+                    .unwrap(),
+                Value::Object(0),
+            );
+            assert!(runtime.decal_surface_list(10).is_empty());
+        }
+
+        let corners = [Vec3::X, Vec3::Y, Vec3::NEG_X, Vec3::NEG_Y];
+        for (level, expected) in [(-1, 0), (0, 0), (1, 1), (2, 4), (4, 16), (8, 16)] {
+            assert_eq!(decal_probe_points(corners, level).len(), expected);
+        }
+        let boundary = Vec3::new(0.7, (1.0_f32 - 0.49).sqrt(), 0.0);
+        assert!(!decal_neighbor_allowed(
+            Vec3::X,
+            boundary,
+            PolyFlags::default()
+        ));
+        assert!(decal_neighbor_allowed(
+            Vec3::X,
+            Vec3::new(0.700_001, (1.0_f32 - 0.700_001_f32.powi(2)).sqrt(), 0.0),
+            PolyFlags::default()
+        ));
+        assert!(!decal_neighbor_allowed(
+            Vec3::X,
+            Vec3::X,
+            PolyFlags::AUTO_U_PAN
+        ));
+        assert!(!decal_neighbor_allowed(
+            Vec3::X,
+            Vec3::X,
+            PolyFlags::AUTO_V_PAN
+        ));
+
+        let (random_first, random_second) = decal_basis(Vec3::X, Vec3::Y, false).unwrap();
+        assert!(random_first.abs_diff_eq(Vec3::Y, 1.0e-6));
+        assert!(random_second.abs_diff_eq(Vec3::NEG_Z, 1.0e-6));
+        let (provided_first, provided_second) = decal_basis(Vec3::X, Vec3::Y, true).unwrap();
+        assert!(provided_first.abs_diff_eq(Vec3::new(0.0, 1.0, -1.0), 1.0e-6));
+        assert!(provided_second.abs_diff_eq(Vec3::new(0.0, 1.0, 1.0), 1.0e-6));
+        assert!((provided_first.length() - std::f32::consts::SQRT_2).abs() < 1.0e-6);
+        assert!((provided_second.length() - std::f32::consts::SQRT_2).abs() < 1.0e-6);
+        let half_size = 512.0_f32.sqrt();
+        let draw_scale_times_u_size = 32.0;
+        for axis in [random_first, random_second] {
+            assert!(
+                ((axis * half_size).length() - draw_scale_times_u_size / std::f32::consts::SQRT_2)
+                    .abs()
+                    < 1.0e-5
+            );
+        }
+        for axis in [provided_first, provided_second] {
+            assert!(((axis * half_size).length() - draw_scale_times_u_size).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn attach_decal_collects_unique_adjacent_and_tilted_surfaces() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let collision = Arc::new(BspCollision::from_model(&adjacent_decal_model()).unwrap());
+        runtime.collision = Some(Arc::clone(&collision));
+        runtime.level_package = Some(Arc::clone(&source.summary().source));
+        let texture = object_id(&source, 3);
+        let (class, mut instance) = decal_instance(&mut runtime, &source, 4, Some(texture));
+
+        runtime
+            .attach_decal_native(
+                5,
+                &class,
+                &mut instance,
+                &[Value::Float(20.0), Value::Vector([0.0, 1.0, 0.0])],
+                &mut Vec::new(),
+            )
+            .unwrap();
+
+        let surfaces = runtime.decal_surface_list(5);
+        assert_eq!(surfaces.first(), Some(&0));
+        assert!(surfaces.contains(&1));
+        assert!(surfaces.contains(&2), "{surfaces:?}");
+        assert_eq!(
+            surfaces.iter().copied().collect::<HashSet<_>>().len(),
+            surfaces.len()
+        );
+        for &surface in surfaces {
+            let geometry = collision.surface_geometry(surface).unwrap();
+            let normal = geometry.normal.normalize();
+            let attachment = &runtime.bsp_decal_attachments[&surface][0];
+            assert!(!attachment.saved_nodes.is_empty());
+            for corner in attachment.corners {
+                assert!(normal.dot(Vec3::from_array(corner)).abs() < 1.0e-4);
+            }
+        }
+        runtime.detach_decal_native(5);
+        assert!(runtime.bsp_decal_attachments.is_empty());
+        assert!(runtime.decal_surface_list(5).is_empty());
     }
 
     #[test]

@@ -592,9 +592,7 @@ macOS Application Support, Linux XDG config (or `~/.config`), or Windows
 `APPDATA`.
 Missing files are seeded from their read-only installed counterparts and,
 respectively, `Default.ini` or `DefUser.ini`. Each update is atomic; package
-files and all installed INIs remain read-only. Other engine side effects
-without an OpenHP1 surface do not abort scripts: decal detachment is a no-op
-until decals render.
+files and all installed INIs remain read-only.
 Config serialization is intentionally type-directed: scalars, named byte
 enums, package object/class references, `Color`, `Vector`, `Rotator`, dynamic
 string arrays, and fixed string/name arrays round-trip through the same parser.
@@ -819,6 +817,19 @@ optional sound, optional slot)` returns true only for a live actor/slot channel,
 optionally filters by sound (`None` is a wildcard), and changes volume, radius,
 or pitch for parameter values 0, 1, or 2. Slot zero uses an allocated transient
 channel and is not selectable by `ModifySound`.
+`Decal.AttachDecal` traces from `Location` backward along the actor rotation,
+rejects auto-panning BSP surfaces, and retains surface-relative USize-only quad
+corners plus the clipped authored node identities. `MultiDecalLevel` is
+upper-clamped to four while zero and negative values remain unchanged; its
+grid adds only unique, non-auto-panning neighbors whose normalized plane
+alignment is strictly greater than `0.7`. A zero `DecalDir` consumes a random
+unit vector only for in-plane orientation and never changes the trace.
+New same-texture records insert before the first match, preserving every decal
+actor while grouping equal textures consecutively on each surface.
+`Decal.DetachDecal` walks the actor's saved surface list backward, removes all
+of that actor's surface records, and empties the list. These are runtime/model
+semantics only; scene consumption, clipping, draw order, style, timestamps,
+and ActorShadow refresh policy remain separate renderer-parity work.
 
 Non-bouncing falling actors call `Landed` directly on walkable floor contacts;
 `HitWall` is reserved for wall or slope contacts. Bouncing actors still receive
