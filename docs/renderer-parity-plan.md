@@ -512,9 +512,11 @@ commit, and live-verification fields for each item.
         41-map scan found zero raw `PF_Mirrored` surfaces, and the current
         loader resolves zero `WarpPortal` records, so neither Erised nor warp
         child placement has an honest shipped live gate yet.
-        Recheck reported Classic gameplay FPS in `Lev2_HogFront`, `Lev2_Inc_A`,
-        `Lev3_Dungeon`, `Lev4_Sneak`, and `Lev5_Final`; the offscreen benchmark
-        excludes swapchain presentation and does not replace live validation.
+  - [x] Live Classic performance rechecked in `Lev2_HogFront`, `Lev2_Inc_A`,
+        `Lev3_Dungeon`, `Lev4_Sneak`, and `Lev5_Final`; the user confirmed the
+        severe release regression is gone after `e2069a6`. Exact post-fix live
+        FPS was not recorded, so the fixed offscreen timings above remain the
+        quantitative reference.
 - [ ] `BASE-017` Apply `FTextureInfo` dimensions and `DrawScale` to ordinary
       legacy mesh byte UVs without changing the environment-map equation.
       Direct Render.dll evidence: `DrawMesh` and `DrawLodMesh` multiply each

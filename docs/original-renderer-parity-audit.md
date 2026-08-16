@@ -222,8 +222,10 @@ the parity plan. Its initial `23529b9` implementation introduced a severe
 Classic regression by rebuilding per-node index vectors and linearly searching
 triangle ownership inside every camera plan. Cached immutable node geometry
 removes that map-size-scaled work without changing command order, draw counts,
-or fixed-view output checksums. The six-map release benchmark and remaining
-live Classic FPS gate are recorded under `BASE-016`.
+or fixed-view output checksums. The six-map release benchmark is recorded under
+`BASE-016`; the user subsequently confirmed that Classic performance is again
+good in all five originally reported gameplay maps after `e2069a6`. Exact
+post-fix live FPS was not recorded.
 
 Two evidence limits apply to this matrix:
 
