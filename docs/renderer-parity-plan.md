@@ -300,11 +300,23 @@ commit, and live-verification fields for each item.
     - [x] Recover the exact camera-to-vertex sphere integral, ordered fog-light
           composition, material/capability gates, and D3D specular-add path in
           [`original-actor-renderfog.md`](original-actor-renderfog.md).
+    - [x] Recover native light admission: each mesh draw consumes
+          `LeafLights[Actor.Region.iLeaf]`, rebuilt by `SetupDynamics` from BSP
+          sphere traversal after the `LightType`, UObject flags,
+          `bSpecialLit`, `bDynamicLight`, `ZoneInfo.bFogZone`,
+          `VolumeRadius`, and `VolumeBrightness` gates. Do not substitute every
+          globally overlapping volume light.
     - [ ] Add one shared per-vertex fog RGB channel/evaluator and apply its
           post-texture diffuse add in both pipelines before optional Modern
           volumetric enhancements. Retain it only for non-Translucent and
           non-Modulated draws when the hardware capability is supported;
           `UseVertexFog` is not that gate.
+    - [ ] Evaluate and upload fog independently for every rendered scene node.
+          Native recomputes `SetupForActor`/`LightAndFog` for the main, sky,
+          warp, mirror, and reflection cameras. A single main-camera fog vertex
+          buffer reused by child passes is incorrect; the unmerged experiment
+          stopped at this boundary. Use per-view vertex data or an equivalent
+          draw-time evaluator without regressing the cached submission plan.
     - [ ] Deterministic acceptance: one/two fog lights, exact `f2=2f`
           accumulation and clamp boundaries, Unlit/flag/capability/blend
           suppression, and Classic/Modern base-path equivalence with Modern
