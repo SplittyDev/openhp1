@@ -57,7 +57,7 @@ pub struct LoadedScene {
     root_motions: Vec<(usize, Vec3)>,
     hidden_actor_positions: HashMap<usize, Vec<Vec3>>,
     attached_weapons: HashMap<usize, SceneObject>,
-    water_animations: Vec<AnimatedWaterTexture>,
+    water_animations: TextureAnimations,
     changed_lightmaps: Vec<usize>,
     particles: HashMap<usize, ParticleSystem>,
     particle_view_rotation: Mat4,
@@ -173,7 +173,7 @@ impl LoadedScene {
         let (level_pan_speed, zone_pan_speeds) =
             load_zone_pan_speeds(&mut packages, &package, &level, &model, &mut class_cache);
         mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
-        let mut water_animations = Vec::new();
+        let mut water_animations = TextureAnimations::default();
         let (mut textures, mut surface_materials) =
             load_materials(&mut packages, &package, &model, &mut water_animations);
         let textured_surfaces = surface_materials
@@ -316,7 +316,8 @@ impl LoadedScene {
             has_sky_zone = sky_zone.is_some(),
             actor_meshes,
             animated_actor_meshes,
-            animated_water_textures = water_animations.len(),
+            animated_water_textures = water_animations.water.len(),
+            animated_generic_textures = water_animations.generic.len(),
             "loaded map"
         );
         if fake_backdrop_surfaces != 0 && sky_zone.is_none() {
@@ -1634,16 +1635,28 @@ impl LoadedScene {
         Ok((changed, completed))
     }
 
-    pub fn tick_water(&mut self, delta_time: f32) -> Result<Vec<usize>> {
+    pub fn tick_textures(&mut self, delta_time: f32) -> Result<Vec<usize>> {
         let mut changed = Vec::new();
-        for water in &mut self.water_animations {
+        for water in &mut self.water_animations.water {
             if water.animation.tick(delta_time) {
                 self.render.textures[water.texture].rgba =
                     water.animation.rgba(&water.palette, water.masked)?;
                 changed.push(water.texture);
             }
         }
+        for animation in &mut self.water_animations.generic {
+            if animation.tick(delta_time) {
+                self.render.textures[animation.texture]
+                    .rgba
+                    .clone_from(&animation.frames[animation.current]);
+                changed.push(animation.texture);
+            }
+        }
         Ok(changed)
+    }
+
+    pub fn tick_water(&mut self, delta_time: f32) -> Result<Vec<usize>> {
+        self.tick_textures(delta_time)
     }
 
     pub fn loop_actor_animation(
@@ -2000,6 +2013,77 @@ struct AnimatedWaterTexture {
     masked: bool,
     palette: Palette,
     animation: WaterAnimation,
+}
+
+#[derive(Default)]
+struct TextureAnimations {
+    water: Vec<AnimatedWaterTexture>,
+    generic: Vec<AnimatedGenericTexture>,
+}
+
+struct AnimatedGenericTexture {
+    texture: usize,
+    frames: Vec<Vec<u8>>,
+    next: Vec<Option<usize>>,
+    current: usize,
+    accumulator: f32,
+    prime_count: u8,
+    prime_current: u8,
+    min_frame_rate: f32,
+    max_frame_rate: f32,
+}
+
+struct GenericTextureAnimation {
+    frames: Vec<(Texture, Palette)>,
+    next: Vec<Option<usize>>,
+    prime_count: u8,
+    min_frame_rate: f32,
+    max_frame_rate: f32,
+}
+
+impl AnimatedGenericTexture {
+    fn tick(&mut self, delta_time: f32) -> bool {
+        if !delta_time.is_finite() || delta_time == 0.0 {
+            return false;
+        }
+        let before = self.current;
+        while self.prime_current < self.prime_count {
+            self.prime_current += 1;
+            self.advance();
+        }
+        if self.max_frame_rate == 0.0 {
+            self.advance();
+            return self.current != before;
+        }
+
+        let maximum = texture_frame_rate(self.max_frame_rate);
+        let minimum_period = 1.0 / texture_frame_rate(self.min_frame_rate);
+        self.accumulator += delta_time;
+        if self.accumulator >= 1.0 / maximum {
+            self.advance();
+            if self.accumulator < minimum_period {
+                self.accumulator = 0.0;
+            } else {
+                self.accumulator -= minimum_period;
+                if self.accumulator > minimum_period {
+                    self.accumulator = minimum_period;
+                }
+            }
+        }
+        self.current != before
+    }
+
+    fn advance(&mut self) {
+        self.current = self.next.get(self.current).copied().flatten().unwrap_or(0);
+    }
+}
+
+fn texture_frame_rate(rate: f32) -> f32 {
+    if 0.1 <= rate {
+        if 100.0 <= rate { 100.0 } else { rate }
+    } else {
+        0.1
+    }
 }
 
 struct SpriteActor {
@@ -2707,7 +2791,7 @@ fn load_actors(
     coronas: &mut Vec<Corona>,
     animations: &mut Vec<AnimatedActorMesh>,
     sprites: &mut Vec<SpriteActor>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) -> (Vec<SceneActor>, Vec<ActorRenderState>) {
     let mut actors = Vec::new();
     let mut actor_states = Vec::new();
@@ -2853,7 +2937,7 @@ fn append_scene_actor_corona(
     state: &ActorState,
     textures: &mut Vec<TextureImage>,
     coronas: &mut Vec<Corona>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) {
     if !state.corona {
         return;
@@ -2896,7 +2980,7 @@ fn append_scene_actor_render(
     materials: &mut Vec<SurfaceMaterial>,
     animations: &mut Vec<AnimatedActorMesh>,
     sprites: &mut Vec<SpriteActor>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) {
     if is_light && !state.editor_sprite && state.texture.is_some() {
         append_scene_actor_sprite(
@@ -3077,7 +3161,7 @@ fn append_scene_actor_sprite(
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
     sprites: &mut Vec<SpriteActor>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) {
     if state.editor_sprite {
         return;
@@ -3209,7 +3293,7 @@ fn append_scene_actor_brush(
     render_mesh: &mut openhp1_map::TriangleMesh,
     textures: &mut Vec<TextureImage>,
     materials: &mut Vec<SurfaceMaterial>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) {
     let Some(brush_object) = state.brush.clone() else {
         scene_actor
@@ -3398,7 +3482,7 @@ fn append_actor_brush(
     materials: &mut Vec<SurfaceMaterial>,
     decoded_textures: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) -> Result<Option<SceneActorRenderRange>> {
     ensure!(
         actor.main_scale.is_finite(),
@@ -3516,7 +3600,7 @@ fn append_actor_mesh(
     decoded_textures: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
     animations: &mut Vec<AnimatedActorMesh>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) -> Result<Option<AppendedActorMesh>> {
     let mesh_textures = mesh
         .textures
@@ -3736,7 +3820,7 @@ fn actor_surface_material(
     textures: &mut Vec<TextureImage>,
     decoded: &mut HashMap<SceneObjectId, Option<DecodedTexture>>,
     images: &mut HashMap<(String, usize, bool), usize>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) -> SurfaceMaterial {
     flags |= match actor.style {
         2 => 0x0000_0002,
@@ -3936,7 +4020,7 @@ fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize), Option<DecodedTexture>>::new();
@@ -4167,7 +4251,9 @@ fn decode_texture(
     let palette = packages
         .resolve(&resolved.package, texture.palette)?
         .context("texture has no palette reference")?;
-    let mut palette = Palette::decode(&palette.package, palette.export_index)?;
+    let palette = Palette::decode(&palette.package, palette.export_index)?;
+    let generic = decode_generic_texture_animation(packages, resolved, &texture, &palette)?;
+    let mut palette = palette;
     let water = if let Some(wet) = &texture.wet {
         let source_object = packages
             .resolve(&resolved.package, wet.source_texture)?
@@ -4198,13 +4284,80 @@ fn decode_texture(
         texture,
         palette,
         water,
+        generic,
     })
+}
+
+fn decode_generic_texture_animation(
+    packages: &mut PackageStore,
+    root: &ResolvedObject,
+    texture: &Texture,
+    palette: &Palette,
+) -> Result<Option<GenericTextureAnimation>> {
+    if texture.anim_next == ObjectReference::None {
+        return Ok(None);
+    }
+    let root_mip = texture.mips.first().context("texture has no mip levels")?;
+    let root_dimensions = (root_mip.width, root_mip.height);
+    let root_id = (root.package.summary().source.to_string(), root.export_index);
+    let mut indices = HashMap::from([(root_id, 0)]);
+    let mut frames = vec![(texture.clone(), palette.clone())];
+    let mut next = Vec::new();
+    let mut current = ResolvedObject {
+        package: Arc::clone(&root.package),
+        export_index: root.export_index,
+    };
+
+    loop {
+        ensure!(frames.len() <= 4096, "texture animation chain is too long");
+        let reference = frames[next.len()].0.anim_next;
+        let Some(resolved) = packages.resolve(&current.package, reference)? else {
+            next.push(None);
+            break;
+        };
+        let id = (
+            resolved.package.summary().source.to_string(),
+            resolved.export_index,
+        );
+        if let Some(&index) = indices.get(&id) {
+            next.push(Some(index));
+            break;
+        }
+
+        let frame = Texture::decode(&resolved.package, resolved.export_index)?;
+        let mip = frame
+            .mips
+            .first()
+            .context("texture animation frame has no mip levels")?;
+        ensure!(
+            (mip.width, mip.height) == root_dimensions,
+            "texture animation frame dimensions differ from the root"
+        );
+        let frame_palette = packages
+            .resolve(&resolved.package, frame.palette)?
+            .context("texture animation frame has no palette reference")?;
+        let frame_palette = Palette::decode(&frame_palette.package, frame_palette.export_index)?;
+        let index = frames.len();
+        indices.insert(id, index);
+        next.push(Some(index));
+        frames.push((frame, frame_palette));
+        current = resolved;
+    }
+
+    Ok(Some(GenericTextureAnimation {
+        frames,
+        next,
+        prime_count: texture.prime_count,
+        min_frame_rate: texture.min_frame_rate,
+        max_frame_rate: texture.max_frame_rate,
+    }))
 }
 
 struct DecodedTexture {
     texture: Texture,
     palette: Palette,
     water: Option<WaterAnimation>,
+    generic: Option<GenericTextureAnimation>,
 }
 
 impl DecodedTexture {
@@ -4227,18 +4380,36 @@ impl DecodedTexture {
 
 fn append_texture_image(
     textures: &mut Vec<TextureImage>,
-    water_animations: &mut Vec<AnimatedWaterTexture>,
+    water_animations: &mut TextureAnimations,
     decoded: &DecodedTexture,
     masked: bool,
 ) -> Result<usize> {
     let index = textures.len();
     textures.push(decoded.image(masked)?);
     if let Some(animation) = &decoded.water {
-        water_animations.push(AnimatedWaterTexture {
+        water_animations.water.push(AnimatedWaterTexture {
             texture: index,
             masked,
             palette: decoded.palette.clone(),
             animation: animation.clone(),
+        });
+    }
+    if let Some(animation) = &decoded.generic {
+        let frames = animation
+            .frames
+            .iter()
+            .map(|(texture, palette)| texture.rgba(0, palette, masked))
+            .collect::<openhp1_texture::Result<Vec<_>>>()?;
+        water_animations.generic.push(AnimatedGenericTexture {
+            texture: index,
+            frames,
+            next: animation.next.clone(),
+            current: 0,
+            accumulator: 0.0,
+            prime_count: animation.prime_count,
+            prime_current: 0,
+            min_frame_rate: animation.min_frame_rate,
+            max_frame_rate: animation.max_frame_rate,
         });
     }
     Ok(index)
@@ -4315,6 +4486,97 @@ mod tests {
     use crate::SurfaceMode;
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn generic_texture_with_zero_maximum_advances_once_per_tick() {
+        let mut animation = generic_texture(vec![Some(1), None], 0, 0.0, 0.0);
+
+        assert!(animation.tick(0.01));
+        assert_eq!(animation.current, 1);
+        assert!(animation.tick(0.01));
+        assert_eq!(animation.current, 0);
+    }
+
+    #[test]
+    fn generic_texture_zero_delta_does_not_prime_or_advance() {
+        let mut animation = generic_texture(vec![Some(1), Some(0)], 1, 0.0, 0.0);
+
+        assert!(!animation.tick(0.0));
+        assert_eq!(animation.current, 0);
+        assert_eq!(animation.prime_current, 0);
+    }
+
+    #[test]
+    fn generic_texture_uses_fixed_and_ranged_frame_periods() {
+        let mut fixed = generic_texture(vec![Some(1), Some(0)], 0, 10.0, 10.0);
+        assert!(!fixed.tick(0.05));
+        assert!(fixed.tick(0.05));
+        assert_eq!(fixed.current, 1);
+
+        let mut ranged = generic_texture(vec![Some(1), Some(0)], 0, 10.0, 20.0);
+        assert!(ranged.tick(0.05));
+        assert_eq!(ranged.current, 1);
+        assert_eq!(ranged.accumulator, 0.0);
+    }
+
+    #[test]
+    fn generic_texture_clamps_frame_rates() {
+        let mut high = generic_texture(vec![Some(1), Some(0)], 0, 1000.0, 1000.0);
+        assert!(high.tick(0.01));
+
+        let mut low = generic_texture(vec![Some(1), Some(0)], 0, 0.01, 0.01);
+        assert!(!low.tick(9.9));
+        assert!(low.tick(0.1));
+    }
+
+    #[test]
+    fn generic_texture_long_delta_advances_at_most_once() {
+        let mut animation = generic_texture(vec![Some(1), Some(2), Some(0)], 0, 10.0, 20.0);
+
+        assert!(animation.tick(1.0));
+        assert_eq!(animation.current, 1);
+        assert_eq!(animation.accumulator, 0.1);
+    }
+
+    #[test]
+    fn generic_texture_null_falls_back_to_root_and_cycles_stay_stable() {
+        let mut fallback = generic_texture(vec![Some(1), None], 0, 0.0, 0.0);
+        fallback.tick(0.01);
+        fallback.tick(0.01);
+        assert_eq!(fallback.current, 0);
+
+        let mut cycle = generic_texture(vec![Some(1), Some(0)], 0, 0.0, 0.0);
+        cycle.tick(0.01);
+        cycle.tick(0.01);
+        assert_eq!(cycle.current, 0);
+    }
+
+    #[test]
+    fn generic_texture_prime_count_advances_before_rate_tick() {
+        let mut animation = generic_texture(vec![Some(1), Some(2), Some(0)], 2, 10.0, 10.0);
+
+        assert!(animation.tick(0.01));
+        assert_eq!(animation.current, 2);
+        assert_eq!(animation.prime_current, 2);
+    }
+
+    #[test]
+    fn scene_texture_tick_does_not_require_actor_animation() {
+        let mut scene = particle_test_scene();
+        scene.render.textures.push(crate::TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+        });
+        scene
+            .water_animations
+            .generic
+            .push(generic_texture(vec![Some(1), Some(0)], 0, 0.0, 0.0));
+
+        assert!(scene.animations.is_empty());
+        assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
+        assert_eq!(scene.render.textures[0].rgba, [1; 4]);
+    }
 
     #[test]
     fn runtime_set_location_action_updates_scene_actor() {
@@ -5182,7 +5444,7 @@ mod tests {
             root_motions: Vec::new(),
             hidden_actor_positions: Default::default(),
             attached_weapons: Default::default(),
-            water_animations: Vec::new(),
+            water_animations: super::TextureAnimations::default(),
             changed_lightmaps: Vec::new(),
             particles: [(
                 0,
@@ -5232,6 +5494,25 @@ mod tests {
                 decoded_textures: Default::default(),
                 images: Default::default(),
             },
+        }
+    }
+
+    fn generic_texture(
+        next: Vec<Option<usize>>,
+        prime_count: u8,
+        min_frame_rate: f32,
+        max_frame_rate: f32,
+    ) -> super::AnimatedGenericTexture {
+        super::AnimatedGenericTexture {
+            texture: 0,
+            frames: (0..next.len()).map(|index| vec![index as u8; 4]).collect(),
+            next,
+            current: 0,
+            accumulator: 0.0,
+            prime_count,
+            prime_current: 0,
+            min_frame_rate,
+            max_frame_rate,
         }
     }
 

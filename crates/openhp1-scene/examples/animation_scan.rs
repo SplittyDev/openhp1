@@ -26,8 +26,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut scene = LoadedScene::load(path)?;
         let before = scene.render.mesh.positions.clone();
         scene.tick_animations(1.0 / 60.0)?;
-        let water = scene.tick_water(1.0 / 30.0)?;
-        if scene.animated_actor_meshes == 0 && water.is_empty() {
+        let textures = scene.tick_textures(1.0 / 30.0)?;
+        if scene.animated_actor_meshes == 0 && textures.is_empty() {
             continue;
         }
         let moved = before
@@ -36,17 +36,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             .filter(|(before, after)| *before != *after)
             .count();
         println!(
-            "{}: {} animated actors, {moved} moved vertices, {} animated water textures",
+            "{}: {} animated actors, {moved} moved vertices, {} changed animated textures",
             scene.path.display(),
             scene.animated_actor_meshes,
-            water.len(),
+            textures.len(),
         );
         animated_maps += usize::from(scene.animated_actor_meshes != 0);
         animated_actors += scene.animated_actor_meshes;
-        water_maps += usize::from(!water.is_empty());
-        water_textures += water.len();
+        water_maps += usize::from(!textures.is_empty());
+        water_textures += textures.len();
     }
     println!("{animated_maps} maps contain {animated_actors} animated actors");
-    println!("{water_maps} maps contain {water_textures} animated water textures");
+    println!("{water_maps} maps changed {water_textures} animated textures");
     Ok(())
 }

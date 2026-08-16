@@ -749,10 +749,27 @@ impl ViewerApp {
     }
 
     fn update_animations(&mut self, delta_time: f32) {
+        let delta_time = delta_time * self.animation_speed;
+        match self.scene.tick_textures(delta_time) {
+            Ok(changed)
+                if !self.renderer.update_textures(
+                    &self.state.queue,
+                    &self.scene.render.textures,
+                    &changed,
+                ) =>
+            {
+                self.animations_playing = false;
+                self.load_error = Some("animation changed the scene textures".to_owned());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.animations_playing = false;
+                self.load_error = Some(format!("texture animation failed: {error:#}"));
+            }
+        }
         if !self.animations_playing {
             return;
         }
-        let delta_time = delta_time * self.animation_speed;
         let completed = match self.scene.tick_animations_with_completions(delta_time) {
             Ok((true, completed)) => {
                 self.vertices_dirty = true;
@@ -806,23 +823,6 @@ impl ViewerApp {
             self.animations_playing = false;
             self.load_error = Some(format!("animation pose sync failed: {error:#}"));
             return;
-        }
-        match self.scene.tick_water(delta_time) {
-            Ok(changed)
-                if !self.renderer.update_textures(
-                    &self.state.queue,
-                    &self.scene.render.textures,
-                    &changed,
-                ) =>
-            {
-                self.animations_playing = false;
-                self.load_error = Some("animation changed the scene textures".to_owned());
-            }
-            Ok(_) => {}
-            Err(error) => {
-                self.animations_playing = false;
-                self.load_error = Some(format!("water animation failed: {error:#}"));
-            }
         }
     }
 

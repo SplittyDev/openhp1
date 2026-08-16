@@ -1380,7 +1380,7 @@ impl Graphics {
         if let Err(error) = openhp1_scene::sync_runtime_pose(&self.scene, &mut self.runtime) {
             self.last_error = Some(format!("animation pose sync failed: {error:#}"));
         }
-        match self.scene.tick_water(delta_time) {
+        match self.scene.tick_textures(delta_time) {
             Ok(changed)
                 if !self.renderer.update_textures(
                     &self.queue,
@@ -1388,10 +1388,10 @@ impl Graphics {
                     &changed,
                 ) =>
             {
-                self.last_error = Some("water changed the scene textures".to_owned());
+                self.last_error = Some("animation changed the scene textures".to_owned());
             }
             Ok(_) => {}
-            Err(error) => self.last_error = Some(format!("water animation failed: {error:#}")),
+            Err(error) => self.last_error = Some(format!("texture animation failed: {error:#}")),
         }
     }
 

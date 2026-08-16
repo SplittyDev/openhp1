@@ -14,9 +14,13 @@ pub struct MipLevel {
     pub indices: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Texture {
     pub palette: ObjectReference,
+    pub anim_next: ObjectReference,
+    pub prime_count: u8,
+    pub min_frame_rate: f32,
+    pub max_frame_rate: f32,
     pub declared_width: Option<u32>,
     pub declared_height: Option<u32>,
     pub render_flags: TextureRenderFlags,
@@ -91,6 +95,10 @@ impl Texture {
         let class = texture_class(package, export_index)?;
         let mut reader = package.export_reader(export_index)?;
         let mut palette = None;
+        let mut anim_next = ObjectReference::None;
+        let mut prime_count = 0;
+        let mut min_frame_rate = 0.0;
+        let mut max_frame_rate = 0.0;
         let mut declared_width = None;
         let mut declared_height = None;
         let mut clamp_width = None;
@@ -107,6 +115,18 @@ impl Texture {
             match name {
                 "Palette" if property.kind == PropertyKind::Object => {
                     palette = Some(reader.property_reader(&property).read_object_reference()?);
+                }
+                "AnimNext" if property.kind == PropertyKind::Object => {
+                    anim_next = reader.property_reader(&property).read_object_reference()?;
+                }
+                "PrimeCount" if property.kind == PropertyKind::Byte => {
+                    prime_count = reader.property_reader(&property).read_u8()?;
+                }
+                "MinFrameRate" if property.kind == PropertyKind::Float => {
+                    min_frame_rate = reader.property_reader(&property).read_f32()?;
+                }
+                "MaxFrameRate" if property.kind == PropertyKind::Float => {
+                    max_frame_rate = reader.property_reader(&property).read_f32()?;
                 }
                 "USize" if property.kind == PropertyKind::Int => {
                     declared_width = Some(reader.property_reader(&property).read_u32()?);
@@ -216,6 +236,10 @@ impl Texture {
 
         Ok(Self {
             palette,
+            anim_next,
+            prime_count,
+            min_frame_rate,
+            max_frame_rate,
             declared_width,
             declared_height,
             render_flags,
@@ -710,7 +734,9 @@ fn texture_poly_flag(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use openhp1_package::ObjectReference;
+    use std::sync::Arc;
+
+    use openhp1_package::{ObjectReference, PACKAGE_MAGIC, Package};
 
     use crate::{Color, MipLevel, Palette, Texture, TextureRenderFlags};
 
@@ -718,6 +744,10 @@ mod tests {
     fn masked_palette_index_zero_becomes_transparent_black() {
         let texture = Texture {
             palette: ObjectReference::None,
+            anim_next: ObjectReference::None,
+            prime_count: 0,
+            min_frame_rate: 0.0,
+            max_frame_rate: 0.0,
             declared_width: Some(2),
             declared_height: Some(1),
             render_flags: TextureRenderFlags::default(),
@@ -765,6 +795,16 @@ mod tests {
         assert!(flags.modulated);
         assert!(flags.two_sided);
         assert!(flags.mirrored);
+    }
+
+    #[test]
+    fn decodes_generic_texture_animation_properties() {
+        let texture = Texture::decode(&synthetic_animated_texture(), 0).unwrap();
+
+        assert_eq!(texture.anim_next, ObjectReference::Export(0));
+        assert_eq!(texture.prime_count, 3);
+        assert_eq!(texture.min_frame_rate, 12.0);
+        assert_eq!(texture.max_frame_rate, 24.0);
     }
 
     #[test]
@@ -820,5 +860,108 @@ mod tests {
             [1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
         );
         assert!(wet.animate(2, 2, 4, 4, &[0; 16]).unwrap().is_none());
+    }
+
+    fn synthetic_animated_texture() -> Package {
+        let names = [
+            "None",
+            "Core",
+            "Class",
+            "Texture",
+            "Animated",
+            "Palette",
+            "AnimNext",
+            "PrimeCount",
+            "MinFrameRate",
+            "MaxFrameRate",
+        ];
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            push_u32(&mut name_table, 0);
+        }
+        let mut import_table = vec![1, 2];
+        push_i32(&mut import_table, 0);
+        import_table.push(3);
+
+        let mut payload = vec![5, 0x05, 0, 6, 0x05, 1, 7, 0x01, 3, 8, 0x24];
+        payload.extend(12.0_f32.to_le_bytes());
+        payload.extend([9, 0x24]);
+        payload.extend(24.0_f32.to_le_bytes());
+        payload.extend([0, 1, 1, 7]);
+        payload.extend(1_u32.to_le_bytes());
+        payload.extend(1_u32.to_le_bytes());
+        payload.extend([0, 0]);
+
+        const HEADER_SIZE: usize = 44;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        push_i32(&mut export, 0);
+        export.push(4);
+        push_u32(&mut export, 0);
+        export.extend(compact_index(payload.len() as i32));
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let encoded = compact_index(payload_offset as i32);
+            let next = export_offset + export.len() + encoded.len();
+            if next == payload_offset {
+                export.extend(encoded);
+                break;
+            }
+            payload_offset = next;
+        }
+
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, PACKAGE_MAGIC);
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        push_u32(&mut bytes, 0);
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+        ] {
+            push_i32(&mut bytes, value as i32);
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        assert_eq!(bytes.len(), payload_offset);
+        bytes.extend(payload);
+        Package::parse("synthetic animated texture", Arc::from(bytes)).unwrap()
+    }
+
+    fn compact_index(value: i32) -> Vec<u8> {
+        let mut value = value as u32;
+        let mut bytes = vec![(value as u8) & 0x3f];
+        value >>= 6;
+        if value != 0 {
+            bytes[0] |= 0x40;
+        }
+        while value != 0 {
+            let mut byte = (value as u8) & 0x7f;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+        }
+        bytes
+    }
+
+    fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+        bytes.extend(value.to_le_bytes());
+    }
+
+    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend(value.to_le_bytes());
     }
 }
