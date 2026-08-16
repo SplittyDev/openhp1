@@ -56,6 +56,7 @@ struct Vertex {
     environment_map: f32,
     lighting_coordinates: [f32; 2],
     lighting_index: u32,
+    small_wavy_scale: [f32; 2],
 }
 
 #[repr(C)]
@@ -327,6 +328,7 @@ impl Renderer {
                         .filter(|&index| index < scene.realtime_lightmaps.len())
                         .and_then(|index| u32::try_from(index).ok())
                         .unwrap_or(u32::MAX),
+                    small_wavy_scale: normalized_small_wavy_scale(material.small_wavy, dimensions),
                 }
             })
             .collect();
@@ -1685,6 +1687,14 @@ impl Renderer {
     }
 }
 
+fn normalized_small_wavy_scale(enabled: bool, dimensions: [f32; 2]) -> [f32; 2] {
+    if enabled {
+        [1.0 / dimensions[0], 1.0 / dimensions[1]]
+    } else {
+        [0.0; 2]
+    }
+}
+
 fn display_gamma(brightness: f32) -> f32 {
     1.0 / (brightness * 2.0).clamp(0.05, 2.99)
 }
@@ -1904,6 +1914,26 @@ mod tests {
     }
 
     #[test]
+    fn small_wavy_uses_original_formula_in_normalized_texture_units() {
+        assert_eq!(
+            normalized_small_wavy_scale(true, [64.0, 128.0]),
+            [1.0 / 64.0, 1.0 / 128.0]
+        );
+        assert_eq!(normalized_small_wavy_scale(false, [64.0, 128.0]), [0.0; 2]);
+
+        let shader = include_str!("shaders/scene.wgsl");
+        assert!(shader.contains(
+            "output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;\n        if any(small_wavy_scale != vec2(0.0)) {"
+        ));
+        assert!(shader.contains("let time = camera.auto_uv.x / 64.0;"));
+        assert!(shader.contains("8.0 * sin(time) + 4.0 * cos(2.3 * time),"));
+        assert!(shader.contains("8.0 * cos(time) + 4.0 * sin(2.3 * time),"));
+        assert!(shader.contains(
+            "output.texture_coordinates = output.texture_coordinates\n                + small_wavy_scale * small_wavy_offset;"
+        ));
+    }
+
+    #[test]
     fn computes_scene_bounds() {
         let vertices = [
             Vertex {
@@ -1917,6 +1947,7 @@ mod tests {
                 environment_map: 0.0,
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
+                small_wavy_scale: [0.0; 2],
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
@@ -1929,6 +1960,7 @@ mod tests {
                 environment_map: 0.0,
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
+                small_wavy_scale: [0.0; 2],
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -2276,6 +2308,7 @@ mod tests {
             environment_map: 0.0,
             lighting_coordinates: [0.0; 2],
             lighting_index: u32::MAX,
+            small_wavy_scale: [0.0; 2],
         }
     }
 }

@@ -39,7 +39,8 @@ pub(super) fn create_pipeline(
                     6 => Float32x3,
                     7 => Float32,
                     8 => Float32x2,
-                    9 => Uint32
+                    9 => Uint32,
+                    10 => Float32x2
                 ],
             }],
         },
@@ -114,7 +115,8 @@ pub(super) fn create_screen_pipeline(
                     6 => Float32x3,
                     7 => Float32,
                     8 => Float32x2,
-                    9 => Uint32
+                    9 => Uint32,
+                    10 => Float32x2
                 ],
             }],
         },

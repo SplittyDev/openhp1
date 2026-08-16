@@ -4266,6 +4266,7 @@ fn surface_material(
         environment_map: false,
         opacity: 1.0,
         texture_pan_speed: [0.0; 2],
+        small_wavy: false,
     }
 }
 
@@ -4288,6 +4289,7 @@ fn bsp_surface_material(
             0.0
         },
     ];
+    material.small_wavy = flags.contains(PolyFlags::SMALL_WAVY);
     material
 }
 
@@ -5922,12 +5924,14 @@ mod tests {
     #[test]
     fn applies_only_requested_zone_texture_pan_axes() {
         let material = super::bsp_surface_material(
-            PolyFlags::AUTO_V_PAN,
+            PolyFlags::from_bits(PolyFlags::AUTO_V_PAN.bits() | 0x0000_2000),
             Some(1),
             None,
             glam::Vec2::new(2.0, 3.5),
         );
         assert_eq!(material.texture_pan_speed, [0.0, 3.5]);
+        assert!(PolyFlags::from_bits(0x0000_2000).contains(PolyFlags::SMALL_WAVY));
+        assert!(material.small_wavy);
     }
 
     #[test]

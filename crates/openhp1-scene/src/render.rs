@@ -127,6 +127,8 @@ pub struct SurfaceMaterial {
     pub opacity: f32,
     /// UE1 zone multipliers for automatic U/V texture-coordinate panning.
     pub texture_pan_speed: [f32; 2],
+    /// Apply UE1's small sinusoidal BSP texture-coordinate motion.
+    pub small_wavy: bool,
 }
 
 impl Default for SurfaceMaterial {
@@ -142,6 +144,7 @@ impl Default for SurfaceMaterial {
             environment_map: false,
             opacity: 1.0,
             texture_pan_speed: [0.0; 2],
+            small_wavy: false,
         }
     }
 }

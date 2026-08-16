@@ -71,6 +71,7 @@ fn vertex_main(
     @location(7) environment_map: f32,
     @location(8) lighting_coordinates: vec2<f32>,
     @location(9) lighting_index: u32,
+    @location(10) small_wavy_scale: vec2<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
@@ -88,6 +89,15 @@ fn vertex_main(
         output.texture_coordinates = (view_reflection.xy + vec2(1.0)) * (128.0 / 255.0);
     } else {
         output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;
+        if any(small_wavy_scale != vec2(0.0)) {
+            let time = camera.auto_uv.x / 64.0;
+            let small_wavy_offset = vec2(
+                8.0 * sin(time) + 4.0 * cos(2.3 * time),
+                8.0 * cos(time) + 4.0 * sin(2.3 * time),
+            );
+            output.texture_coordinates = output.texture_coordinates
+                + small_wavy_scale * small_wavy_offset;
+        }
     }
     output.lightmap_coordinates = lightmap_coordinates;
     output.has_lightmap = has_lightmap;
