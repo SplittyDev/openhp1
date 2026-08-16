@@ -249,15 +249,17 @@ commit, and live-verification fields for each item.
         format, and diff check passed without modifying the copyrighted corpus.
   - [ ] Compare `Lev2_fire1` in retail, Classic, and Modern; keep the parent open
         until camera-side switching and authored rates are visually accepted.
-- [ ] `BASE-006` Implement `PF_SmallWavy` time-varying UV motion. Evidence:
+- [x] `BASE-006` Implement `PF_SmallWavy` time-varying UV motion. Evidence:
       `Ghidra_Render.c:2520`; current shared UV path: `scene.wgsl:86`.
   - [x] Implemented for Classic and Modern in `840976c` with the exact retail
         U/V formula and raw-texel-to-normalized conversion.
   - [x] `openhp1-map` (12), `openhp1-scene` (57), and `openhp1-render` (67;
         4 skipped) nextest suites, focused checks, format, and diff checks passed
         without the copyrighted corpus.
-  - [ ] Locate and replay representative shipped `PF_SmallWavy` surfaces in
-        Classic, Modern, and retail; keep the parent open until visual acceptance.
+  - [x] A complete 248-package/41-map scan found no BSP `PF_SmallWavy`
+        surface, so no authored visual replay exists. Four FireTexture exports
+        set the texture property, but DrawFrame tests the raw BSP surface bit;
+        synthetic exact-formula coverage is the available acceptance gate.
 - [ ] `BASE-007` Preserve, upload, and sample retail mip chains and LOD choices.
       Engine evidence: `Ghidra_Engine.c:28739-28755,65770-65777,121084-121092`.
       Direct D3D device evidence: `InitTextureStageState` RVA `0x10b9` → VA
@@ -298,6 +300,23 @@ commit, and live-verification fields for each item.
         is preserved for BSP admission.
   - [x] Focused render tests/check, formatting, and diff checks pass without the
         copyrighted corpus.
+- [ ] `BASE-015` Implement exact shared mesh environment mapping without
+      treating BSP/texture `bEnvironment` or `ShinySurfaces` as the same
+      feature. Direct Render.dll evidence: actor flag mapping
+      `42390-42426`, Actor → Zone → Level texture fallback `10501-10512`, and
+      reflected UV/color equations plus Unlit precedence `23073-23137`.
+  - [x] Preserve the retail BSP behavior: `bEnvironment` is a renderer no-op;
+        `ShinySurfaces` separately gates translucent reflected child recursion.
+  - [ ] Resolve Actor → Region.Zone → LevelInfo environment textures and carry
+        the texture dimensions and `UMult`/`VMult` needed by the original
+        texel-space equation.
+  - [ ] Reflect normalized view position about the mesh normal, transform by
+        the frame axes, apply the exact U/V scale, and replace vertex RGB with
+        `pow(max(reflected_z, 0), 0.25)` before the existing Unlit override.
+  - [ ] Deterministic acceptance: a synthetic non-default texture size and
+        U/V multiplier case, environment plus Unlit precedence, and identical
+        base behavior in Classic and Modern. Live acceptance uses
+        `HPBase.spellEcto`; the corpus does not author the fallback cases.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
