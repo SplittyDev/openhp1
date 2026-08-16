@@ -367,7 +367,7 @@ fn point_sources(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> 
     let coronas = scene
         .coronas
         .iter()
-        .filter(|corona| !corona.hidden && corona.texture.is_some())
+        .filter(|corona| corona.texture.is_some())
         .map(|corona| (corona.actor_index, corona))
         .collect::<std::collections::HashMap<_, _>>();
     let mut seen = HashSet::new();

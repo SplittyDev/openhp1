@@ -12,6 +12,7 @@ const NODE_NOT_CSG_MASK: u8 = 0x21;
 const BOX_EPSILON: f32 = 0.1;
 const TRACE_PULLBACK: f32 = 0.5;
 const TRAVERSAL_EXTENT_SCALE: f32 = 1.1;
+const SINGLE_LINE_NODE_MASK: u8 = 0x27;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -698,6 +699,64 @@ impl BspCollision {
             fraction: ((hit_distance - TRACE_PULLBACK).max(0.0) / distance).min(1.0),
             normal,
             node,
+        })
+    }
+
+    /// Returns whether the zero-extent model trace used by `SingleLineCheck`
+    /// remains in BSP outside space. Trace flags `6` make nodes carrying any
+    /// bit in `0x27` non-CSG in the shipped engine.
+    pub fn single_line_clear(&self, start: Vec3, end: Vec3) -> bool {
+        if !start.is_finite() || !end.is_finite() || self.zone_nodes.is_empty() {
+            return true;
+        }
+        self.single_line_clear_node(0, start, end, self.root_outside)
+    }
+
+    fn single_line_clear_node(
+        &self,
+        node_index: usize,
+        start: Vec3,
+        end: Vec3,
+        outside: bool,
+    ) -> bool {
+        let Some(node) = self.zone_nodes.get(node_index) else {
+            return outside;
+        };
+        let start_distance = plane_side(node.plane, start);
+        let end_distance = plane_side(node.plane, end);
+        let is_csg = node.vertex_count != 0 && node.flags & SINGLE_LINE_NODE_MASK == 0;
+        let outside_on = |side| {
+            if side == 1 {
+                outside || is_csg
+            } else {
+                outside && !is_csg
+            }
+        };
+        let child = |side| [node.back, node.front][side];
+
+        if start_distance >= -0.001 && end_distance >= -0.001 {
+            return usize::try_from(child(1)).map_or(outside_on(1), |child| {
+                self.single_line_clear_node(child, start, end, outside_on(1))
+            });
+        }
+        if start_distance <= 0.001 && end_distance <= 0.001 {
+            return usize::try_from(child(0)).map_or(outside_on(0), |child| {
+                self.single_line_clear_node(child, start, end, outside_on(0))
+            });
+        }
+
+        let fraction = start_distance / (start_distance - end_distance);
+        let middle = start.lerp(end, fraction);
+        let near = usize::from(start_distance > 0.0);
+        let near_clear = usize::try_from(child(near)).map_or(outside_on(near), |child| {
+            self.single_line_clear_node(child, start, middle, outside_on(near))
+        });
+        if !near_clear {
+            return false;
+        }
+        let far = 1 - near;
+        usize::try_from(child(far)).map_or(outside_on(far), |child| {
+            self.single_line_clear_node(child, middle, end, outside_on(far))
         })
     }
 

@@ -1354,17 +1354,7 @@ impl LoadedScene {
         }
         actor.hidden = hidden;
         self.actor_states[actor_index].actor.hidden = hidden;
-        let mut corona_changed = false;
-        for corona in self
-            .render
-            .coronas
-            .iter_mut()
-            .filter(|corona| corona.actor_index == actor_index)
-        {
-            corona_changed = true;
-            corona.hidden = hidden;
-        }
-        Ok(self.sync_actor_render_visibility(actor_index)? || corona_changed)
+        self.sync_actor_render_visibility(actor_index)
     }
 
     fn sync_actor_render_visibility(&mut self, actor_index: usize) -> Result<bool> {
@@ -3258,7 +3248,6 @@ fn append_scene_actor_corona(
         texture,
         draw_scale: state.draw_scale,
         color: hsb_to_rgb(state.light_hue, state.light_saturation, 255),
-        hidden: state.hidden,
         static_leaf_orders: Vec::new(),
         dynamic_light_radius,
         dynamic_admission_radius,
@@ -6898,7 +6887,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_hidden_state_updates_corona_admission() {
+    fn runtime_hidden_state_does_not_suppress_corona() {
         let mut scene = particle_test_scene();
         scene.render.coronas.push(crate::Corona {
             actor_index: 0,
@@ -6906,18 +6895,17 @@ mod tests {
             texture: Some(0),
             draw_scale: 1.0,
             color: glam::Vec3::ONE,
-            hidden: false,
             static_leaf_orders: Vec::new(),
             dynamic_light_radius: None,
             dynamic_admission_radius: None,
             dynamic_leaves: Vec::new(),
             light_brightness: 0,
         });
+        let corona = scene.render.coronas.clone();
 
-        assert!(scene.set_actor_hidden(0, true).unwrap());
-        assert!(scene.render.coronas[0].hidden);
-        assert!(scene.set_actor_hidden(0, false).unwrap());
-        assert!(!scene.render.coronas[0].hidden);
+        scene.set_actor_hidden(0, true).unwrap();
+        assert!(scene.actors[0].hidden);
+        assert_eq!(scene.render.coronas, corona);
     }
 
     fn particle_test_scene() -> super::LoadedScene {

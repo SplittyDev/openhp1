@@ -214,6 +214,7 @@ fn render_frame(
         &mut encoder,
         output,
         camera,
+        openhp1_render::render_to_unreal(camera.position),
         size,
         DisplaySettings::for_mode(mode),
         [0.0, 0.0, 0.0, 1.0],

@@ -326,6 +326,50 @@ fn point_trace_hits_bsp_polygons_from_both_sides() {
     assert_eq!(back.normal, Vec3::NEG_X);
 }
 
+#[test]
+fn single_line_check_uses_csg_state_instead_of_render_polygons() {
+    let mut model = empty_model();
+    model.root_outside = true;
+    model.points = vec![
+        Vec3::new(0.0, -10.0, -10.0),
+        Vec3::new(0.0, 10.0, -10.0),
+        Vec3::new(0.0, 10.0, 10.0),
+        Vec3::new(0.0, -10.0, 10.0),
+    ];
+    model.vertices = (0..4).map(|point| BspVertex { point, side: -1 }).collect();
+    model.surfaces.push(BspSurface {
+        texture: ObjectReference::None,
+        poly_flags: PolyFlags::default(),
+        base_point: 0,
+        normal: 0,
+        texture_u: 0,
+        texture_v: 0,
+        light_map: -1,
+        brush_poly: -1,
+        pan_u: 0,
+        pan_v: 0,
+        brush_actor: ObjectReference::None,
+    });
+    model.nodes.push(BspNode {
+        plane: [1.0, 0.0, 0.0, 0.0],
+        flags: 0x02,
+        vertex_pool: 0,
+        surface: 0,
+        vertex_count: 4,
+        ..empty_node()
+    });
+
+    let collision = BspCollision::from_model(&model).unwrap();
+    let start = Vec3::X * 10.0;
+    let end = Vec3::NEG_X * 10.0;
+    assert!(collision.line_trace(start, end).is_some());
+    assert!(collision.single_line_clear(start, end));
+
+    model.nodes[0].flags = 0;
+    let collision = BspCollision::from_model(&model).unwrap();
+    assert!(!collision.single_line_clear(start, end));
+}
+
 fn empty_node() -> BspNode {
     BspNode {
         plane: [0.0; 4],

@@ -332,8 +332,8 @@ commit, and live-verification fields for each item.
   - [x] Recover the corona cache and draw contract. The shipped renderer owns
         one 32-entry cache of `(actor pointer, actor index, visibility)`,
         decays nonempty entries by three times elapsed time, and removes an
-        entry below zero. It refreshes candidates from the camera leaf's
-        static actor chain and `LeafLights`, rejects missing textures, excluded
+        entry below zero. It refreshes candidates from the viewport actor's
+        leaf static actor chain and `LeafLights`, rejects missing textures, excluded
         actor flags, failed world/model line checks, and actors without the
         corona bit, then adds twice the same frame step and clamps a candidate's
         visibility to one.
@@ -348,10 +348,20 @@ commit, and live-verification fields for each item.
   - [x] Implement one shared corona admission/cache path consumed by Classic
         and Modern. Do not add a second Classic-only sprite system or preserve
         Modern's current always-present instance list as the parity path.
-        Static chains come from `Model.Leaves[].Permeating`; dynamic links use
-        the native BSP sphere/frustum gates, and the center trace uses the
-        shared static BSP collision model. Runtime `bHidden`, `Skin`, location,
-        draw-scale, and brightness changes refresh the same records. A full
+        Static chains come from the viewport actor's `Region.iLeaf` and
+        `Model.Leaves[].Permeating`; they do not follow a third-person or aiming
+        camera into a different leaf. Retail scans the static chain and
+        `LeafLights` independently, so an actor present in the static chain can
+        still be refreshed through its dynamic leaf link. Dynamic links use the
+        native BSP sphere/frustum gates. Both point-region lookup and sphere
+        traversal now map back/front terminal children to their matching
+        `iLeaf[0]/iLeaf[1]`; the previous reversal selected unrelated candidate
+        lists at player-leaf boundaries. The center trace still uses the actual
+        camera origin. Runtime `Skin`, location,
+        draw-scale, and brightness changes refresh the same records. Actor
+        `bHidden` deliberately does not suppress a corona: the native helper's
+        `Actor+0x28 & 0x200` test is a UObject flag, not `AActor.bHidden`, and
+        all six authored `Lev_Tut1` corona lights are hidden actors. A full
         package census finds 30 static-chain coronas in five maps and 18
         initially dormant dynamic candidates in `Lev_Tut2` whose authored
         brightness is zero.
@@ -371,9 +381,26 @@ commit, and live-verification fields for each item.
         leaves occlusion in retail, Classic, and Modern. The 2026-08-16
         gameplay capture shows the old Modern `LessEqual` billboard abruptly
         toggling on a stationary chandelier while its mesh and baked lighting
-        remain stable. The same OpenHP1 stair replay no longer pops after the
-        shared corona cache and the invalid Invisible-depth submission were
-        corrected; retail comparison and moving-brush occlusion remain open.
+        remain stable. Invalid all-node Invisible depth no longer makes later
+        effects pop, but the first shared-cache implementation also
+        misclassified a UObject flag as `bHidden` and suppressed the authored
+        lantern coronas. A missing camera BSP leaf now supplies an empty
+        refresh set to the same fading cache instead of clearing every drawn
+        halo for that frame, matching DrawFrame's cache lifetime when its leaf
+        actor scan is skipped. The remaining aiming fade proved that OpenHP1
+        incorrectly selected that leaf from the moving camera; the game now
+        supplies the stable player pawn location while the camera remains the
+        line-check and projection origin. The staircase fade exposed two more
+        shared mismatches: static-linked coronas were excluded from the
+        independent dynamic scan, and both point-region and light-sphere BSP
+        traversals returned the opposite terminal leaf. Replay aiming and
+        player-leaf transitions after these corrections. Entering or leaving
+        aiming also changes the wand attachment topology; the resulting GPU
+        resource reload now inherits the existing corona cache and clock
+        instead of restarting every halo at zero visibility. The user
+        live-confirmed stable coronas while aiming and traversing the stairs.
+        Retail moving-brush sight-test details remain open; near-door behavior
+        is deferred with the separate camera/BSP-clipping issue.
 - [ ] `MOD-002` Keep authored corona sprites when Modern volumetric enhancements
       are enabled. Evidence: independent retail sprite and volumetric paths at
       `Ghidra_Render.c:5819-5858,13034-13266`; current divergence:

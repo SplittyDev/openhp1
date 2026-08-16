@@ -24,7 +24,7 @@ impl CoronaVisibility {
     pub fn line_clear(&self, start: Vec3, end: Vec3) -> bool {
         self.0
             .as_ref()
-            .is_none_or(|collision| collision.line_trace(start, end).is_none())
+            .is_none_or(|collision| collision.single_line_clear(start, end))
     }
 }
 
@@ -63,7 +63,6 @@ pub struct Corona {
     pub texture: Option<usize>,
     pub draw_scale: f32,
     pub color: Vec3,
-    pub hidden: bool,
     /// Native order within every serialized static actor chain containing this
     /// corona, keyed by convex-leaf index.
     pub static_leaf_orders: Vec<(usize, usize)>,

@@ -1130,6 +1130,11 @@ impl Renderer {
             self.settings,
         );
         renderer.auto_uv = auto_uv;
+        if let (Some(replacement), Some(previous)) =
+            (renderer.coronas.as_mut(), self.coronas.as_mut())
+        {
+            replacement.inherit_history(previous);
+        }
         *self = renderer;
     }
 
@@ -1324,6 +1329,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         camera: &Camera,
+        viewport_actor_location: Vec3,
         viewport_size: [u32; 2],
         display: DisplaySettings,
         flash: [f32; 4],
@@ -1353,6 +1359,7 @@ impl Renderer {
             coronas.prepare_frame(
                 queue,
                 camera,
+                viewport_actor_location,
                 viewport_size,
                 self.auto_uv / AUTO_UV_PER_SECOND,
             );

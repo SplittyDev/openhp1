@@ -56,6 +56,10 @@ pub(super) struct CoronaRenderer {
 }
 
 impl CoronaCache {
+    fn take_from(&mut self, previous: &mut Self) {
+        *self = std::mem::take(previous);
+    }
+
     pub(super) fn update(&mut self, delta_time: f32, candidates: &[usize]) {
         let step = if delta_time.is_finite() {
             delta_time.max(0.0) * 3.0
@@ -104,6 +108,11 @@ impl CoronaCache {
 }
 
 impl CoronaRenderer {
+    pub(super) fn inherit_history(&mut self, previous: &mut Self) {
+        self.cache.take_from(&mut previous.cache);
+        self.last_time = previous.last_time;
+    }
+
     pub(super) fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
@@ -170,6 +179,7 @@ impl CoronaRenderer {
         &mut self,
         queue: &wgpu::Queue,
         camera: &Camera,
+        viewport_actor_location: Vec3,
         viewport_size: [u32; 2],
         elapsed_time: f32,
     ) {
@@ -182,12 +192,13 @@ impl CoronaRenderer {
                 viewport: [viewport_size[0] as f32, viewport_size[1] as f32, 0.0, 0.0],
             }),
         );
-        let Some(candidates) = corona_candidates(&self.coronas, &self.visibility, camera, aspect)
-        else {
-            self.instance_count = 0;
-            self.batches.clear();
-            return;
-        };
+        let candidates = corona_candidates(
+            &self.coronas,
+            &self.visibility,
+            self.visibility.leaf_at(viewport_actor_location),
+            camera,
+            aspect,
+        );
         let delta_time = self
             .last_time
             .map_or(0.0, |last| (elapsed_time - last).max(0.0));
@@ -230,11 +241,14 @@ impl CoronaRenderer {
 fn corona_candidates(
     coronas: &[Corona],
     visibility: &CoronaVisibility,
+    viewport_actor_leaf: Option<usize>,
     camera: &Camera,
     aspect: f32,
-) -> Option<Vec<usize>> {
+) -> Vec<usize> {
     let camera_location = render_to_unreal(camera.position);
-    let leaf = visibility.leaf_at(camera_location)?;
+    let Some(leaf) = viewport_actor_leaf else {
+        return Vec::new();
+    };
     let mut static_candidates = coronas
         .iter()
         .filter_map(|corona| {
@@ -254,9 +268,7 @@ fn corona_candidates(
         coronas
             .iter()
             .filter(|corona| {
-                !corona.hidden
-                    && corona.texture.is_some()
-                    && corona.static_leaf_orders.is_empty()
+                corona.texture.is_some()
                     && corona.light_brightness != 0
                     && corona.dynamic_leaves.contains(&leaf)
                     && corona.dynamic_admission_radius.is_some_and(|radius| {
@@ -270,12 +282,10 @@ fn corona_candidates(
             .iter()
             .find(|corona| corona.actor_index == *actor_index)
             .is_some_and(|corona| {
-                !corona.hidden
-                    && corona.texture.is_some()
-                    && visibility.line_clear(corona.location, camera_location)
+                corona.texture.is_some() && visibility.line_clear(camera_location, corona.location)
             })
     });
-    Some(candidates)
+    candidates
 }
 
 fn sphere_intersects_view(camera: &Camera, aspect: f32, location: Vec3, radius: f32) -> bool {
@@ -414,6 +424,89 @@ mod tests {
     }
 
     #[test]
+    fn corona_cache_survives_renderer_resource_reload() {
+        let mut previous = CoronaCache::default();
+        previous.update(0.1, &[7]);
+        let mut replacement = CoronaCache::default();
+
+        replacement.take_from(&mut previous);
+
+        assert_eq!(replacement.draw_records(), [(7, 0.6)]);
+        assert!(previous.draw_records().is_empty());
+    }
+
+    #[test]
+    fn missing_viewport_actor_leaf_fades_instead_of_clearing_the_cache() {
+        let mut cache = CoronaCache::default();
+        cache.update(0.1, &[7]);
+        let camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 100.0);
+
+        let candidates =
+            corona_candidates(&[], &CoronaVisibility::default(), None, &camera, 4.0 / 3.0);
+        cache.update(0.1, &candidates);
+
+        let records = cache.draw_records();
+        assert_eq!(records[0].0, 7);
+        assert!((records[0].1 - 0.3).abs() < f32::EPSILON * 2.0);
+    }
+
+    #[test]
+    fn static_candidates_use_the_viewport_actor_leaf_across_camera_changes() {
+        let coronas = [Corona {
+            actor_index: 7,
+            location: Vec3::new(100.0, 0.0, 0.0),
+            texture: Some(0),
+            draw_scale: 1.0,
+            color: Vec3::ONE,
+            static_leaf_orders: vec![(3, 0)],
+            dynamic_light_radius: None,
+            dynamic_admission_radius: None,
+            dynamic_leaves: Vec::new(),
+            light_brightness: 0,
+        }];
+        let visibility = CoronaVisibility::default();
+        let normal = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 100.0);
+        let aiming = Camera::looking_at(Vec3::new(50.0, 20.0, 10.0), -Vec3::Z, 100.0);
+
+        assert_eq!(
+            corona_candidates(&coronas, &visibility, Some(3), &normal, 4.0 / 3.0),
+            [7]
+        );
+        assert_eq!(
+            corona_candidates(&coronas, &visibility, Some(3), &aiming, 4.0 / 3.0),
+            [7]
+        );
+    }
+
+    #[test]
+    fn static_coronas_are_also_scanned_through_dynamic_leaf_lights() {
+        let coronas = [Corona {
+            actor_index: 7,
+            location: Vec3::new(100.0, 0.0, 0.0),
+            texture: Some(0),
+            draw_scale: 1.0,
+            color: Vec3::ONE,
+            static_leaf_orders: vec![(2, 0)],
+            dynamic_light_radius: Some(200.0),
+            dynamic_admission_radius: Some(200.0),
+            dynamic_leaves: vec![3],
+            light_brightness: 255,
+        }];
+        let camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 100.0);
+
+        assert_eq!(
+            corona_candidates(
+                &coronas,
+                &CoronaVisibility::default(),
+                Some(3),
+                &camera,
+                4.0 / 3.0,
+            ),
+            [7]
+        );
+    }
+
+    #[test]
     fn cache_capacity_and_draw_records_match_the_native_limits() {
         let mut cache = CoronaCache::default();
         cache.update(0.1, &(0..33).collect::<Vec<_>>());
@@ -430,7 +523,6 @@ mod tests {
                 texture: Some(3),
                 draw_scale: 0.25,
                 color: Vec3::new(0.5, 1.0, 0.25),
-                hidden: false,
                 static_leaf_orders: Vec::new(),
                 dynamic_light_radius: None,
                 dynamic_admission_radius: None,
@@ -443,7 +535,6 @@ mod tests {
                 texture: Some(0),
                 draw_scale: 1.0,
                 color: Vec3::ONE,
-                hidden: false,
                 static_leaf_orders: Vec::new(),
                 dynamic_light_radius: None,
                 dynamic_admission_radius: None,

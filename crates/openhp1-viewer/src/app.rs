@@ -945,6 +945,7 @@ impl eframe::App for ViewerApp {
                 &mut encoder,
                 &self.target.view,
                 &self.camera,
+                openhp1_render::render_to_unreal(self.camera.position),
                 render_size,
                 self.display_settings(),
                 [0.0, 0.0, 0.0, 1.0],

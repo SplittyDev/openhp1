@@ -19,7 +19,7 @@ use openhp1_runtime::{
 };
 use openhp1_scene::{
     LoadedScene, Rotator, apply_runtime_actions_with, initialize_runtime_with_console,
-    unreal_to_render,
+    render_to_unreal, unreal_to_render,
 };
 use tracing::error;
 use wgpu::{CurrentSurfaceTexture, SurfaceConfiguration};
@@ -978,6 +978,10 @@ impl Graphics {
             &mut encoder,
             self.presentation.view(),
             &self.camera,
+            self.scene.actors.get(self.player).map_or_else(
+                || render_to_unreal(self.camera.position),
+                |actor| actor.location,
+            ),
             render_size,
             self.display_settings,
             self.graphics_settings.visible_flash(self.screen_flash),
