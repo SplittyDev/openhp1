@@ -486,6 +486,33 @@ commit, and live-verification fields for each item.
         attachments without coupling either one to FogMap or Modern effects.
         Use synthetic pass-order/band checks because the shipped corpus cannot
         provide a live gate; retain the D3D default-disabled policy separately.
+- [ ] `BASE-019` Implement viewport `RendMap`/`RMODE` BSP debug rendering in
+      shared scene state and shaders. Engine accepts values `1..20`, defaults
+      to `5`, and preserves the value on invalid `RMODE` input
+      ([E:49518-49589](../res/Ghidra_Engine.c#L49518)); Render directly proves
+      behaviors for modes `1..6` and orthographic `13..15`
+      ([R:2601-2707](../res/Ghidra_Render.c#L2601)). Conventional names are
+      inference because the shipped binaries retain numeric commands, not the
+      enum symbols.
+  - [x] Exact flat colors are recovered. Mode 3 hashes resolved texture object
+        index `t` as `((67t)&255,(91t)&255,(-57t)&255)/256`. Mode 4 calls the
+        shipped HSV helper with `(node/32 as u8,0,255)`. Mode 2 uses texture
+        `MaxColor/255` for zone zero or the same hash for the selected zone,
+        then multiplies by `0.5+(node&7)/16`. Final D3D byte packing uses the
+        existing nearest-even `component*256-0.5` rule with alpha zero.
+  - [ ] Preserve node index, texture object index/MaxColor, and both node-side
+        zones. Modes 2-4 select their flat color before lighting; mode 5 keeps
+        the normal lit path; mode 6 keeps base texture without lighting.
+        Preserve material/depth/portal/hit behavior and route both Classic and
+        Modern through the same selector before Modern's explicit post stack.
+  - [ ] Deterministic acceptance: numeric state/default/invalid commands;
+        hashes, HSV boundaries, zone-zero MaxColor, shade endpoints, and byte
+        packing; shared-surface/different-node and camera-side zone fixtures;
+        lighting invariance for 2-4 versus lit 5 and plain-texture 6; pre-post
+        Classic/Modern scene checksums.
+  - [x] Reachability boundary: stock HP1 bindings do not expose `RMODE`; retail
+        access is through editor/custom console binding. Manual acceptance may
+        use a custom binding, but no map-specific gameplay gate exists.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
