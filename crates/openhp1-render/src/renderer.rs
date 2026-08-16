@@ -1863,6 +1863,18 @@ mod tests {
     }
 
     #[test]
+    fn modern_backdrop_preserves_linear_sky_color() {
+        let fragment = include_str!("shaders/scene.wgsl")
+            .split_once("fn fragment_backdrop_modern")
+            .unwrap()
+            .1
+            .split_once("\n}")
+            .unwrap()
+            .0;
+        assert!(!fragment.contains("srgb_to_linear"));
+    }
+
+    #[test]
     fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
         let shader = modern::COMPOSITE_SHADER;
         let scene_shader = include_str!("shaders/scene.wgsl");

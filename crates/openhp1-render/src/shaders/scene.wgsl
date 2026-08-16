@@ -204,7 +204,7 @@ fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32>
 fn fragment_backdrop_modern(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let color = textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
-    return vec4(srgb_to_linear(color.rgb), 0.0);
+    return vec4(color.rgb, 0.0);
 }
 
 fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
