@@ -521,9 +521,9 @@ commit, and live-verification fields for each item.
   - [x] Decode the four authored properties, resolve chains by stable package
         object identity, and reproduce null fallback, cycles, clamp/range,
         long-delta single-step, accumulator cap, and priming semantics.
-  - [x] Reuse incremental texture uploads for dimension-stable frames; first
-        scan all shipped chains and add texture recreation/rebinding only if a
-        referenced chain actually changes dimensions.
+  - [x] Reuse incremental texture uploads for equal frame shapes; `65d5b0e`
+        recreates only the affected GPU texture and its smooth/NoSmooth bind
+        groups when an authored frame changes base dimensions or mip count.
   - [x] Tick runtime textures independently of actor-mesh playback; the viewer
         now ticks and uploads textures before its actor-animation pause gate.
   - [ ] Acceptance: synthetic decode/scheduler/cycle/prime tests; full shipped
@@ -543,6 +543,37 @@ commit, and live-verification fields for each item.
         cycle.
   - [ ] Replay the animated floor in `Lev5_Snare` and `Lev2_Inc_A` in retail,
         Classic, and Modern; keep the parent open until visual acceptance.
+- [ ] `BASE-008A` Make generic texture animation state object-global and
+      update-on-use like native `UTexture::AnimCurrent`. `UTexture::Get` calls
+      `Update(FTime)` then returns `AnimCurrent` or self
+      ([E:124915-124929](../res/Ghidra_Engine.c#L124915)); BSP, mesh, and sprite
+      paths use the same rule, and repeated calls at one render time are
+      deduplicated by the texture object's update state.
+  - [ ] Own one clock/current/prime/accumulator per `SceneObjectId`, not per
+        `(SceneObjectId, masked)` image. Treat masked/unmasked GPU images as
+        subscribers and fan one selected authored frame/mip chain to both.
+  - [ ] Advance only roots in the camera-visible BSP/mesh/sprite submission
+        set. Full parity therefore depends on `BASE-016` (or an equivalent
+        exact visibility list); do not approximate visibility from asset names.
+  - [ ] Tests: BSP+mesh+sprite touches at identical time advance once; absence
+        does not advance; a later touch preserves native one-step/capped-time
+        behavior; masked/unmasked subscribers share one clock; separate roots
+        remain independent. Live acceptance leaves/fully occludes the Devil's
+        Snare floor, returns, and compares phase in retail/Classic/Modern.
+- [ ] `BASE-020` Implement raw-null BSP texture fallback to the active
+      `LevelInfo.DefaultTexture`. DrawFrame uses the default only when the raw
+      `FBspSurf.Texture` pointer is null; otherwise it updates the authored root,
+      selects `AnimCurrent` or self, and locks that frame
+      ([R:2464-2477](../res/Ghidra_Render.c#L2464)). Resolve/decode/upload
+      failures must remain diagnostics and must not silently use the default.
+  - [x] A read-only scan found 100,021 BSP surfaces across all 41 maps, zero
+        raw null texture references, and zero authored LevelInfo overrides.
+        Shipped LevelInfo inherits non-null `Engine.DefaultTexture`, but there
+        is no live BSP representative.
+  - [ ] Synthetic acceptance: raw None uses inherited default; an authored
+        LevelInfo override wins; broken non-null resolve/decode does not fall
+        back; the raw-null branch locks the selected default without applying
+        the authored surface root's AnimCurrent selection.
 - [ ] `BASE-009A` Implement exact shipped IceTexture animation through the
       changed-texture upload seam as a focused feature/commit before Fire.
       Direct [`Fire.dll`](../res/Ghidra_Fire.c) evidence is complete for
