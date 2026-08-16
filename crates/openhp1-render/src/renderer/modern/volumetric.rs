@@ -423,6 +423,7 @@ fn instances(
     let corona_lights = scene
         .coronas
         .iter()
+        .filter(|corona| !corona.hidden && corona.texture.is_some())
         .map(|corona| (corona.actor_index, corona))
         .collect::<HashMap<_, _>>();
     scene
@@ -774,18 +775,31 @@ mod tests {
                 Corona {
                     actor_index: 4,
                     location: Vec3::ZERO,
-                    texture: 0,
+                    texture: Some(0),
                     draw_scale: 1.0,
                     color: Vec3::ONE,
+                    hidden: false,
+                    static_leaf_orders: Vec::new(),
+                    dynamic_light_radius: None,
+                    dynamic_admission_radius: None,
+                    dynamic_leaves: Vec::new(),
+                    light_brightness: 0,
                 },
                 Corona {
                     actor_index: 5,
                     location: Vec3::ZERO,
-                    texture: 0,
+                    texture: Some(0),
                     draw_scale: 1.0,
                     color: Vec3::ONE,
+                    hidden: false,
+                    static_leaf_orders: Vec::new(),
+                    dynamic_light_radius: None,
+                    dynamic_admission_radius: None,
+                    dynamic_leaves: Vec::new(),
+                    light_brightness: 0,
                 },
             ],
+            corona_visibility: Default::default(),
             actor_submissions: Vec::new(),
             surface_materials: Vec::<SurfaceMaterial>::new(),
             warp_portals: Vec::new(),

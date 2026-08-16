@@ -13,6 +13,7 @@ use crate::{
 mod atlas;
 mod batch;
 mod classic;
+mod corona;
 mod lighting;
 mod modern;
 mod pipeline;
@@ -23,6 +24,7 @@ use crate::camera::{reflected_view, warp_view};
 use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
 use batch::{MaterialBinding, attachment_enabled, material_bindings, mirror_geometries};
 use classic::ClassicDisplay;
+use corona::CoronaRenderer;
 use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
@@ -159,6 +161,7 @@ pub struct Renderer {
     submission: SubmissionGeometry,
     depth: DepthTarget,
     classic_display: Option<ClassicDisplay>,
+    coronas: Option<CoronaRenderer>,
     modern: Option<ModernRenderer>,
     lighting: Option<ModernLighting>,
     sky_target: Option<SampledTarget>,
@@ -954,6 +957,9 @@ impl Renderer {
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
         let classic_display =
             (!modern_enabled).then(|| ClassicDisplay::new(device, target_format, viewport_size));
+        let coronas = (!scene.coronas.is_empty()).then(|| {
+            CoronaRenderer::new(device, scene_format, modern_enabled, scene, &texture_layout)
+        });
         let modern = modern_enabled.then(|| {
             ModernRenderer::new(
                 (device, queue),
@@ -962,7 +968,6 @@ impl Renderer {
                 settings,
                 &depth.view,
                 scene,
-                &texture_layout,
             )
         });
         let lighting = lighting_layout
@@ -997,6 +1002,7 @@ impl Renderer {
             submission,
             depth,
             classic_display,
+            coronas,
             modern,
             lighting,
             sky_target,
@@ -1069,7 +1075,10 @@ impl Renderer {
     }
 
     pub fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        if scene.textures.len() + 1 != self.textures.len() || !self.update_vertices(queue, scene) {
+        if scene.textures.len() + 1 != self.textures.len()
+            || self.coronas.is_some() != !scene.coronas.is_empty()
+            || !self.update_vertices(queue, scene)
+        {
             return false;
         }
         let (bindings, surface_bindings) = material_bindings(
@@ -1092,6 +1101,9 @@ impl Renderer {
             portal.source_on_positive_side = scene_portal.source_on_positive_side;
             portal.source = scene_portal.source;
             portal.destination = scene_portal.destination;
+        }
+        if let Some(coronas) = &mut self.coronas {
+            coronas.update_scene(scene);
         }
         self.lighting
             .as_ref()
@@ -1331,6 +1343,14 @@ impl Renderer {
         );
         if let Some(modern) = &mut self.modern {
             modern.prepare_frame(
+                queue,
+                camera,
+                viewport_size,
+                self.auto_uv / AUTO_UV_PER_SECOND,
+            );
+        }
+        if let Some(coronas) = &mut self.coronas {
+            coronas.prepare_frame(
                 queue,
                 camera,
                 viewport_size,
@@ -1822,8 +1842,8 @@ impl Renderer {
             None,
             ScenePass::Main,
         );
-        if let Some(modern) = &self.modern {
-            draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups[0]);
+        if let Some(coronas) = &self.coronas {
+            draw_calls += coronas.draw(&mut pass, &self.texture_bind_groups[0]);
         }
         drop(pass);
         if let Some(modern) = &mut self.modern {
@@ -2290,7 +2310,7 @@ mod tests {
     fn shaders_are_valid_wgsl() {
         for shader in [
             include_str!("shaders/scene.wgsl"),
-            include_str!("shaders/modern/corona.wgsl"),
+            include_str!("shaders/corona.wgsl"),
             include_str!("shaders/flash.wgsl"),
         ] {
             let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
@@ -2319,7 +2339,7 @@ mod tests {
     fn modern_shader_keeps_tone_mapping_and_effect_invariants() {
         let shader = modern::COMPOSITE_SHADER;
         let scene_shader = include_str!("shaders/scene.wgsl");
-        let corona_shader = include_str!("shaders/modern/corona.wgsl");
+        let corona_shader = include_str!("shaders/corona.wgsl");
         assert!(shader.contains("const WHITE = 1.25;"));
         assert!(shader.contains("const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);"));
         assert!(shader.contains("let luminance = dot(color, LUMINANCE);"));
@@ -2336,7 +2356,7 @@ mod tests {
         assert!(scene_shader.contains("srgb_to_linear(display_color.rgb)"));
         assert!(scene_shader.contains("srgb_to_linear(color.rgb * input.vertex_color.rgb)"));
         assert!(corona_shader.contains("corner * vec2(1.6, 1.6 * aspect) * color_and_scale.w;"));
-        assert!(corona_shader.contains("srgb_to_linear(lit) * CORONA_HDR_GAIN"));
+        assert!(corona_shader.contains("srgb_to_linear(lit) * 4.0"));
         assert!(!corona_shader.contains("distance_scale"));
         assert!(!corona_shader.contains("color.a * CORONA_HDR_GAIN"));
 
@@ -2451,6 +2471,7 @@ mod tests {
             lightmaps: vec![],
             realtime_lightmaps: vec![],
             coronas: vec![],
+            corona_visibility: Default::default(),
             actor_submissions: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
@@ -2496,6 +2517,7 @@ mod tests {
                     lightmaps: vec![],
                     realtime_lightmaps: vec![],
                     coronas: vec![],
+                    corona_visibility: Default::default(),
                     actor_submissions: vec![],
                     surface_materials: vec![material],
                     warp_portals: vec![],
@@ -2574,6 +2596,7 @@ mod tests {
             lightmaps: vec![],
             realtime_lightmaps: vec![],
             coronas: vec![],
+            corona_visibility: Default::default(),
             actor_submissions: vec![],
             surface_materials: vec![
                 SurfaceMaterial {

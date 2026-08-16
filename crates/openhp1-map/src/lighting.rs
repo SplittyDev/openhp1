@@ -7,7 +7,9 @@ use openhp1_package::{ObjectReference, Package, PropertyKind};
 use crate::{Error, Level, Result, Rotator, decode::skip_object_stack};
 
 pub use lightmap::{AuthoredLight, AuthoredLightmap, LightVisibility, LightmapImage};
-pub use vertex::{ActorVertexLighting, VertexLighting, bsp_zone_at, bsp_zone_at_checked};
+pub use vertex::{
+    ActorVertexLighting, VertexLighting, bsp_sphere_leaves, bsp_zone_at, bsp_zone_at_checked,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LightActor {

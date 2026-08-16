@@ -1,14 +1,13 @@
-use std::{borrow::Cow, mem::size_of, ops::Range};
+use std::{borrow::Cow, mem::size_of};
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 
 use crate::{
-    AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, SurfaceMode,
-    TextureImage, ToneMapper, VolumetricDebugView, VolumetricTuning, unreal_to_render,
+    AmbientOcclusion, Antialiasing, Camera, RenderScene, RendererSettings, TextureImage,
+    ToneMapper, VolumetricDebugView, VolumetricTuning,
 };
 
-use super::{DEPTH_FORMAT, display_gamma, pipeline::blend_state};
+use super::display_gamma;
 
 mod aa;
 mod ao;
@@ -41,42 +40,12 @@ struct ModernUniform {
     _padding: [u32; 3],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct CoronaCameraUniform {
-    view_projection: [[f32; 4]; 4],
-    viewport: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct CoronaInstance {
-    position: [f32; 3],
-    color_and_scale: [f32; 4],
-}
-
-#[derive(Eq, PartialEq)]
-struct CoronaBatch {
-    texture: usize,
-    instances: Range<u32>,
-}
-
-struct CoronaRenderer {
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    pipeline: wgpu::RenderPipeline,
-    instance_buffer: wgpu::Buffer,
-    instance_count: usize,
-    batches: Vec<CoronaBatch>,
-}
-
 struct BloomTarget {
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
 }
 
 pub(super) struct ModernRenderer {
-    coronas: Option<CoronaRenderer>,
     volumetrics: VolumetricRenderer,
     ao: AoRenderer,
     aa: Option<AaRenderer>,
@@ -112,7 +81,6 @@ impl ModernRenderer {
         settings: RendererSettings,
         depth_view: &wgpu::TextureView,
         scene: &RenderScene,
-        texture_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let (device, queue) = gpu;
         let size = valid_size(size);
@@ -267,12 +235,9 @@ impl ModernRenderer {
             "fragment_bloom_vertical",
             HDR_FORMAT,
         );
-        let coronas =
-            (!scene.coronas.is_empty()).then(|| CoronaRenderer::new(device, scene, texture_layout));
         let volumetrics = VolumetricRenderer::new(device, queue, size, depth_view, scene);
 
         Self {
-            coronas,
             volumetrics,
             ao,
             aa,
@@ -351,11 +316,7 @@ impl ModernRenderer {
     }
 
     pub(super) fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        let coronas_updated = match self.coronas.as_mut() {
-            Some(coronas) => coronas.update(queue, scene),
-            None => scene.coronas.is_empty(),
-        };
-        coronas_updated && (!self.volumetric_lighting || self.volumetrics.update(queue, scene))
+        !self.volumetric_lighting || self.volumetrics.update(queue, scene)
     }
 
     pub(super) fn update_textures(&mut self, textures: &[TextureImage], changed: &[usize]) -> bool {
@@ -369,23 +330,10 @@ impl ModernRenderer {
         viewport_size: [u32; 2],
         elapsed_time: f32,
     ) {
-        if let Some(coronas) = &self.coronas {
-            coronas.prepare_frame(queue, camera, viewport_size);
-        }
         if self.volumetric_lighting {
             self.volumetrics
                 .prepare_frame(queue, camera, viewport_size, elapsed_time);
         }
-    }
-
-    pub(super) fn draw_scene_effects<'pass>(
-        &'pass self,
-        pass: &mut wgpu::RenderPass<'pass>,
-        texture_bind_groups: &'pass [wgpu::BindGroup],
-    ) -> usize {
-        self.coronas
-            .as_ref()
-            .map_or(0, |coronas| coronas.draw(pass, texture_bind_groups))
     }
 
     pub(super) fn render(
@@ -476,184 +424,6 @@ impl ModernRenderer {
         let aa_passes = self.aa.as_ref().map_or(0, |aa| aa.render(encoder, output));
         volumetric_passes + ao_passes + usize::from(debug) + (if bloom { 4 } else { 1 }) + aa_passes
     }
-}
-
-impl CoronaRenderer {
-    fn new(
-        device: &wgpu::Device,
-        scene: &RenderScene,
-        texture_layout: &wgpu::BindGroupLayout,
-    ) -> Self {
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("OpenHP1 modern corona camera"),
-            size: size_of::<CoronaCameraUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("OpenHP1 modern corona camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OpenHP1 modern corona camera bind group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("OpenHP1 modern corona pipeline layout"),
-            bind_group_layouts: &[Some(&camera_layout), Some(texture_layout)],
-            immediate_size: 0,
-        });
-        let shader =
-            device.create_shader_module(wgpu::include_wgsl!("../shaders/modern/corona.wgsl"));
-        let pipeline = corona_pipeline(device, &pipeline_layout, &shader);
-        let (instances, batches) = corona_instances(scene);
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("OpenHP1 modern corona instances"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-        Self {
-            camera_buffer,
-            camera_bind_group,
-            pipeline,
-            instance_buffer,
-            instance_count: instances.len(),
-            batches,
-        }
-    }
-
-    fn update(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        let (instances, batches) = corona_instances(scene);
-        if instances.len() != self.instance_count || batches != self.batches {
-            return false;
-        }
-        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        true
-    }
-
-    fn prepare_frame(&self, queue: &wgpu::Queue, camera: &Camera, viewport_size: [u32; 2]) {
-        let aspect = viewport_size[0] as f32 / viewport_size[1].max(1) as f32;
-        queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::bytes_of(&CoronaCameraUniform {
-                view_projection: camera.view_projection(aspect).to_cols_array_2d(),
-                viewport: [viewport_size[0] as f32, viewport_size[1] as f32, 0.0, 0.0],
-            }),
-        );
-    }
-
-    fn draw<'pass>(
-        &'pass self,
-        pass: &mut wgpu::RenderPass<'pass>,
-        texture_bind_groups: &'pass [wgpu::BindGroup],
-    ) -> usize {
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        for batch in &self.batches {
-            pass.set_bind_group(1, &texture_bind_groups[batch.texture], &[]);
-            pass.draw(0..6, batch.instances.clone());
-        }
-        self.batches.len()
-    }
-}
-
-fn corona_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("OpenHP1 modern corona pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_corona"),
-            compilation_options: Default::default(),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: size_of::<CoronaInstance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-            }],
-        },
-        primitive: Default::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            // ponytail: depth testing approximates UE1's center-point BSP trace;
-            // add a visibility query only if partial edge occlusion becomes visible.
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: Default::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("fragment_corona"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: HDR_FORMAT,
-                blend: blend_state(SurfaceMode::Translucent),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-fn corona_instances(scene: &RenderScene) -> (Vec<CoronaInstance>, Vec<CoronaBatch>) {
-    let mut entries = scene
-        .coronas
-        .iter()
-        .map(|corona| {
-            (
-                corona.texture.min(scene.textures.len()),
-                CoronaInstance {
-                    position: unreal_to_render(corona.location).to_array(),
-                    color_and_scale: [
-                        corona.color.x,
-                        corona.color.y,
-                        corona.color.z,
-                        corona.draw_scale,
-                    ],
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    entries.sort_unstable_by_key(|(texture, _)| *texture);
-
-    let mut batches: Vec<CoronaBatch> = Vec::new();
-    for (index, (texture, _)) in entries.iter().enumerate() {
-        if let Some(batch) = batches.last_mut()
-            && batch.texture == *texture
-        {
-            batch.instances.end += 1;
-        } else {
-            batches.push(CoronaBatch {
-                texture: *texture,
-                instances: index as u32..index as u32 + 1,
-            });
-        }
-    }
-    (
-        entries.into_iter().map(|(_, instance)| instance).collect(),
-        batches,
-    )
 }
 
 fn valid_size(size: [u32; 2]) -> [u32; 2] {
@@ -845,9 +615,6 @@ fn tone_mapper_id(tone_mapper: ToneMapper) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use glam::Vec3;
-    use openhp1_scene::{Corona, RenderScene, TriangleMesh};
-
     use super::*;
 
     #[test]
@@ -861,8 +628,6 @@ mod tests {
         assert_eq!(size_of::<ModernUniform>(), 32);
         assert_eq!(std::mem::offset_of!(ModernUniform, contrast), 8);
         assert_eq!(std::mem::offset_of!(ModernUniform, ambient_occlusion), 16);
-        assert_eq!(size_of::<CoronaCameraUniform>(), 80);
-        assert_eq!(std::mem::offset_of!(CoronaCameraUniform, viewport), 64);
     }
 
     #[test]
@@ -876,58 +641,5 @@ mod tests {
             .validate(&module)
             .unwrap();
         }
-    }
-
-    #[test]
-    fn batches_coronas_by_skin_texture() {
-        let scene = RenderScene {
-            mesh: TriangleMesh::default(),
-            textures: vec![super::super::checkerboard(), super::super::checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![
-                Corona {
-                    actor_index: 1,
-                    location: Vec3::new(1.0, 2.0, 3.0),
-                    texture: 1,
-                    draw_scale: 0.2,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 2,
-                    location: Vec3::new(4.0, 5.0, 6.0),
-                    texture: 0,
-                    draw_scale: 0.3,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 3,
-                    location: Vec3::new(7.0, 8.0, 9.0),
-                    texture: 1,
-                    draw_scale: 0.4,
-                    color: Vec3::ONE,
-                },
-                Corona {
-                    actor_index: 4,
-                    location: Vec3::ZERO,
-                    texture: 99,
-                    draw_scale: 0.1,
-                    color: Vec3::ONE,
-                },
-            ],
-            actor_submissions: vec![],
-            surface_materials: vec![],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-        let (instances, batches) = corona_instances(&scene);
-        assert_eq!(instances[0].position, [5.0, 6.0, -4.0]);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| (batch.texture, batch.instances.clone()))
-                .collect::<Vec<_>>(),
-            [(0, 0..1), (1, 1..3), (2, 3..4)]
-        );
     }
 }

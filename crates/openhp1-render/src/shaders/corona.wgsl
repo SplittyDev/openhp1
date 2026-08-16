@@ -12,10 +12,6 @@ var color_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var color_sampler: sampler;
 
-// UE1 corona actors have authored color and size but no physical luminance.
-// This modern-only gain gives their Skin texture enough HDR range to bloom.
-const CORONA_HDR_GAIN = 4.0;
-
 struct CoronaOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) texture_coordinates: vec2<f32>,
@@ -49,10 +45,16 @@ fn vertex_corona(
 }
 
 @fragment
-fn fragment_corona(input: CoronaOutput) -> @location(0) vec4<f32> {
+fn fragment_corona_classic(input: CoronaOutput) -> @location(0) vec4<f32> {
+    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    return vec4(color.rgb * input.color, color.a);
+}
+
+@fragment
+fn fragment_corona_modern(input: CoronaOutput) -> @location(0) vec4<f32> {
     let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
     let lit = color.rgb * input.color;
-    return vec4(srgb_to_linear(lit) * CORONA_HDR_GAIN, color.a);
+    return vec4(srgb_to_linear(lit) * 4.0, color.a);
 }
 
 fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {

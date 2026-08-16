@@ -161,17 +161,38 @@ impl LoadedScene {
         let render = actor.render.as_ref().map(|render| render.vertices.clone());
         let mesh_transform = actor.mesh_transform;
         let mesh_to_object = actor.mesh_to_object;
+        let actor_location = actor.location;
         let actor_from_world = (Mat4::from_translation(actor.location + actor.pre_pivot)
             * rotation_matrix(actor.rotation))
         .inverse();
         self.actors[actor_index].draw_scale = draw_scale;
         self.actor_states[actor_index].actor.draw_scale = draw_scale;
+        let (dynamic_light_radius, dynamic_admission_radius) = corona_dynamic_light_radii(
+            &self.actor_states[actor_index].actor,
+            self.actor_states[actor_index].is_light,
+        )
+        .unzip();
+        let mut corona_changed = false;
+        for corona in self
+            .render
+            .coronas
+            .iter_mut()
+            .filter(|corona| corona.actor_index == actor_index)
+        {
+            corona_changed = true;
+            corona.draw_scale = draw_scale;
+            corona.dynamic_light_radius = dynamic_light_radius;
+            corona.dynamic_admission_radius = dynamic_admission_radius;
+            corona.dynamic_leaves = dynamic_light_radius.map_or_else(Vec::new, |radius| {
+                bsp_sphere_leaves(&self.actor_render.model.nodes, actor_location, radius)
+            });
+        }
 
         if self.attached_weapons.contains_key(&actor_index) || render.is_none() {
-            return Ok(false);
+            return Ok(corona_changed);
         }
         if previous == 0.0 {
-            return self.rebuild_current_actor_render(actor_index);
+            return Ok(self.rebuild_current_actor_render(actor_index)? || corona_changed);
         }
         let ratio = draw_scale / previous;
         if let Some(sprite) = self
@@ -198,7 +219,7 @@ impl LoadedScene {
         let (Some(vertices), Some(current), Some(mesh_to_object)) =
             (render, mesh_transform, mesh_to_object)
         else {
-            return Ok(false);
+            return Ok(corona_changed);
         };
         let world_pivot = (current * mesh_to_object.inverse()).transform_point3(Vec3::ZERO);
         ensure!(
@@ -294,7 +315,51 @@ impl LoadedScene {
             return Ok(false);
         }
         self.actor_states[actor_index].actor.skin = skin;
-        self.rebuild_current_actor_render(actor_index)
+        let corona_changed = self.refresh_actor_corona(actor_index);
+        Ok(self.rebuild_current_actor_render(actor_index)? || corona_changed)
+    }
+
+    fn refresh_actor_corona(&mut self, actor_index: usize) -> bool {
+        let previous = self
+            .render
+            .coronas
+            .iter()
+            .find(|corona| corona.actor_index == actor_index)
+            .cloned();
+        self.render
+            .coronas
+            .retain(|corona| corona.actor_index != actor_index);
+        let state = self.actor_states[actor_index].actor.clone();
+        append_scene_actor_corona(
+            &mut self.actor_render,
+            actor_index,
+            &state,
+            self.actor_states[actor_index].is_light,
+            &mut self.render.textures,
+            &mut self.render.coronas,
+            &mut self.water_animations,
+        );
+        let actor_indices = self
+            .actors
+            .iter()
+            .enumerate()
+            .filter(|(_, actor)| {
+                actor.id.package == self.actor_render.map.summary().source.as_ref()
+            })
+            .map(|(index, actor)| (actor.id.export_index, index))
+            .collect::<HashMap<_, _>>();
+        assign_static_corona_leaves(
+            &self.actor_render.model,
+            &actor_indices,
+            &mut self.render.coronas,
+        );
+        previous
+            != self
+                .render
+                .coronas
+                .iter()
+                .find(|corona| corona.actor_index == actor_index)
+                .cloned()
     }
 
     pub fn set_actor_skeletal_animation(

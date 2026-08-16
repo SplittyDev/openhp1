@@ -265,6 +265,42 @@ pub fn bsp_zone_at(nodes: &[crate::BspNode], zone_count: usize, point: Vec3) -> 
     bsp_zone_at_checked(nodes, zone_count, point).unwrap_or(0)
 }
 
+/// Returns the terminal leaves reached by the native dynamic-light sphere
+/// traversal, in its back-before-front walk order.
+pub fn bsp_sphere_leaves(nodes: &[crate::BspNode], center: Vec3, radius: f32) -> Vec<usize> {
+    fn visit(
+        nodes: &[crate::BspNode],
+        node_index: usize,
+        center: Vec3,
+        radius: f32,
+        leaves: &mut Vec<usize>,
+    ) {
+        let Some(node) = nodes.get(node_index) else {
+            return;
+        };
+        let distance = plane_side(node.plane, center);
+        for (front, reached) in [(false, distance < radius), (true, distance > -radius)] {
+            if !reached {
+                continue;
+            }
+            let child = if front { node.front } else { node.back };
+            if let Ok(child) = usize::try_from(child) {
+                visit(nodes, child, center, radius, leaves);
+            } else if let Ok(leaf) = usize::try_from(node.leaves[usize::from(!front)])
+                && !leaves.contains(&leaf)
+            {
+                leaves.push(leaf);
+            }
+        }
+    }
+
+    let mut leaves = Vec::new();
+    if radius > 0.0 && radius.is_finite() {
+        visit(nodes, 0, center, radius, &mut leaves);
+    }
+    leaves
+}
+
 pub fn bsp_zone_at_checked(
     nodes: &[crate::BspNode],
     zone_count: usize,
@@ -361,6 +397,30 @@ mod tests {
         };
         assert_eq!(bsp_zone_at_checked(&[node], 2, -Vec3::X), Some(0));
         assert_eq!(bsp_zone_at_checked(&[], 2, Vec3::ZERO), None);
+    }
+
+    #[test]
+    fn dynamic_light_sphere_marks_only_reached_terminal_leaves() {
+        let node = crate::BspNode {
+            plane: [1.0, 0.0, 0.0, 0.0],
+            zone_mask: 0,
+            flags: 0,
+            vertex_pool: 0,
+            surface: 0,
+            back: -1,
+            front: -1,
+            coplanar: -1,
+            collision_bound: -1,
+            render_bound: -1,
+            zones: [0; 2],
+            vertex_count: 0,
+            leaves: [3, 7],
+        };
+        assert_eq!(
+            bsp_sphere_leaves(&[node.clone()], Vec3::X * 2.0, 1.0),
+            vec![3]
+        );
+        assert_eq!(bsp_sphere_leaves(&[node], Vec3::ZERO, 1.0), vec![7, 3]);
     }
 
     #[test]

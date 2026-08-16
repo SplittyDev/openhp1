@@ -36,6 +36,9 @@ pub struct ActorProperties {
     pub scale_glow: Option<f32>,
     pub opacity: Option<f32>,
     pub light_brightness: Option<u8>,
+    pub light_type: Option<u8>,
+    pub light_radius: Option<u8>,
+    pub volume_radius: Option<u8>,
     pub anim_sequence: Option<String>,
     pub anim_frame: Option<f32>,
     pub anim_rate: Option<f32>,
@@ -155,6 +158,15 @@ impl ActorProperties {
                 }
                 ("LightBrightness", PropertyKind::Byte, _) => {
                     properties.light_brightness = Some(value.read_u8()?);
+                }
+                ("LightType", PropertyKind::Byte, _) => {
+                    properties.light_type = Some(value.read_u8()?);
+                }
+                ("LightRadius", PropertyKind::Byte, _) => {
+                    properties.light_radius = Some(value.read_u8()?);
+                }
+                ("VolumeRadius", PropertyKind::Byte, _) => {
+                    properties.volume_radius = Some(value.read_u8()?);
                 }
                 ("AnimSequence", PropertyKind::Name, _) => {
                     let index = value.read_name_index("actor animation sequence")?;

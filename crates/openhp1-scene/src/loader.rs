@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat3, Mat4, Vec2, Vec3};
 use openhp1_map::{
     Actor, ActorProperties, ActorVertexLighting, BrushPolys, BspNode, Level, Model, PolyFlags,
-    TriangleMesh, VertexLighting, bsp_zone_at, hsb_to_rgb,
+    TriangleMesh, VertexLighting, bsp_sphere_leaves, bsp_zone_at, hsb_to_rgb,
 };
 use openhp1_mesh::{Mesh, MeshAnimationSequence, SkeletalAnimation};
 use openhp1_package::{ObjectReference, Package, PackageStore, ResolveError, ResolvedObject};
@@ -258,6 +258,7 @@ impl LoadedScene {
             .filter(|(_, actor)| actor.id.package == package.summary().source.as_ref())
             .map(|(index, actor)| (actor.id.export_index, index))
             .collect::<HashMap<_, _>>();
+        assign_static_corona_leaves(&actor_render.model, &actor_indices, &mut coronas);
         let warp_portals = load_warp_portals(
             &package,
             &actor_render.model,
@@ -375,6 +376,7 @@ impl LoadedScene {
                 lightmaps,
                 realtime_lightmaps,
                 coronas,
+                corona_visibility: crate::CoronaVisibility::new(Arc::clone(&collision)),
                 actor_submissions,
                 surface_materials,
                 warp_portals,
@@ -533,6 +535,7 @@ impl LoadedScene {
             &mut self.actor_render,
             actor_index,
             &state,
+            is_light,
             &mut self.render.textures,
             &mut self.render.coronas,
             &mut self.water_animations,
@@ -702,6 +705,9 @@ impl LoadedScene {
             .filter(|corona| corona.actor_index == actor_index)
         {
             corona.location = location;
+            corona.dynamic_leaves = corona.dynamic_light_radius.map_or_else(Vec::new, |radius| {
+                bsp_sphere_leaves(&self.actor_render.model.nodes, location, radius)
+            });
         }
         if let Some(transform) = &mut self.actors[actor_index].mesh_transform {
             *transform = Mat4::from_translation(delta) * *transform;
@@ -1348,7 +1354,17 @@ impl LoadedScene {
         }
         actor.hidden = hidden;
         self.actor_states[actor_index].actor.hidden = hidden;
-        self.sync_actor_render_visibility(actor_index)
+        let mut corona_changed = false;
+        for corona in self
+            .render
+            .coronas
+            .iter_mut()
+            .filter(|corona| corona.actor_index == actor_index)
+        {
+            corona_changed = true;
+            corona.hidden = hidden;
+        }
+        Ok(self.sync_actor_render_visibility(actor_index)? || corona_changed)
     }
 
     fn sync_actor_render_visibility(&mut self, actor_index: usize) -> Result<bool> {
@@ -2809,6 +2825,9 @@ struct ActorState {
     scale_glow: f32,
     opacity: f32,
     light_brightness: u8,
+    light_type: u8,
+    light_radius: u8,
+    volume_radius: u8,
     anim_sequence: Option<String>,
     anim_frame: f32,
     anim_rate: f32,
@@ -2862,6 +2881,9 @@ impl Default for ActorState {
             scale_glow: 1.0,
             opacity: 1.0,
             light_brightness: 64,
+            light_type: 0,
+            light_radius: 0,
+            volume_radius: 0,
             anim_sequence: None,
             anim_frame: 0.0,
             anim_rate: 0.0,
@@ -2975,6 +2997,15 @@ impl ActorState {
         }
         if let Some(light_brightness) = properties.light_brightness {
             self.light_brightness = light_brightness;
+        }
+        if let Some(light_type) = properties.light_type {
+            self.light_type = light_type;
+        }
+        if let Some(light_radius) = properties.light_radius {
+            self.light_radius = light_radius;
+        }
+        if let Some(volume_radius) = properties.volume_radius {
+            self.volume_radius = volume_radius;
         }
         if let Some(anim_sequence) = &properties.anim_sequence {
             self.anim_sequence = Some(anim_sequence.clone());
@@ -3167,6 +3198,7 @@ fn load_actors(
             actor_render,
             actors.len(),
             &state,
+            is_light,
             textures,
             coronas,
             water_animations,
@@ -3197,6 +3229,7 @@ fn append_scene_actor_corona(
     actor_render: &mut ActorRenderContext,
     actor_index: usize,
     state: &ActorState,
+    is_light: bool,
     textures: &mut Vec<TextureImage>,
     coronas: &mut Vec<Corona>,
     water_animations: &mut TextureAnimations,
@@ -3204,30 +3237,84 @@ fn append_scene_actor_corona(
     if !state.corona {
         return;
     }
-    let Some(skin) = state.skin.as_ref() else {
-        return;
-    };
-    let texture = actor_surface_material(
-        &mut actor_render.packages,
-        Some(skin),
-        0,
-        state,
-        textures,
-        &mut actor_render.decoded_textures,
-        &mut actor_render.images,
-        water_animations,
-    )
-    .texture;
-    let Some(texture) = texture else {
-        return;
-    };
+    let texture = state.skin.as_ref().and_then(|skin| {
+        actor_surface_material(
+            &mut actor_render.packages,
+            Some(skin),
+            0,
+            state,
+            textures,
+            &mut actor_render.decoded_textures,
+            &mut actor_render.images,
+            water_animations,
+        )
+        .texture
+    });
+    let (dynamic_light_radius, dynamic_admission_radius) =
+        corona_dynamic_light_radii(state, is_light).unzip();
     coronas.push(Corona {
         actor_index,
         location: state.location,
         texture,
         draw_scale: state.draw_scale,
         color: hsb_to_rgb(state.light_hue, state.light_saturation, 255),
+        hidden: state.hidden,
+        static_leaf_orders: Vec::new(),
+        dynamic_light_radius,
+        dynamic_admission_radius,
+        dynamic_leaves: dynamic_light_radius.map_or_else(Vec::new, |radius| {
+            bsp_sphere_leaves(&actor_render.model.nodes, state.location, radius)
+        }),
+        light_brightness: state.light_brightness,
     });
+}
+
+fn corona_dynamic_light_radii(state: &ActorState, is_light: bool) -> Option<(f32, f32)> {
+    (is_light && state.light_type != 0 && state.light_radius != 0).then(|| {
+        let light = state.draw_scale.max(1.0) * (f32::from(state.light_radius) + 1.0) * 25.0;
+        let volume = (f32::from(state.volume_radius) + 1.0) * 25.0;
+        (light, light.max(volume))
+    })
+}
+
+fn assign_static_corona_leaves(
+    model: &Model,
+    actor_indices: &HashMap<usize, usize>,
+    coronas: &mut [Corona],
+) {
+    let corona_indices = coronas
+        .iter()
+        .enumerate()
+        .map(|(corona_index, corona)| (corona.actor_index, corona_index))
+        .collect::<HashMap<_, _>>();
+    for (leaf_index, leaf) in model.leaves.iter().enumerate() {
+        let Ok(first) = usize::try_from(leaf.permeating) else {
+            continue;
+        };
+        for (order, actor) in model
+            .lights
+            .get(first..)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
+            let ObjectReference::Export(export_index) = actor else {
+                if *actor == ObjectReference::None {
+                    break;
+                }
+                continue;
+            };
+            let Some(&actor_index) = actor_indices.get(export_index) else {
+                continue;
+            };
+            let Some(&corona_index) = corona_indices.get(&actor_index) else {
+                continue;
+            };
+            coronas[corona_index]
+                .static_leaf_orders
+                .push((leaf_index, order));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6810,6 +6897,29 @@ mod tests {
         assert_eq!(scene.render.actor_submissions[0].indices, 12..18);
     }
 
+    #[test]
+    fn runtime_hidden_state_updates_corona_admission() {
+        let mut scene = particle_test_scene();
+        scene.render.coronas.push(crate::Corona {
+            actor_index: 0,
+            location: glam::Vec3::ZERO,
+            texture: Some(0),
+            draw_scale: 1.0,
+            color: glam::Vec3::ONE,
+            hidden: false,
+            static_leaf_orders: Vec::new(),
+            dynamic_light_radius: None,
+            dynamic_admission_radius: None,
+            dynamic_leaves: Vec::new(),
+            light_brightness: 0,
+        });
+
+        assert!(scene.set_actor_hidden(0, true).unwrap());
+        assert!(scene.render.coronas[0].hidden);
+        assert!(scene.set_actor_hidden(0, false).unwrap());
+        assert!(!scene.render.coronas[0].hidden);
+    }
+
     fn particle_test_scene() -> super::LoadedScene {
         let root = std::env::temp_dir().join(format!(
             "openhp1-scene-particle-elasticity-{}-{}",
@@ -6843,6 +6953,7 @@ mod tests {
                 lightmaps: Vec::new(),
                 realtime_lightmaps: Vec::new(),
                 coronas: Vec::new(),
+                corona_visibility: Default::default(),
                 actor_submissions: Vec::new(),
                 surface_materials: Vec::new(),
                 warp_portals: Vec::new(),

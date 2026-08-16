@@ -1357,6 +1357,7 @@ mod tests {
             lightmaps: Vec::new(),
             realtime_lightmaps: Vec::new(),
             coronas: Vec::new(),
+            corona_visibility: Default::default(),
             actor_submissions: Vec::new(),
             surface_materials: vec![SurfaceMaterial {
                 mode,

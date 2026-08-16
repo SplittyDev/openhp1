@@ -1,9 +1,32 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use glam::{Mat3, Vec3};
 use openhp1_map::{LightVisibility, LightmapImage, SkyZone, TriangleMesh, hsb_to_rgb};
+use openhp1_physics::BspCollision;
 
 use crate::{Rotator, unreal_to_render};
+
+#[derive(Clone, Debug, Default)]
+pub struct CoronaVisibility(Option<Arc<BspCollision>>);
+
+impl CoronaVisibility {
+    pub(crate) fn new(collision: Arc<BspCollision>) -> Self {
+        Self(Some(collision))
+    }
+
+    pub fn leaf_at(&self, point: Vec3) -> Option<usize> {
+        self.0
+            .as_ref()?
+            .point_region(point)
+            .and_then(|region| usize::try_from(region.leaf).ok())
+    }
+
+    pub fn line_clear(&self, start: Vec3, end: Vec3) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|collision| collision.line_trace(start, end).is_none())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct TextureImage {
@@ -31,15 +54,25 @@ impl TextureImage {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Corona {
     pub actor_index: usize,
     /// Authored UE-space light location.
     pub location: Vec3,
     /// Index into [`RenderScene::textures`].
-    pub texture: usize,
+    pub texture: Option<usize>,
     pub draw_scale: f32,
     pub color: Vec3,
+    pub hidden: bool,
+    /// Native order within every serialized static actor chain containing this
+    /// corona, keyed by convex-leaf index.
+    pub static_leaf_orders: Vec<(usize, usize)>,
+    /// Dynamic-light sphere radius used to rebuild `LeafLights`; `None` means
+    /// this actor is not eligible for the dynamic-light path.
+    pub dynamic_light_radius: Option<f32>,
+    pub dynamic_admission_radius: Option<f32>,
+    pub dynamic_leaves: Vec<usize>,
+    pub light_brightness: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -215,6 +248,8 @@ pub struct RenderScene {
     /// Authored UE1 lights and visibility masks evaluated by the Modern renderer.
     pub realtime_lightmaps: Vec<RenderLightmap>,
     pub coronas: Vec<Corona>,
+    /// World BSP collision used by the original actor-to-camera corona trace.
+    pub corona_visibility: CoronaVisibility,
     /// Dynamic actor geometry records used by the shared submission planner.
     pub actor_submissions: Vec<ActorSubmission>,
     /// Material for each surface. Missing visible textures use the renderer's
@@ -229,6 +264,14 @@ pub struct RenderScene {
 impl RenderScene {
     pub(crate) fn set_light_brightness(&mut self, actor_index: usize, brightness: u8) -> bool {
         let mut changed = false;
+        for corona in self
+            .coronas
+            .iter_mut()
+            .filter(|corona| corona.actor_index == actor_index)
+        {
+            changed |= corona.light_brightness != brightness;
+            corona.light_brightness = brightness;
+        }
         for light in self
             .realtime_lightmaps
             .iter_mut()
@@ -321,6 +364,7 @@ mod tests {
                 },
             ],
             coronas: Vec::new(),
+            corona_visibility: Default::default(),
             actor_submissions: Vec::new(),
             surface_materials: Vec::new(),
             warp_portals: Vec::new(),

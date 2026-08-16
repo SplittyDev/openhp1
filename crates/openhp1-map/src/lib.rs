@@ -19,7 +19,7 @@ pub use error::{Error, Result};
 pub use level::{Level, ReachSpec, world_model_export};
 pub use lighting::{
     ActorVertexLighting, AuthoredLight, AuthoredLightmap, LightVisibility, LightmapImage,
-    VertexLighting, bsp_zone_at, bsp_zone_at_checked, hsb_to_rgb,
+    VertexLighting, bsp_sphere_leaves, bsp_zone_at, bsp_zone_at_checked, hsb_to_rgb,
 };
 pub use mesh::TriangleMesh;
 pub use model::Model;

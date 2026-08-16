@@ -127,8 +127,7 @@ modern post pass provides:
   receive ambient occlusion;
 - selectable FXAA or three-pass SMAA 1x after tone mapping, with SMAA enabled
   by default;
-- authored UE1 coronas drawn as HDR screen-space sprites when volumetric
-  lighting is disabled;
+- authored UE1 coronas drawn through the original persistent visibility cache;
 - depth-clipped HDR volumetric scattering for authored UE1 fog volumes,
   visible `bCorona` sources, and textured light sprites such as candle flames;
 - shadowed world-space sunlight shafts on maps that contain both a
@@ -149,7 +148,7 @@ current fragment before sampling their authored visibility mask. The final
 composite similarly avoids AO and bloom texture reads when those effects are
 disabled; enabled paths keep the same sampling and arithmetic order.
 
-Modern-only HDR, sampleable-depth, post-processing, bloom, AO, corona, and
+Modern-only HDR, sampleable-depth, post-processing, bloom, AO, and
 volumetric resources are created only for `RendererMode::Modern`. Each unique
 eligible light draws one projected sphere. Authored UE1 volumes use UE1's
 analytic fog-sphere density integral; visible corona and textured light sources
@@ -158,8 +157,8 @@ Textured sources use the sprite's chroma and a smaller profile so multi-flame
 fixtures do not stack into a white fog volume.
 Invisible fill lights used only to shape baked illumination do not become
 visible fog orbs.
-Enabling volumetric lighting suppresses the legacy corona sprites so the two
-source-glow treatments do not stack.
+Legacy corona sprites remain enabled alongside optional Modern volumetrics,
+matching the original renderer's independent sprite and volume paths.
 When volumetric lighting is disabled, scene updates and frame preparation skip
 the unused volumetric renderer entirely; changing the setting rebuilds the
 renderer. When it is enabled, sprite-derived light colors are cached per unique
@@ -442,13 +441,15 @@ aligned to the active UE1 view axes. Engine `S_*` textures and textures from
 the `HPEdit`
 package are editor viewport icons, not runtime sprites, and are excluded from
 that path. Particle actors use their live `ParticleFX` emitter state. In modern
-mode, coronas use their authored `Skin`, `DrawScale`, hue, and saturation; a
-fixed HDR gain supplies the luminance that UE1 did not author so they feed the
-bloom pass. Their display-space texture and tint are decoded to HDR after UE1's
-translucent RGB modulation; P8 palette alpha does not attenuate the glow.
-Corona size uses UE1's fixed `0.8 * DrawScale` viewport-width fraction, and
-positions and lifetimes follow their actors. Their quads are depth-tested
-rather than using UE1's center-point BSP visibility trace.
+Both modes use one 32-entry corona cache populated from the camera leaf's
+serialized static chain and eligible dynamic light links. Actor-to-camera BSP
+line traces admit the center point; visible entries ramp up and occluded entries
+fade out at three visibility units per second. Coronas use their authored
+`Skin`, `DrawScale`, hue, and saturation. Modern adds a fixed HDR gain so the
+same sprite feeds bloom. Corona size is UE1's fixed `0.8 * DrawScale`
+viewport-width fraction, and the post-world quad does not depth-test after the
+center trace succeeds. The center trace currently covers static world BSP;
+retail moving-brush occlusion remains tracked in the parity plan.
 Water-backed `WetTexture` exports animate independently of actor scripts.
 Automatically panned BSP surfaces select `Node.Zone0` or `Node.Zone1` from the
 render-pass camera side of the node plane and use that actor's `TexUPanSpeed`

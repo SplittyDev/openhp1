@@ -302,10 +302,12 @@ commit, and live-verification fields for each item.
           [`original-actor-renderfog.md`](original-actor-renderfog.md).
     - [x] Recover native light admission: each mesh draw consumes
           `LeafLights[Actor.Region.iLeaf]`, rebuilt by `SetupDynamics` from BSP
-          sphere traversal after the `LightType`, UObject flags,
-          `bSpecialLit`, `bDynamicLight`, `ZoneInfo.bFogZone`,
-          `VolumeRadius`, and `VolumeBrightness` gates. Do not substitute every
-          globally overlapping volume light.
+          sphere traversal after the `LightType`, UObject-flag,
+          `LightBrightness`, and `LightRadius` gates. Initial frustum admission
+          uses the larger of `WorldLightRadius` and `(VolumeRadius+1)*25`, while
+          BSP `LeafLights` traversal uses `WorldLightRadius` alone; fog-link
+          marking separately requires the zone/volume gates. Do not substitute
+          every globally overlapping volume light.
     - [ ] Add one shared per-vertex fog RGB channel/evaluator and apply its
           post-texture diffuse add in both pipelines before optional Modern
           volumetric enhancements. Retain it only for non-Translucent and
@@ -333,24 +335,43 @@ commit, and live-verification fields for each item.
         entry below zero. It refreshes candidates from the camera leaf's
         static actor chain and `LeafLights`, rejects missing textures, excluded
         actor flags, failed world/model line checks, and actors without the
-        corona bit, then doubles and clamps a candidate's visibility to one.
+        corona bit, then adds twice the same frame step and clamps a candidate's
+        visibility to one.
         Valid cached actors in front of the near plane draw centered textured
         quads after world and dynamic actor geometry. Quad size is
-        `scene_height * Actor.DrawScale * 0.8`; color comes from the actor's
+        `scene_width * Actor.DrawScale * 0.8`; color comes from the actor's
         light hue and saturation.
-  - [ ] Resolve the exact semantic source of the line-check output that is
-        doubled into cache visibility. The helper call and arithmetic are
-        direct, but the decompiler does not preserve the local result's field
-        identity well enough to name it honestly.
-  - [ ] Implement one shared corona admission/cache path consumed by Classic
+  - [x] Resolve the helper's missing fifth argument from direct disassembly: it
+        is the same `elapsed * 3` frame step used for decay, not a line-check
+        weight. A visible candidate therefore gains `2*step` after the common
+        `step` decay.
+  - [x] Implement one shared corona admission/cache path consumed by Classic
         and Modern. Do not add a second Classic-only sprite system or preserve
         Modern's current always-present instance list as the parity path.
-  - [ ] Deterministic acceptance: 32-entry capacity, duplicate refresh,
+        Static chains come from `Model.Leaves[].Permeating`; dynamic links use
+        the native BSP sphere/frustum gates, and the center trace uses the
+        shared static BSP collision model. Runtime `bHidden`, `Skin`, location,
+        draw-scale, and brightness changes refresh the same records. A full
+        package census finds 30 static-chain coronas in five maps and 18
+        initially dormant dynamic candidates in `Lev_Tut2` whose authored
+        brightness is zero.
+  - [ ] Include moving-brush collision in the center trace. Retail
+        `SingleLineCheck(..., flags=6)` checks the actor collision hash and can
+        reject an intervening `AMover`; the current shared trace covers static
+        world BSP only.
+  - [ ] Deterministic acceptance: 32-entry state, duplicate refresh,
         three-times-elapsed decay/removal, static-leaf plus dynamic-leaf
         discovery, line-check rejection, stale actor-index rejection, near
         plane rejection, hue/saturation color, and exact centered quad size.
+        Public checks cover cache transitions/capacity, stale/near rejection,
+        color packing, BSP sphere leaves, shader layout, and shared
+        scene/runtime plumbing. A compact synthetic static-chain plus blocked
+        center-trace fixture remains before closing this aggregate item.
   - [ ] Live acceptance: compare an authored shipped corona while it enters and
-        leaves occlusion in retail, Classic, and Modern.
+        leaves occlusion in retail, Classic, and Modern. The 2026-08-16
+        gameplay capture shows the old Modern `LessEqual` billboard abruptly
+        toggling on a stationary chandelier while its mesh and baked lighting
+        remain stable; replay that same stair movement after this change.
 - [ ] `MOD-002` Keep authored corona sprites when Modern volumetric enhancements
       are enabled. Evidence: independent retail sprite and volumetric paths at
       `Ghidra_Render.c:5819-5858,13034-13266`; current divergence:
@@ -362,9 +383,9 @@ commit, and live-verification fields for each item.
         keep the parent open until visual acceptance.
 - [ ] `MOD-003` Replace Modern corona depth-test visibility with the original
       actor-to-camera world/model line check and persistent 32-entry cache.
-      Direct admission/cache evidence is now recorded under `CLASSIC-001`;
-      the remaining blocker is the exact meaning of the helper's returned
-      visibility weight. Current approximation: `renderer/modern.rs:599-600`.
+      Implemented through the same shared path as Classic under `CLASSIC-001`;
+      the old per-fragment depth approximation and always-present list are gone.
+      Moving-brush occlusion remains before this aggregate item is exact.
 - [ ] `MOD-004` Add optional anisotropic texture filtering to the Modern
       pipeline after base filtering parity is closed. Keep Classic on the
       original linear/point min-mag and point-mip behavior with default LOD
