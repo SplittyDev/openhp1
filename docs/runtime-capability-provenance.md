@@ -151,8 +151,9 @@ changed-value diagnostics rather than speculative runtime implementations.
 There are zero effective runtime changes to `bUnlit` or
 `bMeshEnviroMap`. Six classes and six `Lev2_fire1` movers do author static
 `bUnlit` values, which the existing load path already preserves. The only
-static environment-mapped actor is `HPBase.spellEcto`; it has
-`bMeshEnviroMap=true` and an explicit `Texture=Jgreen`. No class or map actor
+static environment-mapped actor class is `HPBase.spellEcto`; it has
+`bMeshEnviroMap=true` and an explicit `Texture=Jgreen`, but the spell was cut
+and a full-package import scan finds no shipped user. No class or map actor
 authors a ZoneInfo or LevelInfo `EnvironmentMap`.
 
 ### UE1 rendering boundary
@@ -170,8 +171,9 @@ The same reference reads current `Mesh`, `DrawScale`, `Style`, `Skin`, and
 `DrawScale`, and mesh transforms include the same scale. It maps translucent
 style to the translucent pass, uses `bUnlit` to bypass dynamic lighting, and
 adds camera-relative reflection UVs for `bMeshEnviroMap`. Actor `Texture`
-precedes the ZoneInfo and LevelInfo environment maps. The shipped
-`spellEcto` case exercises only that first branch.
+precedes the ZoneInfo and LevelInfo environment maps. The cut, unreferenced
+`spellEcto` class authors only that first branch; no shipped gameplay path
+exercises environment mapping.
 
 SurrealEngine's actor vertex-light path reads the light actor's current
 `LightBrightness`. Its lightmap builder also combines each listed light using

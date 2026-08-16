@@ -261,13 +261,14 @@ rebuild only BSP lightmaps whose serialized light list references that actor.
 The renderer uploads those changed atlas rectangles, including their filtering
 gutters, without rebuilding the atlas.
 
-Static `bMeshEnviroMap` uses camera-relative reflection coordinates. The
-shipped `spellEcto` case supplies its actor `Texture`; ZoneInfo and LevelInfo
-environment-map fallback remains intentionally unimplemented because no
-shipped class or map authors either value. Effective but unsupported
-`Texture`, `MultiSkins`, `bUnlit`, or dynamic `bMeshEnviroMap` assignments
-remain deduplicated diagnostics. `ParticleFX` is excluded because its live
-instance state is synchronized separately each frame.
+Static `bMeshEnviroMap` uses camera-relative reflection coordinates with the
+native Actor → Region.Zone → LevelInfo texture fallback. `HPBase.spellEcto`
+authors the actor-texture branch but was cut; a full-package import scan finds
+no shipped user, and no class or map authors either fallback value. Effective
+but unsupported `Texture`, `MultiSkins`, `bUnlit`, or dynamic
+`bMeshEnviroMap` assignments remain deduplicated diagnostics. `ParticleFX` is
+excluded because its live instance state is synchronized separately each
+frame.
 
 ## Particle effects
 

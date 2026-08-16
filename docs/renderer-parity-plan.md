@@ -398,8 +398,11 @@ commit, and live-verification fields for each item.
         decoded 3,750 shipped textures, of which 37 have non-default
         `DrawScale`; ordinary mesh byte-UV scaling remains unchanged and is a
         separate parity gap.
-  - [ ] Live acceptance uses `HPBase.spellEcto`; the corpus does not author the
-        Zone/Level fallback cases.
+  - [x] Reachability boundary: `HPBase.spellEcto` authors the actor-texture
+        branch but was cut from the game; a full-package import scan finds no
+        shipped user. The corpus also does not author the Zone/Level fallback,
+        so `BASE-015` has no honest live acceptance target and remains covered
+        by native equations plus synthetic tests.
 - [ ] `BASE-016` Preserve retail BSP traversal and dynamic-actor ordering in
       one backend-neutral submission plan shared by Classic and Modern.
       Direct Render.dll evidence: effective-list selection `7140-7253`, mirror
