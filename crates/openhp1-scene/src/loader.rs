@@ -24,7 +24,7 @@ use tracing::{info, warn};
 use crate::{
     Corona, RenderLight, RenderLightmap, RenderScene, Rotator, SceneActor, SceneActorAnimation,
     SceneActorRenderRange, SceneObjectId, SurfaceMaterial, SurfaceMode, TextureImage,
-    render::light_direction, render_to_unreal, unreal_to_render,
+    WarpCoordinates, WarpPortal, render::light_direction, render_to_unreal, unreal_to_render,
 };
 
 mod runtime_display;
@@ -240,6 +240,8 @@ impl LoadedScene {
             .filter(|(_, actor)| actor.id.package == package.summary().source.as_ref())
             .map(|(index, actor)| (actor.id.export_index, index))
             .collect::<HashMap<_, _>>();
+        let warp_portals =
+            load_warp_portals(&package, &actor_render.model, &actors, &actor_indices)?;
         let visible_light_sources = sprites
             .iter()
             .filter(|sprite| actor_states[sprite.actor_index].is_light)
@@ -337,6 +339,7 @@ impl LoadedScene {
                 realtime_lightmaps,
                 coronas,
                 surface_materials,
+                warp_portals,
                 sky_zone,
             },
             points: actor_render.model.points.len(),
@@ -371,6 +374,51 @@ impl LoadedScene {
 
     pub fn collision(&self) -> Arc<BspCollision> {
         Arc::clone(&self.collision)
+    }
+
+    pub fn set_warp_destination(
+        &mut self,
+        source_actor: usize,
+        destination: Option<RuntimeObject>,
+    ) -> Result<bool> {
+        self.actors
+            .get(source_actor)
+            .context("runtime refers to a missing warp-zone actor")?;
+        let destination_actor = destination
+            .as_ref()
+            .map(|destination| {
+                self.actors
+                    .iter()
+                    .position(|actor| {
+                        actor.id.package == destination.package.as_ref()
+                            && actor.id.export_index == destination.export_index
+                    })
+                    .context("warp destination is not a scene actor")
+            })
+            .transpose()?;
+        let destination_coordinates = destination_actor
+            .map(|actor| {
+                self.render
+                    .warp_portals
+                    .iter()
+                    .find(|portal| portal.source_actor == actor)
+                    .map(|portal| portal.source)
+                    .context("warp destination has no authored coordinates")
+            })
+            .transpose()?;
+        let mut changed = false;
+        for portal in self
+            .render
+            .warp_portals
+            .iter_mut()
+            .filter(|portal| portal.source_actor == source_actor)
+        {
+            changed |= portal.destination_actor != destination_actor
+                || portal.destination != destination_coordinates;
+            portal.destination_actor = destination_actor;
+            portal.destination = destination_coordinates;
+        }
+        Ok(changed)
     }
 
     pub fn zone_at(&self, render_position: Vec3) -> usize {
@@ -3795,6 +3843,70 @@ fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
     forward * vector.x + right * vector.y + up * vector.z
 }
 
+fn load_warp_portals(
+    package: &Package,
+    model: &Model,
+    actors: &[SceneActor],
+    actor_indices: &HashMap<usize, usize>,
+) -> Result<Vec<WarpPortal>> {
+    model
+        .surfaces
+        .iter()
+        .enumerate()
+        .filter(|(_, surface)| surface.poly_flags.contains(PolyFlags::PORTAL))
+        .filter_map(|(surface, _)| {
+            let (source_actor, plane, source_on_positive_side) = model
+                .nodes
+                .iter()
+                .filter(|node| node.surface == surface as i32)
+                .flat_map(|node| {
+                    node.zones
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(side, zone)| (node, side, zone))
+                })
+                .filter_map(|(node, side, zone)| {
+                    let zone = usize::try_from(zone)
+                        .ok()
+                        .and_then(|zone| model.zones.get(zone))?;
+                    let ObjectReference::Export(export) = zone.actor else {
+                        return None;
+                    };
+                    actor_indices
+                        .get(&export)
+                        .copied()
+                        .map(|actor| (actor, node.plane, side == 0))
+                })
+                .find(|(actor, _, _)| {
+                    actors[*actor]
+                        .class_name
+                        .eq_ignore_ascii_case("WarpZoneInfo")
+                })?;
+            Some((surface, source_actor, plane, source_on_positive_side))
+        })
+        .map(|(surface, source_actor, plane, source_on_positive_side)| {
+            let actor = Actor::decode(package, actors[source_actor].id.export_index)
+                .context("could not decode warp-zone coordinates")?;
+            let [origin, x_axis, y_axis, z_axis] = actor
+                .properties
+                .warp_coordinates
+                .context("warp zone has no authored WarpCoords")?;
+            Ok(WarpPortal {
+                surface,
+                source_actor,
+                plane,
+                source_on_positive_side,
+                source: WarpCoordinates {
+                    origin,
+                    axes: [x_axis, y_axis, z_axis],
+                },
+                destination_actor: None,
+                destination: None,
+            })
+        })
+        .collect()
+}
+
 fn mesh_to_object_transform(scale: Vec3, origin: Vec3, rotation_origin: Rotator) -> Mat4 {
     rotation_matrix(rotation_origin) * Mat4::from_scale(scale) * Mat4::from_translation(-origin)
 }
@@ -5023,6 +5135,7 @@ mod tests {
                 realtime_lightmaps: Vec::new(),
                 coronas: Vec::new(),
                 surface_materials: Vec::new(),
+                warp_portals: Vec::new(),
                 sky_zone: None,
             },
             points: 0,

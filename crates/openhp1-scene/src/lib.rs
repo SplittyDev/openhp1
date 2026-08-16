@@ -12,6 +12,7 @@ pub use loader::LoadedScene;
 pub use openhp1_map::{LightVisibility, LightmapImage, Rotator, SkyZone, TriangleMesh};
 pub use render::{
     Corona, RenderLight, RenderLightmap, RenderScene, SurfaceMaterial, SurfaceMode, TextureImage,
+    WarpCoordinates, WarpPortal,
 };
 pub use runtime::{
     apply_runtime_actions, apply_runtime_actions_with, initialize_runtime, initialize_runtime_with,

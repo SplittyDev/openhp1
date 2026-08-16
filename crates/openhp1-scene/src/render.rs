@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Mat3, Vec3};
 use openhp1_map::{LightVisibility, LightmapImage, SkyZone, TriangleMesh, hsb_to_rgb};
 
 use crate::{Rotator, unreal_to_render};
@@ -55,6 +55,42 @@ impl RenderLight {
 pub struct RenderLightmap {
     pub ambient: Vec3,
     pub lights: Vec<RenderLight>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WarpCoordinates {
+    /// Authored UE-space origin.
+    pub origin: Vec3,
+    /// Authored UE-space coordinate axes.
+    pub axes: [Vec3; 3],
+}
+
+impl WarpCoordinates {
+    pub fn transform_to(self, destination: Self, position: Vec3) -> Vec3 {
+        destination.rotation().transpose() * (self.rotation() * (position - self.origin))
+            + destination.origin
+    }
+
+    pub fn transform_vector_to(self, destination: Self, vector: Vec3) -> Vec3 {
+        destination.rotation().transpose() * (self.rotation() * vector)
+    }
+
+    fn rotation(self) -> Mat3 {
+        Mat3::from_cols(self.axes[0], self.axes[1], self.axes[2])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WarpPortal {
+    pub surface: usize,
+    pub source_actor: usize,
+    /// Authored BSP plane; positive space selects Zone0 and negative space Zone1.
+    pub plane: [f32; 4],
+    /// The source WarpZoneInfo occupies Zone0 when true, otherwise Zone1.
+    pub source_on_positive_side: bool,
+    pub source: WarpCoordinates,
+    pub destination_actor: Option<usize>,
+    pub destination: Option<WarpCoordinates>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -121,6 +157,8 @@ pub struct RenderScene {
     /// Material for each surface. Missing visible textures use the renderer's
     /// checkerboard; the scene loader hides untextured actor-mesh faces.
     pub surface_materials: Vec<SurfaceMaterial>,
+    /// Authored `PF_Portal` BSP surfaces backed by `WarpZoneInfo` actors.
+    pub warp_portals: Vec<WarpPortal>,
     /// A fixed UE1 sky-box viewpoint rendered behind the main scene.
     pub sky_zone: Option<SkyZone>,
 }
@@ -221,6 +259,7 @@ mod tests {
             ],
             coronas: Vec::new(),
             surface_materials: Vec::new(),
+            warp_portals: Vec::new(),
             sky_zone: None,
         };
 
