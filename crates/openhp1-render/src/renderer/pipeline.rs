@@ -47,7 +47,7 @@ pub(super) fn create_pipeline(
             // The Unreal-to-render axis conversion changes handedness, so UE
             // polygon winding becomes clockwise in render space.
             front_face: front_face(reflected),
-            cull_mode: None,
+            cull_mode: cull_mode(material.two_sided),
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -91,7 +91,7 @@ pub(super) fn create_screen_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    _two_sided: bool,
+    two_sided: bool,
     fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -122,7 +122,7 @@ pub(super) fn create_screen_pipeline(
         },
         primitive: wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Cw,
-            cull_mode: None,
+            cull_mode: cull_mode(two_sided),
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -149,6 +149,10 @@ pub(super) fn create_screen_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn cull_mode(two_sided: bool) -> Option<wgpu::Face> {
+    (!two_sided).then_some(wgpu::Face::Back)
 }
 
 pub(super) fn fragment_entry(
@@ -363,6 +367,12 @@ fn texture_levels(image: &TextureImage) -> impl Iterator<Item = (u32, u32, &[u8]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn culling_substitutes_for_missing_bsp_side_admission() {
+        assert_eq!(cull_mode(false), Some(wgpu::Face::Back));
+        assert_eq!(cull_mode(true), None);
+    }
 
     #[test]
     fn reflected_view_reverses_the_render_space_front_face() {

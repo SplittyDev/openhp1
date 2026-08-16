@@ -380,16 +380,18 @@ commit, and live-verification fields for each item.
       non-TwoSided materials (`renderer/pipeline.rs:47-57`). The original
       side-admission behavior belongs in the shared scene/traversal path, not a
       mode-specific device state.
-  - [x] Deterministic acceptance: both triangle windings submitted after CPU
+  - [ ] Deterministic acceptance: both triangle windings submitted after CPU
         admission reach the rasterizer in Classic and Modern, including the
         reflected and screen-projected pipeline descriptors.
   - [ ] Live acceptance: select a shipped corpus/capture representative that
         actually submits a back-facing primitive and compare both modes.
-  - [x] Implemented by setting cull mode to `None` for both ordinary/reflected
-        scene pipelines and screen-projected surfaces; two-sided scene metadata
-        is preserved for BSP admission.
-  - [x] Focused render tests/check, formatting, and diff checks pass without the
-        copyrighted corpus.
+  - [x] Regression gate: disabling device culling before implementing BSP side
+        admission exposed back-facing fake-backdrop projections around the
+        `Lev2_HogFront` entrance. Keep the shared TwoSided-aware back-face
+        culling approximation until the CPU traversal can reject those polygons;
+        only then switch the device state to `None`.
+  - [x] Focused render coverage keeps one-sided ordinary and screen-projected
+        submissions back-face culled while TwoSided submissions remain unculled.
 - [ ] `BASE-015` Implement exact shared mesh environment mapping without
       treating BSP/texture `bEnvironment` or `ShinySurfaces` as the same
       feature. Direct Render.dll evidence: actor flag mapping
