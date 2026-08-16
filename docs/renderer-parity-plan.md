@@ -156,10 +156,10 @@ Each issue follows this sequence:
 ## Current work queue
 
 - [ ] Complete the original Render.dll/Engine.dll behavior inventory.
-- [ ] Complete the Classic coverage audit.
-- [ ] Complete the Modern coverage audit.
-- [ ] Reconcile all three passes into the feature matrix.
-- [ ] Triage the first confirmed gaps by shared impact and evidence strength.
+- [x] Complete the initial Classic coverage audit.
+- [x] Complete the initial Modern coverage audit.
+- [x] Reconcile all three passes into the feature matrix.
+- [x] Triage the first confirmed gaps by shared impact and evidence strength.
 
 No parity fix should begin from this queue alone; the corresponding audit row
 must first contain sufficient original evidence and concrete acceptance criteria.
