@@ -178,8 +178,13 @@ commit, and live-verification fields for each item.
 - [ ] `BASE-001` Honor `PF_Unlit` for translucent, modulated, masked-blended,
       and actor-opacity materials in Classic and Modern. Evidence:
       `Ghidra_Render.c:17988`; current divergence: `pipeline.rs:164-194` and
-      `scene.wgsl:130-154,188-201`. Implementation is in progress on
-      `codex/fix-unlit-blended-materials`.
+      `scene.wgsl:130-154,188-201`.
+  - [x] Implemented in `5ea6465` with fragment-selection coverage for all
+        blended modes, masking states, and both renderer modes.
+  - [x] `openhp1-render` nextest (66 passed, 4 skipped), focused check, format,
+        and diff check passed without the copyrighted corpus.
+  - [ ] Replay representative unlit blended content in Classic and Modern;
+        keep the parent open until visual acceptance.
 - [ ] `BASE-002` Decode, clip, update, and render decals, including shipped
       scorch, ecto-mark, and decal-shadow actors. Evidence:
       `Ghidra_Render.c:2219-2818,4204-4267` and
