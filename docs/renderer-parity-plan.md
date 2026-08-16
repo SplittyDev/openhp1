@@ -486,6 +486,16 @@ commit, and live-verification fields for each item.
         reverse list 2, both actor insertion passes, all traversal children
         before list-0 mirrors, globally unresolved main-child fallback, and
         runtime actor-record refresh.
+  - [x] Keep immutable BSP node indices and their first surface assignment in
+        the submission geometry, rebuilding them only when topology changes.
+        `23529b9` originally redistributed every triangle and linearly rescanned
+        triangle-to-node ownership for every node, in every camera plan. On an
+        Apple M2 Ultra, the fixed 1024x768 release Classic benchmark reduced
+        `Lev5_Final` from 73.933 to 2.751 ms/frame while preserving all 2,383
+        draw calls and checksum `c24e3fde3233ced3`; the other five fixed views
+        fell from 21.982–39.902 to 0.783–1.775 ms/frame with unchanged command
+        counts and checksums. Per-frame scene refresh remains 2.928–5.416
+        ms/frame across the six maps.
   - [ ] Recover `OccludeBsp` visibility/save order and the exact list-1
         composite UObject key. OpenHP1 does not retain retail runtime UObject
         indices, so current list 1 keeps deterministic binding grouping where
@@ -502,6 +512,9 @@ commit, and live-verification fields for each item.
         41-map scan found zero raw `PF_Mirrored` surfaces, and the current
         loader resolves zero `WarpPortal` records, so neither Erised nor warp
         child placement has an honest shipped live gate yet.
+        Recheck reported Classic gameplay FPS in `Lev2_HogFront`, `Lev2_Inc_A`,
+        `Lev3_Dungeon`, `Lev4_Sneak`, and `Lev5_Final`; the offscreen benchmark
+        excludes swapchain presentation and does not replace live validation.
 - [ ] `BASE-017` Apply `FTextureInfo` dimensions and `DrawScale` to ordinary
       legacy mesh byte UVs without changing the environment-map equation.
       Direct Render.dll evidence: `DrawMesh` and `DrawLodMesh` multiply each

@@ -47,6 +47,7 @@ pub(super) struct SubmissionGeometry {
     triangle_surfaces: Vec<usize>,
     triangle_nodes: Vec<usize>,
     bsp_nodes: Vec<BspNode>,
+    node_geometry: Vec<NodeGeometry>,
     actor_submissions: Vec<ActorSubmission>,
     materials: Vec<SurfaceMaterial>,
     surface_bindings: Vec<usize>,
@@ -54,13 +55,20 @@ pub(super) struct SubmissionGeometry {
     has_sky_zone: bool,
 }
 
+struct NodeGeometry {
+    indices: Vec<u32>,
+    surface: Option<usize>,
+}
+
 impl SubmissionGeometry {
     pub(super) fn new(scene: &RenderScene, surface_bindings: Vec<usize>) -> Self {
+        let node_geometry = node_geometry(scene);
         Self {
             indices: scene.mesh.indices.clone(),
             triangle_surfaces: scene.mesh.triangle_surfaces.clone(),
             triangle_nodes: scene.mesh.triangle_nodes.clone(),
             bsp_nodes: scene.mesh.bsp_nodes.clone(),
+            node_geometry,
             actor_submissions: scene.actor_submissions.clone(),
             materials: scene.surface_materials.clone(),
             surface_bindings,
@@ -79,67 +87,32 @@ impl SubmissionGeometry {
         camera_position: Vec3,
         bindings: &[MaterialBinding],
     ) -> SubmissionPlan {
-        let fallback = self.bsp_nodes.is_empty() || self.triangle_nodes.is_empty();
-        let fallback_triangles = self
-            .actor_submissions
-            .iter()
-            .map(|actor| actor.indices.start / 3)
-            .min()
-            .unwrap_or(self.triangle_surfaces.len());
+        let fallback = uses_fallback(&self.bsp_nodes, &self.triangle_nodes);
         let traversal = if fallback {
-            (0..fallback_triangles).collect()
+            (0..self.node_geometry.len()).collect()
         } else {
             traversal_order(&self.bsp_nodes, render_to_unreal(camera_position))
         };
-        let mut node_indices = vec![
-            Vec::new();
-            if fallback {
-                fallback_triangles
-            } else {
-                self.bsp_nodes.len()
-            }
-        ];
-        if fallback {
-            for (triangle, indices) in self
-                .indices
-                .chunks_exact(3)
-                .take(fallback_triangles)
-                .zip(&mut node_indices)
-            {
-                indices.extend_from_slice(triangle);
-            }
-        } else {
-            for (triangle, &node) in self.indices.chunks_exact(3).zip(&self.triangle_nodes) {
-                if let Some(indices) = node_indices.get_mut(node) {
-                    indices.extend_from_slice(triangle);
-                }
-            }
-        }
 
         let mut children = Vec::new();
         let mut list0 = Vec::new();
         let mut list1 = Vec::new();
         let mut list2 = Vec::new();
         for node in traversal {
-            let Some(indices) = node_indices.get(node).filter(|indices| !indices.is_empty()) else {
+            let Some(geometry) = self
+                .node_geometry
+                .get(node)
+                .filter(|geometry| !geometry.indices.is_empty())
+            else {
                 continue;
             };
-            let surface = if fallback {
-                self.triangle_surfaces.get(node).copied()
-            } else {
-                self.triangle_nodes
-                    .iter()
-                    .position(|candidate| *candidate == node)
-                    .and_then(|triangle| self.triangle_surfaces.get(triangle))
-                    .copied()
-            };
-            let Some(surface) = surface else {
+            let Some(surface) = geometry.surface else {
                 continue;
             };
             let Some(material) = self.materials.get(surface) else {
                 continue;
             };
-            let record = (node, surface, indices.as_slice());
+            let record = (node, surface, geometry.indices.as_slice());
             if material.mode == SurfaceMode::Backdrop && self.has_sky_zone {
                 children.push(SpecialRecord::Backdrop(record));
             } else if material.portal && self.resolved_portals.contains(&surface) {
@@ -217,6 +190,18 @@ impl SubmissionGeometry {
         {
             return false;
         }
+        let geometry_changed = self.indices != scene.mesh.indices
+            || self.triangle_surfaces != scene.mesh.triangle_surfaces
+            || self.triangle_nodes != scene.mesh.triangle_nodes
+            || (uses_fallback(&self.bsp_nodes, &self.triangle_nodes)
+                && fallback_triangle_count(&self.actor_submissions, self.triangle_surfaces.len())
+                    != fallback_triangle_count(
+                        &scene.actor_submissions,
+                        scene.mesh.triangle_surfaces.len(),
+                    ));
+        if geometry_changed {
+            self.node_geometry = node_geometry(scene);
+        }
         self.indices.clone_from(&scene.mesh.indices);
         self.triangle_surfaces
             .clone_from(&scene.mesh.triangle_surfaces);
@@ -275,6 +260,59 @@ impl SubmissionGeometry {
             }
         }
     }
+}
+
+fn node_geometry(scene: &RenderScene) -> Vec<NodeGeometry> {
+    let fallback = uses_fallback(&scene.mesh.bsp_nodes, &scene.mesh.triangle_nodes);
+    let count = if fallback {
+        fallback_triangle_count(&scene.actor_submissions, scene.mesh.triangle_surfaces.len())
+    } else {
+        scene.mesh.bsp_nodes.len()
+    };
+    let mut geometry = (0..count)
+        .map(|_| NodeGeometry {
+            indices: Vec::new(),
+            surface: None,
+        })
+        .collect::<Vec<_>>();
+    if fallback {
+        for ((triangle, &surface), record) in scene
+            .mesh
+            .indices
+            .chunks_exact(3)
+            .zip(&scene.mesh.triangle_surfaces)
+            .zip(&mut geometry)
+        {
+            record.indices.extend_from_slice(triangle);
+            record.surface = Some(surface);
+        }
+    } else {
+        for ((triangle, &surface), &node) in scene
+            .mesh
+            .indices
+            .chunks_exact(3)
+            .zip(&scene.mesh.triangle_surfaces)
+            .zip(&scene.mesh.triangle_nodes)
+        {
+            if let Some(record) = geometry.get_mut(node) {
+                record.indices.extend_from_slice(triangle);
+                record.surface.get_or_insert(surface);
+            }
+        }
+    }
+    geometry
+}
+
+fn uses_fallback(bsp_nodes: &[BspNode], triangle_nodes: &[usize]) -> bool {
+    bsp_nodes.is_empty() || triangle_nodes.is_empty()
+}
+
+fn fallback_triangle_count(actors: &[ActorSubmission], default: usize) -> usize {
+    actors
+        .iter()
+        .map(|actor| actor.indices.start / 3)
+        .min()
+        .unwrap_or(default)
 }
 
 enum SpecialRecord<'a> {
@@ -448,6 +486,37 @@ mod tests {
         }
     }
 
+    fn scene(
+        indices: Range<u32>,
+        triangle_surfaces: Vec<usize>,
+        triangle_nodes: Vec<usize>,
+        bsp_nodes: Vec<BspNode>,
+        actor_submissions: Vec<ActorSubmission>,
+        materials: Vec<SurfaceMaterial>,
+    ) -> RenderScene {
+        RenderScene {
+            mesh: openhp1_scene::TriangleMesh {
+                indices: indices.collect(),
+                triangle_surfaces,
+                triangle_nodes,
+                bsp_nodes,
+                ..Default::default()
+            },
+            textures: Vec::new(),
+            lightmaps: Vec::new(),
+            realtime_lightmaps: Vec::new(),
+            coronas: Vec::new(),
+            actor_submissions,
+            surface_materials: materials,
+            warp_portals: Vec::new(),
+            sky_zone: None,
+        }
+    }
+
+    fn geometry(scene: RenderScene, surface_bindings: Vec<usize>) -> SubmissionGeometry {
+        SubmissionGeometry::new(&scene, surface_bindings)
+    }
+
     #[test]
     fn trace_keeps_coplanar_node_records_and_retail_device_actor_gates() {
         let materials = vec![
@@ -466,33 +535,33 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let geometry = SubmissionGeometry {
-            indices: (0..18).collect(),
-            triangle_surfaces: vec![1, 0, 0, 2, 3, 4],
-            triangle_nodes: vec![1, 0, 3, 2],
-            bsp_nodes: vec![
-                node(1, 2, 3),
-                node(-1, -1, -1),
-                node(-1, -1, -1),
-                node(-1, -1, -1),
-            ],
-            actor_submissions: vec![
-                ActorSubmission {
-                    actor_index: 7,
-                    indices: 12..15,
-                    translucent_pass: false,
-                },
-                ActorSubmission {
-                    actor_index: 8,
-                    indices: 15..18,
-                    translucent_pass: true,
-                },
-            ],
-            materials,
-            surface_bindings: vec![0, 1, 2, 3, 4],
-            resolved_portals: Vec::new(),
-            has_sky_zone: false,
-        };
+        let geometry = geometry(
+            scene(
+                0..18,
+                vec![1, 0, 0, 2, 3, 4],
+                vec![1, 0, 3, 2],
+                vec![
+                    node(1, 2, 3),
+                    node(-1, -1, -1),
+                    node(-1, -1, -1),
+                    node(-1, -1, -1),
+                ],
+                vec![
+                    ActorSubmission {
+                        actor_index: 7,
+                        indices: 12..15,
+                        translucent_pass: false,
+                    },
+                    ActorSubmission {
+                        actor_index: 8,
+                        indices: 15..18,
+                        translucent_pass: true,
+                    },
+                ],
+                materials,
+            ),
+            vec![0, 1, 2, 3, 4],
+        );
         let bindings = (0..5).map(binding).collect::<Vec<_>>();
         let plan = geometry.plan(-Vec3::Z, &bindings);
         let trace = plan
@@ -523,30 +592,32 @@ mod tests {
 
     #[test]
     fn all_traversal_children_precede_list_zero_mirror_overlays() {
-        let geometry = SubmissionGeometry {
-            indices: (0..9).collect(),
-            triangle_surfaces: vec![0, 1, 2],
-            triangle_nodes: vec![0, 1, 2],
-            bsp_nodes: vec![node(-1, -1, 1), node(-1, -1, 2), node(-1, -1, -1)],
-            actor_submissions: Vec::new(),
-            materials: vec![
-                SurfaceMaterial {
-                    mode: SurfaceMode::Backdrop,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    portal: true,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    mirror: true,
-                    ..Default::default()
-                },
-            ],
-            surface_bindings: vec![0, 1, 2],
-            resolved_portals: vec![1],
-            has_sky_zone: true,
-        };
+        let mut geometry = geometry(
+            scene(
+                0..9,
+                vec![0, 1, 2],
+                vec![0, 1, 2],
+                vec![node(-1, -1, 1), node(-1, -1, 2), node(-1, -1, -1)],
+                Vec::new(),
+                vec![
+                    SurfaceMaterial {
+                        mode: SurfaceMode::Backdrop,
+                        ..Default::default()
+                    },
+                    SurfaceMaterial {
+                        portal: true,
+                        ..Default::default()
+                    },
+                    SurfaceMaterial {
+                        mirror: true,
+                        ..Default::default()
+                    },
+                ],
+            ),
+            vec![0, 1, 2],
+        );
+        geometry.resolved_portals = vec![1];
+        geometry.has_sky_zone = true;
         let plan = geometry.plan(Vec3::ZERO, &[binding(0), binding(1), binding(2)]);
 
         assert!(matches!(
@@ -561,26 +632,26 @@ mod tests {
 
     #[test]
     fn unresolved_portal_and_backdrop_fall_back_to_list_one() {
-        let geometry = SubmissionGeometry {
-            indices: (0..6).collect(),
-            triangle_surfaces: vec![0, 1],
-            triangle_nodes: vec![0, 1],
-            bsp_nodes: vec![node(-1, -1, 1), node(-1, -1, -1)],
-            actor_submissions: Vec::new(),
-            materials: vec![
-                SurfaceMaterial {
-                    mode: SurfaceMode::Backdrop,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    portal: true,
-                    ..Default::default()
-                },
-            ],
-            surface_bindings: vec![0, 1],
-            resolved_portals: Vec::new(),
-            has_sky_zone: false,
-        };
+        let geometry = geometry(
+            scene(
+                0..6,
+                vec![0, 1],
+                vec![0, 1],
+                vec![node(-1, -1, 1), node(-1, -1, -1)],
+                Vec::new(),
+                vec![
+                    SurfaceMaterial {
+                        mode: SurfaceMode::Backdrop,
+                        ..Default::default()
+                    },
+                    SurfaceMaterial {
+                        portal: true,
+                        ..Default::default()
+                    },
+                ],
+            ),
+            vec![0, 1],
+        );
         let plan = geometry.plan(Vec3::ZERO, &[binding(0), binding(1)]);
 
         assert!(plan.commands.iter().all(|command| matches!(
@@ -594,43 +665,40 @@ mod tests {
     }
 
     #[test]
-    fn refresh_replaces_runtime_actor_records() {
-        let mut geometry = SubmissionGeometry {
-            indices: (0..6).collect(),
-            triangle_surfaces: vec![0, 1],
-            triangle_nodes: Vec::new(),
-            bsp_nodes: Vec::new(),
-            actor_submissions: vec![ActorSubmission {
-                actor_index: 3,
-                indices: 3..6,
-                translucent_pass: false,
-            }],
-            materials: vec![SurfaceMaterial::default(), SurfaceMaterial::default()],
-            surface_bindings: vec![0, 0],
-            resolved_portals: Vec::new(),
-            has_sky_zone: false,
-        };
-        let scene = RenderScene {
-            mesh: openhp1_scene::TriangleMesh {
-                indices: (0..6).collect(),
-                triangle_surfaces: vec![0, 1],
-                ..Default::default()
-            },
-            textures: Vec::new(),
-            lightmaps: Vec::new(),
-            realtime_lightmaps: Vec::new(),
-            coronas: Vec::new(),
-            actor_submissions: vec![ActorSubmission {
+    fn refresh_reuses_node_geometry_while_replacing_runtime_actor_records() {
+        let mut geometry = geometry(
+            scene(
+                0..6,
+                vec![0, 1],
+                Vec::new(),
+                Vec::new(),
+                vec![ActorSubmission {
+                    actor_index: 3,
+                    indices: 3..6,
+                    translucent_pass: false,
+                }],
+                vec![SurfaceMaterial::default(), SurfaceMaterial::default()],
+            ),
+            vec![0, 0],
+        );
+        let scene = scene(
+            0..6,
+            vec![0, 1],
+            Vec::new(),
+            Vec::new(),
+            vec![ActorSubmission {
                 actor_index: 3,
                 indices: 3..6,
                 translucent_pass: true,
             }],
-            surface_materials: vec![SurfaceMaterial::default(), SurfaceMaterial::default()],
-            warp_portals: Vec::new(),
-            sky_zone: None,
-        };
+            vec![SurfaceMaterial::default(), SurfaceMaterial::default()],
+        );
 
+        let node_geometry = geometry.node_geometry.as_ptr();
+        let node_indices = geometry.node_geometry[0].indices.as_ptr();
         assert!(geometry.refresh(&scene, vec![0, 0]));
+        assert_eq!(geometry.node_geometry.as_ptr(), node_geometry);
+        assert_eq!(geometry.node_geometry[0].indices.as_ptr(), node_indices);
         let plan = geometry.plan(Vec3::ZERO, &[binding(0)]);
         assert!(matches!(
             plan.commands.last(),
@@ -638,6 +706,56 @@ mod tests {
                 source: GeometrySource::Actor { actor_index: 3 },
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn refresh_rebuilds_fallback_geometry_when_actor_boundary_moves() {
+        let materials = vec![SurfaceMaterial::default(); 3];
+        let bsp_nodes = vec![node(-1, -1, -1)];
+        let mut geometry = geometry(
+            scene(
+                0..9,
+                vec![0, 1, 2],
+                Vec::new(),
+                bsp_nodes.clone(),
+                vec![ActorSubmission {
+                    actor_index: 7,
+                    indices: 3..9,
+                    translucent_pass: false,
+                }],
+                materials.clone(),
+            ),
+            vec![0; 3],
+        );
+        let scene = scene(
+            0..9,
+            vec![0, 1, 2],
+            Vec::new(),
+            bsp_nodes,
+            vec![ActorSubmission {
+                actor_index: 7,
+                indices: 6..9,
+                translucent_pass: false,
+            }],
+            materials,
+        );
+
+        assert!(geometry.refresh(&scene, vec![0; 3]));
+        let plan = geometry.plan(Vec3::ZERO, &[binding(0)]);
+        assert_eq!(plan.indices, (0..9).collect::<Vec<_>>());
+        assert!(matches!(
+            plan.commands.as_slice(),
+            [
+                SubmissionCommand::Geometry {
+                    batch: DrawBatch { indices, .. },
+                    source: GeometrySource::BspList1,
+                },
+                SubmissionCommand::Geometry {
+                    source: GeometrySource::Actor { actor_index: 7 },
+                    ..
+                }
+            ] if indices == &(0..6)
         ));
     }
 }
