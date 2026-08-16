@@ -18,7 +18,9 @@ use openhp1_runtime::{
     ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject, WeaponAttachment,
 };
 use openhp1_script::class_defaults_reader;
-use openhp1_texture::{IceAnimation, Palette, Texture, TextureRenderFlags, WaterAnimation};
+use openhp1_texture::{
+    FireAnimation, FireTexture, IceAnimation, Palette, Texture, TextureRenderFlags, WaterAnimation,
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -1725,6 +1727,18 @@ impl LoadedScene {
                 }
             }
         }
+        for fire in &mut animations.fire {
+            if fire.animation.tick(delta_time) {
+                animations
+                    .pixels
+                    .insert(fire.id.clone(), fire.animation.indices().to_vec());
+                for subscriber in &fire.subscribers {
+                    self.render.textures[subscriber.texture].rgba =
+                        fire.animation.rgba(&fire.palette, subscriber.masked)?;
+                    changed.push(subscriber.texture);
+                }
+            }
+        }
         for animation in &mut animations.generic {
             if animation.tick(delta_time) {
                 animations.pixels.insert(
@@ -2158,9 +2172,23 @@ struct AnimatedWaterTexture {
     animation: WaterAnimation,
 }
 
+struct AnimatedFireTexture {
+    id: SceneObjectId,
+    palette: Palette,
+    animation: FireAnimation,
+    subscribers: Vec<FireTextureSubscriber>,
+}
+
+#[derive(Clone, Copy)]
+struct FireTextureSubscriber {
+    texture: usize,
+    masked: bool,
+}
+
 #[derive(Default)]
 struct TextureAnimations {
     water: Vec<AnimatedWaterTexture>,
+    fire: Vec<AnimatedFireTexture>,
     ice: Vec<AnimatedIceTexture>,
     generic: Vec<AnimatedGenericTexture>,
     attachments: Vec<AnimatedSurfaceAttachments>,
@@ -4836,6 +4864,7 @@ fn decode_texture(
     } else {
         None
     };
+    let fire = texture.fire.clone();
     Ok(DecodedTexture {
         id: SceneObjectId {
             package: resolved.package.summary().source.to_string(),
@@ -4844,6 +4873,7 @@ fn decode_texture(
         texture,
         palette,
         water,
+        fire,
         ice,
         generic,
     })
@@ -4972,6 +5002,7 @@ struct DecodedTexture {
     texture: Texture,
     palette: Palette,
     water: Option<WaterAnimation>,
+    fire: Option<FireTexture>,
     ice: Option<DecodedIceTexture>,
     generic: Option<GenericTextureAnimation>,
 }
@@ -5061,6 +5092,8 @@ fn append_texture_image(
         .context("texture has no mip levels")?;
     let pixels = if let Some(water) = &decoded.water {
         water.indices().to_vec()
+    } else if decoded.fire.is_some() {
+        mip.indices.clone()
     } else if let Some(ice) = &decoded.ice {
         ice.animation.indices().to_vec()
     } else {
@@ -5078,6 +5111,38 @@ fn append_texture_image(
             palette: decoded.palette.clone(),
             animation: animation.clone(),
         });
+    }
+    if let Some(config) = &decoded.fire {
+        let subscriber = FireTextureSubscriber {
+            texture: index,
+            masked,
+        };
+        if let Some(existing) = water_animations
+            .fire
+            .iter_mut()
+            .find(|fire| fire.id == decoded.id)
+        {
+            textures[index].rgba = existing.animation.rgba(&decoded.palette, masked)?;
+            existing.subscribers.push(subscriber);
+        } else {
+            let animation = config.animate(
+                mip.width,
+                mip.height,
+                decoded.texture.prime_count,
+                decoded.texture.min_frame_rate,
+                decoded.texture.max_frame_rate,
+            )?;
+            textures[index].rgba = animation.rgba(&decoded.palette, masked)?;
+            water_animations
+                .pixels
+                .insert(decoded.id.clone(), animation.indices().to_vec());
+            water_animations.fire.push(AnimatedFireTexture {
+                id: decoded.id.clone(),
+                palette: decoded.palette.clone(),
+                animation,
+                subscribers: vec![subscriber],
+            });
+        }
     }
     if let Some(ice) = &decoded.ice {
         register_ice_dependency(water_animations, &ice.source)?;
@@ -5100,7 +5165,7 @@ fn append_texture_image(
             Some(index),
             animation,
             masked,
-            decoded.water.is_none() && decoded.ice.is_none(),
+            decoded.water.is_none() && decoded.fire.is_none() && decoded.ice.is_none(),
         )?);
     }
     Ok(index)
@@ -5277,13 +5342,169 @@ mod tests {
         RuntimeObject, ScriptRuntime, WeaponAttachment,
     };
     use openhp1_texture::{
-        Color, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Palette, Texture,
-        TextureRenderFlags,
+        Color, FireRng, FireSpark, FireTexture, IcePanningStyle, IceTexture, IceTimeMethod,
+        MipLevel, Palette, Texture, TextureRenderFlags,
     };
 
     use crate::{SurfaceMaterial, SurfaceMode};
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn fire_registration_primes_once_and_shares_masked_subscribers_and_cpu_pixels() {
+        let fire = FireTexture {
+            spark_type: 2,
+            render_heat: 255,
+            rising: false,
+            fx_heat: 0,
+            fx_size: 0,
+            fx_aux_size: 0,
+            fx_area: 0,
+            fx_frequency: 0,
+            fx_phase: 0,
+            fx_horiz_speed: 0,
+            fx_vert_speed: 0,
+            draw_mode: 0,
+            sparks_limit: 4,
+            num_sparks: 1,
+            sparks: vec![FireSpark {
+                kind: 2,
+                heat: 200,
+                x: 4,
+                y: 4,
+                d: 1,
+                ..Default::default()
+            }],
+        };
+        let id = crate::SceneObjectId {
+            package: "fire-test".to_owned(),
+            export_index: 1,
+        };
+        let palette = Palette {
+            colors: (0..=255)
+                .map(|v| Color {
+                    red: v,
+                    green: v,
+                    blue: v,
+                    alpha: 255,
+                })
+                .collect(),
+        };
+        let decoded = super::DecodedTexture {
+            id: id.clone(),
+            texture: Texture {
+                palette: ObjectReference::None,
+                anim_next: ObjectReference::None,
+                detail_texture: ObjectReference::None,
+                macro_texture: ObjectReference::None,
+                prime_count: 0,
+                min_frame_rate: 0.0,
+                max_frame_rate: 0.0,
+                draw_scale: 1.0,
+                declared_width: Some(8),
+                declared_height: Some(8),
+                render_flags: TextureRenderFlags::default(),
+                mips: vec![MipLevel {
+                    width: 8,
+                    height: 8,
+                    width_bits: 3,
+                    height_bits: 3,
+                    indices: vec![0; 64],
+                }],
+                wet: None,
+                ice: None,
+                fire: Some(fire.clone()),
+            },
+            palette,
+            water: None,
+            fire: Some(fire),
+            ice: None,
+            generic: None,
+        };
+        let mut images = Vec::new();
+        let mut animations = super::TextureAnimations::default();
+        super::append_texture_image(&mut images, &mut animations, &decoded, false, false).unwrap();
+        let primed = animations.fire[0].animation.indices().to_vec();
+        assert_eq!(animations.pixels[&id], primed);
+        super::append_texture_image(&mut images, &mut animations, &decoded, true, false).unwrap();
+        assert_eq!(animations.fire.len(), 1);
+        assert_eq!(animations.fire[0].subscribers.len(), 2);
+        assert_eq!(animations.fire[0].animation.indices(), primed);
+    }
+
+    #[test]
+    fn fire_objects_consume_the_shared_rng_in_first_registration_order() {
+        let config = FireTexture {
+            render_heat: 255,
+            fx_frequency: 0,
+            sparks_limit: 4,
+            num_sparks: 1,
+            sparks: vec![FireSpark {
+                kind: 0,
+                x: 4,
+                y: 4,
+                ..Default::default()
+            }],
+            ..FireTexture::default()
+        };
+        let mut first_prime_rng = FireRng::new([0; 512], 0);
+        let mut second_prime_rng = FireRng::new([0; 512], 0);
+        let first = config
+            .animate_with_rng(8, 8, 0, 0.0, 0.0, &mut first_prime_rng)
+            .unwrap();
+        let second = config
+            .animate_with_rng(8, 8, 0, 0.0, 0.0, &mut second_prime_rng)
+            .unwrap();
+        let first_id = crate::SceneObjectId {
+            package: "first".to_owned(),
+            export_index: 1,
+        };
+        let second_id = crate::SceneObjectId {
+            package: "second".to_owned(),
+            export_index: 2,
+        };
+        let mut animations = super::TextureAnimations {
+            fire: vec![
+                super::AnimatedFireTexture {
+                    id: first_id.clone(),
+                    palette: Palette { colors: Vec::new() },
+                    animation: first,
+                    subscribers: Vec::new(),
+                },
+                super::AnimatedFireTexture {
+                    id: second_id.clone(),
+                    palette: Palette { colors: Vec::new() },
+                    animation: second,
+                    subscribers: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut table = [0; 512];
+        table[128] = 32;
+        table[132] = 64;
+        let mut rng = FireRng::new(table, 0);
+        for fire in &mut animations.fire {
+            assert!(fire.animation.tick_with_rng(1.0, &mut rng));
+        }
+
+        assert_eq!(
+            animations
+                .fire
+                .iter()
+                .map(|fire| fire.id.clone())
+                .collect::<Vec<_>>(),
+            [first_id, second_id]
+        );
+        assert_eq!(
+            [
+                animations.fire[0].animation.indices()[36],
+                animations.fire[1].animation.indices()[36],
+            ],
+            [37, 45]
+        );
+        assert_eq!(rng.index, 8);
+    }
 
     #[test]
     fn bsp_default_texture_is_only_used_for_a_raw_null_reference() {
@@ -5338,6 +5559,7 @@ mod tests {
                     .collect(),
                 wet: None,
                 ice: None,
+                fire: None,
             },
             palette: Palette {
                 colors: (0..4)
@@ -5350,6 +5572,7 @@ mod tests {
                     .collect(),
             },
             water: None,
+            fire: None,
             ice: None,
             generic: None,
         };
@@ -5401,6 +5624,7 @@ mod tests {
                 }],
                 wet: None,
                 ice: None,
+                fire: None,
             },
             palette: Palette {
                 colors: vec![Color {
@@ -5411,6 +5635,7 @@ mod tests {
                 }],
             },
             water: None,
+            fire: None,
             ice: None,
             generic: Some(super::GenericTextureAnimation {
                 frames: Vec::new(),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use openhp1_package::{ObjectReader, ObjectReference, Package, PropertyKind};
 
-use crate::{Error, Palette, Result, decode::nonnegative};
+use crate::{Error, FireSpark, FireTexture, Palette, Result, decode::nonnegative};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MipLevel {
@@ -33,6 +33,7 @@ pub struct Texture {
     pub mips: Vec<MipLevel>,
     pub wet: Option<WetTexture>,
     pub ice: Option<IceTexture>,
+    pub fire: Option<FireTexture>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -182,8 +183,21 @@ impl Texture {
         let mut v_displace = 0.0;
         let mut u_position = 0.0;
         let mut v_position = 0.0;
-        let mut render_heat = 255;
+        let fire_defaults = FireTexture::default();
+        let mut render_heat = fire_defaults.render_heat;
         let mut rising = false;
+        let mut spark_type = fire_defaults.spark_type;
+        let mut fx_heat = fire_defaults.fx_heat;
+        let mut fx_size = fire_defaults.fx_size;
+        let mut fx_aux_size = fire_defaults.fx_aux_size;
+        let mut fx_area = fire_defaults.fx_area;
+        let mut fx_frequency = fire_defaults.fx_frequency;
+        let mut fx_phase = fire_defaults.fx_phase;
+        let mut fx_horiz_speed = fire_defaults.fx_horiz_speed;
+        let mut fx_vert_speed = fire_defaults.fx_vert_speed;
+        let mut draw_mode = fire_defaults.draw_mode;
+        let mut sparks_limit = fire_defaults.sparks_limit;
+        let mut active_sparks = 0;
         let mut water_drop_count = 0;
         let mut water_drops = Vec::new();
         let mut render_flags = TextureRenderFlags::default();
@@ -285,6 +299,46 @@ impl Texture {
                 "RenderHeat" if property.kind == PropertyKind::Byte => {
                     render_heat = reader.property_reader(&property).read_u8()?;
                 }
+                "SparkType" if property.kind == PropertyKind::Byte => {
+                    spark_type = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_Heat" if property.kind == PropertyKind::Byte => {
+                    fx_heat = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_Size" if property.kind == PropertyKind::Byte => {
+                    fx_size = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_AuxSize" if property.kind == PropertyKind::Byte => {
+                    fx_aux_size = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_Area" if property.kind == PropertyKind::Byte => {
+                    fx_area = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_Frequency" if property.kind == PropertyKind::Byte => {
+                    fx_frequency = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_Phase" if property.kind == PropertyKind::Byte => {
+                    fx_phase = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_HorizSpeed" if property.kind == PropertyKind::Byte => {
+                    fx_horiz_speed = reader.property_reader(&property).read_u8()?;
+                }
+                "FX_VertSpeed" if property.kind == PropertyKind::Byte => {
+                    fx_vert_speed = reader.property_reader(&property).read_u8()?;
+                }
+                "DrawMode" if property.kind == PropertyKind::Byte => {
+                    draw_mode = reader.property_reader(&property).read_u8()?;
+                }
+                "SparksLimit" if property.kind == PropertyKind::Int => {
+                    let mut value = reader.property_reader(&property);
+                    let offset = value.absolute_position();
+                    sparks_limit = nonnegative(value.read_i32()?, offset, "fire spark limit")?;
+                }
+                "NumSparks" if property.kind == PropertyKind::Int => {
+                    let mut value = reader.property_reader(&property);
+                    let offset = value.absolute_position();
+                    active_sparks = nonnegative(value.read_i32()?, offset, "active fire sparks")?;
+                }
                 "bRising" if property.kind == PropertyKind::Bool => {
                     rising = property.bool_value.unwrap_or(false);
                 }
@@ -335,6 +389,7 @@ impl Texture {
                 procedural_height.unwrap_or_else(|| mips.first().map_or(0, |mip| mip.height));
             mips = vec![empty_mip(width, height)?];
         }
+        let mut fire_sparks = None;
         match class {
             TextureClass::Regular => {}
             TextureClass::Wet => {
@@ -360,9 +415,11 @@ impl Texture {
                         .checked_mul(8)
                         .ok_or(Error::InvalidFireSparkCount { count: spark_count })?,
                 )?;
-                if let Some(mip) = mips.first_mut() {
-                    render_fire_snapshot(mip, sparks, render_heat, rising);
-                }
+                let serialized = sparks
+                    .chunks_exact(8)
+                    .map(FireSpark::from_bytes)
+                    .collect::<Vec<_>>();
+                fire_sparks = Some(serialized);
             }
         }
         let wet = (class == TextureClass::Wet)
@@ -388,6 +445,27 @@ impl Texture {
             u_position,
             v_position,
         });
+        let fire = fire_sparks.map(|mut sparks| {
+            let sparks_limit = sparks_limit.clamp(4, 8192);
+            sparks.resize(sparks_limit, FireSpark::default());
+            FireTexture {
+                spark_type,
+                render_heat,
+                rising,
+                fx_heat,
+                fx_size,
+                fx_aux_size,
+                fx_area,
+                fx_frequency,
+                fx_phase,
+                fx_horiz_speed,
+                fx_vert_speed,
+                draw_mode,
+                sparks_limit,
+                num_sparks: active_sparks.min(sparks_limit),
+                sparks,
+            }
+        });
 
         Ok(Self {
             palette,
@@ -404,6 +482,7 @@ impl Texture {
             mips,
             wet,
             ice,
+            fire,
         })
     }
 
@@ -961,7 +1040,7 @@ fn set_pressure(
     field[x.min(width - 1) + y.min(height - 1) * width].pressure = pressure;
 }
 
-fn rgba(indices: &[u8], palette: &Palette, masked: bool) -> Result<Vec<u8>> {
+pub(crate) fn rgba(indices: &[u8], palette: &Palette, masked: bool) -> Result<Vec<u8>> {
     let mut rgba = Vec::with_capacity(indices.len() * 4);
     for &index in indices {
         let color =
@@ -1088,51 +1167,6 @@ fn pixel_count(width: u32, height: u32) -> Result<usize> {
         .ok_or(Error::InvalidMipDimensions { width, height })
 }
 
-fn render_fire_snapshot(mip: &mut MipLevel, sparks: &[u8], render_heat: u8, rising: bool) {
-    if mip.width == 0 || mip.height == 0 {
-        return;
-    }
-    let width = mip.width as usize;
-    let height = mip.height as usize;
-    let mut random = 0x6d2b_79f5_u32;
-    let heat_loss = 1.0 - f32::from(255 - render_heat) / 16.0;
-    let fade = |sum: usize| {
-        (((sum as f32 + 0.5) * 0.25 + heat_loss)
-            .round()
-            .clamp(0.0, 255.0)) as u8
-    };
-    let mut buffer = vec![0; mip.indices.len()];
-
-    // ponytail: this deterministic warm-up is a static viewer snapshot.
-    // Move the same update into a runtime texture tick when animation lands.
-    for _ in 0..32 {
-        for spark in sparks.chunks_exact(8) {
-            random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            let x = usize::from(spark[2]);
-            let y = usize::from(spark[3]);
-            if x < width && y < height {
-                mip.indices[x + y * width] = (random >> 24) as u8;
-            }
-        }
-        let rise = usize::from(rising);
-        for y in 0..height {
-            let source_y = (y + rise) % height;
-            let next_y = (source_y + 1) % height;
-            for x in 0..width {
-                let left = if x == 0 { width - 1 } else { x - 1 };
-                let right = if x + 1 == width { 0 } else { x + 1 };
-                buffer[x + y * width] = fade(
-                    usize::from(mip.indices[left + source_y * width])
-                        + usize::from(mip.indices[x + source_y * width])
-                        + usize::from(mip.indices[right + source_y * width])
-                        + usize::from(mip.indices[x + next_y * width]),
-                );
-            }
-        }
-        mip.indices.copy_from_slice(&buffer);
-    }
-}
-
 impl TextureRenderFlags {
     fn set(&mut self, name: &str, value: bool) {
         if name.eq_ignore_ascii_case("bInvisible") {
@@ -1195,8 +1229,8 @@ mod tests {
     use openhp1_package::{ObjectReference, PACKAGE_MAGIC, Package};
 
     use crate::{
-        Color, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Palette, Texture,
-        TextureRenderFlags,
+        Color, FireSpark, FireTexture, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel,
+        Palette, Texture, TextureRenderFlags,
     };
 
     #[test]
@@ -1222,6 +1256,7 @@ mod tests {
             }],
             wet: None,
             ice: None,
+            fire: None,
         };
         let palette = Palette {
             colors: vec![
@@ -1278,20 +1313,118 @@ mod tests {
     }
 
     #[test]
-    fn fire_snapshot_produces_repeatable_pixels() {
-        let mut first = MipLevel {
-            width: 8,
-            height: 8,
-            width_bits: 3,
-            height_bits: 3,
-            indices: vec![0; 64],
-        };
-        let mut second = first.clone();
-        let sparks = [0, 255, 4, 6, 0, 0, 0, 0];
-        super::render_fire_snapshot(&mut first, &sparks, 223, true);
-        super::render_fire_snapshot(&mut second, &sparks, 223, true);
-        assert_eq!(first, second);
-        assert!(first.indices.iter().any(|index| *index != 0));
+    fn decodes_fire_fields_active_prefix_and_serialized_backing_slots() {
+        let records = [
+            [0x10, 0x20, 1, 2, 3, 4, 5, 6],
+            [0xaa, 0xbb, 7, 8, 9, 10, 11, 12],
+        ];
+        let texture =
+            Texture::decode(&synthetic_fire_texture(Some(4), 1, &records, true), 0).unwrap();
+        let fire = texture.fire.unwrap();
+
+        assert_eq!(
+            [
+                fire.spark_type,
+                fire.render_heat,
+                fire.fx_heat,
+                fire.fx_size,
+                fire.fx_aux_size,
+                fire.fx_area,
+                fire.fx_frequency,
+                fire.fx_phase,
+                fire.fx_horiz_speed,
+                fire.fx_vert_speed,
+                fire.draw_mode,
+            ],
+            [9, 201, 202, 203, 204, 205, 206, 207, 208, 209, 2]
+        );
+        assert!(fire.rising);
+        assert_eq!(
+            (fire.sparks_limit, fire.num_sparks, fire.sparks.len()),
+            (4, 1, 4)
+        );
+        assert_eq!(fire.sparks[0], FireSpark::from_bytes(&records[0]));
+        assert_eq!(fire.sparks[1], FireSpark::from_bytes(&records[1]));
+        assert_eq!(fire.sparks[2..], [FireSpark::default(); 2]);
+    }
+
+    #[test]
+    fn fire_postload_resizes_backing_then_clamps_the_active_prefix() {
+        let texture = Texture::decode(&synthetic_fire_texture(Some(4), 1, &[], false), 0).unwrap();
+        let fire = texture.fire.unwrap();
+        assert_eq!(
+            (fire.sparks_limit, fire.num_sparks, fire.sparks.len()),
+            (4, 1, 4)
+        );
+        assert_eq!(fire.sparks, [FireSpark::default(); 4]);
+
+        let mut serialized = vec![[0; 8]; 8193];
+        serialized[8191] = [0x1f, 1, 2, 3, 4, 5, 6, 7];
+        serialized[8192] = [0x2b, 7, 6, 5, 4, 3, 2, 1];
+        let texture = Texture::decode(
+            &synthetic_fire_texture(Some(8193), 8193, &serialized, false),
+            0,
+        )
+        .unwrap();
+        let fire = texture.fire.unwrap();
+        assert_eq!(
+            (fire.sparks_limit, fire.num_sparks, fire.sparks.len()),
+            (8192, 8192, 8192)
+        );
+        assert_eq!(
+            fire.sparks[8191],
+            FireSpark::from_bytes(&[0x1f, 1, 2, 3, 4, 5, 6, 7])
+        );
+        assert!(!fire.sparks.iter().any(|spark| spark.kind == 0x2b));
+    }
+
+    #[test]
+    fn fire_omissions_use_native_defaults_and_sparks_limit_is_clamped() {
+        let texture = Texture::decode(&synthetic_fire_texture(None, 0, &[], false), 0).unwrap();
+        let fire = texture.fire.unwrap();
+        let defaults = FireTexture::default();
+        assert_eq!(
+            [
+                fire.spark_type,
+                fire.render_heat,
+                fire.fx_heat,
+                fire.fx_size,
+                fire.fx_aux_size,
+                fire.fx_area,
+                fire.fx_frequency,
+                fire.fx_phase,
+                fire.fx_horiz_speed,
+                fire.fx_vert_speed,
+                fire.draw_mode,
+            ],
+            [
+                defaults.spark_type,
+                defaults.render_heat,
+                defaults.fx_heat,
+                defaults.fx_size,
+                defaults.fx_aux_size,
+                defaults.fx_area,
+                defaults.fx_frequency,
+                defaults.fx_phase,
+                defaults.fx_horiz_speed,
+                defaults.fx_vert_speed,
+                defaults.draw_mode,
+            ]
+        );
+        assert_eq!(
+            (fire.sparks_limit, fire.num_sparks, fire.sparks.len()),
+            (1024, 0, 1024)
+        );
+        assert!(!fire.rising);
+
+        for (serialized, expected) in [(0, 4), (3, 4), (4, 4), (8192, 8192), (8193, 8192)] {
+            let texture =
+                Texture::decode(&synthetic_fire_texture(Some(serialized), 0, &[], false), 0)
+                    .unwrap();
+            let fire = texture.fire.unwrap();
+            assert_eq!(fire.sparks_limit, expected, "serialized limit {serialized}");
+            assert_eq!(fire.sparks.len(), expected, "backing limit {serialized}");
+        }
     }
 
     #[test]
@@ -1550,6 +1683,127 @@ mod tests {
             u_position: 0.0,
             v_position: 0.0,
         }
+    }
+
+    fn synthetic_fire_texture(
+        sparks_limit: Option<i32>,
+        num_sparks: i32,
+        sparks: &[[u8; 8]],
+        include_fields: bool,
+    ) -> Package {
+        let names = [
+            "None",
+            "Core",
+            "Class",
+            "FireTexture",
+            "Burning",
+            "Palette",
+            "SparkType",
+            "RenderHeat",
+            "FX_Heat",
+            "FX_Size",
+            "FX_AuxSize",
+            "FX_Area",
+            "FX_Frequency",
+            "FX_Phase",
+            "FX_HorizSpeed",
+            "FX_VertSpeed",
+            "DrawMode",
+            "SparksLimit",
+            "NumSparks",
+            "bRising",
+        ];
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            push_u32(&mut name_table, 0);
+        }
+        let mut import_table = vec![1, 2];
+        push_i32(&mut import_table, 0);
+        import_table.push(3);
+
+        let mut payload = Vec::new();
+        payload.extend([5, 0x05, 0]);
+        if include_fields {
+            for (name, value) in [
+                (6, 9),
+                (7, 201),
+                (8, 202),
+                (9, 203),
+                (10, 204),
+                (11, 205),
+                (12, 206),
+                (13, 207),
+                (14, 208),
+                (15, 209),
+                (16, 2),
+            ] {
+                payload.extend([name, 0x01, value]);
+            }
+            payload.extend([19, 0x83]);
+        }
+        if let Some(sparks_limit) = sparks_limit {
+            payload.extend([17, 0x22]);
+            push_i32(&mut payload, sparks_limit);
+        }
+        if num_sparks != 0 {
+            payload.extend([18, 0x22]);
+            push_i32(&mut payload, num_sparks);
+        }
+        payload.extend([0, 1, 0]);
+        payload.extend(8_u32.to_le_bytes());
+        payload.extend(8_u32.to_le_bytes());
+        payload.extend([3, 3]);
+        payload.extend(compact_index(sparks.len() as i32));
+        for spark in sparks {
+            payload.extend(spark);
+        }
+
+        const HEADER_SIZE: usize = 48;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        push_i32(&mut export, 0);
+        export.push(4);
+        push_u32(&mut export, 0);
+        export.extend(compact_index(payload.len() as i32));
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let encoded = compact_index(payload_offset as i32);
+            let next = export_offset + export.len() + encoded.len();
+            if next == payload_offset {
+                export.extend(encoded);
+                break;
+            }
+            payload_offset = next;
+        }
+
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, PACKAGE_MAGIC);
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        push_u32(&mut bytes, 0);
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+            0,
+        ] {
+            push_i32(&mut bytes, value as i32);
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        assert_eq!(bytes.len(), payload_offset);
+        bytes.extend(payload);
+        Package::parse("synthetic fire texture", Arc::from(bytes)).unwrap()
     }
 
     fn synthetic_ice_texture() -> Package {

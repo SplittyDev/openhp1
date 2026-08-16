@@ -1,10 +1,10 @@
 # Shipped Fire procedural-texture inventory
 
-Status: read-only binary/decompilation inventory. This document reconciles the
-complete shipped `Fire.dll` body/export set and records the implementation
-contracts for Fire, Ice, Water, Wave, Wet, and their shared fractal scheduler.
-It does not treat editor painting tools or compiler-generated bodies as game
-rendering features.
+Status: native binary/decompilation inventory with OpenHP1 implementation
+tracking. This document reconciles the complete shipped `Fire.dll` body/export
+set and records the implementation contracts for Fire, Ice, Water, Wave, Wet,
+and their shared fractal scheduler. It does not treat editor painting tools or
+compiler-generated bodies as game rendering features.
 
 Primary evidence is the legally obtained shipped `Fire.dll`, SHA-256
 `029ff9562c68ee502ab0a02963341e2b00ab42c4e2d1a33c268f306dc3c13041`,
@@ -101,36 +101,66 @@ checklists preserve the direct state transition without inventing a name.
 
 ## Shared fractal scheduling and priming
 
-`UFractalTexture::Prime` directly raises `PrimeCount` to at least 48,
-temporarily puts `Client+0x54` into the state that permits ticking, invokes
-virtual constant-time ticks until primed, and restores the old client value
-([F:4864-5088](../res/Ghidra_Fire.c#L4864)). The operation is direct; the
-semantic name of `Client+0x54` is not.
+`UFractalTexture::Prime` directly raises `PrimeCount` to at least 48. An
+already-primed object returns. A null client or zero `Client+0x54` takes the
+base/delegated Prime path; only a nonzero field is temporarily written to zero
+for the virtual constant-time tick loop and then restored as literal `1`
+([F:4864-5088](../res/Ghidra_Fire.c#L4864)). This is the source-backed behavior;
+no semantic field name or arbitrary-old-value restoration is inferred.
 
-- [ ] Implement the exact minimum-48 priming contract before declaring Fire,
-      Water, Wave, or Wet parity. The current 32-step Fire warm-up is divergent.
-- [ ] Preserve and restore the client field even across zero/already-primed
-      cases; do not replace it with an invented global scheduling flag.
-- [ ] Deterministic acceptance: input counts `0, 1, 47, 48, 49`, exact number
-      of virtual ticks, temporary client value during each tick, and restoration.
+- [x] Fire construction/first identity registration performs the exact
+      minimum-48 pre-visible Prime loop; the old 32-step static snapshot was
+      removed ([fire.rs](../crates/openhp1-texture/src/fire.rs),
+      [loader.rs](../crates/openhp1-scene/src/loader.rs)). Synthetic counts
+      `0, 1, 47, 48, 49` cover the Fire loop.
+- [ ] Shared UWater, Wave, and Wet still need the same scheduler contract. Their
+      open work must preserve the direct null/zero/nonzero client branches
+      above rather than inventing a named field abstraction.
 
 ## FireTexture behavior closure
 
-The FireTexture portion of `BASE-009B` is inventoried, but the feature boundary
-is not closed because `BASE-009B` also owns the shared UWater and Wet behavior
-below. Output-bearing Fire evidence is `AddSpark` through movement/flash helpers
+The FireTexture runtime is implemented for the proved shipped-live cases, but
+the Fire acceptance boundary and `BASE-009B` remain open: exhaustive independent
+acceptance for all 44 redraw cases is not complete, and `BASE-009B` also owns
+the shared UWater and Wet behavior below. Output-bearing Fire evidence is
+`AddSpark` through movement/flash helpers
 ([F:1113-3577](../res/Ghidra_Fire.c#L1113)), `UFireTexture::ConstantTimeTick`
 at VA `0x105082c0` ([F:5543](../res/Ghidra_Fire.c#L5543)), persisted spark
 filtering/serialization ([F:5715](../res/Ghidra_Fire.c#L5715)), and the optimized
 filter wrappers beginning at [F:10839](../res/Ghidra_Fire.c#L10839) with
 implementation bodies at [F:11843](../res/Ghidra_Fire.c#L11843).
 
-- [ ] Retain the existing exhaustive 44-case, process-global RNG, filter,
-      line-endpoint, mutation/deletion-order, and star-boundary acceptance.
-- [ ] Replace the 32-step warm-up with the shared minimum-48 Prime contract.
-- [ ] Live compare `FireEng.Fire1/Torch1`, `HP_FX.General.Furnace/Star`, and
-      `GreatFire.ancflame1`; direct map imports include `Lev5_Final`,
-      `Lev5_fluffy`, `Lev3_DungeonB`, and `Lev_Tut1`.
+- [x] Decode persistent Fire fields, exact eight-byte spark records, clamped
+      active prefix/backing storage, the process-global 512-byte RNG transition,
+      all `0x00..0x2b` redraw implementations, one exact wrapped scalar filter,
+      `PostDrawSparks`, minimum-48 priming, and the 1,024 initialized render
+      entries. The object reserves 1,028 bytes at `+0x104..+0x507`, but native
+      PostLoad initializes only the first `0x400` bytes; four trailing bytes are
+      not additional sum-table entries ([fire.rs](../crates/openhp1-texture/src/fire.rs),
+      [texture.rs](../crates/openhp1-texture/src/texture.rs)).
+- [x] Keep one animation per `SceneObjectId`, first-registration order for the
+      shared RNG stream, shared masked/unmasked subscribers, pre-visible CPU
+      dependency pixels, and changed GPU uploads
+      ([loader.rs](../crates/openhp1-scene/src/loader.rs)).
+- [x] Independent full-state direct-redraw fixtures cover shipped cases `0x00`,
+      `0x01`, `0x03`, `0x1b` and its same-tick `0x2b`, plus authored-corpus
+      `0x0c`. They compare all backing slots, all 64 pixels, the full RNG table
+      and index, and helper-global state. Additional focused fixtures cover the
+      corrected spawn/internal cases, append/swap-delete order, line endpoint,
+      Manhattan and star boundaries, filters, render table, Prime, and scheduler.
+- [ ] Add independently derived full-state acceptance for every one of the 44
+      cases. The implementation switch is complete, but this exhaustive proof
+      is intentionally not checked off.
+- [ ] Recover the exact initial Core process-global `appRand` history and the
+      native visible-use update cadence. The production MSVCRT/time seed is a
+      closer startup approximation; injected 512-byte state is the exact test
+      boundary.
+- [ ] Live compare retail, Classic, and Modern. Proved BSP uses are `0x00` at
+      `Lev_Tut1` `owlstand1` (2 surfaces), `0x01/0x03` at `Lev5_Final`
+      `Furnace` (32) and `Lev5_fluffy` `ancflame1` (4), and `0x1b -> 0x2b` at
+      `Lev3_DungeonB` `lumos1` (80). `0x0c` appears in stale `Win_L`/`Jelly1`
+      imports with no owning class/function/state/default-property consumer, so
+      it is extra authored-corpus coverage, not a shipped-live gate.
 
 Editor painting/click/mouse exports are not stock-game rendering contracts.
 

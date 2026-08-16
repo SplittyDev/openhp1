@@ -850,46 +850,70 @@ commit, and live-verification fields for each item.
         rather than guessed. Fixed-identity pixel refresh, native smaller-source
         expansion/`LocalSource`, first-lock output, priming, signed time, and
         same-tick incremental upload are implemented.
-- [ ] `BASE-009B` Implement exact shipped FireTexture, shared UWater, and
-      WetTexture animation as focused commits after Ice. Direct Fire evidence
-      covers `ConstantTimeTick`
+- [ ] `BASE-009B` Complete exact shipped FireTexture acceptance, shared UWater,
+      and WetTexture animation as focused commits after Ice. Fire runtime is
+      implemented for the proved shipped-live cases, but this base remains open
+      because shared UWater/Wet and independent full-state acceptance for all 44
+      Fire redraw cases are not complete. Direct Fire evidence covers `ConstantTimeTick`
       (`0x105082c0-0x105083d5`), `AddSpark` (`0x10501130-0x1050196f`),
       close/delete/line/paint/movement/flash helpers (`0x10501a00-0x105025db`),
       all of `RedrawSparks` (`0x105025e0-0x105058a3`), and `PostDrawSparks`
-      (`0x10505960-0x105059e3`). Do not retain the current 32-step warm-up:
-      `UFractalTexture::Prime` directly raises `PrimeCount` to at least 48,
-      temporarily enables ticking through Client `+0x54`, ticks until primed,
-      and restores the field ([F:4864-5088](../res/Ghidra_Fire.c#L4864)).
-  - [ ] Preserve the `0x50c` object layout and exact eight-byte spark records.
-        Implement all 29 public `ESpark` values and all internal spawned types,
-        covering the complete 44-case `RedrawSparks` switch (`0x00..0x2b`);
-        shipped-asset subsets or placeholder cases are not acceptable.
-  - [ ] Rebuild all 1,028 render-table entries as
+      (`0x10505960-0x105059e3`). `UFractalTexture::Prime` raises `PrimeCount`
+      to at least 48 and returns when already primed. Null client or zero
+      `Client+0x54` delegates through the base path; only a nonzero byte is
+      temporarily zeroed for the tick loop and restored as literal `1`
+      ([F:4864-5088](../res/Ghidra_Fire.c#L4864)). No semantic field name or
+      arbitrary-old-value restoration is inferred.
+  - [x] Decode Fire's persistent fields, exact eight-byte spark backing array,
+        clamped `SparksLimit`/active `NumSparks`, native constructor defaults,
+        and all 29 public plus internal spawned types in the complete 44-case
+        `RedrawSparks` switch. The old divergent 32-step static snapshot is
+        removed; Fire first registration performs minimum-48 pre-visible Prime
+        ([fire.rs](../crates/openhp1-texture/src/fire.rs),
+        [texture.rs](../crates/openhp1-texture/src/texture.rs)).
+  - [x] Rebuild the 1,024 initialized render-table entries as
         `clamp(round-to-nearest-even(i/4 + 1 - (255-RenderHeat)/16),0,255)`.
+        The `0x50c` object reserves 1,028 bytes at `+0x104..+0x507`, but native
+        PostLoad initializes only `0x400`; the final four bytes are not table
+        entries addressable by the maximum four-pixel sum of 1,020.
         Apply wrapped non-rising samples `(x,y),(x+1,y),(x-1,y+1),(x,y+1)`;
         for rising, shift the rows to `y+1,y+2`. Pentium/non-Pentium branches
-        are optimized equivalents and need only one exact scalar result.
-  - [ ] Reproduce RNG state rather than substituting a new generator: seed the
+        are optimized equivalents; one exact scalar result is implemented.
+  - [x] Reproduce the process-global RNG transition rather than substituting a
+        per-texture generator: seed the
         512-byte table from low bytes of 512 Core `appRand()` results, read a
         little-endian word at `(index+0x80)&0xfc`, advance by four modulo
         `0x100`, XOR the returned source word into the new table slot, and
-        retain the index/table across ticks. Permit injected initial state for
-        tests because retail's first bytes depend on process-global Core RNG
-        history.
-  - [ ] Preserve redraw mutation order: reload `NumSparks` so appended sparks
+        retain the index/table across ticks. Injected initial state provides
+        exact deterministic tests. Production initializes a MSVCRT `rand`
+        approximation from UNIX seconds, but exact startup bytes remain open
+        because Core calls can consume the global stream before Fire initializes.
+  - [x] Preserve redraw mutation order: reload `NumSparks` so appended sparks
         can execute in the same tick; swap removal causes the replacement to
         wait until the next tick. Preserve Manhattan proximity deletion,
         Bresenham's excluded final endpoint, and star restoration only when the
         saved destination value is below 38.
-  - [ ] Acceptance: exhaustive render-table comparison; wrapped 8x8 filters in
-        both rising modes; injected RNG table/index sequence; per-case state
-        transitions for all 44 cases, including append/delete order; line and
-        star boundary tests; changed-texture upload. Compare `FireEng.Fire1`
-        and `Torch1`, `HP_FX.General.Furnace` and `Star`, and
-        `GreatFire.ancflame1`; replay direct imports in `Lev5_Final`,
-        `Lev5_fluffy`, `Lev3_DungeonB`, and `Lev_Tut1` in retail, Classic, and
-        Modern. Remaining blockers are only the semantic name of the client
-        `+0x54` tick-suppression field and retail-exact initial Core RNG state.
+  - [x] Store one Fire animation per `SceneObjectId` in first-registration
+        order, share masked/unmasked GPU subscribers, expose primed CPU pixels
+        to procedural dependencies before the first normal tick, and upload all
+        subscribers from that one changed state
+        ([loader.rs](../crates/openhp1-scene/src/loader.rs)).
+  - [x] Deterministic acceptance covers the full render table, wrapped rising
+        and non-rising filters, injected RNG transition, Prime counts
+        `0/1/47/48/49`, scheduling, append/delete order, line/Manhattan/star
+        boundaries, shared subscribers and two-object RNG order. Independent
+        full-backing/full-8x8/full-RNG/global-state rows cover shipped `0x00`,
+        `0x01`, `0x03`, `0x1b -> 0x2b` and extra authored-corpus `0x0c`.
+        Focused texture/scene nextest passes 105 tests and both crates check.
+  - [ ] Add independently derived full-state acceptance for all 44 redraw
+        cases; implementation coverage alone does not close this gate.
+  - [ ] Recover exact startup Core RNG history and native visible-use cadence,
+        then compare retail, Classic, and Modern. Proved live BSP cases are
+        `0x00` at `Lev_Tut1` `owlstand1` (2 surfaces), `0x01/0x03` at
+        `Lev5_Final` `Furnace` (32) and `Lev5_fluffy` `ancflame1` (4), and
+        `0x1b -> 0x2b` at `Lev3_DungeonB` `lumos1` (80). `0x0c` `Win_L`/
+        `Jelly1` references are stale imports without an owning compiled
+        consumer and are not a live gate.
   - [ ] Preserve the shared 1,536-byte water table, the single in-place
         `width*height/2` SourceFields byte buffer processed by alternating
         parity-0/parity-1 kernels, 256 eight-byte drop records, process-global

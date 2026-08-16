@@ -48,6 +48,20 @@ pub enum Error {
     #[error("fire spark count {count} overflows the host address space")]
     InvalidFireSparkCount { count: usize },
 
+    #[error("fire texture dimensions must be nonzero powers of two, got {width}x{height}")]
+    InvalidFireDimensions { width: u32, height: u32 },
+
+    #[error(
+        "active fire spark {index} coordinate ({x}, {y}) is outside texture dimensions {width}x{height}"
+    )]
+    InvalidActiveFireSparkCoordinates {
+        index: usize,
+        x: u8,
+        y: u8,
+        width: u32,
+        height: u32,
+    },
+
     #[error("water drop {index} has {actual} bytes, expected 8")]
     InvalidWaterDropLength { index: usize, actual: usize },
 

@@ -2,10 +2,12 @@
 
 mod decode;
 mod error;
+mod fire;
 mod palette;
 mod texture;
 
 pub use error::{Error, Result};
+pub use fire::{FireAnimation, FireRng, FireSpark, FireTexture};
 pub use palette::{Color, Palette};
 pub use texture::{
     IceAnimation, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Texture,
