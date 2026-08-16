@@ -252,23 +252,26 @@ commit, and live-verification fields for each item.
   - [ ] Live acceptance: retail/Classic/Modern comparisons in `Lev2_HogFront`,
         `Lev_Tut3`, one Quidditch map, `Lev4_Sneak`, and `startup`; toggle
         `Decals`. Use a controlled spawn for ecto/scorch behavior.
-- [ ] `BASE-003` Implement both original fog contracts independently of
+- [ ] `BASE-003` Implement the three original fog contracts independently of
       optional Modern volumetric/AO enhancements; do not replace them with one
       generic depth-fog shader.
-  - [ ] `BASE-003A` Implement legacy BSP FogMap. Direct evidence:
-        `FLightManager::LightAndFog` and exact accumulation
-        `Ghidra_Render.c:17903-18228`, fog-light collection/color
-        `22540-22568`, DrawFrame surface layout/lifetime `2550-2575,2862-2870`,
-        and shipped D3D `DrawComplexSurface` VA `0x10003ac0-0x1000548b`.
-    - [ ] Carry the optional light-manager-generated FogMap only on BSP
-          surfaces. Preserve `PF_Unlit` suppression and the `0x40000000` gate;
-          do not attach it to actor meshes without direct caller proof.
-    - [ ] Reproduce `f2=2f`, premultiplied light-color accumulation and alpha
-          clamps, FogMap texture-info UVs, and the one full-facet AlphaBlend
-          pass after base/macro/light/detail in the shared Classic/Modern path.
-    - [ ] Deterministic acceptance: one/two fog lights, clamp boundaries,
-          Unlit/gate suppression, independent macro/detail/FogMap toggles, and
-          pass-order trace. Modern volumetrics on/off must not change base fog.
+  - [ ] `BASE-003A` Implement legacy BSP FogMap. DrawFrame carries the optional
+        light-manager attachment at `FSurfaceInfo+0x1c`; shipped D3D draws it
+        last as a full-facet AlphaBlend-only `ONE/INVSRCALPHA` texture pass
+        after base/macro/light/detail
+        (`Ghidra_Render.c:2550-2575`, `Ghidra_D3DDrv.c:7077-7082`).
+    - [ ] Trace the exact BSP surface-generation caller and data equation before
+          implementing the producer. The recovered actor `LightAndFog` vertex
+          equation is not evidence for FogMap texels.
+    - [ ] Carry the generated image/texture-info pan and scale only on BSP
+          surfaces, suppress detail when present, and issue the final ordered
+          pass in shared Classic/Modern rendering. Do not reuse generic actor
+          opacity blending.
+    - [ ] Deterministic acceptance: attachment absence/presence, independent
+          macro/detail/FogMap gates, exact producer pixels once recovered, and
+          base→macro→light→detail→fog command order. BSP-linked fog lights in
+          `Lev2_Fire2` and `Lev2_fire1` are candidates, but a visible non-null
+          FogMap still needs retail/runtime confirmation.
   - [ ] `BASE-003B` Recover and implement camera-zone distance fog separately.
         Shipped properties and authored reachability are proved, including
         `bFogZone`, `FogColor`, and `FogDistance`; native FogColor replication
@@ -281,6 +284,21 @@ commit, and live-verification fields for each item.
     - [ ] Live evidence targets: `Lev2_Fire2`, `Lev2_fire1`, `Lev_Tut1`,
           `Lev_Tut3b`, `Lev3_PreDungeon`, and `Lev3_PreTroll`, using fixed
           near/far views and a zone crossing in retail, Classic, and Modern.
+  - [ ] `BASE-003C` Implement legacy actor-mesh RenderFog. `SetupForActor`
+        collects fog lights and returns `0x40000000`; DrawMesh/DrawLodMesh run
+        `LightAndFog` per vertex and carry fog RGB to D3D specular
+        (`Ghidra_Render.c:10518-10765,15986-16157,22540-22554`).
+    - [ ] Add one shared per-vertex fog RGB channel/evaluator and apply its
+          post-texture diffuse add in both pipelines before optional Modern
+          volumetric enhancements. Retain it only for non-Translucent and
+          non-Modulated draws when the hardware capability is supported;
+          `UseVertexFog` is not that gate.
+    - [ ] Deterministic acceptance: one/two fog lights, exact `f2=2f`
+          accumulation and clamp boundaries, Unlit/flag/capability/blend
+          suppression, and Classic/Modern base-path equivalence with Modern
+          volumetrics toggled both ways.
+    - [ ] Locate a shipped visible opaque mesh overlapping an affected
+          fog-light leaf before claiming a live representative.
 - [ ] `CLASSIC-001` Render authored corona sprites and original volumetric
       lighting in Classic. Evidence: `Ghidra_Render.c:5819-5858,18256,
       21906-21928` and `Ghidra_Engine.c:153257-153281`.
