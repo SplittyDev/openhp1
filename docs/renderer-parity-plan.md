@@ -808,6 +808,16 @@ commit, and live-verification fields for each item.
 
 ### Evidence still required
 
+- [x] Classify `URender::Precache` as a one-shot D3D cache-warming policy:
+      map-load/console flush arms the shipped-default request, the next eligible
+      draw sweeps model-surface textures then all textures, and D3D uploads
+      without binding while Software is a no-op. OpenHP1's shared eager upload
+      is output-equivalent; do not emulate the UObject sweep or cache logs.
+- [ ] Scan texture identities reused between BSP surfaces carrying
+      `Masked|NoSmooth` and actor/sprite/mesh draws. Retail's precache sweep
+      persistently ORs those two model-surface bits into the shared texture;
+      keep any resulting cross-context material issue separate from upload
+      policy.
 - [x] Audit the shipped D3D render-device DLL for delegated visual/config
       behavior. The renderer audit records the 40-entry `UD3DRenderDevice`
       export block, direct blend/polyflag/depth/filter/stage/attachment/frame/
