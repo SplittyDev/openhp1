@@ -365,6 +365,20 @@ viewer's side of the authored plane, matching the half-space retained by UE1's
 mirror-portal BSP traversal. Geometry physically behind a mirror therefore
 cannot cover or leak into its reflection.
 
+`PF_Portal` (`0x04000000`) surfaces whose BSP zone is owned by a
+`WarpZoneInfo` use that actor's serialized `WarpCoords` and live
+`OtherSideActor` connection. The renderer applies UE1's source-unwarp then
+destination-warp camera transform, clips the destination scene at the warped
+portal plane, and projects the result behind the authored portal polygons
+before opaque overlays. Portal recursion preserves the authored BSP side: a
+warp is active only when the opposite zone is owned by its `WarpZoneInfo`.
+`PF_Mirrored` and `PF_Portal` surfaces may interleave, so the Erised path renders
+warp, reflection, then warp rather than following `OtherSideActor` links as an
+unconditional chain. The three-traversal limit matches HP1's shipped
+`Render.dll`. Until OpenHP1 implements UE1's scanline portal-span traversal,
+the nearest nested surface intersecting the portal view's center ray selects
+that single recursive branch.
+
 Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
 matters for sky-box cube faces.
 

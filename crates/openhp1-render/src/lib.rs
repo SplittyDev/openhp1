@@ -6,7 +6,8 @@ mod settings;
 
 pub use camera::{Camera, SceneBounds};
 pub use openhp1_scene::{
-    RenderScene, SurfaceMaterial, SurfaceMode, TextureImage, render_to_unreal, unreal_to_render,
+    RenderScene, SurfaceMaterial, SurfaceMode, TextureImage, WarpCoordinates, render_to_unreal,
+    unreal_to_render,
 };
 pub use renderer::{RenderStats, Renderer};
 pub use settings::{

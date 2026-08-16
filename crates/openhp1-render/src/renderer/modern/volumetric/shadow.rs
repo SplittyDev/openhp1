@@ -1358,6 +1358,7 @@ mod tests {
                 volumetric_source: mode == SurfaceMode::Backdrop,
                 ..Default::default()
             }],
+            warp_portals: Vec::new(),
             sky_zone: sky.then_some(openhp1_scene::SkyZone {
                 location: Vec3::ZERO,
                 rotation: Default::default(),

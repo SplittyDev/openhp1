@@ -1,7 +1,7 @@
 use glam::{Mat4, Quat, Vec3};
-use openhp1_scene::SkyZone;
+use openhp1_scene::{SkyZone, WarpCoordinates};
 
-use crate::unreal_to_render;
+use crate::{render_to_unreal, unreal_to_render};
 
 /// A free camera expressed in renderer coordinates.
 #[derive(Clone, Debug)]
@@ -41,7 +41,7 @@ impl Camera {
         self.forward().cross(Vec3::Y).normalize_or_zero()
     }
 
-    fn up(&self) -> Vec3 {
+    pub(crate) fn up(&self) -> Vec3 {
         let up = self.right().cross(self.forward()).normalize_or_zero();
         Quat::from_axis_angle(self.forward(), self.roll) * up
     }
@@ -80,6 +80,60 @@ impl Camera {
     pub(crate) fn view(&self) -> Mat4 {
         Mat4::look_to_rh(self.position, self.forward(), self.up())
     }
+}
+
+pub(crate) fn warp_view(
+    position: Vec3,
+    forward: Vec3,
+    up: Vec3,
+    world_to_view: Mat4,
+    source: WarpCoordinates,
+    destination: WarpCoordinates,
+) -> (Vec3, Vec3, Vec3, Mat4) {
+    let position = unreal_to_render(source.transform_to(destination, render_to_unreal(position)));
+    let forward =
+        unreal_to_render(source.transform_vector_to(destination, render_to_unreal(forward)));
+    let up = unreal_to_render(source.transform_vector_to(destination, render_to_unreal(up)));
+    let warp_to_world = Mat4::from_cols(
+        unreal_to_render(source.transform_vector_to(destination, render_to_unreal(Vec3::X)))
+            .extend(0.0),
+        unreal_to_render(source.transform_vector_to(destination, render_to_unreal(Vec3::Y)))
+            .extend(0.0),
+        unreal_to_render(source.transform_vector_to(destination, render_to_unreal(Vec3::Z)))
+            .extend(0.0),
+        unreal_to_render(source.transform_to(destination, Vec3::ZERO)).extend(1.0),
+    );
+    (
+        position,
+        forward,
+        up,
+        world_to_view * warp_to_world.inverse(),
+    )
+}
+
+pub(crate) fn reflected_view(
+    position: Vec3,
+    forward: Vec3,
+    up: Vec3,
+    world_to_view: Mat4,
+    plane_point: Vec3,
+    plane_normal: Vec3,
+) -> (Vec3, Vec3, Vec3, Mat4) {
+    let normal = plane_normal.normalize_or_zero();
+    let reflection = Mat4::from_translation(plane_point)
+        * Mat4::from_cols(
+            (Vec3::X - 2.0 * normal.x * normal).extend(0.0),
+            (Vec3::Y - 2.0 * normal.y * normal).extend(0.0),
+            (Vec3::Z - 2.0 * normal.z * normal).extend(0.0),
+            Vec3::ZERO.extend(1.0),
+        )
+        * Mat4::from_translation(-plane_point);
+    (
+        reflection.transform_point3(position),
+        reflection.transform_vector3(forward),
+        reflection.transform_vector3(up),
+        world_to_view * reflection,
+    )
 }
 
 /// Bounds used to choose a useful initial camera and movement speed.
@@ -141,5 +195,46 @@ mod tests {
             0.000_01,
         ));
         assert!(view.determinant().is_sign_negative());
+    }
+
+    #[test]
+    fn warp_view_moves_the_camera_between_authored_coordinate_frames() {
+        let camera = Camera {
+            position: unreal_to_render(Vec3::new(0.0, 10.0, 0.0)),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            roll: 0.0,
+            vertical_fov: 1.0,
+            near: 1.0,
+            far: 1000.0,
+        };
+        let source = WarpCoordinates {
+            origin: Vec3::ZERO,
+            axes: [Vec3::X, Vec3::Y, Vec3::Z],
+        };
+        let destination = WarpCoordinates {
+            origin: Vec3::new(100.0, 200.0, 0.0),
+            axes: [-Vec3::X, -Vec3::Y, Vec3::Z],
+        };
+
+        let (position, _, _, view) = warp_view(
+            camera.position,
+            camera.forward(),
+            camera.up(),
+            camera.view(),
+            source,
+            destination,
+        );
+
+        assert!(position.abs_diff_eq(unreal_to_render(Vec3::new(100.0, 190.0, 0.0)), 0.000_01));
+        assert!(
+            view.transform_point3(position)
+                .abs_diff_eq(Vec3::ZERO, 0.000_01)
+        );
+        assert!(
+            view.transform_point3(position + Vec3::X)
+                .abs_diff_eq(-Vec3::Z, 0.000_01)
+        );
+        assert!(view.determinant().is_sign_positive());
     }
 }

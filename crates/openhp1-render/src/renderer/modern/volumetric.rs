@@ -786,6 +786,7 @@ mod tests {
                 },
             ],
             surface_materials: Vec::<SurfaceMaterial>::new(),
+            warp_portals: Vec::new(),
             sky_zone: None,
         };
         let texture_colors = source_texture_colors(&scene);

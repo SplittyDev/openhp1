@@ -6,7 +6,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     Camera, DisplaySettings, RenderScene, RendererMode, RendererSettings, SceneBounds,
-    SurfaceMaterial, SurfaceMode, TextureImage, VolumetricTuning, unreal_to_render,
+    SurfaceMaterial, SurfaceMode, TextureImage, VolumetricTuning, WarpCoordinates,
+    render_to_unreal, unreal_to_render,
 };
 
 mod atlas;
@@ -16,6 +17,7 @@ mod modern;
 mod pipeline;
 mod target;
 
+use crate::camera::{reflected_view, warp_view};
 use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
 use batch::{
     BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
@@ -29,6 +31,7 @@ use pipeline::{create_pipeline, create_screen_pipeline, texture, texture_bind_gr
 use target::{DepthTarget, SampledTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const MAX_WARP_PORTAL_DEPTH: usize = 3;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 32;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
@@ -69,6 +72,7 @@ struct CameraUniform {
 struct Mirror {
     surface: usize,
     plane: (Vec3, Vec3),
+    bounds: (Vec3, Vec3),
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     index_buffer: wgpu::Buffer,
@@ -77,10 +81,33 @@ struct Mirror {
     target: SampledTarget,
 }
 
+struct WarpPortal {
+    surface: usize,
+    authored_plane: [f32; 4],
+    source_on_positive_side: bool,
+    source: WarpCoordinates,
+    destination: Option<WarpCoordinates>,
+    plane: (Vec3, Vec3),
+    bounds: (Vec3, Vec3),
+    view: PortalView,
+    nested_views: Vec<PortalView>,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    pipeline: usize,
+    target: SampledTarget,
+}
+
+struct PortalView {
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    blended_index_buffer: wgpu::Buffer,
+}
+
 #[derive(Clone, Copy)]
 enum ScenePass {
     Main,
     Sky,
+    Portal,
     Reflection,
 }
 
@@ -102,6 +129,8 @@ pub struct Renderer {
     backdrop_index_buffer: wgpu::Buffer,
     backdrop_batches: Vec<BackdropBatch>,
     mirrors: Vec<Mirror>,
+    warp_portals: Vec<WarpPortal>,
+    nested_warp_targets: Vec<SampledTarget>,
     blended_index_buffer: wgpu::Buffer,
     sky_blended_index_buffer: Option<wgpu::Buffer>,
     blended_surfaces: Vec<BlendedSurface>,
@@ -121,6 +150,40 @@ pub struct Renderer {
     auto_uv: f32,
     stats: RenderStats,
     settings: RendererSettings,
+}
+
+impl PortalView {
+    fn new(
+        device: &wgpu::Device,
+        camera_layout: &wgpu::BindGroupLayout,
+        blended_index_count: usize,
+    ) -> Self {
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 warp-portal camera"),
+            size: size_of::<CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OpenHP1 warp-portal camera bind group"),
+            layout: camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+        let blended_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 warp-portal blended indices"),
+            size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            camera_buffer,
+            camera_bind_group,
+            blended_index_buffer,
+        }
+    }
 }
 
 impl Renderer {
@@ -271,6 +334,21 @@ impl Renderer {
         let (opaque_indices, opaque_batches) = texture_batches(scene, fallback_texture);
         let (backdrop_indices, backdrop_batches) = backdrop_batches(scene);
         let mirror_geometries = mirror_geometries(scene);
+        let warp_portal_geometries = scene
+            .warp_portals
+            .iter()
+            .filter_map(|portal| {
+                let indices = scene
+                    .mesh
+                    .indices
+                    .chunks_exact(3)
+                    .zip(&scene.mesh.triangle_surfaces)
+                    .filter(|(_, surface)| **surface == portal.surface)
+                    .flat_map(|(triangle, _)| triangle.iter().copied())
+                    .collect::<Vec<_>>();
+                (!indices.is_empty()).then_some((*portal, indices))
+            })
+            .collect::<Vec<_>>();
         let blended_surfaces = blended_surfaces(scene, fallback_texture, &vertices);
         let blended_index_count = blended_surfaces
             .iter()
@@ -580,6 +658,7 @@ impl Renderer {
                 Some(Mirror {
                     surface: geometry.surface,
                     plane,
+                    bounds: surface_bounds(scene, &vertices, geometry.surface)?,
                     camera_buffer,
                     camera_bind_group,
                     index_buffer,
@@ -597,6 +676,59 @@ impl Renderer {
                 })
             })
             .collect();
+        let warp_portals = warp_portal_geometries
+            .into_iter()
+            .filter_map(|(portal, indices)| {
+                let plane = mirror_plane(scene, &vertices, portal.surface)?;
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("OpenHP1 warp-portal indices"),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                Some(WarpPortal {
+                    surface: portal.surface,
+                    authored_plane: portal.plane,
+                    source_on_positive_side: portal.source_on_positive_side,
+                    source: portal.source,
+                    destination: portal.destination,
+                    plane,
+                    bounds: surface_bounds(scene, &vertices, portal.surface)?,
+                    view: PortalView::new(device, &camera_layout, blended_index_count),
+                    nested_views: (1..MAX_WARP_PORTAL_DEPTH)
+                        .map(|_| PortalView::new(device, &camera_layout, blended_index_count))
+                        .collect(),
+                    index_buffer,
+                    index_count: indices.len() as u32,
+                    pipeline: usize::from(scene.surface_materials[portal.surface].two_sided),
+                    target: SampledTarget::new(
+                        device,
+                        viewport_size,
+                        scene_format,
+                        &texture_layout,
+                        &sky_sampler,
+                        &lightmap_view,
+                        &lightmap_sampler,
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
+        let nested_warp_targets = (!warp_portals.is_empty())
+            .then(|| {
+                (1..MAX_WARP_PORTAL_DEPTH)
+                    .map(|_| {
+                        SampledTarget::new(
+                            device,
+                            viewport_size,
+                            scene_format,
+                            &texture_layout,
+                            &sky_sampler,
+                            &lightmap_view,
+                            &lightmap_sampler,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
         let modern = modern_enabled.then(|| {
             ModernRenderer::new(
@@ -634,6 +766,8 @@ impl Renderer {
             backdrop_index_buffer,
             backdrop_batches,
             mirrors,
+            warp_portals,
+            nested_warp_targets,
             blended_index_buffer,
             sky_blended_index_buffer,
             blended_surfaces,
@@ -688,6 +822,20 @@ impl Renderer {
                 return false;
             };
             mirror.plane = plane;
+            let Some(bounds) = surface_bounds(scene, &self.vertices, mirror.surface) else {
+                return false;
+            };
+            mirror.bounds = bounds;
+        }
+        for portal in &mut self.warp_portals {
+            let Some(plane) = mirror_plane(scene, &self.vertices, portal.surface) else {
+                return false;
+            };
+            portal.plane = plane;
+            let Some(bounds) = surface_bounds(scene, &self.vertices, portal.surface) else {
+                return false;
+            };
+            portal.bounds = bounds;
         }
         update_blended_centers(&mut self.blended_surfaces, &self.vertices);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
@@ -697,6 +845,19 @@ impl Renderer {
     pub fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         if scene.textures.len() + 1 != self.textures.len() || !self.update_vertices(queue, scene) {
             return false;
+        }
+        for portal in &mut self.warp_portals {
+            let Some(scene_portal) = scene
+                .warp_portals
+                .iter()
+                .find(|candidate| candidate.surface == portal.surface)
+            else {
+                return false;
+            };
+            portal.authored_plane = scene_portal.plane;
+            portal.source_on_positive_side = scene_portal.source_on_positive_side;
+            portal.source = scene_portal.source;
+            portal.destination = scene_portal.destination;
         }
         self.lighting
             .as_ref()
@@ -856,6 +1017,36 @@ impl Renderer {
                     &self.lightmap_sampler,
                 );
             }
+            for portal in &mut self.warp_portals {
+                portal.target = SampledTarget::new(
+                    device,
+                    viewport_size,
+                    if self.modern.is_some() {
+                        HDR_FORMAT
+                    } else {
+                        self.target_format
+                    },
+                    &self.texture_layout,
+                    &self.sky_sampler,
+                    &self.lightmap_view,
+                    &self.lightmap_sampler,
+                );
+            }
+            for target in &mut self.nested_warp_targets {
+                *target = SampledTarget::new(
+                    device,
+                    viewport_size,
+                    if self.modern.is_some() {
+                        HDR_FORMAT
+                    } else {
+                        self.target_format
+                    },
+                    &self.texture_layout,
+                    &self.sky_sampler,
+                    &self.lightmap_view,
+                    &self.lightmap_sampler,
+                );
+            }
         }
     }
 
@@ -978,7 +1169,296 @@ impl Renderer {
                 sky_blended_index_buffer,
                 &sky_batches,
                 None,
+                None,
+                None,
                 ScenePass::Sky,
+            );
+        }
+
+        for root in 0..self.warp_portals.len() {
+            let portal = &self.warp_portals[root];
+            let Some(destination) = portal.destination else {
+                continue;
+            };
+            let (position, forward, up, world_to_view) = warp_view(
+                camera.position,
+                camera.forward(),
+                camera.up(),
+                camera.view(),
+                portal.source,
+                destination,
+            );
+            let (source_point, source_normal) = portal.plane;
+            let destination_point = unreal_to_render(
+                portal
+                    .source
+                    .transform_to(destination, render_to_unreal(source_point)),
+            );
+            let destination_normal = unreal_to_render(
+                portal
+                    .source
+                    .transform_vector_to(destination, render_to_unreal(source_normal)),
+            );
+            let clip_plane = -mirror_clip_plane(position, destination_point, destination_normal);
+
+            // ponytail: use the portal view's center ray until the renderer owns UE1's
+            // scanline portal spans; replace this selector when partially visible nested
+            // portals must branch within one target.
+            let mirror = self
+                .mirrors
+                .iter()
+                .filter_map(|mirror| {
+                    ray_surface_distance(position, forward, mirror.plane, mirror.bounds)
+                        .map(|distance| (mirror, distance))
+                })
+                .min_by(|(_, left), (_, right)| left.total_cmp(right))
+                .map(|(mirror, _)| mirror);
+
+            if let Some(mirror) = mirror {
+                let (reflected_position, reflected_forward, reflected_up, reflected_view) =
+                    reflected_view(
+                        position,
+                        forward,
+                        up,
+                        world_to_view,
+                        mirror.plane.0,
+                        mirror.plane.1,
+                    );
+                let nested = self
+                    .warp_portals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, candidate)| {
+                        candidate.destination.is_some()
+                            && warp_portal_active(candidate, reflected_position)
+                    })
+                    .filter_map(|(index, candidate)| {
+                        ray_surface_distance(
+                            reflected_position,
+                            reflected_forward,
+                            candidate.plane,
+                            candidate.bounds,
+                        )
+                        .map(|distance| (index, distance))
+                    })
+                    .min_by(|(_, left), (_, right)| left.total_cmp(right))
+                    .map(|(index, _)| index);
+
+                if let Some(nested) = nested {
+                    let nested_portal = &self.warp_portals[nested];
+                    let nested_destination = nested_portal
+                        .destination
+                        .expect("nested warp portal was filtered by destination");
+                    let (nested_position, _, _, nested_world_to_view) = warp_view(
+                        reflected_position,
+                        reflected_forward,
+                        reflected_up,
+                        reflected_view,
+                        nested_portal.source,
+                        nested_destination,
+                    );
+                    let nested_destination_point =
+                        unreal_to_render(nested_portal.source.transform_to(
+                            nested_destination,
+                            render_to_unreal(nested_portal.plane.0),
+                        ));
+                    let nested_destination_normal =
+                        unreal_to_render(nested_portal.source.transform_vector_to(
+                            nested_destination,
+                            render_to_unreal(nested_portal.plane.1),
+                        ));
+                    let nested_clip_plane = -mirror_clip_plane(
+                        nested_position,
+                        nested_destination_point,
+                        nested_destination_normal,
+                    );
+                    let view = &portal.nested_views[1];
+                    let target = &self.nested_warp_targets[1];
+                    queue.write_buffer(
+                        &view.camera_buffer,
+                        0,
+                        bytemuck::bytes_of(&CameraUniform {
+                            view_projection: (Mat4::perspective_rh(
+                                camera.vertical_fov,
+                                aspect,
+                                camera.near,
+                                camera.far,
+                            ) * nested_world_to_view)
+                                .to_cols_array_2d(),
+                            world_to_view: nested_world_to_view.to_cols_array_2d(),
+                            camera_position: nested_position.extend(1.0).to_array(),
+                            display_gamma,
+                            auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                            clip_plane: nested_clip_plane.to_array(),
+                        }),
+                    );
+                    let (indices, batches) =
+                        sorted_blended_batches(&self.blended_surfaces, nested_position);
+                    if !indices.is_empty() {
+                        queue.write_buffer(
+                            &view.blended_index_buffer,
+                            0,
+                            bytemuck::cast_slice(&indices),
+                        );
+                    }
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("OpenHP1 nested warp-portal render pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(clear_color()),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &target.depth.view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    draw_calls += self.draw_scene(
+                        &mut pass,
+                        &view.camera_bind_group,
+                        &view.blended_index_buffer,
+                        &batches,
+                        None,
+                        None,
+                        None,
+                        ScenePass::Reflection,
+                    );
+                }
+
+                let view = &portal.nested_views[0];
+                queue.write_buffer(
+                    &view.camera_buffer,
+                    0,
+                    bytemuck::bytes_of(&CameraUniform {
+                        view_projection: (Mat4::perspective_rh(
+                            camera.vertical_fov,
+                            aspect,
+                            camera.near,
+                            camera.far,
+                        ) * reflected_view)
+                            .to_cols_array_2d(),
+                        world_to_view: reflected_view.to_cols_array_2d(),
+                        camera_position: reflected_position.extend(1.0).to_array(),
+                        display_gamma,
+                        auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                        clip_plane: mirror_clip_plane(position, mirror.plane.0, mirror.plane.1)
+                            .to_array(),
+                    }),
+                );
+                let (indices, batches) =
+                    sorted_blended_batches(&self.blended_surfaces, reflected_position);
+                if !indices.is_empty() {
+                    queue.write_buffer(
+                        &view.blended_index_buffer,
+                        0,
+                        bytemuck::cast_slice(&indices),
+                    );
+                }
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("OpenHP1 warp-portal mirror render pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &mirror.target.view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clear_color()),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &mirror.target.depth.view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                draw_calls += self.draw_scene(
+                    &mut pass,
+                    &view.camera_bind_group,
+                    &view.blended_index_buffer,
+                    &batches,
+                    None,
+                    nested.map(|nested| (&self.warp_portals[nested], &self.nested_warp_targets[1])),
+                    None,
+                    ScenePass::Reflection,
+                );
+            }
+
+            let view = &portal.view;
+            queue.write_buffer(
+                &view.camera_buffer,
+                0,
+                bytemuck::bytes_of(&CameraUniform {
+                    view_projection: (Mat4::perspective_rh(
+                        camera.vertical_fov,
+                        aspect,
+                        camera.near,
+                        camera.far,
+                    ) * world_to_view)
+                        .to_cols_array_2d(),
+                    world_to_view: world_to_view.to_cols_array_2d(),
+                    camera_position: position.extend(1.0).to_array(),
+                    display_gamma,
+                    auto_uv: [self.auto_uv, 0.0, 0.0, 0.0],
+                    clip_plane: clip_plane.to_array(),
+                }),
+            );
+            let (indices, batches) = sorted_blended_batches(&self.blended_surfaces, position);
+            if !indices.is_empty() {
+                queue.write_buffer(
+                    &view.blended_index_buffer,
+                    0,
+                    bytemuck::cast_slice(&indices),
+                );
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("OpenHP1 warp-portal render pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &portal.target.view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear_color()),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &portal.target.depth.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            draw_calls += self.draw_scene(
+                &mut pass,
+                &view.camera_bind_group,
+                &view.blended_index_buffer,
+                &batches,
+                None,
+                None,
+                mirror,
+                ScenePass::Portal,
             );
         }
 
@@ -1034,6 +1514,8 @@ impl Renderer {
                 &self.blended_index_buffer,
                 &[],
                 None,
+                None,
+                None,
                 ScenePass::Reflection,
             );
         }
@@ -1071,6 +1553,8 @@ impl Renderer {
             &self.blended_index_buffer,
             &blended_batches,
             self.sky_target.as_ref().map(|target| &target.bind_group),
+            None,
+            None,
             ScenePass::Main,
         );
         if let Some(modern) = &self.modern {
@@ -1100,6 +1584,8 @@ impl Renderer {
         blended_index_buffer: &'pass wgpu::Buffer,
         blended_batches: &[DrawBatch],
         backdrop_bind_group: Option<&'pass wgpu::BindGroup>,
+        nested_warp_portal: Option<(&'pass WarpPortal, &'pass SampledTarget)>,
+        nested_mirror: Option<&'pass Mirror>,
         scene_pass: ScenePass,
     ) -> usize {
         let mut draw_calls = 0;
@@ -1117,9 +1603,39 @@ impl Renderer {
         if !self.opaque_batches.is_empty()
             || !blended_batches.is_empty()
             || (backdrop_bind_group.is_some() && !self.backdrop_batches.is_empty())
+            || nested_warp_portal.is_some()
+            || nested_mirror.is_some()
+            || (matches!(scene_pass, ScenePass::Main) && !self.warp_portals.is_empty())
             || (matches!(scene_pass, ScenePass::Main) && !self.mirrors.is_empty())
         {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        }
+        if matches!(scene_pass, ScenePass::Main) {
+            for portal in self
+                .warp_portals
+                .iter()
+                .filter(|portal| portal.destination.is_some())
+            {
+                pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_bind_group(1, &portal.target.bind_group, &[]);
+                pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
+                pass.draw_indexed(0..portal.index_count, 0, 0..1);
+                draw_calls += 1;
+            }
+        }
+        if let Some((portal, target)) = nested_warp_portal {
+            pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_bind_group(1, &target.bind_group, &[]);
+            pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
+            pass.draw_indexed(0..portal.index_count, 0, 0..1);
+            draw_calls += 1;
+        }
+        if let Some(mirror) = nested_mirror {
+            pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_bind_group(1, &mirror.target.bind_group, &[]);
+            pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
+            pass.draw_indexed(0..mirror.index_count, 0, 0..1);
+            draw_calls += 1;
         }
         if !self.opaque_batches.is_empty() {
             pass.set_index_buffer(
@@ -1252,6 +1768,70 @@ fn mirror_plane(
         })
 }
 
+fn surface_bounds(
+    scene: &RenderScene,
+    vertices: &[Vertex],
+    surface: usize,
+) -> Option<(Vec3, Vec3)> {
+    scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+        .filter(|(_, triangle_surface)| **triangle_surface == surface)
+        .flat_map(|(triangle, _)| triangle)
+        .filter_map(|&index| usize::try_from(index).ok())
+        .filter_map(|index| vertices.get(index))
+        .map(|vertex| Vec3::from_array(vertex.position))
+        .fold(None, |bounds, position| {
+            Some(
+                bounds.map_or((position, position), |(minimum, maximum): (Vec3, Vec3)| {
+                    (minimum.min(position), maximum.max(position))
+                }),
+            )
+        })
+}
+
+fn ray_surface_distance(
+    position: Vec3,
+    direction: Vec3,
+    plane: (Vec3, Vec3),
+    bounds: (Vec3, Vec3),
+) -> Option<f32> {
+    let denominator = direction.dot(plane.1);
+    if denominator.abs() < 1.0e-5 {
+        return None;
+    }
+    let distance = (plane.0 - position).dot(plane.1) / denominator;
+    if distance <= 1.0e-3 {
+        return None;
+    }
+    let point = position + direction * distance;
+    let tolerance = Vec3::splat(0.5);
+    (point.cmpge(bounds.0 - tolerance).all() && point.cmple(bounds.1 + tolerance).all())
+        .then_some(distance)
+}
+
+fn warp_portal_active(portal: &WarpPortal, camera_position: Vec3) -> bool {
+    warp_portal_side_active(
+        portal.authored_plane,
+        portal.source_on_positive_side,
+        camera_position,
+    )
+}
+
+fn warp_portal_side_active(
+    authored_plane: [f32; 4],
+    source_on_positive_side: bool,
+    camera_position: Vec3,
+) -> bool {
+    let camera = render_to_unreal(camera_position);
+    let side = Vec3::from_array([authored_plane[0], authored_plane[1], authored_plane[2]])
+        .dot(camera)
+        - authored_plane[3];
+    (side >= 0.0) == source_on_positive_side
+}
+
 fn mirror_clip_plane(camera: Vec3, point: Vec3, normal: Vec3) -> Vec4 {
     let mut normal = normal.normalize_or_zero();
     if (camera - point).dot(normal) < 0.0 {
@@ -1373,6 +1953,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            warp_portals: vec![],
             sky_zone: None,
         };
         let (indices, batches) = texture_batches(&scene, 2);
@@ -1419,6 +2000,7 @@ mod tests {
                 },
                 SurfaceMaterial::default(),
             ],
+            warp_portals: vec![],
             sky_zone: None,
         };
 
@@ -1449,6 +2031,17 @@ mod tests {
         assert!(plane.dot(Vec3::ZERO.extend(1.0)) > 0.0);
         assert_eq!(plane.dot(point.extend(1.0)), 0.0);
         assert!(plane.dot(Vec3::new(0.0, -11.0, 0.0).extend(1.0)) < 0.0);
+    }
+
+    #[test]
+    fn warp_portal_uses_the_zone_actor_on_the_opposite_bsp_side() {
+        let plane = [0.0, 1.0, 0.0, 10.0];
+        let positive_camera = unreal_to_render(Vec3::new(0.0, 12.0, 0.0));
+        let negative_camera = unreal_to_render(Vec3::new(0.0, 8.0, 0.0));
+
+        assert!(warp_portal_side_active(plane, true, positive_camera));
+        assert!(!warp_portal_side_active(plane, true, negative_camera));
+        assert!(warp_portal_side_active(plane, false, negative_camera));
     }
 
     #[test]
@@ -1484,6 +2077,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            warp_portals: vec![],
             sky_zone: None,
         };
         let surfaces = blended_surfaces(&scene, 2, &vertices);
@@ -1622,6 +2216,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            warp_portals: vec![],
             sky_zone: None,
         };
         let (indices, batches) = backdrop_batches(&scene);

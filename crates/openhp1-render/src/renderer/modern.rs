@@ -919,6 +919,7 @@ mod tests {
                 },
             ],
             surface_materials: vec![],
+            warp_portals: vec![],
             sky_zone: None,
         };
         let (instances, batches) = corona_instances(&scene);
