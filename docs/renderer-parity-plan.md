@@ -590,10 +590,11 @@ commit, and live-verification fields for each item.
         presented frame. D3D clears depth to `1` and color to the supplied
         zero/black `ScreenClear`. The shared Classic/Modern main scene pass now
         does the same. Child portal/mirror clears remain traversal-owned.
-  - [ ] Resolve WinDrv's `Repaint(0)` window-message caller before adding an
-        unused clear/load API. It does not present, and its lock bit depends on
-        the world-model `PointCheck`; its observable stock-game effect is not
-        yet established.
+  - [x] WinDrv's only `Repaint(0)` caller is the `WM_SIZE` (`5`) handler. It
+        updates viewport/client size state, performs a non-present draw while
+        the engine is running, and the next normal `Repaint(1)` clears black.
+        No persistent-color load path is observable in stock gameplay, so no
+        unused clear/load API is required.
   - [ ] Live gate: expose otherwise uncovered main-target pixels and compare
         retail, Classic, and Modern. The expected presented-frame clear is
         black.
