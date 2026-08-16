@@ -554,6 +554,17 @@ commit, and live-verification fields for each item.
   - [x] Reachability boundary: stock HP1 bindings do not expose `RMODE`; retail
         access is through editor/custom console binding. Manual acceptance may
         use a custom binding, but no map-specific gameplay gate exists.
+  - [x] An implementation attempt rejected `export_index` as a color-key
+        surrogate. Retail mode 3 hashes the selected texture object's
+        process-global `UObject::Index`; OpenHP1 currently retains only package
+        identity plus export index, which does not preserve retail allocation
+        order.
+  - [ ] Dependency: recover the shared UObject allocation/registration order
+        and lifetime (including native, transient, and selected `AnimCurrent`
+        objects), then expose that exact index to scene texture metadata.
+        BASE-019 also needs preserved BSP node index/both zones, selected-frame
+        `MaxColor`, and viewport `RendMap` state. Do not build a debug-only
+        registry for a stock-game-unreachable mode.
 - [ ] `BASE-021` Match the viewport frame clear contract.
   - [x] Normal gameplay presentation is directly resolved: WinDrv's client
         tick calls `Repaint(1)`, which forwards `Blit=1` to
