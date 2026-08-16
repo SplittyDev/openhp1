@@ -590,9 +590,11 @@ commit, and live-verification fields for each item.
       configuration and reapplies supported graphics/display resources before
       the next frame. Reuse eager texture upload; do not emulate D3D cache
       buckets, eviction, preload counters, or logs.
-  - [ ] Deterministic acceptance: one command causes exactly one save and one
+  - [x] Deterministic acceptance: one command causes exactly one save and one
         graphics refresh, with the existing runtime/scene state preserved.
-        Live-check Classic brightness and other supported display changes.
+        The host reloads the existing scene resources and applies an explicitly
+        changed legacy client brightness without recreating gameplay state.
+  - [ ] Live-check Classic brightness and other supported display changes.
 - [ ] `PRESENT-001` Resolve retail presentation cadence before changing the
       current `AutoNoVsync` plus 60 Hz deadline. Capture effective `UseVSync`,
       refresh rate, tearing, and frame cadence on retail D3D at 60 and 120 Hz;

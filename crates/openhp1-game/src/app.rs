@@ -1210,6 +1210,15 @@ impl Graphics {
                         audio.set_sound_volume(f32::from(volume) / 255.0);
                     }
                 }
+                ConsoleCommandAction::Flush { classic_brightness } => {
+                    if let Some(brightness) = classic_brightness {
+                        self.graphics_settings.classic_display.brightness = brightness;
+                    }
+                    self.renderer
+                        .reload_scene(&self.device, &self.queue, &self.scene.render);
+                    self.display_settings = self.graphics_settings.display();
+                    self.game_ui.set_graphics_settings(self.graphics_settings);
+                }
                 ConsoleCommandAction::Open(url) => {
                     if let Err(error) = open_url(&url) {
                         self.last_error = Some(format!("could not open {url}: {error}"));

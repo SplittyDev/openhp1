@@ -10,7 +10,7 @@ use openhp1_package::{ConfigEntry, PackageStore};
 
 use crate::{ConsoleCommandHost, ConsoleCommandResponse};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConsoleCommandAction {
     Exit,
     Open(String),
@@ -20,6 +20,7 @@ pub enum ConsoleCommandAction {
     SetResolution { width: u32, height: u32 },
     SetMusicVolume(u8),
     SetSoundVolume(u8),
+    Flush { classic_brightness: Option<f32> },
 }
 
 /// The command surface shared by the windowed game and headless corpus runs.
@@ -383,10 +384,23 @@ fn resolution(value: &str) -> Option<(u32, u32)> {
 }
 
 fn flush(state: &mut ConsoleState) -> bool {
+    let classic_brightness = state
+        .pending_config
+        .get(&(
+            "system".to_owned(),
+            "windrv.windowsclient".to_owned(),
+            "brightness".to_owned(),
+        ))
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.2, 1.0));
     if !state.persist {
         // Corpus scanning must execute the same script path without writing
         // an overlay; its in-memory settings are deterministic for the run.
         state.pending_config.clear();
+        state
+            .actions
+            .push(ConsoleCommandAction::Flush { classic_brightness });
         return true;
     }
     let mut entries = BTreeMap::<String, Vec<ConfigEntry>>::new();
@@ -405,6 +419,9 @@ fn flush(state: &mut ConsoleState) -> bool {
         .all(|(config, entries)| state.packages.save_config(config, entries).is_ok())
     {
         state.pending_config.clear();
+        state
+            .actions
+            .push(ConsoleCommandAction::Flush { classic_brightness });
         true
     } else {
         false
@@ -788,6 +805,9 @@ mod tests {
             commands.take_actions(),
             [
                 ConsoleCommandAction::SetMusicVolume(200),
+                ConsoleCommandAction::Flush {
+                    classic_brightness: Some(0.65),
+                },
                 ConsoleCommandAction::Exit,
             ],
         );
