@@ -548,6 +548,19 @@ impl LoadedScene {
             );
             changed |= actor.render.is_some();
         }
+        self.render
+            .actor_submissions
+            .retain(|submission| submission.actor_index != actor_index);
+        if let Some(render) = &self.actors[actor_index].render {
+            self.render.actor_submissions.push(crate::ActorSubmission {
+                actor_index,
+                indices: render.indices.clone(),
+                translucent_pass: state.style == 3 || state.opacity < 1.0,
+            });
+            self.render
+                .actor_submissions
+                .sort_by_key(|submission| submission.actor_index);
+        }
         if let Some(playback) = playback {
             playback.restore(
                 self.animations

@@ -1339,6 +1339,7 @@ mod tests {
     fn scene(mode: SurfaceMode, sky: bool) -> RenderScene {
         RenderScene {
             mesh: TriangleMesh {
+                bsp_nodes: Vec::new(),
                 positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
                 node_plane_normals: Vec::new(),
                 texture_coordinates: vec![Vec2::ZERO; 3],
@@ -1350,11 +1351,13 @@ mod tests {
                 vertex_surfaces: vec![0; 3],
                 texture_pan_speeds: Vec::new(),
                 triangle_surfaces: vec![0],
+                triangle_nodes: Vec::new(),
             },
             textures: Vec::new(),
             lightmaps: Vec::new(),
             realtime_lightmaps: Vec::new(),
             coronas: Vec::new(),
+            actor_submissions: Vec::new(),
             surface_materials: vec![SurfaceMaterial {
                 mode,
                 volumetric_source: mode == SurfaceMode::Backdrop,

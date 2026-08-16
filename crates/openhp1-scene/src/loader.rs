@@ -22,9 +22,10 @@ use openhp1_texture::{IceAnimation, Palette, Texture, TextureRenderFlags, WaterA
 use tracing::{info, warn};
 
 use crate::{
-    Corona, RenderLight, RenderLightmap, RenderScene, Rotator, SceneActor, SceneActorAnimation,
-    SceneActorRenderRange, SceneObjectId, SurfaceMaterial, SurfaceMode, TextureImage,
-    WarpCoordinates, WarpPortal, render::light_direction, render_to_unreal, unreal_to_render,
+    ActorSubmission, Corona, RenderLight, RenderLightmap, RenderScene, Rotator, SceneActor,
+    SceneActorAnimation, SceneActorRenderRange, SceneObjectId, SurfaceMaterial, SurfaceMode,
+    TextureImage, WarpCoordinates, WarpPortal, render::light_direction, render_to_unreal,
+    unreal_to_render,
 };
 
 mod runtime_display;
@@ -320,6 +321,18 @@ impl LoadedScene {
             collapse_positions(&mut mesh.positions[render.vertices.clone()]);
         }
         let actor_meshes = actors.iter().filter(|actor| actor.render.is_some()).count();
+        let actor_submissions = actors
+            .iter()
+            .zip(&actor_states)
+            .enumerate()
+            .filter_map(|(actor_index, (actor, state))| {
+                actor.render.as_ref().map(|render| ActorSubmission {
+                    actor_index,
+                    indices: render.indices.clone(),
+                    translucent_pass: state.actor.style == 3 || state.actor.opacity < 1.0,
+                })
+            })
+            .collect();
         let animated_actor_meshes = actors
             .iter()
             .filter(|actor| actor.animation.is_some())
@@ -360,6 +373,7 @@ impl LoadedScene {
                 lightmaps,
                 realtime_lightmaps,
                 coronas,
+                actor_submissions,
                 surface_materials,
                 warp_portals,
                 sky_zone,
@@ -750,15 +764,23 @@ impl LoadedScene {
             .iter()
             .map(|emitter| emitter.actor)
             .collect::<HashSet<_>>();
-        self.particles.retain(|actor, system| {
-            if active.contains(actor) {
-                true
-            } else {
+        let inactive = self
+            .particles
+            .keys()
+            .filter(|actor| !active.contains(actor))
+            .copied()
+            .collect::<Vec<_>>();
+        for actor in inactive {
+            if let Some(system) = self.particles.remove(&actor) {
                 self.render.mesh.positions[system.vertices.clone()].fill(Vec3::ZERO);
+                let _ = remove_particle_submission_range(
+                    &mut self.render.actor_submissions,
+                    actor,
+                    &system.indices,
+                );
                 changed = true;
-                false
             }
-        });
+        }
         for emitter in emitters {
             if let Some(actor) = self.actors.get_mut(emitter.actor) {
                 for diagnostic in emitter.capability_diagnostics() {
@@ -781,8 +803,20 @@ impl LoadedScene {
             if emitter.textures.is_empty() {
                 continue;
             }
+            let translucent_pass = emitter.style == 3
+                || self
+                    .actor_states
+                    .get(emitter.actor)
+                    .is_some_and(|state| state.actor.opacity < 1.0);
             if let Some(system) = self.particles.get_mut(&emitter.actor) {
+                let actor = emitter.actor;
                 system.config = emitter;
+                changed |= upsert_particle_submission(
+                    &mut self.render.actor_submissions,
+                    actor,
+                    system.indices.clone(),
+                    translucent_pass,
+                );
                 continue;
             }
             let capacity = particle_capacity(&emitter);
@@ -827,6 +861,7 @@ impl LoadedScene {
                 unlit: emitter.unlit,
                 ..material
             });
+            let index_start = self.render.mesh.indices.len();
             let vertices = append_particle_slots(
                 &mut self.render.mesh,
                 capacity,
@@ -838,6 +873,7 @@ impl LoadedScene {
                     Vec2::new(0.0, dimensions.y),
                 ],
             );
+            let indices = index_start..self.render.mesh.indices.len();
             let actor = emitter.actor;
             let emitted = emitter.particles_emitted;
             self.particles.insert(
@@ -847,12 +883,19 @@ impl LoadedScene {
                     particles: Vec::new(),
                     capacity,
                     vertices,
+                    indices: indices.clone(),
                     residue: 0.0,
                     last_location: self.actors[actor].location,
                     random: actor as u32 ^ 0xa341_316c,
                     primed: false,
                     emitted,
                 },
+            );
+            upsert_particle_submission(
+                &mut self.render.actor_submissions,
+                actor,
+                indices,
+                translucent_pass,
             );
             changed = true;
         }
@@ -957,6 +1000,12 @@ impl LoadedScene {
                         .max(needed)
                         .min(MAX_PARTICLE_CAPACITY);
                     grow_particle_system(&mut self.render.mesh, system, capacity);
+                    let _ = upsert_particle_submission(
+                        &mut self.render.actor_submissions,
+                        actor,
+                        system.indices.clone(),
+                        system.config.style == 3 || self.actor_states[actor].actor.opacity < 1.0,
+                    );
                 }
                 let count = if system.config.particles_alive == 0 {
                     requested.min(system.capacity.saturating_sub(system.particles.len()))
@@ -1348,6 +1397,7 @@ impl LoadedScene {
         } else {
             false
         };
+        changed |= remove_particle_submission(&mut self.render.actor_submissions, actor_index);
         let corona_count = self.render.coronas.len();
         self.render
             .coronas
@@ -2221,6 +2271,7 @@ struct ParticleSystem {
     particles: Vec<Particle>,
     capacity: usize,
     vertices: Range<usize>,
+    indices: Range<usize>,
     residue: f32,
     last_location: Vec3,
     random: u32,
@@ -2254,8 +2305,57 @@ fn grow_particle_system(mesh: &mut TriangleMesh, system: &mut ParticleSystem, ca
         .expect("particle quad has four texture coordinates");
     let surface = mesh.vertex_surfaces[old_vertices.start];
     mesh.positions[old_vertices].fill(Vec3::ZERO);
+    let index_start = mesh.indices.len();
     system.vertices = append_particle_slots(mesh, capacity, surface, texture_coordinates);
+    system.indices = index_start..mesh.indices.len();
     system.capacity = capacity;
+}
+
+fn upsert_particle_submission(
+    submissions: &mut Vec<crate::ActorSubmission>,
+    actor_index: usize,
+    indices: Range<usize>,
+    translucent_pass: bool,
+) -> bool {
+    if let Some(submission) = submissions
+        .iter_mut()
+        .find(|submission| submission.actor_index == actor_index)
+    {
+        let changed =
+            submission.indices != indices || submission.translucent_pass != translucent_pass;
+        submission.indices = indices;
+        submission.translucent_pass = translucent_pass;
+        changed
+    } else {
+        submissions.push(crate::ActorSubmission {
+            actor_index,
+            indices,
+            translucent_pass,
+        });
+        submissions.sort_by_key(|submission| submission.actor_index);
+        true
+    }
+}
+
+fn remove_particle_submission(
+    submissions: &mut Vec<crate::ActorSubmission>,
+    actor_index: usize,
+) -> bool {
+    let previous = submissions.len();
+    submissions.retain(|submission| submission.actor_index != actor_index);
+    submissions.len() != previous
+}
+
+fn remove_particle_submission_range(
+    submissions: &mut Vec<crate::ActorSubmission>,
+    actor_index: usize,
+    indices: &Range<usize>,
+) -> bool {
+    let previous = submissions.len();
+    submissions.retain(|submission| {
+        submission.actor_index != actor_index || submission.indices != *indices
+    });
+    submissions.len() != previous
 }
 
 fn append_particle_slots(
@@ -5173,8 +5273,8 @@ mod tests {
     use openhp1_package::{ObjectReference, PackageStore};
     use openhp1_physics::BspCollision;
     use openhp1_runtime::{
-        ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject,
-        ScriptRuntime, WeaponAttachment,
+        ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleTexture, ParticleWind,
+        RuntimeObject, ScriptRuntime, WeaponAttachment,
     };
     use openhp1_texture::{
         Color, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Palette, Texture,
@@ -5970,6 +6070,32 @@ mod tests {
     }
 
     #[test]
+    fn runtime_style_and_opacity_transitions_refresh_actor_submission_pass() {
+        let mut scene = particle_test_scene();
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: mesh,
+            export_index: 0,
+        };
+        scene.actor_states[0].actor.draw_type = 2;
+        scene.actor_states[0].actor.mesh = Some(mesh_object.clone());
+        scene.actors[0].draw_type = 2;
+        scene.actors[0].mesh = Some(mesh_object.id());
+        assert!(scene.rebuild_current_actor_render(0).unwrap());
+        assert!(!scene.render.actor_submissions[0].translucent_pass);
+
+        assert!(scene.set_actor_style(0, 3).unwrap());
+        assert!(scene.render.actor_submissions[0].translucent_pass);
+        assert!(scene.set_actor_style(0, 1).unwrap());
+        assert!(!scene.render.actor_submissions[0].translucent_pass);
+
+        assert!(scene.set_actor_opacity(0, 0.5).unwrap());
+        assert!(scene.render.actor_submissions[0].translucent_pass);
+        assert!(scene.set_actor_opacity(0, 1.0).unwrap());
+        assert!(!scene.render.actor_submissions[0].translucent_pass);
+    }
+
+    #[test]
     fn particle_capacity_uses_alive_limit_and_finite_emission_count() {
         let mut emitter = ParticleEmitter {
             actor: 0,
@@ -6377,6 +6503,88 @@ mod tests {
         assert_eq!(particle.location, glam::Vec3::ZERO);
     }
 
+    #[test]
+    fn dynamic_particle_submission_tracks_growth_pass_and_removal() {
+        let mut mesh = openhp1_map::TriangleMesh::default();
+        let index_start = mesh.indices.len();
+        let vertices = super::append_particle_slots(&mut mesh, 1, 0, [glam::Vec2::ZERO; 4]);
+        let mut system = super::ParticleSystem {
+            config: ParticleEmitter::default(),
+            particles: Vec::new(),
+            capacity: 1,
+            vertices,
+            indices: index_start..mesh.indices.len(),
+            residue: 0.0,
+            last_location: glam::Vec3::ZERO,
+            random: 0,
+            primed: false,
+            emitted: 0,
+        };
+        let mut submissions = Vec::new();
+        super::upsert_particle_submission(&mut submissions, 7, system.indices.clone(), false);
+        assert_eq!(submissions[0].indices, 0..6);
+        assert!(!submissions[0].translucent_pass);
+
+        super::grow_particle_system(&mut mesh, &mut system, 2);
+        super::upsert_particle_submission(&mut submissions, 7, system.indices.clone(), true);
+        assert_eq!(submissions[0].indices, 6..18);
+        assert!(submissions[0].translucent_pass);
+
+        super::remove_particle_submission(&mut submissions, 7);
+        assert!(submissions.is_empty());
+    }
+
+    #[test]
+    fn particle_emitter_sync_refreshes_submission_pass_and_removes_it() {
+        let mut scene = particle_test_scene();
+        let emitter = |style| ParticleEmitter {
+            actor: 0,
+            style,
+            textures: vec![ParticleTexture {
+                package: "unused-existing-system".to_owned(),
+                export_index: 0,
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            !scene
+                .render
+                .actor_submissions
+                .iter()
+                .any(|s| s.actor_index == 0)
+        );
+        assert!(scene.sync_particle_emitters(vec![emitter(1)]).unwrap());
+        assert!(!scene.render.actor_submissions[0].translucent_pass);
+
+        scene.actor_states[0].actor.opacity = 0.5;
+        assert!(scene.sync_particle_emitters(vec![emitter(1)]).unwrap());
+        assert!(scene.render.actor_submissions[0].translucent_pass);
+
+        scene.actor_states[0].actor.opacity = 1.0;
+        assert!(scene.sync_particle_emitters(vec![emitter(1)]).unwrap());
+        assert!(!scene.render.actor_submissions[0].translucent_pass);
+        assert!(scene.sync_particle_emitters(vec![emitter(3)]).unwrap());
+        assert!(scene.render.actor_submissions[0].translucent_pass);
+
+        assert!(scene.sync_particle_emitters(Vec::new()).unwrap());
+        assert!(scene.render.actor_submissions.is_empty());
+    }
+
+    #[test]
+    fn inactive_particle_teardown_preserves_rebuilt_actor_submission() {
+        let mut scene = particle_test_scene();
+        scene.render.actor_submissions.push(crate::ActorSubmission {
+            actor_index: 0,
+            indices: 12..18,
+            translucent_pass: false,
+        });
+
+        assert!(scene.sync_particle_emitters(Vec::new()).unwrap());
+        assert_eq!(scene.render.actor_submissions.len(), 1);
+        assert_eq!(scene.render.actor_submissions[0].indices, 12..18);
+    }
+
     fn particle_test_scene() -> super::LoadedScene {
         let root = std::env::temp_dir().join(format!(
             "openhp1-scene-particle-elasticity-{}-{}",
@@ -6410,6 +6618,7 @@ mod tests {
                 lightmaps: Vec::new(),
                 realtime_lightmaps: Vec::new(),
                 coronas: Vec::new(),
+                actor_submissions: Vec::new(),
                 surface_materials: Vec::new(),
                 warp_portals: Vec::new(),
                 sky_zone: None,
@@ -6488,6 +6697,7 @@ mod tests {
                     }],
                     capacity: 1,
                     vertices: 0..4,
+                    indices: 0..6,
                     residue: 0.0,
                     last_location: glam::Vec3::ZERO,
                     random: 0,

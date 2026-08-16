@@ -1,10 +1,12 @@
 use glam::{Vec2, Vec3};
 
-use crate::{Error, Model, Result, decode::index};
+use crate::{BspNode, Error, Model, Result, decode::index};
 
 /// Indexed triangles plus the BSP surface responsible for each triangle.
 #[derive(Clone, Debug, Default)]
 pub struct TriangleMesh {
+    /// Compact BSP topology retained for camera-dependent submission order.
+    pub bsp_nodes: Vec<BspNode>,
     pub positions: Vec<Vec3>,
     /// World-space normals. Environment-mapped actor meshes use these to
     /// derive camera-relative reflection coordinates.
@@ -25,6 +27,9 @@ pub struct TriangleMesh {
     pub texture_pan_speeds: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub triangle_surfaces: Vec<usize>,
+    /// BSP node responsible for each triangulated world polygon. Actor
+    /// triangles appended by scene assembly are intentionally not represented.
+    pub triangle_nodes: Vec<usize>,
 }
 
 impl Model {
@@ -39,8 +44,9 @@ impl Model {
         let mut vertex_surfaces = Vec::new();
         let mut indices = Vec::new();
         let mut triangle_surfaces = Vec::new();
+        let mut triangle_nodes = Vec::new();
 
-        for node in &self.nodes {
+        for (node_index, node) in self.nodes.iter().enumerate() {
             if node.vertex_count < 3 {
                 continue;
             }
@@ -124,9 +130,11 @@ impl Model {
                     base_vertex + offset + 1,
                 ]);
                 triangle_surfaces.push(surface);
+                triangle_nodes.push(node_index);
             }
         }
         Ok(TriangleMesh {
+            bsp_nodes: self.nodes.clone(),
             positions,
             normals,
             node_plane_normals,
@@ -138,6 +146,7 @@ impl Model {
             texture_pan_speeds: Vec::new(),
             indices,
             triangle_surfaces,
+            triangle_nodes,
         })
     }
 }

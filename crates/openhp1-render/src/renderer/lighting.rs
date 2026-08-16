@@ -296,6 +296,7 @@ mod tests {
                 }],
             }],
             coronas: Vec::new(),
+            actor_submissions: Vec::new(),
             surface_materials: Vec::<SurfaceMaterial>::new(),
             warp_portals: Vec::new(),
             sky_zone: None,

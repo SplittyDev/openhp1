@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use glam::{Mat3, Vec3};
 use openhp1_map::{LightVisibility, LightmapImage, SkyZone, TriangleMesh, hsb_to_rgb};
 
@@ -112,6 +114,16 @@ pub struct WarpPortal {
     pub destination: Option<WarpCoordinates>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActorSubmission {
+    pub actor_index: usize,
+    /// Index range in [`RenderScene::mesh`], retained as one actor record.
+    pub indices: Range<usize>,
+    /// Retail's device path defers Style 3 and Opacity < 1 actors until after
+    /// BSP list 2. Other actor styles remain in the ordinary actor pass.
+    pub translucent_pass: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SurfaceMode {
     #[default]
@@ -203,6 +215,8 @@ pub struct RenderScene {
     /// Authored UE1 lights and visibility masks evaluated by the Modern renderer.
     pub realtime_lightmaps: Vec<RenderLightmap>,
     pub coronas: Vec<Corona>,
+    /// Dynamic actor geometry records used by the shared submission planner.
+    pub actor_submissions: Vec<ActorSubmission>,
     /// Material for each surface. Missing visible textures use the renderer's
     /// checkerboard; the scene loader hides untextured actor-mesh faces.
     pub surface_materials: Vec<SurfaceMaterial>,
@@ -307,6 +321,7 @@ mod tests {
                 },
             ],
             coronas: Vec::new(),
+            actor_submissions: Vec::new(),
             surface_materials: Vec::new(),
             warp_portals: Vec::new(),
             sky_zone: None,

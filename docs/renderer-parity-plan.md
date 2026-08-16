@@ -466,21 +466,37 @@ commit, and live-verification fields for each item.
         traversal order; ordinary list 1 is sorted by the composite
         zone/base/auxiliary-texture object key; `flags & 0x47 != 0` list 2
         remains reverse traversal order. Retail never center-sorts list 2.
-  - [ ] Retain BSP node/save order and per-actor geometry records instead of
-        flattening those boundaries during scene assembly. Preserve the
-        current shared mesh/material data rather than introducing a second
-        renderer representation.
-  - [ ] Build one camera-dependent command plan with the three surface lists,
-        device-path actor insertion points, and traversal-time backdrop,
-        portal, and mirror children; consume it unchanged in both modes.
-        Decals must remain immediately after their owning surface, while
-        coronas remain a distinct post-geometry pass.
-  - [ ] Deterministic acceptance: exact flag/list matrix; traversal reversal
-        and material-key order; alternating BSP-plane actor insertion for
-        mesh, particle, and billboard records; style/opacity split; child-view
-        ordering; and a command-trace/pixel fixture in both modes. Live gates:
-        `Lev2_HogFront` WetWater, `Lev4_Sneak` masked/opacity actors,
-        `Lev5_Chess` opaque baseline, and a corpus-identified Erised map.
+  - [x] Retain BSP topology, per-triangle node identity, and per-actor index
+        records without introducing a second mesh/material representation.
+        Runtime display replacement refreshes those actor records through the
+        existing renderer scene-update seam.
+  - [x] Build one camera-dependent command plan consumed before the
+        Classic/Modern split. The shipped device path now submits ordinary
+        actors after list 1, Style 3/Opacity<1 actors after reverse-traversal
+        list 2, all successfully constructed main child frames in traversal
+        order, and then list-0 mirror overlays in traversal order. Globally
+        unresolved main portal or backdrop children fall back to ordinary
+        classification instead of disappearing.
+  - [x] Synthetic command traces cover coplanar repeated-surface records,
+        reverse list 2, both actor insertion passes, all traversal children
+        before list-0 mirrors, globally unresolved main-child fallback, and
+        runtime actor-record refresh.
+  - [ ] Recover `OccludeBsp` visibility/save order and the exact list-1
+        composite UObject key. OpenHP1 does not retain retail runtime UObject
+        indices, so current list 1 keeps deterministic binding grouping where
+        opaque order is pixel-neutral rather than inventing export-index keys.
+        The native dynamic-actor class-object sort key is also unavailable;
+        current actor-index order is deterministic but not exact. Exact
+        span-path actor-plane interleave remains open, as do fallback semantics
+        for nested passes whose special target is missing or depth-limited.
+  - [ ] Insert rendered decals immediately after each owning saved surface;
+        `BASE-002F` still owns scene consumption and clipping. Coronas remain a
+        distinct post-geometry pass.
+  - [ ] Live gates remain `Lev2_HogFront` WetWater, `Lev4_Sneak`
+        masked/opacity actors, and `Lev5_Chess` opaque baseline. A read-only
+        41-map scan found zero raw `PF_Mirrored` surfaces, and the current
+        loader resolves zero `WarpPortal` records, so neither Erised nor warp
+        child placement has an honest shipped live gate yet.
 - [ ] `BASE-017` Apply `FTextureInfo` dimensions and `DrawScale` to ordinary
       legacy mesh byte UVs without changing the environment-map equation.
       Direct Render.dll evidence: `DrawMesh` and `DrawLodMesh` multiply each

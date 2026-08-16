@@ -16,15 +16,12 @@ mod classic;
 mod lighting;
 mod modern;
 mod pipeline;
+mod submission;
 mod target;
 
 use crate::camera::{reflected_view, warp_view};
 use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
-use batch::{
-    BackdropBatch, BlendedSurface, DrawBatch, MaterialBinding, attachment_enabled,
-    backdrop_batches, blended_surfaces, material_bindings, mirror_geometries,
-    sorted_blended_batches, texture_batches, update_blended_centers,
-};
+use batch::{MaterialBinding, attachment_enabled, material_bindings, mirror_geometries};
 use classic::ClassicDisplay;
 use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
@@ -34,6 +31,7 @@ use pipeline::{
     create_attachment_pipeline, create_pipeline, create_screen_pipeline,
     material_texture_bind_group, texture, texture_bind_group, write_texture_mips,
 };
+use submission::{SubmissionCommand, SubmissionGeometry, SubmissionPlan};
 use target::{DepthTarget, SampledTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -102,8 +100,7 @@ struct Mirror {
     bounds: (Vec3, Vec3),
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    blended_index_buffer: wgpu::Buffer,
     pipeline: usize,
     no_smooth: bool,
     target: SampledTarget,
@@ -119,8 +116,6 @@ struct WarpPortal {
     bounds: (Vec3, Vec3),
     view: PortalView,
     nested_views: Vec<PortalView>,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
     pipeline: usize,
     no_smooth: bool,
     target: SampledTarget,
@@ -156,16 +151,12 @@ pub struct Renderer {
     material_bindings: Vec<MaterialBinding>,
     vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
-    opaque_index_buffer: wgpu::Buffer,
-    opaque_batches: Vec<DrawBatch>,
-    backdrop_index_buffer: wgpu::Buffer,
-    backdrop_batches: Vec<BackdropBatch>,
     mirrors: Vec<Mirror>,
     warp_portals: Vec<WarpPortal>,
     nested_warp_targets: Vec<SampledTarget>,
     blended_index_buffer: wgpu::Buffer,
     sky_blended_index_buffer: Option<wgpu::Buffer>,
-    blended_surfaces: Vec<BlendedSurface>,
+    submission: SubmissionGeometry,
     depth: DepthTarget,
     classic_display: Option<ClassicDisplay>,
     modern: Option<ModernRenderer>,
@@ -513,9 +504,6 @@ impl Renderer {
         let bounds = scene_bounds(&vertices);
         let (material_bindings, surface_bindings) =
             material_bindings(scene, fallback_texture, settings.detail_textures);
-        let (opaque_indices, opaque_batches) =
-            texture_batches(scene, &material_bindings, &surface_bindings);
-        let (backdrop_indices, backdrop_batches) = backdrop_batches(scene);
         let mirror_geometries = mirror_geometries(scene, &surface_bindings);
         let warp_portal_geometries = scene
             .warp_portals
@@ -532,50 +520,23 @@ impl Renderer {
                 (!indices.is_empty()).then_some((*portal, indices))
             })
             .collect::<Vec<_>>();
-        let blended_surfaces = blended_surfaces(
-            scene,
-            fallback_texture,
-            &vertices,
-            &material_bindings,
-            &surface_bindings,
-        );
-        let blended_index_count = blended_surfaces
-            .iter()
-            .map(|surface| surface.indices.len())
-            .sum::<usize>();
+        let submission_index_count = scene.mesh.indices.len();
+        let submission = SubmissionGeometry::new(scene, surface_bindings.clone());
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("OpenHP1 BSP vertices"),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-        let opaque_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("OpenHP1 opaque BSP indices"),
-            contents: bytemuck::cast_slice(&opaque_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let backdrop_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("OpenHP1 fake-backdrop indices"),
-            size: (backdrop_indices.len() * size_of::<u32>()).max(size_of::<u32>()) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        if !backdrop_indices.is_empty() {
-            queue.write_buffer(
-                &backdrop_index_buffer,
-                0,
-                bytemuck::cast_slice(&backdrop_indices),
-            );
-        }
         let blended_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 blended BSP indices"),
-            size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
+            size: (submission_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let sky_blended_index_buffer = scene.sky_zone.map(|_| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("OpenHP1 sky blended BSP indices"),
-                size: (blended_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
+                size: (submission_index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -914,10 +875,12 @@ impl Renderer {
                         resource: camera_buffer.as_entire_binding(),
                     }],
                 });
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("OpenHP1 mirror indices"),
-                    contents: bytemuck::cast_slice(&geometry.indices),
-                    usage: wgpu::BufferUsages::INDEX,
+                let blended_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("OpenHP1 mirror blended indices"),
+                    size: (scene.mesh.indices.len() * size_of::<u32>()).max(size_of::<u32>())
+                        as u64,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
                 });
                 Some(Mirror {
                     surface: geometry.surface,
@@ -926,8 +889,7 @@ impl Renderer {
                     bounds: surface_bounds(scene, &vertices, geometry.surface)?,
                     camera_buffer,
                     camera_bind_group,
-                    index_buffer,
-                    index_count: geometry.indices.len() as u32,
+                    blended_index_buffer,
                     pipeline: geometry.pipeline,
                     no_smooth: geometry.no_smooth,
                     target: SampledTarget::new(
@@ -944,13 +906,8 @@ impl Renderer {
             .collect();
         let warp_portals = warp_portal_geometries
             .into_iter()
-            .filter_map(|(portal, indices)| {
+            .filter_map(|(portal, _)| {
                 let plane = mirror_plane(scene, &vertices, portal.surface)?;
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("OpenHP1 warp-portal indices"),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
                 Some(WarpPortal {
                     surface: portal.surface,
                     authored_plane: portal.plane,
@@ -959,12 +916,10 @@ impl Renderer {
                     destination: portal.destination,
                     plane,
                     bounds: surface_bounds(scene, &vertices, portal.surface)?,
-                    view: PortalView::new(device, &camera_layout, blended_index_count),
+                    view: PortalView::new(device, &camera_layout, submission_index_count),
                     nested_views: (1..MAX_WARP_PORTAL_DEPTH)
-                        .map(|_| PortalView::new(device, &camera_layout, blended_index_count))
+                        .map(|_| PortalView::new(device, &camera_layout, submission_index_count))
                         .collect(),
-                    index_buffer,
-                    index_count: indices.len() as u32,
                     pipeline: usize::from(scene.surface_materials[portal.surface].two_sided),
                     no_smooth: scene.surface_materials[portal.surface].no_smooth,
                     target: SampledTarget::new(
@@ -1034,16 +989,12 @@ impl Renderer {
             material_bindings,
             vertices,
             vertex_buffer,
-            opaque_index_buffer,
-            opaque_batches,
-            backdrop_index_buffer,
-            backdrop_batches,
             mirrors,
             warp_portals,
             nested_warp_targets,
             blended_index_buffer,
             sky_blended_index_buffer,
-            blended_surfaces,
+            submission,
             depth,
             classic_display,
             modern,
@@ -1113,13 +1064,20 @@ impl Renderer {
             };
             portal.bounds = bounds;
         }
-        update_blended_centers(&mut self.blended_surfaces, &self.vertices);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
         true
     }
 
     pub fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
         if scene.textures.len() + 1 != self.textures.len() || !self.update_vertices(queue, scene) {
+            return false;
+        }
+        let (bindings, surface_bindings) = material_bindings(
+            scene,
+            self.textures.len() - 1,
+            self.settings.detail_textures,
+        );
+        if bindings != self.material_bindings || !self.submission.refresh(scene, surface_bindings) {
             return false;
         }
         for portal in &mut self.warp_portals {
@@ -1379,13 +1337,14 @@ impl Renderer {
                 self.auto_uv / AUTO_UV_PER_SECOND,
             );
         }
-        let (blended_indices, blended_batches) =
-            sorted_blended_batches(&self.blended_surfaces, camera.position);
-        if !blended_indices.is_empty() {
+        let main_plan = self
+            .submission
+            .plan(camera.position, &self.material_bindings);
+        if !main_plan.indices.is_empty() {
             queue.write_buffer(
                 &self.blended_index_buffer,
                 0,
-                bytemuck::cast_slice(&blended_indices),
+                bytemuck::cast_slice(&main_plan.indices),
             );
         }
 
@@ -1414,13 +1373,14 @@ impl Renderer {
                     clip_plane: Vec4::ZERO.to_array(),
                 }),
             );
-            let (sky_indices, sky_batches) =
-                sorted_blended_batches(&self.blended_surfaces, sky_camera.position);
-            if !sky_indices.is_empty() {
+            let sky_plan = self
+                .submission
+                .plan(sky_camera.position, &self.material_bindings);
+            if !sky_plan.indices.is_empty() {
                 queue.write_buffer(
                     sky_blended_index_buffer,
                     0,
-                    bytemuck::cast_slice(&sky_indices),
+                    bytemuck::cast_slice(&sky_plan.indices),
                 );
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1450,7 +1410,7 @@ impl Renderer {
                 &mut pass,
                 sky_camera_bind_group,
                 sky_blended_index_buffer,
-                &sky_batches,
+                &sky_plan,
                 None,
                 None,
                 None,
@@ -1574,13 +1534,14 @@ impl Renderer {
                             clip_plane: nested_clip_plane.to_array(),
                         }),
                     );
-                    let (indices, batches) =
-                        sorted_blended_batches(&self.blended_surfaces, nested_position);
-                    if !indices.is_empty() {
+                    let plan = self
+                        .submission
+                        .plan(nested_position, &self.material_bindings);
+                    if !plan.indices.is_empty() {
                         queue.write_buffer(
                             &view.blended_index_buffer,
                             0,
-                            bytemuck::cast_slice(&indices),
+                            bytemuck::cast_slice(&plan.indices),
                         );
                     }
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1610,7 +1571,7 @@ impl Renderer {
                         &mut pass,
                         &view.camera_bind_group,
                         &view.blended_index_buffer,
-                        &batches,
+                        &plan,
                         None,
                         None,
                         None,
@@ -1637,13 +1598,14 @@ impl Renderer {
                             .to_array(),
                     }),
                 );
-                let (indices, batches) =
-                    sorted_blended_batches(&self.blended_surfaces, reflected_position);
-                if !indices.is_empty() {
+                let plan = self
+                    .submission
+                    .plan(reflected_position, &self.material_bindings);
+                if !plan.indices.is_empty() {
                     queue.write_buffer(
                         &view.blended_index_buffer,
                         0,
-                        bytemuck::cast_slice(&indices),
+                        bytemuck::cast_slice(&plan.indices),
                     );
                 }
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1673,7 +1635,7 @@ impl Renderer {
                     &mut pass,
                     &view.camera_bind_group,
                     &view.blended_index_buffer,
-                    &batches,
+                    &plan,
                     None,
                     nested.map(|nested| (&self.warp_portals[nested], &self.nested_warp_targets[1])),
                     None,
@@ -1699,12 +1661,12 @@ impl Renderer {
                     clip_plane: clip_plane.to_array(),
                 }),
             );
-            let (indices, batches) = sorted_blended_batches(&self.blended_surfaces, position);
-            if !indices.is_empty() {
+            let plan = self.submission.plan(position, &self.material_bindings);
+            if !plan.indices.is_empty() {
                 queue.write_buffer(
                     &view.blended_index_buffer,
                     0,
-                    bytemuck::cast_slice(&indices),
+                    bytemuck::cast_slice(&plan.indices),
                 );
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1734,7 +1696,7 @@ impl Renderer {
                 &mut pass,
                 &view.camera_bind_group,
                 &view.blended_index_buffer,
-                &batches,
+                &plan,
                 None,
                 None,
                 mirror,
@@ -1764,6 +1726,16 @@ impl Renderer {
                     clip_plane: clip_plane.to_array(),
                 }),
             );
+            let plan = self
+                .submission
+                .plan(mirror_camera_position, &self.material_bindings);
+            if !plan.indices.is_empty() {
+                queue.write_buffer(
+                    &mirror.blended_index_buffer,
+                    0,
+                    bytemuck::cast_slice(&plan.indices),
+                );
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("OpenHP1 mirror render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1790,12 +1762,20 @@ impl Renderer {
             draw_calls += self.draw_scene(
                 &mut pass,
                 &mirror.camera_bind_group,
-                &self.blended_index_buffer,
-                &[],
+                &mirror.blended_index_buffer,
+                &plan,
                 None,
                 None,
                 None,
                 ScenePass::Reflection,
+            );
+        }
+
+        if !main_plan.indices.is_empty() {
+            queue.write_buffer(
+                &self.blended_index_buffer,
+                0,
+                bytemuck::cast_slice(&main_plan.indices),
             );
         }
 
@@ -1836,7 +1816,7 @@ impl Renderer {
             &mut pass,
             &self.camera_bind_group,
             &self.blended_index_buffer,
-            &blended_batches,
+            &main_plan,
             self.sky_target.as_ref(),
             None,
             None,
@@ -1875,8 +1855,8 @@ impl Renderer {
         &'pass self,
         pass: &mut wgpu::RenderPass<'pass>,
         camera_bind_group: &'pass wgpu::BindGroup,
-        blended_index_buffer: &'pass wgpu::Buffer,
-        blended_batches: &[DrawBatch],
+        submission_index_buffer: &'pass wgpu::Buffer,
+        plan: &SubmissionPlan,
         backdrop_target: Option<&'pass SampledTarget>,
         nested_warp_portal: Option<(&'pass WarpPortal, &'pass SampledTarget)>,
         nested_mirror: Option<&'pass Mirror>,
@@ -1895,95 +1875,79 @@ impl Renderer {
         if let Some(lighting) = &self.lighting {
             pass.set_bind_group(2, &lighting.bind_group, &[]);
         }
-        if !self.opaque_batches.is_empty()
-            || !blended_batches.is_empty()
-            || (backdrop_target.is_some() && !self.backdrop_batches.is_empty())
-            || nested_warp_portal.is_some()
-            || nested_mirror.is_some()
-            || (matches!(scene_pass, ScenePass::Main) && !self.warp_portals.is_empty())
-            || (matches!(scene_pass, ScenePass::Main) && !self.mirrors.is_empty())
-        {
+        if !plan.commands.is_empty() {
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(submission_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         }
-        if matches!(scene_pass, ScenePass::Main) {
-            for portal in self
-                .warp_portals
-                .iter()
-                .filter(|portal| portal.destination.is_some())
-            {
-                pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.set_bind_group(1, portal.target.bind_group(portal.no_smooth), &[]);
-                pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
-                pass.draw_indexed(0..portal.index_count, 0, 0..1);
-                draw_calls += 1;
-            }
-        }
-        if let Some((portal, target)) = nested_warp_portal {
-            pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_bind_group(1, target.bind_group(portal.no_smooth), &[]);
-            pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
-            pass.draw_indexed(0..portal.index_count, 0, 0..1);
-            draw_calls += 1;
-        }
-        if let Some(mirror) = nested_mirror {
-            pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_bind_group(1, mirror.target.bind_group(mirror.no_smooth), &[]);
-            pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
-            pass.draw_indexed(0..mirror.index_count, 0, 0..1);
-            draw_calls += 1;
-            pass.set_bind_group(1, &self.material_bind_groups[mirror.binding], &[]);
-            draw_calls +=
-                self.draw_attachments(pass, mirror.binding, 0..mirror.index_count, reflected);
-        }
-        if !self.opaque_batches.is_empty() {
-            pass.set_index_buffer(
-                self.opaque_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            for batch in &self.opaque_batches {
-                pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(1, &self.material_bind_groups[batch.binding], &[]);
-                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
-                draw_calls += 1;
-                draw_calls +=
-                    self.draw_attachments(pass, batch.binding, batch.indices.clone(), reflected);
-            }
-        }
-        if matches!(scene_pass, ScenePass::Main) {
-            for mirror in &self.mirrors {
-                pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.set_bind_group(1, mirror.target.bind_group(mirror.no_smooth), &[]);
-                pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
-                pass.draw_indexed(0..mirror.index_count, 0, 0..1);
-                draw_calls += 1;
-                pass.set_bind_group(1, &self.material_bind_groups[mirror.binding], &[]);
-                draw_calls +=
-                    self.draw_attachments(pass, mirror.binding, 0..mirror.index_count, reflected);
-            }
-        }
-        if let Some(backdrop_target) = backdrop_target
-            && !self.backdrop_batches.is_empty()
-        {
-            pass.set_index_buffer(
-                self.backdrop_index_buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            for batch in &self.backdrop_batches {
-                pass.set_bind_group(1, backdrop_target.bind_group(batch.no_smooth), &[]);
-                pass.set_pipeline(&self.backdrop_pipelines[batch.pipeline]);
-                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
-                draw_calls += 1;
-            }
-        }
-        if !blended_batches.is_empty() {
-            pass.set_index_buffer(blended_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            for batch in blended_batches {
-                pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(1, &self.material_bind_groups[batch.binding], &[]);
-                pass.draw_indexed(batch.indices.clone(), 0, 0..1);
-                draw_calls += 1;
-                draw_calls +=
-                    self.draw_attachments(pass, batch.binding, batch.indices.clone(), reflected);
+        for command in &plan.commands {
+            match command {
+                SubmissionCommand::Geometry { batch, .. } => {
+                    pass.set_pipeline(&pipelines[batch.pipeline]);
+                    pass.set_bind_group(1, &self.material_bind_groups[batch.binding], &[]);
+                    pass.draw_indexed(batch.indices.clone(), 0, 0..1);
+                    draw_calls += 1;
+                    draw_calls += self.draw_attachments(
+                        pass,
+                        batch.binding,
+                        batch.indices.clone(),
+                        reflected,
+                    );
+                }
+                SubmissionCommand::Portal { surface, indices } => {
+                    let portal = if matches!(scene_pass, ScenePass::Main) {
+                        self.warp_portals.iter().find(|portal| {
+                            portal.surface == *surface && portal.destination.is_some()
+                        })
+                    } else {
+                        nested_warp_portal
+                            .filter(|(portal, _)| portal.surface == *surface)
+                            .map(|(portal, _)| portal)
+                    };
+                    let target = nested_warp_portal
+                        .filter(|(portal, _)| portal.surface == *surface)
+                        .map(|(_, target)| target);
+                    if let Some(portal) = portal {
+                        let bind_group = target.map_or_else(
+                            || portal.target.bind_group(portal.no_smooth),
+                            |target| target.bind_group(portal.no_smooth),
+                        );
+                        pass.set_bind_group(1, bind_group, &[]);
+                        pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
+                        pass.draw_indexed(indices.clone(), 0, 0..1);
+                        draw_calls += 1;
+                    }
+                }
+                SubmissionCommand::Mirror { surface, indices } => {
+                    let mirror = if matches!(scene_pass, ScenePass::Main) {
+                        self.mirrors
+                            .iter()
+                            .find(|mirror| mirror.surface == *surface)
+                    } else {
+                        nested_mirror.filter(|mirror| mirror.surface == *surface)
+                    };
+                    if let Some(mirror) = mirror {
+                        pass.set_bind_group(1, mirror.target.bind_group(mirror.no_smooth), &[]);
+                        pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
+                        pass.draw_indexed(indices.clone(), 0, 0..1);
+                        draw_calls += 1;
+                        pass.set_bind_group(1, &self.material_bind_groups[mirror.binding], &[]);
+                        draw_calls +=
+                            self.draw_attachments(pass, mirror.binding, indices.clone(), reflected);
+                    }
+                }
+                SubmissionCommand::Backdrop {
+                    indices,
+                    pipeline,
+                    no_smooth,
+                    ..
+                } => {
+                    if let Some(target) = backdrop_target {
+                        pass.set_bind_group(1, target.bind_group(*no_smooth), &[]);
+                        pass.set_pipeline(&self.backdrop_pipelines[*pipeline]);
+                        pass.draw_indexed(indices.clone(), 0, 0..1);
+                        draw_calls += 1;
+                    }
+                }
             }
         }
         draw_calls
@@ -2463,93 +2427,11 @@ mod tests {
     }
 
     #[test]
-    fn batches_by_texture_and_material_while_skipping_hidden_surfaces() {
-        let scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..12).collect(),
-                triangle_surfaces: vec![0, 1, 2, 3],
-                ..Default::default()
-            },
-            textures: vec![checkerboard(), checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                SurfaceMaterial {
-                    texture: Some(1),
-                    masked: true,
-                    two_sided: true,
-                    ..Default::default()
-                },
-                SurfaceMaterial::default(),
-                SurfaceMaterial {
-                    texture: Some(0),
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    mode: SurfaceMode::Hidden,
-                    ..Default::default()
-                },
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-        let (bindings, surfaces) = material_bindings(&scene, 2, false);
-        let (indices, batches) = texture_batches(&scene, &bindings, &surfaces);
-        assert_eq!(indices, [6, 7, 8, 0, 1, 2, 3, 4, 5]);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| (
-                    batch.binding,
-                    batch.texture,
-                    batch.pipeline,
-                    batch.indices.clone()
-                ))
-                .collect::<Vec<_>>(),
-            [(0, 0, 0, 0..3), (1, 1, 3, 3..6), (2, 2, 0, 6..9)]
-        );
-    }
-
-    #[test]
     fn no_smooth_selects_point_filter_and_separate_batches() {
         assert_eq!(texture_filter(false), wgpu::FilterMode::Linear);
         assert_eq!(texture_filter(true), wgpu::FilterMode::Nearest);
         assert_eq!(TEXTURE_MIP_FILTER, wgpu::MipmapFilterMode::Nearest);
         assert!(SCENE_SHADER.contains("textureSampleBias(color_texture, color_sampler, uv, -0.5)"));
-
-        let scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..6).collect(),
-                triangle_surfaces: vec![0, 1],
-                ..Default::default()
-            },
-            textures: vec![checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                SurfaceMaterial {
-                    texture: Some(0),
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    texture: Some(0),
-                    no_smooth: true,
-                    ..Default::default()
-                },
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-
-        let (bindings, surfaces) = material_bindings(&scene, 1, false);
-        let (_, batches) = texture_batches(&scene, &bindings, &surfaces);
-        assert_eq!(batches.len(), 2);
-        assert!(!batches[0].no_smooth);
-        assert!(batches[1].no_smooth);
-        assert_eq!(batches[0].texture, batches[1].texture);
-        assert_eq!(batches[0].pipeline, batches[1].pipeline);
     }
 
     #[test]
@@ -2569,6 +2451,7 @@ mod tests {
             lightmaps: vec![],
             realtime_lightmaps: vec![],
             coronas: vec![],
+            actor_submissions: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
                     texture: Some(0),
@@ -2598,64 +2481,9 @@ mod tests {
         };
 
         let (bindings, surfaces) = material_bindings(&scene, 4, true);
-        let (indices, batches) = texture_batches(&scene, &bindings, &surfaces);
         assert_eq!(bindings.len(), 2);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(indices, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
-        assert_eq!(batches[0].indices, 0..6);
-        assert_eq!(batches[1].indices, 6..9);
-    }
-
-    #[test]
-    fn blended_attachment_surfaces_complete_auxiliary_passes_before_the_next_surface() {
-        let vertices = [
-            vertex_at(0.0, 0.0, 1.0),
-            vertex_at(1.0, 0.0, 1.0),
-            vertex_at(0.0, 1.0, 1.0),
-            vertex_at(0.0, 0.0, 2.0),
-            vertex_at(1.0, 0.0, 2.0),
-            vertex_at(0.0, 1.0, 2.0),
-        ];
-        let mut scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..6).collect(),
-                triangle_surfaces: vec![0, 1],
-                ..Default::default()
-            },
-            textures: vec![checkerboard(), checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                SurfaceMaterial {
-                    texture: Some(0),
-                    macro_texture: Some(1),
-                    mode: SurfaceMode::Translucent,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    texture: Some(0),
-                    macro_texture: Some(1),
-                    mode: SurfaceMode::Translucent,
-                    ..Default::default()
-                },
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-
-        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
-        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
-        assert_eq!(sorted_blended_batches(&surfaces, Vec3::ZERO).1.len(), 2);
-
-        for material in &mut scene.surface_materials {
-            material.macro_texture = None;
-        }
-        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
-        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
-        let (_, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].indices, 0..6);
+        assert_eq!(surfaces[0], surfaces[1]);
+        assert_ne!(surfaces[1], surfaces[2]);
     }
 
     #[test]
@@ -2668,6 +2496,7 @@ mod tests {
                     lightmaps: vec![],
                     realtime_lightmaps: vec![],
                     coronas: vec![],
+                    actor_submissions: vec![],
                     surface_materials: vec![material],
                     warp_portals: vec![],
                     sky_zone: None,
@@ -2745,6 +2574,7 @@ mod tests {
             lightmaps: vec![],
             realtime_lightmaps: vec![],
             coronas: vec![],
+            actor_submissions: vec![],
             surface_materials: vec![
                 SurfaceMaterial {
                     mirror: true,
@@ -2761,17 +2591,14 @@ mod tests {
             sky_zone: None,
         };
 
-        let (bindings, surfaces) = material_bindings(&scene, 0, false);
-        assert!(texture_batches(&scene, &bindings, &surfaces).0.is_empty());
+        let (_, surfaces) = material_bindings(&scene, 0, false);
         let geometries = mirror_geometries(&scene, &surfaces);
         assert_eq!(geometries.len(), 2);
         assert_eq!(geometries[0].surface, 0);
         assert_eq!(geometries[0].binding, surfaces[0]);
-        assert_eq!(geometries[0].indices, [0, 1, 2]);
         assert_eq!(geometries[0].pipeline, 0);
         assert_eq!(geometries[1].surface, 1);
         assert_eq!(geometries[1].binding, surfaces[1]);
-        assert_eq!(geometries[1].indices, [3, 4, 5]);
         assert_eq!(geometries[1].pipeline, 1);
         assert_eq!(
             mirror_plane(&scene, &vertices, 0),
@@ -2802,55 +2629,6 @@ mod tests {
         assert!(warp_portal_side_active(plane, true, positive_camera));
         assert!(!warp_portal_side_active(plane, true, negative_camera));
         assert!(warp_portal_side_active(plane, false, negative_camera));
-    }
-
-    #[test]
-    fn extracts_and_sorts_blended_surfaces_by_camera_distance() {
-        let vertices = [
-            vertex_at(0.0, 0.0, 10.0),
-            vertex_at(1.0, 0.0, 10.0),
-            vertex_at(0.0, 1.0, 10.0),
-            vertex_at(0.0, 0.0, 1.0),
-            vertex_at(1.0, 0.0, 1.0),
-            vertex_at(0.0, 1.0, 1.0),
-        ];
-        let scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..6).collect(),
-                triangle_surfaces: vec![0, 1],
-                ..Default::default()
-            },
-            textures: vec![checkerboard(), checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                SurfaceMaterial {
-                    texture: Some(0),
-                    mode: SurfaceMode::Translucent,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    texture: Some(1),
-                    mode: SurfaceMode::Modulated,
-                    masked: true,
-                    ..Default::default()
-                },
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
-        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
-        let (indices, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
-        assert_eq!(indices, [3, 4, 5, 0, 1, 2]);
-        assert_eq!(
-            batches
-                .iter()
-                .map(|batch| (batch.texture, batch.pipeline, batch.indices.clone()))
-                .collect::<Vec<_>>(),
-            [(1, 18, 0..3), (0, 8, 3..6)]
-        );
     }
 
     #[test]
@@ -2890,38 +2668,6 @@ mod tests {
             detail_texture: Some(0),
             ..Default::default()
         };
-        let scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..9).collect(),
-                triangle_surfaces: vec![0, 1, 2],
-                ..Default::default()
-            },
-            textures: vec![checkerboard()],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                material,
-                SurfaceMaterial {
-                    mode: SurfaceMode::Hidden,
-                    ..Default::default()
-                },
-                SurfaceMaterial::default(),
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-
-        let (bindings, surfaces) = material_bindings(&scene, 1, true);
-        assert_eq!(texture_batches(&scene, &bindings, &surfaces).0, [6, 7, 8]);
-        let vertices = (0..9)
-            .map(|index| vertex_at(index as f32, 0.0, 1.0))
-            .collect::<Vec<_>>();
-        let special = blended_surfaces(&scene, 1, &vertices, &bindings, &surfaces);
-        let (indices, batches) = sorted_blended_batches(&special, Vec3::ZERO);
-        assert_eq!(indices, [0, 1, 2]);
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].pipeline, 34);
         assert_eq!(attachment_enabled(material, true), [false, false]);
         assert!(depth_write_enabled(SurfaceMode::DepthOnly));
         assert_eq!(
@@ -3267,40 +3013,6 @@ mod tests {
         assert_eq!(round_ties_even(2.5), 2.0);
         assert_eq!(round_ties_even(3.5), 4.0);
         assert!(SCENE_SHADER.contains("fraction == 0.5 && u32(lower) % 2u == 1u"));
-    }
-
-    #[test]
-    fn extracts_only_fake_backdrop_triangles() {
-        let scene = RenderScene {
-            mesh: TriangleMesh {
-                indices: (0..9).collect(),
-                triangle_surfaces: vec![0, 1, 2],
-                ..Default::default()
-            },
-            textures: vec![],
-            lightmaps: vec![],
-            realtime_lightmaps: vec![],
-            coronas: vec![],
-            surface_materials: vec![
-                SurfaceMaterial::default(),
-                SurfaceMaterial {
-                    mode: SurfaceMode::Backdrop,
-                    ..Default::default()
-                },
-                SurfaceMaterial {
-                    mode: SurfaceMode::Backdrop,
-                    two_sided: true,
-                    ..Default::default()
-                },
-            ],
-            warp_portals: vec![],
-            sky_zone: None,
-        };
-        let (indices, batches) = backdrop_batches(&scene);
-        assert_eq!(indices, [3, 4, 5, 6, 7, 8]);
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].indices, 0..3);
-        assert_eq!(batches[1].indices, 3..6);
     }
 
     fn vertex_at(x: f32, y: f32, z: f32) -> Vertex {

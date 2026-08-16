@@ -915,6 +915,7 @@ mod tests {
                     color: Vec3::ONE,
                 },
             ],
+            actor_submissions: vec![],
             surface_materials: vec![],
             warp_portals: vec![],
             sky_zone: None,
