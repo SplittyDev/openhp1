@@ -69,3 +69,24 @@ palette.
 OpenHP1 performs the same nearest-neighbor expansion on palette indices before
 starting the water simulation. Resizing RGBA output instead would bypass the
 palette-index refraction performed by the original engine.
+
+## WaveTexture and the shared water core
+
+`UWaveTexture` is not a renamed `WetTexture`. Both inherit the native
+`UWaterTexture` simulation: two half-resolution byte fields, a 1,536-byte
+water table, parity-switched kernels, eight-byte drop records, and Fire's
+process-global RNG. Wave maps the resulting gradients through its own exact
+1,024-byte lighting table into base-mip palette indices; Wet applies a distinct
+source-refraction output.
+
+OpenHP1's current full-resolution float water model and fixed 30 Hz accumulator
+are approximations. Exact replacement is tracked as `BASE-009C`. The optimized
+retail kernels at [`Ghidra_Fire.c:12658`](../res/Ghidra_Fire.c#L12658) have
+corrupted decompiler aliases, so their scalar equations must come from shipped
+x86 disassembly or complete injected-state golden vectors rather than guessed
+from the invalid C output.
+
+The only shipped Wave export is `Detail.WaterDE2`. It is referenced as
+`DetailTexture` by twelve unused `Liquids` textures, and a full-package scan
+finds no map or class import of those owners. This removes a shipped live test
+case, not the engine-compatibility requirement.

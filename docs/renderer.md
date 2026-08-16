@@ -422,6 +422,8 @@ space selects `Zone0`.
 A missing zone actor falls back to `Level.Actors(0)`, the active `LevelInfo`.
 See [the original-engine evidence](texture-panning-engine-evidence.md).
 `FireTexture` previews and time-varying light effects remain static.
+`WaveTexture` is also missing; its exact shared Water kernel is tracked under
+`BASE-009C`, with no shipped gameplay representative.
 Unsupported texture classes use a magenta checkerboard.
 
 Sky rendering clips at the fake-backdrop polygons rather than reproducing

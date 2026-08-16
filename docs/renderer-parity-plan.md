@@ -591,6 +591,33 @@ commit, and live-verification fields for each item.
         `Lev5_fluffy`, `Lev3_DungeonB`, and `Lev_Tut1` in retail, Classic, and
         Modern. Remaining blockers are only the semantic name of the client
         `+0x54` tick-suppression field and retail-exact initial Core RNG state.
+- [ ] `BASE-009C` Replace the approximate shared water simulation and implement
+      `UWaveTexture`. Direct Fire evidence covers Water construction/init
+      ([F:5808-5940](../res/Ghidra_Fire.c#L5808)), source allocation
+      ([F:5947-5996](../res/Ghidra_Fire.c#L5947)), Wave initialization and
+      palette ownership ([F:6282-6498](../res/Ghidra_Fire.c#L6282)), exact
+      lighting-table construction ([F:6606-6678](../res/Ghidra_Fire.c#L6606)),
+      drop mutation ([F:4247-4690](../res/Ghidra_Fire.c#L4247)), and the parity
+      kernel dispatcher ([F:10895-10915](../res/Ghidra_Fire.c#L10895)).
+  - [ ] Recover both optimized half-resolution byte-field kernels from shipped
+        x86 disassembly or complete injected-state golden vectors. The C at
+        [F:12658-13619](../res/Ghidra_Fire.c#L12658) has corrupted register
+        aliases and impossible stores; do not translate it or retain the
+        current full-resolution float/30 Hz approximation.
+  - [ ] Preserve the shared 1,536-byte water table, two parity fields, 256
+        eight-byte drop records, process-global Fire RNG, native priming, and
+        once-per-nonzero-update cadence when `MaxFrameRate==0`. Implement
+        Wave's exact 1,024-byte render table and generated 256-color palette,
+        then reuse the shared palette-to-RGBA changed-texture upload path.
+  - [ ] Deterministic acceptance: full tables/palette; both parity kernels on
+        wrapped 8x8 or 16x8 inputs; injected RandomMover, BigWhirly, and
+        LeakyTap mutation/RNG cases; clear bits; 1/2/48-step checksums; and
+        identical Classic/Modern uploads.
+  - [x] Reachability boundary: the only shipped export is
+        `Detail.WaterDE2`; all twelve `Liquids` WetTextures reference it as
+        `DetailTexture`, but a read-only 248-package scan finds no map or class
+        importing those owners. There is no shipped gameplay/live gate; use a
+        local synthetic retail comparison without committing game data.
 - [ ] `CLASSIC-002` Re-evaluate Classic actor and world lighting when actors or
       lights move and when live light properties change. Evidence:
       `Ghidra_Render.c:1938-2013,22100-22606`; current partial projection:
