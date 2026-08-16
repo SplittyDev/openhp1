@@ -554,6 +554,50 @@ commit, and live-verification fields for each item.
   - [x] Reachability boundary: stock HP1 bindings do not expose `RMODE`; retail
         access is through editor/custom console binding. Manual acceptance may
         use a custom binding, but no map-specific gameplay gate exists.
+- [ ] `BASE-020` Replace the unconditional dark-blue scene clear with the
+      shared viewport lock contract: depth clears to `1` every accepted frame,
+      while color clears to black only when the caller requests lock bit 0 and
+      otherwise loads the existing target. Keep child portal/mirror clears in
+      their traversal-owned paths.
+  - [ ] Deterministic acceptance: a requested clear produces black and depth
+        `1`; the no-clear path retains seeded color while still resetting
+        depth. Live gate: cross a BSP/void boundary in retail, Classic, and
+        Modern and compare uncovered pixels.
+- [ ] `HOST-001` Implement the original viewport-size control surface in the
+      existing game host: authored startup fullscreen, stored windowed and
+      fullscreen sizes/color depth, arbitrary valid `SETRES`, `GETRES`, and
+      fullscreen enter/exit/toggle. Classic renders at the physical viewport;
+      Modern may retain its explicit independent HDR render resolution.
+  - [ ] Recreate only size-dependent resources and preserve runtime/scene/UI
+        state. Test command payloads and window-state transitions; live-check
+        startup, resize, minimize/restore, and fullscreen round trips.
+- [ ] `HOST-002` Recover from surface and device loss without recreating the
+      level or runtime. Reuse the existing surface reconfigure path for one
+      bounded reacquire retry; rebuild renderer GPU resources from the loaded
+      `RenderScene` only when the device/queue is actually lost.
+  - [ ] Deterministic acceptance: table-test success, suboptimal, lost,
+        outdated, timeout, occluded, validation, and device-loss outcomes;
+        force recovery where the platform permits and verify dynamic scene/UI
+        state survives.
+- [ ] `CLASSIC-004` Reproduce visible 16-bit render-target precision at each
+      Classic scene write/blend boundary instead of quantizing RGB565 only in
+      the final presentation pass. Keep Modern HDR color unchanged.
+  - [ ] Add a two-or-more-pass translucent/modulated numeric fixture that
+        distinguishes intermediate from final-only quantization. Record the
+        retail adapter-selected depth format before changing shared depth;
+        buffer topology and DirectDraw allocation details are not targets.
+- [ ] `HOST-003` Make console `FLUSH` emit one host action that persists pending
+      configuration and reapplies supported graphics/display resources before
+      the next frame. Reuse eager texture upload; do not emulate D3D cache
+      buckets, eviction, preload counters, or logs.
+  - [ ] Deterministic acceptance: one command causes exactly one save and one
+        graphics refresh, with the existing runtime/scene state preserved.
+        Live-check Classic brightness and other supported display changes.
+- [ ] `PRESENT-001` Resolve retail presentation cadence before changing the
+      current `AutoNoVsync` plus 60 Hz deadline. Capture effective `UseVSync`,
+      refresh rate, tearing, and frame cadence on retail D3D at 60 and 120 Hz;
+      then implement only the observable present/timing policy shared by both
+      renderers. Do not reproduce flip flags or literal back-buffer counts.
 - [x] `EDITOR-001` Classify renderer hit proxies as shipped editor selection,
       not player-facing game-renderer behavior. DrawFrame wraps BSP surfaces in
       `HBspSurf` and actor dispatch in redirected `HActor` proxies
