@@ -3804,7 +3804,11 @@ fn append_actor_mesh(
             render_mesh.normals.push(normal);
             render_mesh
                 .texture_coordinates
-                .push(vertex.texture_coordinates * dimensions);
+                .push(actor_mesh_texture_coordinates(
+                    vertex.texture_coordinates,
+                    dimensions,
+                    materials[surface],
+                ));
             render_mesh.lightmap_coordinates.push(Vec2::ZERO);
             render_mesh.vertex_lightmaps.push(None);
             render_mesh
@@ -3871,6 +3875,19 @@ fn append_actor_mesh(
             visual_bounds,
         }),
     )
+}
+
+fn actor_mesh_texture_coordinates(
+    coordinates: Vec2,
+    dimensions: Vec2,
+    material: SurfaceMaterial,
+) -> Vec2 {
+    let draw_scale = if material.environment_map {
+        1.0
+    } else {
+        material.texture_draw_scale
+    };
+    coordinates * dimensions * draw_scale
 }
 
 fn select_actor_texture(
@@ -6652,6 +6669,28 @@ mod tests {
         );
         assert_eq!(super::select_environment_map(None, None, Some(3)), Some(3));
         assert_eq!(super::select_environment_map::<u8>(None, None, None), None);
+    }
+
+    #[test]
+    fn applies_texture_draw_scale_to_ordinary_mesh_uvs_only() {
+        let coordinates = glam::Vec2::new(128.0 / 256.0, 64.0 / 256.0);
+        let dimensions = glam::Vec2::new(64.0, 32.0);
+        let coordinates_at = |draw_scale, environment_map| {
+            super::actor_mesh_texture_coordinates(
+                coordinates,
+                dimensions,
+                crate::SurfaceMaterial {
+                    texture_draw_scale: draw_scale,
+                    environment_map,
+                    ..Default::default()
+                },
+            )
+        };
+
+        assert_eq!(coordinates_at(0.5, false), glam::Vec2::new(16.0, 4.0));
+        assert_eq!(coordinates_at(1.0, false), glam::Vec2::new(32.0, 8.0));
+        assert_eq!(coordinates_at(24.0, false), glam::Vec2::new(768.0, 192.0));
+        assert_eq!(coordinates_at(24.0, true), glam::Vec2::new(32.0, 8.0));
     }
 
     #[test]

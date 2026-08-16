@@ -428,13 +428,18 @@ commit, and live-verification fields for each item.
       serialized byte coordinate by `USize * UMult / 256` and
       `VSize * VMult / 256` (`Ghidra_Render.c:10617-10642,16114-16136`);
       `UTexture::Lock` supplies the dimensions and base-mip `DrawScale`
-      multipliers (`Ghidra_Engine.c:96945-97058`). Current legacy geometry
-      instead normalizes both axes by `255` and the ordinary material path
-      ignores `DrawScale` (`openhp1-mesh/src/geometry.rs:50-52,209`).
-  - [ ] Deterministic acceptance: non-square dimensions and non-default
+      multipliers (`Ghidra_Engine.c:96945-97058`). Both mesh decoders now use
+      the native `/256` conversion and shared actor-mesh assembly applies the
+      selected texture's decoded `DrawScale`; environment materials retain
+      their separate reflection-coordinate equation.
+  - [x] Implemented in the shared Classic/Modern mesh path without changing
+        BSP texture coordinates or the environment-map shader equation.
+  - [x] Deterministic acceptance: non-square dimensions and non-default
         `DrawScale` reproduce the native `/256` texel coordinates for both
         mesh formats while default-scale fixtures prove the intentional
-        one-part-in-256 correction; environment UVs remain unchanged.
+        one-part-in-256 correction; environment UVs remain unchanged. The
+        synthetic regressions cover scale `0.5`, `1`, and `24`, while the
+        existing BSP texel-coordinate regression remains unchanged.
   - [ ] Corpus/live acceptance: a read-only scan found 37 non-default
         `DrawScale` textures, including 35 in `Detail.utx` and the reachable
         candidates `HP_Bentemp.benGrassCicle` (`24`) and

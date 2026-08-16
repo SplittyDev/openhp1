@@ -47,10 +47,7 @@ pub(crate) fn classic_triangles(
                 corners[corner] = MeshVertex {
                     position: checked(vertices, usize::from(indices[corner]), "mesh vertex")?,
                     normal: normals[face[corner]],
-                    texture_coordinates: Vec2::new(
-                        f32::from(uv[corner][0]) / 255.0,
-                        f32::from(uv[corner][1]) / 255.0,
-                    ),
+                    texture_coordinates: byte_texture_coordinates(uv[corner]),
                 };
             }
             Ok(MeshTriangle {
@@ -206,7 +203,7 @@ pub(crate) fn lod_triangles(
             corners[corner] = MeshVertex {
                 position: vertices[vertex],
                 normal: normals[vertex],
-                texture_coordinates: Vec2::new(f32::from(uv[0]) / 255.0, f32::from(uv[1]) / 255.0),
+                texture_coordinates: byte_texture_coordinates(uv),
             };
         }
         triangles.push(MeshTriangle {
@@ -221,6 +218,10 @@ pub(crate) fn lod_triangles(
         attachment_vertices,
         skeletal,
     })
+}
+
+fn byte_texture_coordinates(uv: [u8; 2]) -> Vec2 {
+    Vec2::new(f32::from(uv[0]), f32::from(uv[1])) / 256.0
 }
 
 fn decode_skeletal_mesh(reader: &mut ObjectReader<'_>) -> Result<DecodedSkeletalMesh> {
@@ -439,6 +440,16 @@ pub(crate) fn animation_normals(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converts_mesh_byte_uvs_with_the_native_256_divisor() {
+        assert_eq!(byte_texture_coordinates([0, 0]), Vec2::ZERO);
+        assert_eq!(byte_texture_coordinates([128, 64]), Vec2::new(0.5, 0.25));
+        assert_eq!(
+            byte_texture_coordinates([255, 255]),
+            Vec2::splat(255.0 / 256.0)
+        );
+    }
 
     #[test]
     fn averages_normals_across_shared_mesh_vertices() {
