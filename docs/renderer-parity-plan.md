@@ -324,8 +324,33 @@ commit, and live-verification fields for each item.
     - [ ] Locate a shipped visible opaque mesh overlapping an affected
           fog-light leaf before claiming a live representative.
 - [ ] `CLASSIC-001` Render authored corona sprites and original volumetric
-      lighting in Classic. Evidence: `Ghidra_Render.c:5819-5858,18256,
-      21906-21928` and `Ghidra_Engine.c:153257-153281`.
+      lighting in Classic. Evidence: `Ghidra_Render.c:2852-3137,
+      36276-36325,5819-5858,18256,21906-21928` and
+      `Ghidra_Engine.c:153257-153281`.
+  - [x] Recover the corona cache and draw contract. The shipped renderer owns
+        one 32-entry cache of `(actor pointer, actor index, visibility)`,
+        decays nonempty entries by three times elapsed time, and removes an
+        entry below zero. It refreshes candidates from the camera leaf's
+        static actor chain and `LeafLights`, rejects missing textures, excluded
+        actor flags, failed world/model line checks, and actors without the
+        corona bit, then doubles and clamps a candidate's visibility to one.
+        Valid cached actors in front of the near plane draw centered textured
+        quads after world and dynamic actor geometry. Quad size is
+        `scene_height * Actor.DrawScale * 0.8`; color comes from the actor's
+        light hue and saturation.
+  - [ ] Resolve the exact semantic source of the line-check output that is
+        doubled into cache visibility. The helper call and arithmetic are
+        direct, but the decompiler does not preserve the local result's field
+        identity well enough to name it honestly.
+  - [ ] Implement one shared corona admission/cache path consumed by Classic
+        and Modern. Do not add a second Classic-only sprite system or preserve
+        Modern's current always-present instance list as the parity path.
+  - [ ] Deterministic acceptance: 32-entry capacity, duplicate refresh,
+        three-times-elapsed decay/removal, static-leaf plus dynamic-leaf
+        discovery, line-check rejection, stale actor-index rejection, near
+        plane rejection, hue/saturation color, and exact centered quad size.
+  - [ ] Live acceptance: compare an authored shipped corona while it enters and
+        leaves occlusion in retail, Classic, and Modern.
 - [ ] `MOD-002` Keep authored corona sprites when Modern volumetric enhancements
       are enabled. Evidence: independent retail sprite and volumetric paths at
       `Ghidra_Render.c:5819-5858,13034-13266`; current divergence:
@@ -336,8 +361,10 @@ commit, and live-verification fields for each item.
   - [ ] Replay an authored corona with Modern volumetrics enabled and disabled;
         keep the parent open until visual acceptance.
 - [ ] `MOD-003` Replace Modern corona depth-test visibility with the original
-      center-point BSP visibility rule. Evidence must be completed before
-      implementation; current approximation: `renderer/modern.rs:599-600`.
+      actor-to-camera world/model line check and persistent 32-entry cache.
+      Direct admission/cache evidence is now recorded under `CLASSIC-001`;
+      the remaining blocker is the exact meaning of the helper's returned
+      visibility weight. Current approximation: `renderer/modern.rs:599-600`.
 - [ ] `MOD-004` Add optional anisotropic texture filtering to the Modern
       pipeline after base filtering parity is closed. Keep Classic on the
       original linear/point min-mag and point-mip behavior with default LOD
