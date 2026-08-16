@@ -395,6 +395,9 @@ pub fn apply_runtime_actions_with(
             ActorAction::SetOpacity { actor, opacity } => {
                 transformed |= scene.set_actor_opacity(actor, opacity)?;
             }
+            ActorAction::SetWarpDestination { actor, destination } => {
+                transformed |= scene.set_warp_destination(actor, destination)?;
+            }
             ActorAction::SetLightBrightness {
                 actor,
                 light_brightness,

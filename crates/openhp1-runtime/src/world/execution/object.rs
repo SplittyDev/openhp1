@@ -889,6 +889,12 @@ fn scene_property_action(
                 opacity: *opacity,
             }
         }
+        (name, StoredValue::Object(destination)) if name.eq_ignore_ascii_case("OtherSideActor") => {
+            ActorAction::SetWarpDestination {
+                actor,
+                destination: runtime_object_value(destination),
+            }
+        }
         (name, StoredValue::Value(Value::Float(frame)))
             if name.eq_ignore_ascii_case("AnimFrame") && frame.is_finite() && *frame >= 0.0 =>
         {
@@ -912,6 +918,24 @@ mod tests {
             [ActorAction::SetAnimationFrame {
                 actor: 7,
                 frame: 0.625,
+            }]
+        );
+    }
+
+    #[test]
+    fn warp_destination_projects_to_the_scene() {
+        let destination = super::ObjectId {
+            package: std::sync::Arc::from("WarpTest"),
+            export_index: 3,
+        };
+        assert_eq!(
+            scene_projection_actions(7, "OtherSideActor", &StoredValue::Object(Some(destination)),),
+            [ActorAction::SetWarpDestination {
+                actor: 7,
+                destination: Some(super::RuntimeObject {
+                    package: std::sync::Arc::from("WarpTest"),
+                    export_index: 3,
+                }),
             }]
         );
     }

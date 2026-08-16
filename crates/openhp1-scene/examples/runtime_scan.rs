@@ -512,6 +512,11 @@ fn apply_actions(
                 stats.visibility += 1;
                 stats.visibility_changed += usize::from(scene.set_actor_opacity(actor, opacity)?);
             }
+            ActorAction::SetWarpDestination { actor, destination } => {
+                stats.visibility += 1;
+                stats.visibility_changed +=
+                    usize::from(scene.set_warp_destination(actor, destination)?);
+            }
             ActorAction::SetLightBrightness {
                 actor,
                 light_brightness,

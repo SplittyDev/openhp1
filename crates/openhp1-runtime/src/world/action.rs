@@ -629,6 +629,10 @@ pub enum ActorAction {
         actor: usize,
         opacity: f32,
     },
+    SetWarpDestination {
+        actor: usize,
+        destination: Option<RuntimeObject>,
+    },
     UnsupportedSceneProperty {
         actor: usize,
         property: String,
@@ -683,6 +687,7 @@ impl ActorAction {
             | Self::SetAmbientGlow { actor, .. }
             | Self::SetLightBrightness { actor, .. }
             | Self::SetOpacity { actor, .. }
+            | Self::SetWarpDestination { actor, .. }
             | Self::UnsupportedSceneProperty { actor, .. }
             | Self::DestroyActor { actor }
             | Self::Log { actor, .. }
