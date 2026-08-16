@@ -28,6 +28,7 @@ pub struct ActorProperties {
     pub skeletal_animation: Option<ObjectReference>,
     pub skin: Option<ObjectReference>,
     pub texture: Option<ObjectReference>,
+    pub default_texture: Option<ObjectReference>,
     pub environment_map: Option<ObjectReference>,
     pub multi_skins: Vec<Option<ObjectReference>>,
     pub style: Option<u8>,
@@ -129,6 +130,9 @@ impl ActorProperties {
                 ("Texture", PropertyKind::Object, _) => {
                     properties.texture = Some(value.read_object_reference()?);
                 }
+                ("DefaultTexture", PropertyKind::Object, _) => {
+                    properties.default_texture = Some(value.read_object_reference()?);
+                }
                 ("EnvironmentMap", PropertyKind::Object, _) => {
                     properties.environment_map = Some(value.read_object_reference()?);
                 }
@@ -217,6 +221,27 @@ mod tests {
                 .unwrap()
                 .properties
                 .environment_map,
+            Some(ObjectReference::Export(0))
+        );
+    }
+
+    #[test]
+    fn decodes_level_default_texture_object_property() {
+        let names = [
+            "DefaultTexture",
+            "None",
+            "Core",
+            "Class",
+            "Actor",
+            "LevelInfo",
+        ];
+        let package = synthetic_actor_package(&names, vec![0, 0x05, 1, 1]);
+
+        assert_eq!(
+            super::Actor::decode(&package, 0)
+                .unwrap()
+                .properties
+                .default_texture,
             Some(ObjectReference::Export(0))
         );
     }

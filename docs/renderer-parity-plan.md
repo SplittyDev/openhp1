@@ -594,10 +594,15 @@ commit, and live-verification fields for each item.
         raw null texture references, and zero authored LevelInfo overrides.
         Shipped LevelInfo inherits non-null `Engine.DefaultTexture`, but there
         is no live BSP representative.
-  - [ ] Synthetic acceptance: raw None uses inherited default; an authored
-        LevelInfo override wins; broken non-null resolve/decode does not fall
-        back; the raw-null branch locks the selected default without applying
-        the authored surface root's AnimCurrent selection.
+  - [x] Decode `DefaultTexture` through the existing inherited actor-class
+        state, apply the active LevelInfo instance override, and substitute the
+        resolved object only for `ObjectReference::None`. Explicit resolution
+        and decode failures retain their existing diagnostic/checkerboard path.
+  - [x] Synthetic acceptance decodes the object property and distinguishes raw
+        None, explicit success, explicit resolved None, and explicit resolution
+        failure; the latter three never select the default.
+  - [ ] Local retail differential with a synthetic raw-null surface and
+        LevelInfo override; no shipped map can supply an honest live gate.
 - [ ] `BASE-009A` Implement exact shipped IceTexture animation through the
       changed-texture upload seam as a focused feature/commit before Fire.
       Direct [`Fire.dll`](../res/Ghidra_Fire.c) evidence is complete for

@@ -176,10 +176,23 @@ impl LoadedScene {
             load_zone_pan_speeds(&mut packages, &package, &level, &model, &mut class_cache);
         let (level_environment_map, zone_environment_maps) =
             load_environment_maps(&mut packages, &package, &level, &model, &mut class_cache);
+        let level_default_texture = level.level_info_export().and_then(|export_index| {
+            actor_default_texture(&mut packages, &package, export_index, &mut class_cache)
+                .inspect_err(|error| {
+                    warn!(export_index, %error, "could not decode LevelInfo default texture");
+                })
+                .ok()
+                .flatten()
+        });
         mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
         let mut water_animations = TextureAnimations::default();
-        let (mut textures, mut surface_materials) =
-            load_materials(&mut packages, &package, &model, &mut water_animations);
+        let (mut textures, mut surface_materials) = load_materials(
+            &mut packages,
+            &package,
+            &model,
+            level_default_texture.as_ref(),
+            &mut water_animations,
+        );
         let textured_surfaces = surface_materials
             .iter()
             .filter(|material| material.texture.is_some())
@@ -2608,6 +2621,7 @@ struct ActorState {
     skeletal_animation: Option<SceneObject>,
     skin: Option<SceneObject>,
     texture: Option<SceneObject>,
+    default_texture: Option<SceneObject>,
     environment_map: Option<SceneObject>,
     editor_sprite: bool,
     multi_skins: Vec<Option<SceneObject>>,
@@ -2660,6 +2674,7 @@ impl Default for ActorState {
             skeletal_animation: None,
             skin: None,
             texture: None,
+            default_texture: None,
             environment_map: None,
             editor_sprite: false,
             multi_skins: Vec::new(),
@@ -2753,6 +2768,9 @@ impl ActorState {
                         .file_stem()
                         .is_some_and(|name| name.eq_ignore_ascii_case("HPEdit"))
             });
+        }
+        if let Some(reference) = properties.default_texture {
+            self.default_texture = packages.resolve(source, reference)?.map(Into::into);
         }
         if let Some(reference) = properties.environment_map {
             self.environment_map = packages.resolve(source, reference)?.map(Into::into);
@@ -4114,6 +4132,7 @@ fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
+    default_texture: Option<&SceneObject>,
     water_animations: &mut TextureAnimations,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
@@ -4128,17 +4147,25 @@ fn load_materials(
             });
             continue;
         }
-        let resolved = match packages.resolve(map, surface.texture) {
-            Ok(Some(resolved)) => resolved,
-            Ok(None) => {
-                materials.push(bsp_surface_material(surface.poly_flags, None, None));
-                continue;
-            }
+        let authored = match surface.texture {
+            ObjectReference::None => None,
+            reference => Some(packages.resolve(map, reference)),
+        };
+        let default = default_texture.map(|texture| ResolvedObject {
+            package: Arc::clone(&texture.package),
+            export_index: texture.export_index,
+        });
+        let resolved = match select_bsp_texture(authored, default) {
+            Ok(resolved) => resolved,
             Err(error) => {
                 warn!(surface_index, %error, "could not resolve surface texture");
                 materials.push(bsp_surface_material(surface.poly_flags, None, None));
                 continue;
             }
+        };
+        let Some(resolved) = resolved else {
+            materials.push(bsp_surface_material(surface.poly_flags, None, None));
+            continue;
         };
         let key = (
             resolved.package.summary().source.to_string(),
@@ -4205,6 +4232,16 @@ fn load_materials(
     }
 
     (textures, materials)
+}
+
+fn select_bsp_texture<T, E>(
+    authored: Option<std::result::Result<Option<T>, E>>,
+    default: Option<T>,
+) -> std::result::Result<Option<T>, E> {
+    match authored {
+        Some(resolved) => resolved,
+        None => Ok(default),
+    }
 }
 
 fn is_window_texture(name: &str) -> bool {
@@ -4389,6 +4426,27 @@ fn actor_environment_map(
     let mut state = class_state(packages, &class, class_cache, 0).actor;
     state.apply(packages, map, &actor.properties)?;
     Ok(state.environment_map)
+}
+
+fn actor_default_texture(
+    packages: &mut PackageStore,
+    map: &Arc<Package>,
+    export_index: usize,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
+) -> Result<Option<SceneObject>> {
+    let actor = Actor::decode(map, export_index)?;
+    let export = map
+        .summary()
+        .exports
+        .get(export_index)
+        .context("LevelInfo actor export is missing")?;
+    let class = packages
+        .resolve(map, export.class)?
+        .map(SceneObject::from)
+        .context("LevelInfo actor class is missing")?;
+    let mut state = class_state(packages, &class, class_cache, 0).actor;
+    state.apply(packages, map, &actor.properties)?;
+    Ok(state.default_texture)
 }
 
 fn decode_texture(
@@ -4887,6 +4945,26 @@ mod tests {
     use crate::SurfaceMode;
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn bsp_default_texture_is_only_used_for_a_raw_null_reference() {
+        assert_eq!(
+            super::select_bsp_texture::<_, &str>(None, Some(7)),
+            Ok(Some(7))
+        );
+        assert_eq!(
+            super::select_bsp_texture::<_, &str>(Some(Ok(Some(3))), Some(7)),
+            Ok(Some(3))
+        );
+        assert_eq!(
+            super::select_bsp_texture::<_, &str>(Some(Ok(None)), Some(7)),
+            Ok(None)
+        );
+        assert_eq!(
+            super::select_bsp_texture(Some(Err("broken authored reference")), Some(7)),
+            Err("broken authored reference")
+        );
+    }
 
     #[test]
     fn decoded_texture_preserves_exact_authored_mip_chain() {
