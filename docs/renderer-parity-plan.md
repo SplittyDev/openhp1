@@ -353,25 +353,35 @@ commit, and live-verification fields for each item.
       Evidence: `Ghidra_Render.c:10130-10134,31283-31361`; discarded fields:
       `openhp1-mesh/src/geometry.rs:71-125`.
 - [ ] `BASE-012` Implement original viewport screen flashes/fades through one
-      local-player runtime-to-render path shared by Classic and Modern, after
-      pinning the remaining native scheduling evidence. Direct evidence is the
+      local-player runtime-to-render path shared by Classic and Modern. Direct
+      evidence is the
       compiled `Engine.u` `PlayerPawn` bytecode (`ClientFlash` export 4319,
       `ClientInstantFlash` 3485, `ClientFadeIn` 4280, `ClientFadeOut` 3466,
       `SetViewFlash` 3402, and `ViewFlash` 4100), Engine draw/config handling at
       `Ghidra_Engine.c:117664-117768,121781-121788`, and shipped
       `D3DDrv.dll` `EndFlash` RVA `0x1087` -> VA `0x10008be0` (SHA-256
       `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`).
-  - [ ] First pin the native Engine call site, frequency, and ordering for
-        `APlayerPawn::eventViewFlash`; `Ghidra_Engine.c:103234-103250` proves
-        the wrapper and delta parameter but not when Engine invokes it. Do not
-        mark runtime cadence implementation-ready or simply assume placement
-        beside `PlayerTick` until this xref is recovered.
-  - [ ] Keep native `InterpolationManager` flash ownership unresolved. Its
-        shipped `SetStartParameters`/`UpdateCamera` script exports 3646/3650
-        contain only `Return; Nothing`; therefore embedded source mentioning
-        `FlashScale`, `DesiredFlashScale`, `ScreenFlashScale`, or
-        `ScreenFlashFog` is inactive and must not drive implementation. Resolve
-        the native writes before adding interpolation-point flash behavior.
+  - [x] Native cadence is pinned: `UGameEngine::Tick` dispatches `ViewFlash`
+        exactly once to `Client.Viewports[0].Actor`, using the effective outer
+        tick delta, after the complete level/world tick and before
+        `UWindowsClient::Tick` and its eligible viewport repaint/`Draw` path.
+        Direct Engine evidence is `Ghidra_Engine.c:252233-252238,252647-252653`
+        and VAs `0x103a15f2-0x103a1647`; the exported wrapper at `0x103036bb`
+        jumps to `0x103242a0` and has no internal caller or vtable pointer.
+        Shipped `WinDrv.dll` completes the render-order proof through
+        `UWindowsClient::Tick` `0x11102e00`, its repaint call
+        `0x11102f3e-0x11102f44`, and `UWindowsViewport::Repaint`
+        `0x11108a50` calling Engine `Draw` at `0x11108a8b`. The local actor
+        order before the outer dispatch is `PlayerTick`, `ProcessState`,
+        timers, then `performPhysics` (`Ghidra_Engine.c:264212-264253`).
+  - [x] Native `AInterpolationManager::performPhysics` flash ownership is
+        resolved negatively. Its vtable entry `0x1046ecac` selects the wrapper
+        at `0x10301d02` and body `0x103f7880-0x103f9163`; the body has no access
+        to rendered PlayerPawn flash offsets `0x4f8-0x504` and no `ViewFlash`
+        reference. Its writes at `Ghidra_Engine.c:38397-38415,38481-38492` are
+        manager-owned interpolation derivative/basis state at `this+0x298`
+        through `this+0x2ac`, not player or viewport flash state. Do not add
+        interpolation-manager flash behavior from inactive embedded source.
   - [ ] Reproduce the proved `PlayerPawn` plane state exactly: client writers
         scale authored RGB by `.001`; `ViewFlash` caps delta at `.1`, advances
         and clamps fade W to `[-1,0]`, combines desired/constant/zone fog with
@@ -391,11 +401,14 @@ commit, and live-verification fields for each item.
         state continues to advance; it must not reset the player properties.
   - [ ] Deterministic acceptance: synthetic tests for client writers, delta cap,
         desired decay, instant reset, fade clamps/rate clearing, snap thresholds,
-        and one dispatch per proved native cadence; config-disabled identity
-        without state destruction; 1x1/pure blend cases for identity, black,
-        fractional scale plus fog and saturation; and structural coverage that
-        both Classic and Modern use the same pass before UI. No copyrighted
-        package is required by public tests.
+        and exactly one dispatch per outer world tick to the primary local
+        player after world/state/physics processing and before render-state
+        preparation; prove physics substeps, interpolation managers, secondary
+        actors/viewports, and repaint-only draws do not advance it. Also cover
+        config-disabled identity without state destruction; 1x1/pure blend
+        cases for identity, black, fractional scale plus fog and saturation;
+        and structural coverage that both Classic and Modern use the same pass
+        before UI. No copyrighted package is required by public tests.
   - [ ] Live acceptance: compare the two authored `ViewFlash` triggers in
         `Lev2_fire1`; the repeated red flashes and `fadeout 2.0` in `Lev5_Final`;
         HUD/console exclusion; `ScreenFlashes` true/false; and matching event
