@@ -363,6 +363,16 @@ commit, and live-verification fields for each item.
         `Lev_Tut3b`.
   - [ ] Compare a representative in retail, Classic, and Modern; keep the
         parent open until point min/mag is visually accepted.
+- [x] Classify legacy texture `bNoMerge`/`0x00010000` as an exact runtime
+      renderer no-op in this shipped build. Render transports the bit in the
+      effective word but never consumes it ([R:7189-7196](../res/Ghidra_Render.c#L7189));
+      D3D SetBlending and AdjustPolyFlags ignore it
+      ([D:1651-1770](../res/Ghidra_D3DDrv.c#L1651),
+      [D:3942-4032](../res/Ghidra_D3DDrv.c#L3942)). Editor
+      `bspMergeCoplanars` also does not read it. A complete scan found zero
+      authored true texture values and zero raw BSP surfaces with the bit.
+      Preserve the raw decoded flag for inspection, but do not add a material
+      field or split otherwise compatible batches.
 - [ ] `BASE-014` Disable hardware back-face culling in both renderers after the
       renderer's CPU/BSP side-admission decision. Direct evidence: D3D `SetRes`
       RVA `0x1064` → VA `0x1000b360` sets `CULLMODE=NONE`, and the shipped DLL
