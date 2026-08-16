@@ -554,15 +554,20 @@ commit, and live-verification fields for each item.
   - [x] Reachability boundary: stock HP1 bindings do not expose `RMODE`; retail
         access is through editor/custom console binding. Manual acceptance may
         use a custom binding, but no map-specific gameplay gate exists.
-- [ ] `BASE-020` Replace the unconditional dark-blue scene clear with the
-      shared viewport lock contract: depth clears to `1` every accepted frame,
-      while color clears to black only when the caller requests lock bit 0 and
-      otherwise loads the existing target. Keep child portal/mirror clears in
-      their traversal-owned paths.
-  - [ ] Deterministic acceptance: a requested clear produces black and depth
-        `1`; the no-clear path retains seeded color while still resetting
-        depth. Live gate: cross a BSP/void boundary in retail, Classic, and
-        Modern and compare uncovered pixels.
+- [ ] `BASE-021` Match the viewport frame clear contract.
+  - [x] Normal gameplay presentation is directly resolved: WinDrv's client
+        tick calls `Repaint(1)`, which forwards `Blit=1` to
+        `UGameEngine::Draw`; Draw therefore passes lock bit 0 for every
+        presented frame. D3D clears depth to `1` and color to the supplied
+        zero/black `ScreenClear`. The shared Classic/Modern main scene pass now
+        does the same. Child portal/mirror clears remain traversal-owned.
+  - [ ] Resolve WinDrv's `Repaint(0)` window-message caller before adding an
+        unused clear/load API. It does not present, and its lock bit depends on
+        the world-model `PointCheck`; its observable stock-game effect is not
+        yet established.
+  - [ ] Live gate: expose otherwise uncovered main-target pixels and compare
+        retail, Classic, and Modern. The expected presented-frame clear is
+        black.
 - [ ] `HOST-001` Implement the original viewport-size control surface in the
       existing game host: authored startup fullscreen, stored windowed and
       fullscreen sizes/color depth, arbitrary valid `SETRES`, `GETRES`, and
