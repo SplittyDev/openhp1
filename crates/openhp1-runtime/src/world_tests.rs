@@ -974,6 +974,44 @@ fn log_event_script(export_index: usize, message: &str) -> Arc<openhp1_script::S
     })
 }
 
+fn console_event_script(
+    export_index: usize,
+    console_function: i32,
+    message: &str,
+) -> Arc<openhp1_script::ScriptExport> {
+    let mut bytes = vec![0x04, 0x1c];
+    bytes.extend(console_function.to_le_bytes());
+    bytes.push(0x1f);
+    bytes.extend(message.bytes());
+    bytes.extend([0, 0x16]);
+    Arc::new(ScriptExport {
+        export_index,
+        class_name: "Function".to_owned(),
+        base_field: ObjectReference::None,
+        next_field: ObjectReference::None,
+        script_text: ObjectReference::None,
+        children: ObjectReference::None,
+        friendly_name: export_index,
+        line: 0,
+        text_position: 0,
+        bytecode: Bytecode {
+            version: 76,
+            raw_len: bytes.len(),
+            bytes,
+            tokens: Vec::new(),
+        },
+        metadata: ScriptMetadata::Function(FunctionMetadata {
+            parameter_size: None,
+            native_index: 0,
+            parameter_count: None,
+            operator_precedence: 0,
+            return_value_offset: None,
+            flags: 0,
+            replication_offset: None,
+        }),
+    })
+}
+
 fn standing_count_event_script(export_index: usize) -> Arc<openhp1_script::ScriptExport> {
     let mut bytes = vec![0x04, LOG as u8, 0x52, 0x01];
     bytes.extend(1_i32.to_le_bytes());
@@ -3904,6 +3942,158 @@ fn looping_timer_catches_up_through_bytecode_and_honors_callback_mutation() {
     assert_eq!(runtime.timer_callbacks(), 6);
     assert!(runtime.destroyed.contains(&actor));
     assert!(!runtime.timers.contains_key(&actor));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn outer_tick_dispatches_view_flash_once_but_physics_steps_do_not() {
+    let root = std::env::temp_dir().join(format!(
+        "openhp1-runtime-view-flash-{}-{}",
+        std::process::id(),
+        FIXTURE_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let system = root.join("System");
+    fs::create_dir_all(&system).unwrap();
+    fs::write(system.join("Default.ini"), "[Core.System]\nPaths=*.u\n").unwrap();
+    let package_path = system.join("Test.u");
+    fs::write(&package_path, synthetic_runtime_package()).unwrap();
+
+    let mut runtime = ScriptRuntime::new(&root).unwrap();
+    let package = runtime.packages.load_path(&package_path).unwrap();
+    let class = ResolvedObject {
+        package: Arc::clone(&package),
+        export_index: 0,
+    };
+    let class_id = object_id(&package, 0);
+    runtime
+        .scripts
+        .insert(class_id.clone(), synthetic_class_script(0));
+    runtime
+        .class_defaults
+        .insert(class_id.clone(), InstanceState::default());
+    runtime
+        .scripts
+        .insert(object_id(&package, 7), named_native_script(7));
+    runtime.scripts.insert(
+        object_id(&package, 8),
+        console_event_script(8, 8, "VIEWFLASH"),
+    );
+    runtime.function_lookups.insert(
+        FunctionLookup::new(class_id.clone(), None, "ViewFlash", 0),
+        Some(object_id(&package, 8)),
+    );
+
+    let fields = [
+        "TimeSeconds",
+        "TimeDilation",
+        "Physics",
+        "LifeSpan",
+        "aForward",
+        "aTurn",
+        "aLookUp",
+        "FovAngle",
+        "FlashFog",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, name)| (name, runtime_actor_id(100 + index)))
+    .collect::<HashMap<_, _>>();
+    for (name, field) in &fields {
+        runtime.fields.insert(
+            (class_id.clone(), name.to_ascii_lowercase()),
+            (name != &"LifeSpan").then_some(field.clone()),
+        );
+    }
+
+    let level = 0;
+    let player = 1;
+    let player_object = runtime_actor_id(1_000);
+    runtime.actor_classes.insert(level, class_id.clone());
+    runtime.actor_classes.insert(player, class_id.clone());
+    runtime.actor_objects.insert(player, player_object.clone());
+    runtime.object_actors.insert(player_object, player);
+    runtime.level_info = Some(level);
+    runtime.player_actor = Some(player);
+    runtime.instances.insert(
+        level,
+        [
+            (
+                fields["TimeSeconds"].clone(),
+                StoredValue::Value(Value::Float(0.0)),
+            ),
+            (
+                fields["TimeDilation"].clone(),
+                StoredValue::Value(Value::Float(1.0)),
+            ),
+            (
+                fields["Physics"].clone(),
+                StoredValue::Value(Value::Byte(0)),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let player_instance = [
+        (
+            fields["Physics"].clone(),
+            StoredValue::Value(Value::Byte(0)),
+        ),
+        (
+            fields["aForward"].clone(),
+            StoredValue::Value(Value::Float(0.0)),
+        ),
+        (
+            fields["aTurn"].clone(),
+            StoredValue::Value(Value::Float(0.0)),
+        ),
+        (
+            fields["aLookUp"].clone(),
+            StoredValue::Value(Value::Float(0.0)),
+        ),
+        (
+            fields["FovAngle"].clone(),
+            StoredValue::Value(Value::Float(90.0)),
+        ),
+        (
+            fields["FlashFog"].clone(),
+            StoredValue::Value(Value::Struct(std::collections::HashMap::from([
+                ("X".to_owned(), Value::Float(0.1)),
+                ("Y".to_owned(), Value::Float(0.2)),
+                ("Z".to_owned(), Value::Float(0.3)),
+                ("W".to_owned(), Value::Float(0.4)),
+            ]))),
+        ),
+    ]
+    .into_iter()
+    .collect::<InstanceState>();
+    runtime.instances.insert(player, player_instance.clone());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    runtime.set_console_command_host(RecordingConsole {
+        calls: Rc::clone(&calls),
+    });
+
+    runtime.tick(0.25).unwrap();
+    assert_eq!(calls.borrow().len(), 1);
+    assert_eq!(calls.borrow()[0].2, "VIEWFLASH");
+    assert_eq!(
+        runtime
+            .player_view([1.0, 2.0, 3.0], [4, 5, 6])
+            .unwrap()
+            .0
+            .flash_fog,
+        [0.1, 0.2, 0.3, 0.4]
+    );
+
+    calls.borrow_mut().clear();
+    let mut instance = runtime.instances.remove(&player).unwrap();
+    runtime
+        .tick_actor_physics(player, &class, &mut instance, 0.05, &mut Vec::new())
+        .unwrap();
+    assert!(calls.borrow().is_empty());
+    runtime.instances.insert(player, instance);
+    runtime.player_actor = None;
+    runtime.tick(0.05).unwrap();
+    assert!(calls.borrow().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 

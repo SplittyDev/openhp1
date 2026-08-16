@@ -10,6 +10,7 @@ const CONFIG: &str = "OpenHP1";
 const RENDERER_SECTION: &str = "OpenHP1.Renderer";
 const CLASSIC_SECTION: &str = "OpenHP1.Renderer.Classic";
 const MODERN_SECTION: &str = "OpenHP1.Renderer.Modern";
+const WINDOWS_CLIENT_SECTION: &str = "WinDrv.WindowsClient";
 const LEGACY_SECTION: &str = "OpenHP1.Graphics";
 const MAX_RENDER_PIXELS: u64 = 3840 * 2160;
 
@@ -53,6 +54,7 @@ pub(super) struct GraphicsSettings {
     window_size: [u32; 2],
     pub(super) renderer: RendererSettings,
     pub(super) color_depth: ColorDepth,
+    pub(super) screen_flashes: bool,
     pub(super) classic_display: DisplaySettings,
     modern_agx_display: DisplaySettings,
     modern_reinhard_display: DisplaySettings,
@@ -66,6 +68,7 @@ impl Default for GraphicsSettings {
             window_size: DEFAULT_WINDOW_SIZE,
             renderer: RendererSettings::default(),
             color_depth: ColorDepth::default(),
+            screen_flashes: true,
             classic_display: DisplaySettings::for_mode(RendererMode::Classic),
             modern_agx_display: DisplaySettings::for_tone_mapper(ToneMapper::AgX),
             modern_reinhard_display: DisplaySettings::for_tone_mapper(ToneMapper::Reinhard),
@@ -130,6 +133,10 @@ impl GraphicsSettings {
                 .as_deref()
                 .and_then(color_depth)
                 .unwrap_or(defaults.color_depth),
+            screen_flashes: console
+                .config_value(CONFIG, WINDOWS_CLIENT_SECTION, "ScreenFlashes")
+                .and_then(|value| parse_bool(&value))
+                .unwrap_or(defaults.screen_flashes),
             classic_display: DisplaySettings {
                 brightness: setting(
                     console,
@@ -175,6 +182,14 @@ impl GraphicsSettings {
         }
     }
 
+    pub(super) fn visible_flash(self, flash: [f32; 4]) -> [f32; 4] {
+        if self.screen_flashes {
+            flash
+        } else {
+            [0.0, 0.0, 0.0, 1.0]
+        }
+    }
+
     pub(super) fn save(self, console: &ConsoleCommands) -> io::Result<()> {
         console.save_config_values(
             CONFIG,
@@ -194,6 +209,12 @@ impl GraphicsSettings {
                 ("Brightness", self.classic_display.brightness.to_string()),
                 ("ColorMode", color_depth_name(self.color_depth).to_owned()),
             ],
+        )?;
+        console.save_config_value(
+            CONFIG,
+            WINDOWS_CLIENT_SECTION,
+            "ScreenFlashes",
+            self.screen_flashes.to_string(),
         )?;
         console.save_config_values(
             CONFIG,
@@ -396,6 +417,7 @@ mod tests {
                 window_size: [1280, 800],
                 renderer: RendererSettings::default(),
                 color_depth: ColorDepth::TrueColor,
+                screen_flashes: true,
                 classic_display: DisplaySettings {
                     brightness: 0.6,
                     contrast: 1.0,
@@ -428,6 +450,16 @@ mod tests {
         assert_eq!(color_depth("TRUECOLOR"), Some(ColorDepth::TrueColor));
         assert_eq!(color_depth("rGb565"), Some(ColorDepth::Rgb565));
         assert_eq!(color_depth("unknown"), None);
+    }
+
+    #[test]
+    fn disabled_screen_flashes_supply_draw_time_identity() {
+        let runtime_state = [0.25, 0.5, 0.75, 0.125];
+        let mut settings = GraphicsSettings::default();
+        settings.screen_flashes = false;
+
+        assert_eq!(settings.visible_flash(runtime_state), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(runtime_state, [0.25, 0.5, 0.75, 0.125]);
     }
 
     #[test]

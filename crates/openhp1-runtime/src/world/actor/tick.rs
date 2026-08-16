@@ -45,6 +45,9 @@ impl ScriptRuntime {
         }
         // Actors spawned during this tick were not in the stable actor snapshot above.
         self.tick_physics(delta_time, &mut actions)?;
+        if self.player_actor.is_some() {
+            actions.extend(self.dispatch_player_event("ViewFlash", &[Value::Float(delta_time)])?);
+        }
         Ok(actions)
     }
 

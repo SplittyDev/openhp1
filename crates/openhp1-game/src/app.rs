@@ -518,6 +518,7 @@ struct Graphics {
     pending_screenshots: Vec<Option<u32>>,
     graphics_settings: GraphicsSettings,
     display_settings: DisplaySettings,
+    screen_flash: [f32; 4],
 }
 
 fn initialize_saved_runtime(
@@ -679,6 +680,7 @@ impl Graphics {
             location: player_location,
             rotation: player_rotation,
             fov_degrees: 90.0,
+            flash_fog: [0.0, 0.0, 0.0, 1.0],
         };
         let player_view = match runtime.player_view(fallback_view.location, fallback_view.rotation)
         {
@@ -804,6 +806,7 @@ impl Graphics {
             pending_screenshots: Vec::new(),
             graphics_settings,
             display_settings,
+            screen_flash: player_view.flash_fog,
         })
     }
 
@@ -977,6 +980,7 @@ impl Graphics {
             &self.camera,
             render_size,
             self.display_settings,
+            self.graphics_settings.visible_flash(self.screen_flash),
         );
         let screenshots = match prepare_screenshots(
             &self.device,
@@ -1471,6 +1475,7 @@ impl Graphics {
             Ok((view, actions)) => {
                 self.apply_actions(actions);
                 self.view_actor = view.actor;
+                self.screen_flash = view.flash_fog;
                 if !self.fly_camera_active {
                     self.camera = camera_from_player_view(
                         view,
@@ -1956,6 +1961,7 @@ mod tests {
                 location: [10.0, 20.0, 30.0],
                 rotation: [8_192, 16_384, -8_192],
                 fov_degrees: 90.0,
+                flash_fog: [0.0, 0.0, 0.0, 1.0],
             },
             PhysicalSize::new(1600, 900),
             10_000.0,

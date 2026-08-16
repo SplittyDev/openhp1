@@ -456,33 +456,44 @@ commit, and live-verification fields for each item.
         manager-owned interpolation derivative/basis state at `this+0x298`
         through `this+0x2ac`, not player or viewport flash state. Do not add
         interpolation-manager flash behavior from inactive embedded source.
-  - [ ] Reproduce the proved `PlayerPawn` plane state exactly: client writers
+  - [x] Reproduce the proved `PlayerPawn` plane state exactly by dispatching
+        the shipped compiled client writers and `ViewFlash` bytecode unchanged
+        through the existing VM: client writers
         scale authored RGB by `.001`; `ViewFlash` caps delta at `.1`, advances
         and clamps fade W to `[-1,0]`, combines desired/constant/zone fog with
         one added to W, decays desired by `2d`, interpolates by `10d`, clears
         instant fog each update, and applies the `.981` W and `.019` RGB snaps.
         Treat `FlashFog.W` as the effective scale; a separate active
         `FlashScale` property is not proved in this build.
-  - [ ] At the narrow shared seam, expose the owning local player's resulting
+  - [x] At the narrow shared seam, expose the owning local player's resulting
         scale/fog through `PlayerView`, pass it to `Renderer::render`, and draw
         one fullscreen pass after Classic output or Modern final composite/AA
         but before game UI/egui. Match D3D's saturated
         `fog + scene*clamp(scale,0,1)` equation using source `ONE`, destination
         `SRC_ALPHA`, including its clamped 8-bit diffuse-color quantization.
+        `EndFlash` multiplies each component by `256.0` at
+        `0x10008cb3,0x10008cfa,0x10008d28,0x10008d56`, subtracts `0.5` at
+        `0x10008cce,0x10008d06,0x10008d34,0x10008d62`, converts with `fistp`,
+        and clamps to `0..255`. `D3DDrv.dll`, `Engine.dll`, and `WinDrv.dll`
+        contain no x87 control-word writes, so the inherited default
+        round-to-nearest-even mode makes the literal result
+        `clamp(round_ties_even(component*256 - .5),0,255)`, including its
+        odd/even half-integer boundary behavior. Classic applies the shared
+        pass before its final gamma pass; Modern applies it after composite/AA.
         Do not add per-actor scene state or duplicate backend-specific effects.
-  - [ ] Parse `WindowsClient.ScreenFlashes` with shipped default true. False
+  - [x] Parse `WindowsClient.ScreenFlashes` with shipped default true. False
         supplies identity (`scale=1`, zero fog) at draw time while runtime flash
         state continues to advance; it must not reset the player properties.
-  - [ ] Deterministic acceptance: synthetic tests for client writers, delta cap,
-        desired decay, instant reset, fade clamps/rate clearing, snap thresholds,
-        and exactly one dispatch per outer world tick to the primary local
-        player after world/state/physics processing and before render-state
-        preparation; prove physics substeps, interpolation managers, secondary
-        actors/viewports, and repaint-only draws do not advance it. Also cover
-        config-disabled identity without state destruction; 1x1/pure blend
-        cases for identity, black, fractional scale plus fog and saturation;
-        and structural coverage that both Classic and Modern use the same pass
-        before UI. No copyrighted package is required by public tests.
+  - [x] Deterministic implementation acceptance: the shipped writer/`ViewFlash`
+        bytecode remains single-owned by the VM and was exercised unchanged
+        against the local corpus. Public synthetic tests prove exactly one
+        post-world dispatch to the primary player, no physics-step or no-player
+        dispatch, `FlashFog` projection through `PlayerView`, config-disabled
+        draw-time identity without state destruction, D3D byte quantization,
+        identity/black/fractional/saturated blends, RGB-only alpha preservation,
+        valid WGSL, and one shared pass in the Classic pre-gamma and Modern
+        post-composite/AA paths before UI. No copyrighted package is required
+        by public tests.
   - [ ] Live acceptance: compare the two authored `ViewFlash` triggers in
         `Lev2_fire1`; the repeated red flashes and `fadeout 2.0` in `Lev5_Final`;
         HUD/console exclusion; `ScreenFlashes` true/false; and matching event

@@ -941,6 +941,7 @@ impl eframe::App for ViewerApp {
                 &self.camera,
                 render_size,
                 self.display_settings(),
+                [0.0, 0.0, 0.0, 1.0],
             );
             self.state.queue.submit([encoder.finish()]);
         });

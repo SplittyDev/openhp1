@@ -74,6 +74,18 @@ struct CameraUniform {
     clip_plane: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct FlashUniform {
+    color: [f32; 4],
+}
+
+struct FlashPass {
+    pipeline: wgpu::RenderPipeline,
+    uniform: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 struct Mirror {
     surface: usize,
     plane: (Vec3, Vec3),
@@ -156,6 +168,112 @@ pub struct Renderer {
     auto_uv: f32,
     stats: RenderStats,
     settings: RendererSettings,
+    flash: FlashPass,
+}
+
+impl FlashPass {
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("OpenHP1 viewport flash uniform"),
+            size: size_of::<FlashUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("OpenHP1 viewport flash layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("OpenHP1 viewport flash bind group"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            }],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("OpenHP1 viewport flash shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/flash.wgsl").into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("OpenHP1 viewport flash pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("OpenHP1 viewport flash pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vertex_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fragment_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(flash_target_state(target_format))],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self {
+            pipeline,
+            uniform,
+            bind_group,
+        }
+    }
+
+    fn render(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        flash: [f32; 4],
+    ) -> usize {
+        let color = quantized_flash(flash);
+        if color == [0.0, 0.0, 0.0, 1.0] {
+            return 0;
+        }
+        queue.write_buffer(
+            &self.uniform,
+            0,
+            bytemuck::bytes_of(&FlashUniform { color }),
+        );
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("OpenHP1 viewport flash pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        1
+    }
 }
 
 impl PortalView {
@@ -772,6 +890,7 @@ impl Renderer {
         if let Some(lighting) = &lighting {
             stats.lightmap_memory_bytes += lighting.memory_bytes();
         }
+        let flash = FlashPass::new(device, target_format);
 
         Self {
             pipelines,
@@ -813,6 +932,7 @@ impl Renderer {
             auto_uv: 0.0,
             stats,
             settings,
+            flash,
         }
     }
 
@@ -1091,6 +1211,7 @@ impl Renderer {
         camera: &Camera,
         viewport_size: [u32; 2],
         display: DisplaySettings,
+        flash: [f32; 4],
     ) -> RenderStats {
         let mut draw_calls = 0;
         let aspect = viewport_size[0] as f32 / viewport_size[1] as f32;
@@ -1589,9 +1710,15 @@ impl Renderer {
                 display.contrast,
                 camera,
             );
+            draw_calls += self.flash.render(queue, encoder, target, flash);
         } else if let Some(classic_display) = &self.classic_display {
+            draw_calls += self
+                .flash
+                .render(queue, encoder, classic_display.scene_view(), flash);
             classic_display.render(queue, encoder, target, display.brightness);
             draw_calls += 1;
+        } else {
+            draw_calls += self.flash.render(queue, encoder, target, flash);
         }
         RenderStats {
             draw_calls,
@@ -1704,6 +1831,35 @@ impl Renderer {
             }
         }
         draw_calls
+    }
+}
+
+fn quantized_flash(flash: [f32; 4]) -> [f32; 4] {
+    flash.map(|component| {
+        ((component * 256.0 - 0.5)
+            .round_ties_even()
+            .clamp(0.0, 255.0))
+            / 255.0
+    })
+}
+
+fn flash_blend_state() -> wgpu::BlendState {
+    let component = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::SrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    wgpu::BlendState {
+        color: component,
+        alpha: component,
+    }
+}
+
+fn flash_target_state(format: wgpu::TextureFormat) -> wgpu::ColorTargetState {
+    wgpu::ColorTargetState {
+        format,
+        blend: Some(flash_blend_state()),
+        write_mask: wgpu::ColorWrites::COLOR,
     }
 }
 
@@ -1881,6 +2037,7 @@ mod tests {
         for shader in [
             include_str!("shaders/scene.wgsl"),
             include_str!("shaders/modern/corona.wgsl"),
+            include_str!("shaders/flash.wgsl"),
         ] {
             let module = wgpu::naga::front::wgsl::parse_str(shader).unwrap();
             wgpu::naga::valid::Validator::new(
@@ -2189,6 +2346,11 @@ mod tests {
         let alpha = blend_state(SurfaceMode::AlphaBlended).unwrap();
         assert_eq!(alpha.color.src_factor, wgpu::BlendFactor::SrcAlpha);
         assert_eq!(alpha.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+        let target = flash_target_state(wgpu::TextureFormat::Rgba8Unorm);
+        let flash = target.blend.unwrap();
+        assert_eq!(flash.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(flash.color.dst_factor, wgpu::BlendFactor::SrcAlpha);
+        assert!(!target.write_mask.contains(wgpu::ColorWrites::ALPHA));
         assert_eq!(
             fragment_entry(SurfaceMode::Modulated, true, false, false),
             "fragment_blended_masked"
@@ -2197,6 +2359,42 @@ mod tests {
             fragment_entry(SurfaceMode::Opaque, false, true, false),
             "fragment_unlit"
         );
+    }
+
+    #[test]
+    fn viewport_flash_quantizes_then_blends_like_d3d() {
+        let blend = |scene: [f32; 3], flash: [f32; 4]| {
+            let flash = quantized_flash(flash);
+            std::array::from_fn(|index| (flash[index] + scene[index] * flash[3]).min(1.0))
+        };
+
+        assert_eq!(
+            blend([0.2, 0.4, 0.8], [0.0, 0.0, 0.0, 1.0]),
+            [0.2, 0.4, 0.8]
+        );
+        assert_eq!(blend([0.2, 0.4, 0.8], [0.0; 4]), [0.0; 3]);
+        let fractional = blend([0.5, 0.25, 0.75], [0.2, 0.4, 0.0, 128.0 / 255.0]);
+        let expected = [
+            0.2 + 0.5 * 128.0 / 255.0,
+            0.4 + 0.25 * 128.0 / 255.0,
+            0.75 * 128.0 / 255.0,
+        ];
+        assert!(
+            fractional
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6)
+        );
+        assert_eq!(blend([1.0; 3], [1.0, 0.5, 0.25, 1.0]), [1.0; 3]);
+        assert_eq!(
+            quantized_flash([-1.0, 0.5, 2.0, 0.5]),
+            [0.0, 128.0 / 255.0, 1.0, 128.0 / 255.0]
+        );
+        assert_eq!(quantized_flash([0.1; 4]), [25.0 / 255.0; 4]);
+        assert_eq!(quantized_flash([1.0 / 256.0; 4]), [0.0; 4]);
+        assert_eq!(quantized_flash([2.0 / 256.0; 4]), [2.0 / 255.0; 4]);
+        assert_eq!(quantized_flash([3.0 / 256.0; 4]), [2.0 / 255.0; 4]);
+        assert_eq!(quantized_flash([4.0 / 256.0; 4]), [4.0 / 255.0; 4]);
     }
 
     #[test]

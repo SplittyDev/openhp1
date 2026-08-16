@@ -35,6 +35,9 @@ WindowSizeX=1280
 WindowSizeY=800
 Renderer=Classic
 
+[WinDrv.WindowsClient]
+ScreenFlashes=true
+
 [OpenHP1.Renderer.Classic]
 Brightness=0.6
 ColorMode=32Bit
@@ -85,6 +88,14 @@ large, OpenHP1 uses its default instead.
 
 `ResolutionX` and `ResolutionY` control the game image, not the physical window.
 This lets you keep the original 1024x768 presentation inside a larger window.
+
+## `[WinDrv.WindowsClient]`
+
+| Key | Default | Accepted values | What it does |
+| --- | --- | --- | --- |
+| `ScreenFlashes` | `true` | `true`, `false` | Shows authored viewport flashes and fades. When false, their runtime timing continues but the rendered image is unchanged. |
+
+`ScreenFlashes` also accepts `1`, `on`, `0`, and `off`.
 
 ## `[OpenHP1.Renderer.Classic]`
 

@@ -216,6 +216,7 @@ fn render_frame(
         camera,
         size,
         DisplaySettings::for_mode(mode),
+        [0.0, 0.0, 0.0, 1.0],
     );
     queue.submit([encoder.finish()]);
     stats

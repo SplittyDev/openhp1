@@ -23,4 +23,5 @@ pub struct PlayerView {
     pub location: [f32; 3],
     pub rotation: [i32; 3],
     pub fov_degrees: f32,
+    pub flash_fog: [f32; 4],
 }

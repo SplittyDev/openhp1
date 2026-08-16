@@ -1177,15 +1177,51 @@ impl ScriptRuntime {
                 message: format!("FovAngle is {fov_degrees}"),
             });
         }
+        let flash_fog = self
+            .actor_plane_property(actor, "FlashFog")?
+            .unwrap_or([0.0, 0.0, 0.0, 1.0]);
         Ok((
             PlayerView {
                 actor: view_actor,
                 location: *location,
                 rotation: *rotation,
                 fov_degrees,
+                flash_fog,
             },
             actions,
         ))
+    }
+
+    fn actor_plane_property(
+        &mut self,
+        actor: usize,
+        name: &str,
+    ) -> DispatchResult<Option<[f32; 4]>> {
+        let class = self
+            .actor_classes
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor })?;
+        let class = self.resolved_object(&class)?;
+        let instance = self
+            .instances
+            .get(&actor)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let Some(StoredValue::Value(Value::Struct(fields))) =
+            self.instance_property(&class, &instance, name)?
+        else {
+            return Ok(None);
+        };
+        let component = |name| match fields.get(name) {
+            Some(Value::Float(value)) if value.is_finite() => Some(*value),
+            _ => None,
+        };
+        Ok(component("X")
+            .zip(component("Y"))
+            .zip(component("Z"))
+            .zip(component("W"))
+            .map(|(((x, y), z), w)| [x, y, z, w]))
     }
 
     pub(super) fn actor_float_property(
