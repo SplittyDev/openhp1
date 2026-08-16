@@ -415,20 +415,13 @@ impl SkeletalAnimation {
                     length: self.bones.len(),
                 });
             };
-            let mesh_bone = mesh
+            let Some(mesh_bone) = mesh
                 .bones
                 .iter()
                 .position(|bone| bone.name.eq_ignore_ascii_case(&animation_bone.name))
-                .or_else(|| {
-                    (self.bones.len() == mesh.bones.len()
-                        && animation_bone_index < mesh.bones.len())
-                    .then_some(animation_bone_index)
-                })
-                .ok_or(Error::InvalidIndex {
-                    field: "mesh animation bone",
-                    index: track_index,
-                    length: mesh.bones.len(),
-                })?;
+            else {
+                continue;
+            };
             let fallback = local[mesh_bone];
             local[mesh_bone] = track.sample(time, movement.track_time, fallback);
             if extract_root_motion && mesh_bone == 0 {
@@ -630,5 +623,72 @@ mod tests {
             .sample_skeletal_vertices(&animation, 0, 0.5, false)
             .unwrap();
         assert_eq!(sample.bone_positions().collect::<Vec<_>>(), positions);
+    }
+
+    #[test]
+    fn ignores_animation_tracks_without_matching_mesh_bones() {
+        let mesh = SkeletalMesh {
+            points: vec![Vec3::ZERO],
+            bones: vec![
+                SkeletalBone {
+                    name: "Root".to_owned(),
+                    orientation: Quat::IDENTITY,
+                    position: Vec3::ZERO,
+                    parent: 0,
+                },
+                SkeletalBone {
+                    name: "MeshOnly".to_owned(),
+                    orientation: Quat::IDENTITY,
+                    position: Vec3::new(1.0, 2.0, 3.0),
+                    parent: 0,
+                },
+            ],
+            influences: vec![vec![SkeletalInfluence {
+                bone: 1,
+                weight: 1.0,
+                local_position: Vec3::ZERO,
+            }]],
+            weapon_bone: None,
+            weapon_adjust: Mat4::IDENTITY,
+        };
+        let animation = SkeletalAnimation {
+            sequences: vec![MeshAnimationSequence {
+                name: "Breathe".to_owned(),
+                group: "None".to_owned(),
+                start_frame: 0,
+                frame_count: 1,
+                notifications: Vec::new(),
+                rate: 1.0,
+            }],
+            bones: vec![
+                AnimationBone {
+                    name: "Root".to_owned(),
+                },
+                AnimationBone {
+                    name: "AnimationOnly".to_owned(),
+                },
+            ],
+            moves: vec![AnimationMove {
+                track_time: 1.0,
+                start_bone: 0,
+                bone_indices: vec![0, 1],
+                tracks: vec![
+                    AnimationTrack {
+                        rotations: Vec::new(),
+                        positions: vec![Vec3::ZERO],
+                        times: vec![0.0],
+                    },
+                    AnimationTrack {
+                        rotations: Vec::new(),
+                        positions: vec![Vec3::splat(100.0)],
+                        times: vec![0.0],
+                    },
+                ],
+            }],
+        };
+
+        let positions = animation.sample(&mesh, 0, 0.0).unwrap();
+
+        assert_eq!(positions, vec![Vec3::new(1.0, -2.0, 3.0)]);
     }
 }

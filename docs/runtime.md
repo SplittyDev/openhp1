@@ -175,6 +175,11 @@ timer, switch it to a one-shot rate, or destroy its actor without stale firings.
   next `Tick`.
 - `FinishAnim` ends the current loop.
 - Tween-time arguments blend from the displayed pose.
+- Skeletal animation tracks bind to mesh bones by case-insensitive name. Tracks
+  for bones absent from the mesh are ignored, while mesh bones absent from the
+  animation retain their reference pose. Shipped `USkeletalMesh::ApplyAnim`
+  builds this mapping at `0x1041bd2a..0x1041be3b`; its negative-map branch at
+  `0x1041bf3c..0x1041bf6e` copies the mesh reference-bone pose.
 - HP1's `RootBone='Move'` argument extracts skeletal root translation from the
   rendered pose and applies it through UE1 smooth movement so a blocked forward
   component can slide upward during a mount. Translation is measured from the
