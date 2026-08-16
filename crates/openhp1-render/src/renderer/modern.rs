@@ -383,9 +383,6 @@ impl ModernRenderer {
         pass: &mut wgpu::RenderPass<'pass>,
         texture_bind_groups: &'pass [wgpu::BindGroup],
     ) -> usize {
-        if self.volumetric_lighting {
-            return 0;
-        }
         self.coronas
             .as_ref()
             .map_or(0, |coronas| coronas.draw(pass, texture_bind_groups))
