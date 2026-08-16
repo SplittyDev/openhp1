@@ -282,10 +282,16 @@ commit, and live-verification fields for each item.
       non-TwoSided materials (`renderer/pipeline.rs:47-57`). The original
       side-admission behavior belongs in the shared scene/traversal path, not a
       mode-specific device state.
-  - [ ] Deterministic acceptance: both triangle windings submitted after CPU
-        admission render in Classic and Modern, including reflected winding.
-        Select a shipped live representative from a corpus/capture showing an
-        actually submitted back-facing primitive.
+  - [x] Deterministic acceptance: both triangle windings submitted after CPU
+        admission reach the rasterizer in Classic and Modern, including the
+        reflected and screen-projected pipeline descriptors.
+  - [ ] Live acceptance: select a shipped corpus/capture representative that
+        actually submits a back-facing primitive and compare both modes.
+  - [x] Implemented by setting cull mode to `None` for both ordinary/reflected
+        scene pipelines and screen-projected surfaces; two-sided scene metadata
+        is preserved for BSP admission.
+  - [x] Focused render tests/check, formatting, and diff checks pass without the
+        copyrighted corpus.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:

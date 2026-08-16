@@ -49,7 +49,7 @@ pub(super) fn create_pipeline(
             // The Unreal-to-render axis conversion changes handedness, so UE
             // polygon winding becomes clockwise in render space.
             front_face: front_face(reflected),
-            cull_mode: (!material.two_sided).then_some(wgpu::Face::Back),
+            cull_mode: None,
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -93,7 +93,7 @@ pub(super) fn create_screen_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    two_sided: bool,
+    _two_sided: bool,
     fragment_entry: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -124,7 +124,7 @@ pub(super) fn create_screen_pipeline(
         },
         primitive: wgpu::PrimitiveState {
             front_face: wgpu::FrontFace::Cw,
-            cull_mode: (!two_sided).then_some(wgpu::Face::Back),
+            cull_mode: None,
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
