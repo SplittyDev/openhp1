@@ -28,6 +28,7 @@ pub struct ActorProperties {
     pub skeletal_animation: Option<ObjectReference>,
     pub skin: Option<ObjectReference>,
     pub texture: Option<ObjectReference>,
+    pub environment_map: Option<ObjectReference>,
     pub multi_skins: Vec<Option<ObjectReference>>,
     pub style: Option<u8>,
     pub ambient_glow: Option<u8>,
@@ -128,6 +129,9 @@ impl ActorProperties {
                 ("Texture", PropertyKind::Object, _) => {
                     properties.texture = Some(value.read_object_reference()?);
                 }
+                ("EnvironmentMap", PropertyKind::Object, _) => {
+                    properties.environment_map = Some(value.read_object_reference()?);
+                }
                 ("MultiSkins", PropertyKind::Object, _) => {
                     let index = property.array_index.unwrap_or_default();
                     properties.multi_skins.resize(index + 1, None);
@@ -195,4 +199,98 @@ fn read_vec3(reader: &mut ObjectReader<'_>) -> Result<Vec3> {
         reader.read_f32()?,
         reader.read_f32()?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use openhp1_package::{ObjectReference, PACKAGE_MAGIC, Package};
+
+    #[test]
+    fn decodes_zone_environment_map_object_property() {
+        let names = ["EnvironmentMap", "None", "Core", "Class", "Actor", "Zone"];
+        let package = synthetic_actor_package(&names, vec![0, 0x05, 1, 1]);
+
+        assert_eq!(
+            super::Actor::decode(&package, 0)
+                .unwrap()
+                .properties
+                .environment_map,
+            Some(ObjectReference::Export(0))
+        );
+    }
+
+    fn synthetic_actor_package(names: &[&str], payload: Vec<u8>) -> Package {
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            name_table.extend(0_u32.to_le_bytes());
+        }
+        let mut import_table = vec![2, 3];
+        import_table.extend(compact_index(0));
+        import_table.extend(compact_index(4));
+        const HEADER_SIZE: usize = 44;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        export.extend(0_i32.to_le_bytes());
+        export.extend(compact_index(5));
+        export.extend(0_u32.to_le_bytes());
+        export.extend(compact_index(payload.len() as i32));
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let encoded = compact_index(payload_offset as i32);
+            let next = export_offset + export.len() + encoded.len();
+            if next == payload_offset {
+                export.extend(encoded);
+                break;
+            }
+            payload_offset = next;
+        }
+        let mut bytes = Vec::new();
+        bytes.extend(PACKAGE_MAGIC.to_le_bytes());
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        bytes.extend(0_u32.to_le_bytes());
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+        ] {
+            bytes.extend((value as i32).to_le_bytes());
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        assert_eq!(bytes.len(), payload_offset);
+        bytes.extend(payload);
+        Package::parse("synthetic zone", Arc::from(bytes)).unwrap()
+    }
+
+    fn compact_index(value: i32) -> Vec<u8> {
+        let negative = value < 0;
+        let mut value = value.unsigned_abs();
+        let mut bytes = vec![(value as u8 & 0x3f) | if negative { 0x80 } else { 0 }];
+        value >>= 6;
+        if value != 0 {
+            bytes[0] |= 0x40;
+        }
+        while value != 0 {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            bytes.push(byte);
+        }
+        bytes
+    }
 }

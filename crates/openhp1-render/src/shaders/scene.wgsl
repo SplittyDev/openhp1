@@ -56,6 +56,7 @@ struct VertexOutput {
     @location(5) world_normal: vec3<f32>,
     @location(6) @interpolate(flat) lighting_index: u32,
     @location(7) lighting_coordinates: vec2<f32>,
+    @location(8) environment_color: vec4<f32>,
 };
 
 @vertex
@@ -70,11 +71,12 @@ fn vertex_main(
     @location(7) environment_map: f32,
     @location(8) lighting_coordinates: vec2<f32>,
     @location(9) lighting_index: u32,
-    @location(10) small_wavy_scale: vec2<f32>,
+    @location(10) uv_effect_scale: vec2<f32>,
     @location(11) node_plane_normal: vec3<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
+    output.environment_color = vec4(-1.0);
     if environment_map > 0.5 {
         let incident_offset = position - camera.camera_position.xyz;
         let incident = incident_offset * inverseSqrt(max(dot(incident_offset, incident_offset), 0.00000001));
@@ -86,7 +88,10 @@ fn vertex_main(
             camera.world_to_view[2].xyz,
         );
         let view_reflection = world_to_view * reflection;
-        output.texture_coordinates = (view_reflection.xy + vec2(1.0)) * (128.0 / 255.0);
+        output.texture_coordinates = (view_reflection.xy + vec2(1.0))
+            * 0.5 * uv_effect_scale.x;
+        let environment_light = pow(max(view_reflection.z, 0.0), 0.25);
+        output.environment_color = vec4(vec3(environment_light), 0.0);
     } else {
         let texture_pan_speed = select(
             texture_pan_speeds.xy,
@@ -94,14 +99,14 @@ fn vertex_main(
             dot(camera.camera_position.xyz - position, node_plane_normal) > 0.0,
         );
         output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;
-        if any(small_wavy_scale != vec2(0.0)) {
+        if any(uv_effect_scale != vec2(0.0)) {
             let time = camera.auto_uv.x / 64.0;
             let small_wavy_offset = vec2(
                 8.0 * sin(time) + 4.0 * cos(2.3 * time),
                 8.0 * cos(time) + 4.0 * sin(2.3 * time),
             );
             output.texture_coordinates = output.texture_coordinates
-                + small_wavy_scale * small_wavy_offset;
+                + uv_effect_scale * small_wavy_offset;
         }
     }
     output.lightmap_coordinates = lightmap_coordinates;
@@ -116,30 +121,34 @@ fn vertex_main(
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_lightmap(input, texture_color);
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_lightmap(input, color);
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_vertex_light(input, texture_color);
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_vertex_light(input, color);
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
@@ -150,11 +159,12 @@ fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_opacity(input, apply_lightmap(input, texture_color));
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_opacity(input, apply_lightmap(input, color));
+    return color;
 }
 
 @fragment
@@ -165,11 +175,12 @@ fn fragment_unlit_blended(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_opacity(input, apply_vertex_light(input, texture_color));
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_opacity(input, apply_vertex_light(input, color));
+    return color;
 }
 
 @fragment
@@ -188,30 +199,34 @@ fn fragment_mirror(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_modern(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_realtime_light(input, texture_color);
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_realtime_light(input, color);
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    return apply_modern_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_modern_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = apply_modern_vertex_light(input, texture_color);
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return apply_modern_vertex_light(input, color);
+    return preserve_environment_coverage(input, color);
 }
 
 @fragment
@@ -223,11 +238,16 @@ fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = clamp(
+        apply_opacity(input, apply_realtime_light(input, texture_color)),
+        vec4(0.0),
+        vec4(1.0),
+    );
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return clamp(apply_opacity(input, apply_realtime_light(input, color)), vec4(0.0), vec4(1.0));
+    return color;
 }
 
 @fragment
@@ -238,11 +258,16 @@ fn fragment_modern_unlit_blended(input: VertexOutput) -> @location(0) vec4<f32> 
 
 @fragment
 fn fragment_modern_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(color_texture, color_sampler, input.texture_coordinates);
-    if color.a < 0.5 {
+    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let color = clamp(
+        apply_opacity(input, apply_modern_vertex_light(input, texture_color)),
+        vec4(0.0),
+        vec4(1.0),
+    );
+    if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
-    return clamp(apply_opacity(input, apply_modern_vertex_light(input, color)), vec4(0.0), vec4(1.0));
+    return color;
 }
 
 @fragment
@@ -259,21 +284,47 @@ fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
         lightmap_sampler,
         input.lightmap_coordinates,
     ).rgb * 2.0;
-    return vec4(color.rgb * mix(input.vertex_color.rgb, light, input.has_lightmap), color.a);
+    let vertex_light = select(
+        input.vertex_color.rgb,
+        input.environment_color.rgb,
+        input.environment_color.r >= 0.0,
+    );
+    let alpha = select(
+        color.a,
+        color.a * input.environment_color.a,
+        input.environment_color.r >= 0.0,
+    );
+    return vec4(color.rgb * mix(vertex_light, light, input.has_lightmap), alpha);
 }
 
 fn apply_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     clip_to_portal(input);
-    return vec4(color.rgb * input.vertex_color.rgb, color.a);
+    let alpha = select(
+        color.a,
+        color.a * input.environment_color.a,
+        input.environment_color.r >= 0.0,
+    );
+    return vec4(color.rgb * input.vertex_color.rgb, alpha);
 }
 
 fn apply_modern_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     clip_to_portal(input);
-    return vec4(srgb_to_linear(color.rgb * input.vertex_color.rgb), color.a);
+    let alpha = select(
+        color.a,
+        color.a * input.environment_color.a,
+        input.environment_color.r >= 0.0,
+    );
+    return vec4(srgb_to_linear(color.rgb * input.vertex_color.rgb), alpha);
 }
 
 fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     clip_to_portal(input);
+    if input.environment_color.r >= 0.0 {
+        return vec4(
+            srgb_to_linear(color.rgb * input.environment_color.rgb),
+            color.a * input.environment_color.a,
+        );
+    }
     if input.lighting_index == 0xffffffffu {
         return apply_modern_vertex_light(input, color);
     }
@@ -357,7 +408,25 @@ fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
 
 fn apply_opacity(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     // HP1's mesh path multiplies vertex RGBA by Opacity before alpha blending.
+    // Environment/Unlit subsequently overwrite RGB and alpha, so opacity no
+    // longer scales the source color in that path.
+    if input.environment_color.r >= 0.0 {
+        return color;
+    }
     return color * input.vertex_color.a;
+}
+
+fn preserve_environment_coverage(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    // Retail consumes the environment vertex alpha as zero, but its backbuffer
+    // alpha is otherwise unused. Modern uses target alpha to distinguish
+    // geometry from the backdrop, so opaque environment meshes retain coverage.
+    return select(color, vec4(color.rgb, 1.0), input.environment_color.r >= 0.0);
+}
+
+fn masked_alpha(input: VertexOutput, texture_alpha: f32, final_alpha: f32) -> f32 {
+    // The fixed alpha test sees environment diffuse alpha after texture-stage
+    // modulation. Ordinary masked materials retain their texture-alpha test.
+    return select(texture_alpha, final_alpha, input.environment_color.r >= 0.0);
 }
 
 fn clip_to_portal(input: VertexOutput) {

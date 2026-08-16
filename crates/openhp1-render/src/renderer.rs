@@ -60,7 +60,7 @@ struct Vertex {
     environment_map: f32,
     lighting_coordinates: [f32; 2],
     lighting_index: u32,
-    small_wavy_scale: [f32; 2],
+    uv_effect_scale: [f32; 2],
     node_plane_normal: [f32; 3],
 }
 
@@ -460,7 +460,11 @@ impl Renderer {
                         .filter(|&index| index < scene.realtime_lightmaps.len())
                         .and_then(|index| u32::try_from(index).ok())
                         .unwrap_or(u32::MAX),
-                    small_wavy_scale: normalized_small_wavy_scale(material.small_wavy, dimensions),
+                    uv_effect_scale: if material.environment_map {
+                        [material.texture_draw_scale, 0.0]
+                    } else {
+                        normalized_small_wavy_scale(material.small_wavy, dimensions)
+                    },
                     node_plane_normal: unreal_to_render(
                         scene
                             .mesh
@@ -2157,13 +2161,13 @@ mod tests {
 
         let shader = include_str!("shaders/scene.wgsl");
         assert!(shader.contains(
-            "output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;\n        if any(small_wavy_scale != vec2(0.0)) {"
+            "output.texture_coordinates = texture_coordinates + texture_pan_speed * camera.auto_uv.x;\n        if any(uv_effect_scale != vec2(0.0)) {"
         ));
         assert!(shader.contains("let time = camera.auto_uv.x / 64.0;"));
         assert!(shader.contains("8.0 * sin(time) + 4.0 * cos(2.3 * time),"));
         assert!(shader.contains("8.0 * cos(time) + 4.0 * sin(2.3 * time),"));
         assert!(shader.contains(
-            "output.texture_coordinates = output.texture_coordinates\n                + small_wavy_scale * small_wavy_offset;"
+            "output.texture_coordinates = output.texture_coordinates\n                + uv_effect_scale * small_wavy_offset;"
         ));
     }
 
@@ -2181,7 +2185,7 @@ mod tests {
                 environment_map: 0.0,
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
-                small_wavy_scale: [0.0; 2],
+                uv_effect_scale: [0.0; 2],
                 node_plane_normal: [0.0; 3],
             },
             Vertex {
@@ -2195,7 +2199,7 @@ mod tests {
                 environment_map: 0.0,
                 lighting_coordinates: [0.0; 2],
                 lighting_index: u32::MAX,
-                small_wavy_scale: [0.0; 2],
+                uv_effect_scale: [0.0; 2],
                 node_plane_normal: [0.0; 3],
             },
         ];
@@ -2532,27 +2536,99 @@ mod tests {
     }
 
     #[test]
-    fn environment_maps_are_opt_in_and_use_surreal_reflection_coordinates() {
+    fn environment_maps_match_texture_info_reflection_color_and_unlit_precedence() {
         assert!(!SurfaceMaterial::default().environment_map);
-        assert_eq!(SurfaceMaterial::default().opacity, 1.0);
-        assert!(
-            SurfaceMaterial {
-                environment_map: true,
-                ..Default::default()
-            }
-            .environment_map
-        );
-
-        let coordinates = |position: Vec3, normal: Vec3, camera: Vec3| {
+        let environment = |position: Vec3,
+                           normal: Vec3,
+                           camera: Vec3,
+                           world_to_view: glam::Mat3,
+                           dimensions: glam::Vec2,
+                           multiplier: f32| {
             let incident = (position - camera).normalize_or_zero();
             let reflection = incident - 2.0 * incident.dot(normal) * normal;
-            (reflection.truncate() + glam::Vec2::ONE) * (128.0 / 255.0)
+            let view_reflection = world_to_view * reflection;
+            let texture_info_scale = dimensions * multiplier / 256.0;
+            let raw = (view_reflection.truncate() + glam::Vec2::ONE) * 128.0 * texture_info_scale;
+            let light = view_reflection.z.max(0.0).powf(0.25);
+            let color = Vec4::new(light, light, light, 0.0);
+            (raw / dimensions, color)
         };
-        let centered = coordinates(-Vec3::Z, Vec3::Z, Vec3::ZERO);
-        assert!(centered.abs_diff_eq(glam::Vec2::splat(128.0 / 255.0), 0.000_001));
-        let camera_relative = coordinates(-Vec3::Z, Vec3::Z, Vec3::new(-1.0, 0.0, -1.0));
+        let (basis_coordinates, dark) = environment(
+            Vec3::X,
+            Vec3::new(1.0, 1.0, 0.0).normalize(),
+            Vec3::ZERO,
+            glam::Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            glam::Vec2::new(96.0, 40.0),
+            0.75,
+        );
+        assert!(basis_coordinates.abs_diff_eq(glam::Vec2::new(0.75, 0.375), 0.000_001));
+        assert!(dark.abs_diff_eq(Vec4::ZERO, 0.000_001));
+
+        let (centered, bright) = environment(
+            -Vec3::Z,
+            Vec3::Z,
+            Vec3::ZERO,
+            glam::Mat3::IDENTITY,
+            glam::Vec2::new(37.0, 91.0),
+            1.25,
+        );
+        assert!(centered.abs_diff_eq(glam::Vec2::splat(0.625), 0.000_001));
+        assert!(bright.abs_diff_eq(Vec4::new(1.0, 1.0, 1.0, 0.0), 0.000_001));
+
         assert!(
-            camera_relative.abs_diff_eq(glam::Vec2::new(256.0 / 255.0, 128.0 / 255.0), 0.000_001)
+            SCENE_SHADER.contains("output.environment_color = vec4(vec3(environment_light), 0.0);")
+        );
+        assert!(SCENE_SHADER.contains("color.a * input.environment_color.a"));
+        assert!(SCENE_SHADER.contains(
+            "return select(color, vec4(color.rgb, 1.0), input.environment_color.r >= 0.0);"
+        ));
+        assert!(SCENE_SHADER.contains("return vec4(color.rgb * input.vertex_color.rgb, alpha);"));
+        assert!(
+            SCENE_SHADER.contains(
+                "return vec4(srgb_to_linear(color.rgb * input.vertex_color.rgb), alpha);"
+            )
+        );
+        let destination = Vec3::new(0.2, 0.4, 0.6);
+        let source = Vec3::new(1.0, 0.5, 0.25);
+        let environment_alpha = bright.w;
+        assert_eq!(
+            source * environment_alpha + destination * (1.0 - environment_alpha),
+            destination
+        );
+        assert!(SCENE_SHADER.contains("return preserve_environment_coverage(input, color);"));
+        assert!(SCENE_SHADER.contains(
+            "return select(texture_alpha, final_alpha, input.environment_color.r >= 0.0);"
+        ));
+        assert_eq!(
+            SCENE_SHADER
+                .matches("masked_alpha(input, texture_color.a, color.a)")
+                .count(),
+            8
+        );
+        let masked_alpha = |texture_alpha, final_alpha, environment| {
+            if environment {
+                final_alpha
+            } else {
+                texture_alpha
+            }
+        };
+        assert_eq!(masked_alpha(1.0, environment_alpha, true), 0.0);
+        assert_eq!(masked_alpha(1.0, 0.0, false), 1.0);
+        assert_eq!(
+            pipeline::fragment_entry(SurfaceMode::Opaque, true, false, false),
+            "fragment_masked"
+        );
+        assert_eq!(
+            pipeline::fragment_entry(SurfaceMode::Opaque, true, false, true),
+            "fragment_modern_masked"
+        );
+        assert_eq!(
+            pipeline::fragment_entry(SurfaceMode::Opaque, true, true, false),
+            "fragment_unlit_masked"
+        );
+        assert_eq!(
+            pipeline::fragment_entry(SurfaceMode::Opaque, true, true, true),
+            "fragment_modern_unlit_masked"
         );
     }
 
@@ -2623,7 +2699,7 @@ mod tests {
             environment_map: 0.0,
             lighting_coordinates: [0.0; 2],
             lighting_index: u32::MAX,
-            small_wavy_scale: [0.0; 2],
+            uv_effect_scale: [0.0; 2],
             node_plane_normal: [0.0; 3],
         }
     }

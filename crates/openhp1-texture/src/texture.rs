@@ -21,6 +21,8 @@ pub struct Texture {
     pub prime_count: u8,
     pub min_frame_rate: f32,
     pub max_frame_rate: f32,
+    /// UE1's base-mip environment-map multiplier for both texture axes.
+    pub draw_scale: f32,
     pub declared_width: Option<u32>,
     pub declared_height: Option<u32>,
     pub render_flags: TextureRenderFlags,
@@ -154,6 +156,7 @@ impl Texture {
         let mut prime_count = 0;
         let mut min_frame_rate = 0.0;
         let mut max_frame_rate = 0.0;
+        let mut draw_scale = 1.0;
         let mut declared_width = None;
         let mut declared_height = None;
         let mut clamp_width = None;
@@ -195,6 +198,9 @@ impl Texture {
                 }
                 "MaxFrameRate" if property.kind == PropertyKind::Float => {
                     max_frame_rate = reader.property_reader(&property).read_f32()?;
+                }
+                "DrawScale" if property.kind == PropertyKind::Float => {
+                    draw_scale = reader.property_reader(&property).read_f32()?;
                 }
                 "USize" if property.kind == PropertyKind::Int => {
                     declared_width = Some(reader.property_reader(&property).read_u32()?);
@@ -376,6 +382,7 @@ impl Texture {
             prime_count,
             min_frame_rate,
             max_frame_rate,
+            draw_scale,
             declared_width,
             declared_height,
             render_flags,
@@ -1183,6 +1190,7 @@ mod tests {
             prime_count: 0,
             min_frame_rate: 0.0,
             max_frame_rate: 0.0,
+            draw_scale: 1.0,
             declared_width: Some(2),
             declared_height: Some(1),
             render_flags: TextureRenderFlags::default(),

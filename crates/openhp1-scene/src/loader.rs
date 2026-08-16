@@ -68,6 +68,8 @@ struct ActorRenderContext {
     packages: PackageStore,
     map: Arc<Package>,
     model: Model,
+    level_environment_map: Option<SceneObject>,
+    zone_environment_maps: Vec<Option<SceneObject>>,
     vertex_lighting: VertexLighting,
     light_brightnesses: HashMap<usize, u8>,
     class_cache: HashMap<SceneObjectId, ClassState>,
@@ -172,6 +174,8 @@ impl LoadedScene {
         let mut class_cache = HashMap::<SceneObjectId, ClassState>::new();
         let (level_pan_speed, zone_pan_speeds) =
             load_zone_pan_speeds(&mut packages, &package, &level, &model, &mut class_cache);
+        let (level_environment_map, zone_environment_maps) =
+            load_environment_maps(&mut packages, &package, &level, &model, &mut class_cache);
         mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
         let mut water_animations = TextureAnimations::default();
         let (mut textures, mut surface_materials) =
@@ -209,6 +213,8 @@ impl LoadedScene {
             packages,
             map: Arc::clone(&package),
             model,
+            level_environment_map,
+            zone_environment_maps,
             vertex_lighting,
             light_brightnesses: HashMap::new(),
             class_cache,
@@ -2604,6 +2610,7 @@ struct ActorState {
     skeletal_animation: Option<SceneObject>,
     skin: Option<SceneObject>,
     texture: Option<SceneObject>,
+    environment_map: Option<SceneObject>,
     editor_sprite: bool,
     multi_skins: Vec<Option<SceneObject>>,
     style: u8,
@@ -2655,6 +2662,7 @@ impl Default for ActorState {
             skeletal_animation: None,
             skin: None,
             texture: None,
+            environment_map: None,
             editor_sprite: false,
             multi_skins: Vec::new(),
             style: 1,
@@ -2747,6 +2755,9 @@ impl ActorState {
                         .file_stem()
                         .is_some_and(|name| name.eq_ignore_ascii_case("HPEdit"))
             });
+        }
+        if let Some(reference) = properties.environment_map {
+            self.environment_map = packages.resolve(source, reference)?.map(Into::into);
         }
         for (index, reference) in properties.multi_skins.iter().enumerate() {
             let Some(reference) = reference else {
@@ -3097,6 +3108,18 @@ fn append_scene_actor_render(
     let Some(mesh_object) = state.mesh.clone() else {
         return;
     };
+    let environment_map = state.mesh_environment_map.then(|| {
+        let zone = actor_render.model.zone_at(state.location);
+        select_environment_map(
+            state.texture.clone(),
+            actor_render
+                .zone_environment_maps
+                .get(zone)
+                .and_then(Clone::clone),
+            actor_render.level_environment_map.clone(),
+        )
+    });
+    let environment_map = environment_map.flatten();
     let ActorRenderContext {
         packages,
         model,
@@ -3140,6 +3163,7 @@ fn append_scene_actor_render(
         &mesh,
         &animation_source,
         state,
+        environment_map.as_ref(),
         actor_index,
         model,
         vertex_lighting,
@@ -3647,6 +3671,7 @@ fn append_actor_mesh(
     mesh: &Arc<Mesh>,
     animation_source: &ActorAnimationSource,
     actor: &ActorState,
+    environment_map: Option<&SceneObject>,
     actor_index: usize,
     model: &Model,
     vertex_lighting: &VertexLighting,
@@ -3740,11 +3765,8 @@ fn append_actor_mesh(
         let surface = if let Some(surface) = actor_materials.get(&material_key) {
             *surface
         } else {
-            // ponytail: the shipped corpus only enables bMeshEnviroMap on
-            // spellEcto, which supplies Actor.Texture. Add zone/level
-            // EnvironmentMap fallback here if authored content starts using it.
             let texture = if actor.mesh_environment_map {
-                actor.texture.clone()
+                environment_map.cloned()
             } else {
                 select_actor_texture(actor, &mesh_textures, triangle.texture_index)
             };
@@ -3922,6 +3944,7 @@ fn actor_surface_material(
     };
     let mut material = actor_opacity_material(SurfaceMaterial {
         opacity,
+        texture_draw_scale: texture.texture.draw_scale,
         ..surface_material(flags, None, Some(texture.texture.render_flags))
     });
     let image_key = (key.package, key.export_index, material.masked);
@@ -4214,6 +4237,44 @@ fn load_zone_pan_speeds(
     (level_pan_speed, zone_pan_speeds)
 }
 
+fn load_environment_maps(
+    packages: &mut PackageStore,
+    map: &Arc<Package>,
+    level: &Level,
+    model: &Model,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
+) -> (Option<SceneObject>, Vec<Option<SceneObject>>) {
+    let level_map = level.level_info_export().and_then(|export_index| {
+        actor_environment_map(packages, map, export_index, class_cache)
+            .inspect_err(|error| {
+                warn!(export_index, %error, "could not decode LevelInfo environment map");
+            })
+            .ok()
+            .flatten()
+    });
+    let zone_maps = model
+        .zones
+        .iter()
+        .enumerate()
+        .map(|(zone_index, zone)| {
+            let ObjectReference::Export(export_index) = zone.actor else {
+                return None;
+            };
+            actor_environment_map(packages, map, export_index, class_cache).unwrap_or_else(
+                |error| {
+                    warn!(zone_index, export_index, %error, "could not decode zone environment map");
+                    None
+                },
+            )
+        })
+        .collect();
+    (level_map, zone_maps)
+}
+
+fn select_environment_map<T>(actor: Option<T>, zone: Option<T>, level: Option<T>) -> Option<T> {
+    actor.or(zone).or(level)
+}
+
 fn bsp_texture_pan_speeds(
     model: &Model,
     level_pan_speed: Vec2,
@@ -4292,6 +4353,27 @@ fn actor_pan_speed(
         "zone texture pan speed is not finite"
     );
     Ok(state.texture_pan_speed)
+}
+
+fn actor_environment_map(
+    packages: &mut PackageStore,
+    map: &Arc<Package>,
+    export_index: usize,
+    class_cache: &mut HashMap<SceneObjectId, ClassState>,
+) -> Result<Option<SceneObject>> {
+    let actor = Actor::decode(map, export_index)?;
+    let export = map
+        .summary()
+        .exports
+        .get(export_index)
+        .context("zone actor export is missing")?;
+    let class = packages
+        .resolve(map, export.class)?
+        .map(SceneObject::from)
+        .context("zone actor class is missing")?;
+    let mut state = class_state(packages, &class, class_cache, 0).actor;
+    state.apply(packages, map, &actor.properties)?;
+    Ok(state.environment_map)
 }
 
 fn decode_texture(
@@ -4702,6 +4784,7 @@ fn surface_material(
         volumetric_source: false,
         mirror: flags.contains(PolyFlags::MIRRORED) || texture_flags.mirrored,
         environment_map: false,
+        texture_draw_scale: 1.0,
         opacity: 1.0,
         small_wavy: false,
     }
@@ -5837,6 +5920,8 @@ mod tests {
                 packages,
                 map,
                 model,
+                level_environment_map: None,
+                zone_environment_maps: Vec::new(),
                 vertex_lighting,
                 light_brightnesses: Default::default(),
                 class_cache: Default::default(),
@@ -6549,6 +6634,24 @@ mod tests {
         assert_eq!(texture_backdrop.mode, SurfaceMode::Backdrop);
         assert!(surface_backdrop.no_smooth);
         assert!(texture_backdrop.no_smooth);
+
+        let bsp_environment =
+            super::bsp_surface_material(PolyFlags::from_bits(0x0000_0010), None, None);
+        assert!(!bsp_environment.environment_map);
+    }
+
+    #[test]
+    fn mesh_environment_map_prefers_actor_then_zone_then_level() {
+        assert_eq!(
+            super::select_environment_map(Some(1), Some(2), Some(3)),
+            Some(1)
+        );
+        assert_eq!(
+            super::select_environment_map(None, Some(2), Some(3)),
+            Some(2)
+        );
+        assert_eq!(super::select_environment_map(None, None, Some(3)), Some(3));
+        assert_eq!(super::select_environment_map::<u8>(None, None, None), None);
     }
 
     #[test]

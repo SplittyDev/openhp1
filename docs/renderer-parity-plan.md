@@ -373,16 +373,30 @@ commit, and live-verification fields for each item.
       reflected UV/color equations plus Unlit precedence `23073-23137`.
   - [x] Preserve the retail BSP behavior: `bEnvironment` is a renderer no-op;
         `ShinySurfaces` separately gates translucent reflected child recursion.
-  - [ ] Resolve Actor → Region.Zone → LevelInfo environment textures and carry
-        the texture dimensions and `UMult`/`VMult` needed by the original
-        texel-space equation.
-  - [ ] Reflect normalized view position about the mesh normal, transform by
+  - [x] Resolve Actor → Region.Zone → LevelInfo environment textures. Decode
+        texture `DrawScale`, which `UTexture::Lock` copies into base-mip
+        `UMult`/`VMult`; normalized GPU sampling reduces the native texel-space
+        equation to `(reflected_xy + 1) * 0.5 * DrawScale` without a `255`
+        assumption. Initial scene assembly resolves the actor's loaded zone;
+        draw-time refresh after runtime texture/flag changes or zone crossings
+        remains assigned to `BASE-010`.
+  - [x] Reflect normalized view position about the mesh normal, transform by
         the frame axes, apply the exact U/V scale, and replace vertex RGB with
         `pow(max(reflected_z, 0), 0.25)` before the existing Unlit override.
-  - [ ] Deterministic acceptance: a synthetic non-default texture size and
-        U/V multiplier case, environment plus Unlit precedence, and identical
-        base behavior in Classic and Modern. Live acceptance uses
-        `HPBase.spellEcto`; the corpus does not author the fallback cases.
+        Carry the native zero diffuse alpha through the D3D-proved
+        texture/diffuse alpha modulation, fixed masked test, and opacity blend
+        path while keeping opaque non-masked target-alpha coverage for
+        Modern's geometry/AO mask.
+  - [x] Deterministic acceptance covers non-default dimensions and multiplier,
+        reflected frame basis, fourth-root color, blended zero alpha, masked
+        discard, opaque non-masked coverage, Actor/Zone/Level fallback,
+        environment plus Unlit precedence in Classic and Modern, and the BSP
+        no-op regression. A read-only scan
+        decoded 3,750 shipped textures, of which 37 have non-default
+        `DrawScale`; ordinary mesh byte-UV scaling remains unchanged and is a
+        separate parity gap.
+  - [ ] Live acceptance uses `HPBase.spellEcto`; the corpus does not author the
+        Zone/Level fallback cases.
 - [ ] `BASE-016` Preserve retail BSP traversal and dynamic-actor ordering in
       one backend-neutral submission plan shared by Classic and Modern.
       Direct Render.dll evidence: effective-list selection `7140-7253`, mirror
@@ -408,6 +422,25 @@ commit, and live-verification fields for each item.
         ordering; and a command-trace/pixel fixture in both modes. Live gates:
         `Lev2_HogFront` WetWater, `Lev4_Sneak` masked/opacity actors,
         `Lev5_Chess` opaque baseline, and a corpus-identified Erised map.
+- [ ] `BASE-017` Apply `FTextureInfo` dimensions and `DrawScale` to ordinary
+      legacy mesh byte UVs without changing the environment-map equation.
+      Direct Render.dll evidence: `DrawMesh` and `DrawLodMesh` multiply each
+      serialized byte coordinate by `USize * UMult / 256` and
+      `VSize * VMult / 256` (`Ghidra_Render.c:10617-10642,16114-16136`);
+      `UTexture::Lock` supplies the dimensions and base-mip `DrawScale`
+      multipliers (`Ghidra_Engine.c:96945-97058`). Current legacy geometry
+      instead normalizes both axes by `255` and the ordinary material path
+      ignores `DrawScale` (`openhp1-mesh/src/geometry.rs:50-52,209`).
+  - [ ] Deterministic acceptance: non-square dimensions and non-default
+        `DrawScale` reproduce the native `/256` texel coordinates for both
+        mesh formats while default-scale fixtures prove the intentional
+        one-part-in-256 correction; environment UVs remain unchanged.
+  - [ ] Corpus/live acceptance: a read-only scan found 37 non-default
+        `DrawScale` textures, including 35 in `Detail.utx` and the reachable
+        candidates `HP_Bentemp.benGrassCicle` (`24`) and
+        `HP_Sneak.jellybeans01` (`0.5`). Trace their ordinary mesh bindings,
+        then compare a confirmed representative in retail, Classic, and
+        Modern.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
@@ -530,7 +563,9 @@ commit, and live-verification fields for each item.
       `openhp1-scene/src/loader.rs:636-697` and
       `loader/runtime_light.rs:4-56`.
 - [ ] `BASE-010` Project runtime `Texture`, `MultiSkins`, `bUnlit`, and
-      `bMeshEnviroMap` changes into shared scene materials. Evidence:
+      `bMeshEnviroMap` changes into shared scene materials, including draw-time
+      Actor → current Region.Zone → LevelInfo environment fallback refresh.
+      Evidence:
       `Ghidra_Engine.c:126909-126989` and
       `Ghidra_Render.c:10130-10134,13034-13266`.
 - [ ] `BASE-011` Apply retail LodMesh collapse, morph, hysteresis, and

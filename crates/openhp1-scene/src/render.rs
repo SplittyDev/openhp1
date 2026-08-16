@@ -125,6 +125,8 @@ pub struct SurfaceMaterial {
     pub mirror: bool,
     /// Derive texture coordinates from the reflected view direction.
     pub environment_map: bool,
+    /// Base-mip `FTextureInfo` multiplier used by mesh environment UVs.
+    pub texture_draw_scale: f32,
     /// HP1-specific multiplier for actor source color and alpha.
     pub opacity: f32,
     /// Apply UE1's small sinusoidal BSP texture-coordinate motion.
@@ -143,6 +145,7 @@ impl Default for SurfaceMaterial {
             volumetric_source: false,
             mirror: false,
             environment_map: false,
+            texture_draw_scale: 1.0,
             opacity: 1.0,
             small_wavy: false,
         }
