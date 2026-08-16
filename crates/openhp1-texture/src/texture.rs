@@ -37,6 +37,7 @@ pub struct TextureRenderFlags {
     pub modulated: bool,
     pub fake_backdrop: bool,
     pub two_sided: bool,
+    pub no_smooth: bool,
     pub mirrored: bool,
 }
 
@@ -1124,6 +1125,8 @@ impl TextureRenderFlags {
             self.fake_backdrop = value;
         } else if name.eq_ignore_ascii_case("bTwoSided") {
             self.two_sided = value;
+        } else if name.eq_ignore_ascii_case("bNoSmooth") {
+            self.no_smooth = value;
         } else if name.eq_ignore_ascii_case("bMirrored") {
             self.mirrored = value;
         }
@@ -1222,11 +1225,13 @@ mod tests {
         flags.set("bTransparent", true);
         flags.set("bModulate", true);
         flags.set("bTwoSided", true);
+        flags.set("bNoSmooth", true);
         flags.set("bMirrored", true);
         assert!(flags.masked);
         assert!(flags.translucent);
         assert!(flags.modulated);
         assert!(flags.two_sided);
+        assert!(flags.no_smooth);
         assert!(flags.mirrored);
     }
 

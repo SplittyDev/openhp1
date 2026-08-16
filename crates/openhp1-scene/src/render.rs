@@ -115,6 +115,8 @@ pub struct SurfaceMaterial {
     /// because UE1 permits masked modulated surfaces.
     pub masked: bool,
     pub two_sided: bool,
+    /// Select point minification/magnification for the base texture.
+    pub no_smooth: bool,
     pub unlit: bool,
     /// Authored sky or corpus-identified window surface that can admit a
     /// directional volumetric shaft.
@@ -136,6 +138,7 @@ impl Default for SurfaceMaterial {
             mode: SurfaceMode::Opaque,
             masked: false,
             two_sided: false,
+            no_smooth: false,
             unlit: false,
             volumetric_source: false,
             mirror: false,

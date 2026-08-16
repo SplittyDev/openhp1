@@ -4090,14 +4090,6 @@ fn load_materials(
             });
             continue;
         }
-        if surface.poly_flags.contains(PolyFlags::FAKE_BACKDROP) {
-            materials.push(SurfaceMaterial {
-                mode: SurfaceMode::Backdrop,
-                volumetric_source: true,
-                ..Default::default()
-            });
-            continue;
-        }
         let resolved = match packages.resolve(map, surface.texture) {
             Ok(Some(resolved)) => resolved,
             Ok(None) => {
@@ -4130,15 +4122,23 @@ fn load_materials(
         };
         let texture_flags = decoded_texture.texture.render_flags;
         let material = bsp_surface_material(surface.poly_flags, None, Some(texture_flags));
-        let volumetric_source = is_window_texture(
-            resolved
-                .package
-                .summary()
-                .exports
-                .get(resolved.export_index)
-                .map(|export| resolved.package.summary().name(export.object_name))
-                .unwrap_or_default(),
-        );
+        let volumetric_source = material.volumetric_source
+            || is_window_texture(
+                resolved
+                    .package
+                    .summary()
+                    .exports
+                    .get(resolved.export_index)
+                    .map(|export| resolved.package.summary().name(export.object_name))
+                    .unwrap_or_default(),
+            );
+        if material.mode == SurfaceMode::Backdrop {
+            materials.push(SurfaceMaterial {
+                volumetric_source,
+                ..material
+            });
+            continue;
+        }
         let image_key = (key.0.clone(), key.1, material.masked);
         let texture_index = if let Some(index) = images.get(&image_key) {
             *index
@@ -4697,6 +4697,7 @@ fn surface_material(
         // it for modulated surfaces.
         masked: !translucent && (flags.contains(PolyFlags::MASKED) || texture_flags.masked),
         two_sided: flags.contains(PolyFlags::TWO_SIDED) || texture_flags.two_sided,
+        no_smooth: flags.contains(PolyFlags::NO_SMOOTH) || texture_flags.no_smooth,
         unlit: flags.contains(PolyFlags::UNLIT),
         volumetric_source: false,
         mirror: flags.contains(PolyFlags::MIRRORED) || texture_flags.mirrored,
@@ -4712,6 +4713,7 @@ fn bsp_surface_material(
     texture_flags: Option<TextureRenderFlags>,
 ) -> SurfaceMaterial {
     let mut material = surface_material(flags, texture, texture_flags);
+    material.volumetric_source = flags.contains(PolyFlags::FAKE_BACKDROP);
     material.small_wavy = flags.contains(PolyFlags::SMALL_WAVY);
     material
 }
@@ -6506,6 +6508,47 @@ mod tests {
             }),
         );
         assert!(texture_mirror.mirror);
+
+        let smooth = super::surface_material(PolyFlags::default(), None, None);
+        let surface_no_smooth = super::surface_material(PolyFlags::NO_SMOOTH, None, None);
+        let texture_no_smooth = super::surface_material(
+            PolyFlags::default(),
+            None,
+            Some(TextureRenderFlags {
+                no_smooth: true,
+                ..Default::default()
+            }),
+        );
+        let both_no_smooth = super::surface_material(
+            PolyFlags::NO_SMOOTH,
+            None,
+            Some(TextureRenderFlags {
+                no_smooth: true,
+                ..Default::default()
+            }),
+        );
+        assert!(!smooth.no_smooth);
+        assert!(surface_no_smooth.no_smooth);
+        assert!(texture_no_smooth.no_smooth);
+        assert!(both_no_smooth.no_smooth);
+
+        let surface_backdrop = super::bsp_surface_material(
+            PolyFlags::from_bits(PolyFlags::FAKE_BACKDROP.bits() | PolyFlags::NO_SMOOTH.bits()),
+            None,
+            None,
+        );
+        let texture_backdrop = super::bsp_surface_material(
+            PolyFlags::FAKE_BACKDROP,
+            None,
+            Some(TextureRenderFlags {
+                no_smooth: true,
+                ..Default::default()
+            }),
+        );
+        assert_eq!(surface_backdrop.mode, SurfaceMode::Backdrop);
+        assert_eq!(texture_backdrop.mode, SurfaceMode::Backdrop);
+        assert!(surface_backdrop.no_smooth);
+        assert!(texture_backdrop.no_smooth);
     }
 
     #[test]

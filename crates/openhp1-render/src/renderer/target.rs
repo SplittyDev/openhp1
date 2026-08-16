@@ -8,7 +8,7 @@ pub(super) struct DepthTarget {
 pub(super) struct SampledTarget {
     _texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
-    pub(super) bind_group: wgpu::BindGroup,
+    bind_groups: [wgpu::BindGroup; 2],
     pub(super) depth: DepthTarget,
 }
 
@@ -18,7 +18,7 @@ impl SampledTarget {
         size: [u32; 2],
         format: wgpu::TextureFormat,
         texture_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
+        samplers: [&wgpu::Sampler; 2],
         lightmap_view: &wgpu::TextureView,
         lightmap_sampler: &wgpu::Sampler,
     ) -> Self {
@@ -38,34 +38,40 @@ impl SampledTarget {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("OpenHP1 sampled scene target bind group"),
-            layout: texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(lightmap_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(lightmap_sampler),
-                },
-            ],
+        let bind_groups = samplers.map(|sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("OpenHP1 sampled scene target bind group"),
+                layout: texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(lightmap_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                    },
+                ],
+            })
         });
         Self {
             _texture: texture,
             view,
-            bind_group,
+            bind_groups,
             depth: DepthTarget::new(device, size, false),
         }
+    }
+
+    pub(super) fn bind_group(&self, no_smooth: bool) -> &wgpu::BindGroup {
+        &self.bind_groups[usize::from(no_smooth)]
     }
 }
 

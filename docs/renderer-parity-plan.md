@@ -276,13 +276,19 @@ commit, and live-verification fields for each item.
 - [ ] `BASE-013` Carry effective `bNoSmooth`/polyflag `0x800` into shared
       material state and select point min/mag filtering for that draw. Direct
       evidence: D3D `SetBlending` RVA `0x104b` → VA `0x100092d0`; the state is
-      independent of the mip-chain policy in `BASE-007`. Current gaps:
-      `openhp1-map/src/bsp.rs:44-64` has no named flag and the renderer has one
-      global linear sampler (`renderer.rs:495-502`).
-  - [ ] Deterministic acceptance: effective surface-or-texture NoSmooth selects
-        point min/mag while the default stays linear; prove mip choice remains
-        independently configured. Scan the shipped corpus before naming a live
-        representative.
+      independent of the mip-chain policy in `BASE-007`.
+  - [x] The shared material state ORs the named BSP flag with decoded texture
+        `bNoSmooth`; opaque, blended, backdrop, mirror, and portal batches bind
+        point min/mag only when that effective flag is set. Classic and Modern
+        use the same selection path, while Modern post-processing is unchanged.
+  - [x] Synthetic surface-only, texture-only, neither, and both precedence
+        checks pass; smooth and NoSmooth uses of one texture remain separate
+        batches. Mip filtering remains independently nearest pending `BASE-007`.
+  - [x] A read-only full-map scan found representatives in `Lev3_Intro`,
+        `Lev3_PreDungeon`, `Lev3_PreTroll`, `Lev3_Troll`, `Lev_Tut1`, and
+        `Lev_Tut3b`.
+  - [ ] Compare a representative in retail, Classic, and Modern; keep the
+        parent open until point min/mag is visually accepted.
 - [ ] `BASE-014` Disable hardware back-face culling in both renderers after the
       renderer's CPU/BSP side-admission decision. Direct evidence: D3D `SetRes`
       RVA `0x1064` → VA `0x1000b360` sets `CULLMODE=NONE`, and the shipped DLL

@@ -10,17 +10,20 @@ pub(super) struct DrawBatch {
     pub(super) indices: Range<u32>,
     pub(super) texture: usize,
     pub(super) pipeline: usize,
+    pub(super) no_smooth: bool,
 }
 
 pub(super) struct BackdropBatch {
     pub(super) indices: Range<u32>,
     pub(super) pipeline: usize,
+    pub(super) no_smooth: bool,
 }
 
 pub(super) struct MirrorGeometry {
     pub(super) surface: usize,
     pub(super) indices: Vec<u32>,
     pub(super) pipeline: usize,
+    pub(super) no_smooth: bool,
 }
 
 pub(super) struct BlendedSurface {
@@ -28,10 +31,11 @@ pub(super) struct BlendedSurface {
     center: Vec3,
     texture: usize,
     pipeline: usize,
+    no_smooth: bool,
 }
 
 pub(super) fn backdrop_batches(scene: &RenderScene) -> (Vec<u32>, Vec<BackdropBatch>) {
-    let mut buckets = [Vec::new(), Vec::new()];
+    let mut buckets = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for (triangle, &surface) in scene
         .mesh
         .indices
@@ -42,7 +46,8 @@ pub(super) fn backdrop_batches(scene: &RenderScene) -> (Vec<u32>, Vec<BackdropBa
             continue;
         };
         if material.mode == SurfaceMode::Backdrop {
-            buckets[usize::from(material.two_sided)].extend_from_slice(triangle);
+            buckets[usize::from(material.no_smooth) * 2 + usize::from(material.two_sided)]
+                .extend_from_slice(triangle);
         }
     }
 
@@ -56,7 +61,8 @@ pub(super) fn backdrop_batches(scene: &RenderScene) -> (Vec<u32>, Vec<BackdropBa
         indices.extend(bucket);
         batches.push(BackdropBatch {
             indices: start..indices.len() as u32,
-            pipeline,
+            pipeline: pipeline % 2,
+            no_smooth: pipeline >= 2,
         });
     }
     (indices, batches)
@@ -86,6 +92,7 @@ pub(super) fn mirror_geometries(scene: &RenderScene) -> Vec<MirrorGeometry> {
                 surface,
                 indices,
                 pipeline: usize::from(scene.surface_materials[surface].two_sided),
+                no_smooth: scene.surface_materials[surface].no_smooth,
             })
         })
         .collect()
@@ -95,7 +102,7 @@ pub(super) fn texture_batches(
     scene: &RenderScene,
     fallback_texture: usize,
 ) -> (Vec<u32>, Vec<DrawBatch>) {
-    let mut buckets = vec![Vec::new(); (fallback_texture + 1) * PIPELINES_PER_MODE];
+    let mut buckets = vec![Vec::new(); (fallback_texture + 1) * PIPELINES_PER_MODE * 2];
     for (triangle, surface) in scene
         .mesh
         .indices
@@ -115,7 +122,8 @@ pub(super) fn texture_batches(
             .filter(|index| *index < fallback_texture)
             .unwrap_or(fallback_texture);
         let pipeline = pipeline_index(material);
-        buckets[texture * PIPELINES_PER_MODE + pipeline].extend_from_slice(triangle);
+        buckets[(texture * 2 + usize::from(material.no_smooth)) * PIPELINES_PER_MODE + pipeline]
+            .extend_from_slice(triangle);
     }
 
     let mut indices = Vec::with_capacity(scene.mesh.indices.len());
@@ -128,8 +136,9 @@ pub(super) fn texture_batches(
         indices.extend(source);
         batches.push(DrawBatch {
             indices: start..indices.len() as u32,
-            texture: bucket / PIPELINES_PER_MODE,
+            texture: bucket / PIPELINES_PER_MODE / 2,
             pipeline: bucket % PIPELINES_PER_MODE,
+            no_smooth: bucket / PIPELINES_PER_MODE % 2 != 0,
         });
     }
     (indices, batches)
@@ -184,6 +193,7 @@ pub(super) fn blended_surfaces(
                     .filter(|index| *index < fallback_texture)
                     .unwrap_or(fallback_texture),
                 pipeline: pipeline_index(material),
+                no_smooth: material.no_smooth,
             })
         })
         .collect()
@@ -210,6 +220,7 @@ pub(super) fn sorted_blended_batches(
         if let Some(batch) = batches.last_mut()
             && batch.texture == surface.texture
             && batch.pipeline == surface.pipeline
+            && batch.no_smooth == surface.no_smooth
         {
             batch.indices.end = end;
         } else {
@@ -217,6 +228,7 @@ pub(super) fn sorted_blended_batches(
                 indices: start..end,
                 texture: surface.texture,
                 pipeline: surface.pipeline,
+                no_smooth: surface.no_smooth,
             });
         }
     }

@@ -95,6 +95,7 @@ struct Mirror {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     pipeline: usize,
+    no_smooth: bool,
     target: SampledTarget,
 }
 
@@ -111,6 +112,7 @@ struct WarpPortal {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     pipeline: usize,
+    no_smooth: bool,
     target: SampledTarget,
 }
 
@@ -138,7 +140,7 @@ pub struct Renderer {
     sky_camera_buffer: Option<wgpu::Buffer>,
     sky_camera_bind_group: Option<wgpu::BindGroup>,
     textures: Vec<wgpu::Texture>,
-    texture_bind_groups: Vec<wgpu::BindGroup>,
+    texture_bind_groups: [Vec<wgpu::BindGroup>; 2],
     vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
     opaque_index_buffer: wgpu::Buffer,
@@ -160,7 +162,7 @@ pub struct Renderer {
     sky_zone: Option<openhp1_scene::SkyZone>,
     target_format: wgpu::TextureFormat,
     texture_layout: wgpu::BindGroupLayout,
-    sky_sampler: wgpu::Sampler,
+    sky_samplers: [wgpu::Sampler; 2],
     lightmap_texture: wgpu::Texture,
     lightmap_view: wgpu::TextureView,
     lightmap_rectangles: Vec<AtlasRectangle>,
@@ -614,22 +616,21 @@ impl Renderer {
                 },
             ],
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("OpenHP1 texture sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
+        let texture_samplers = [false, true].map(|no_smooth| {
+            texture_sampler(
+                device,
+                "OpenHP1 texture sampler",
+                wgpu::AddressMode::Repeat,
+                no_smooth,
+            )
         });
-        let sky_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("OpenHP1 sky sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
+        let sky_samplers = [false, true].map(|no_smooth| {
+            texture_sampler(
+                device,
+                "OpenHP1 sky sampler",
+                wgpu::AddressMode::ClampToEdge,
+                no_smooth,
+            )
         });
         let lightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("OpenHP1 lightmap sampler"),
@@ -663,20 +664,22 @@ impl Renderer {
             .chain(std::iter::once(&checkerboard))
             .map(|image| texture(device, queue, "OpenHP1 texture", image))
             .collect::<Vec<_>>();
-        let texture_bind_groups = textures
-            .iter()
-            .map(|texture| {
-                let view = texture.create_view(&Default::default());
-                texture_bind_group(
-                    device,
-                    &texture_layout,
-                    &sampler,
-                    &view,
-                    &lightmap_view,
-                    &lightmap_sampler,
-                )
-            })
-            .collect();
+        let texture_bind_groups = std::array::from_fn(|filter| {
+            textures
+                .iter()
+                .map(|texture| {
+                    let view = texture.create_view(&Default::default());
+                    texture_bind_group(
+                        device,
+                        &texture_layout,
+                        &texture_samplers[filter],
+                        &view,
+                        &lightmap_view,
+                        &lightmap_sampler,
+                    )
+                })
+                .collect()
+        });
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
         let lighting_layout = modern_enabled.then(|| ModernLighting::layout(device));
         let mut bind_group_layouts = vec![Some(&camera_layout), Some(&texture_layout)];
@@ -768,7 +771,7 @@ impl Renderer {
                 viewport_size,
                 scene_format,
                 &texture_layout,
-                &sky_sampler,
+                [&sky_samplers[0], &sky_samplers[1]],
                 &lightmap_view,
                 &lightmap_sampler,
             )
@@ -805,12 +808,13 @@ impl Renderer {
                     index_buffer,
                     index_count: geometry.indices.len() as u32,
                     pipeline: geometry.pipeline,
+                    no_smooth: geometry.no_smooth,
                     target: SampledTarget::new(
                         device,
                         viewport_size,
                         scene_format,
                         &texture_layout,
-                        &sky_sampler,
+                        [&sky_samplers[0], &sky_samplers[1]],
                         &lightmap_view,
                         &lightmap_sampler,
                     ),
@@ -841,12 +845,13 @@ impl Renderer {
                     index_buffer,
                     index_count: indices.len() as u32,
                     pipeline: usize::from(scene.surface_materials[portal.surface].two_sided),
+                    no_smooth: scene.surface_materials[portal.surface].no_smooth,
                     target: SampledTarget::new(
                         device,
                         viewport_size,
                         scene_format,
                         &texture_layout,
-                        &sky_sampler,
+                        [&sky_samplers[0], &sky_samplers[1]],
                         &lightmap_view,
                         &lightmap_sampler,
                     ),
@@ -862,7 +867,7 @@ impl Renderer {
                             viewport_size,
                             scene_format,
                             &texture_layout,
-                            &sky_sampler,
+                            [&sky_samplers[0], &sky_samplers[1]],
                             &lightmap_view,
                             &lightmap_sampler,
                         )
@@ -924,7 +929,7 @@ impl Renderer {
             sky_zone: scene.sky_zone,
             target_format,
             texture_layout,
-            sky_sampler,
+            sky_samplers,
             lightmap_texture,
             lightmap_view,
             lightmap_rectangles: lightmap_atlas.rectangles,
@@ -1146,7 +1151,7 @@ impl Renderer {
                         self.target_format
                     },
                     &self.texture_layout,
-                    &self.sky_sampler,
+                    [&self.sky_samplers[0], &self.sky_samplers[1]],
                     &self.lightmap_view,
                     &self.lightmap_sampler,
                 ));
@@ -1161,7 +1166,7 @@ impl Renderer {
                         self.target_format
                     },
                     &self.texture_layout,
-                    &self.sky_sampler,
+                    [&self.sky_samplers[0], &self.sky_samplers[1]],
                     &self.lightmap_view,
                     &self.lightmap_sampler,
                 );
@@ -1176,7 +1181,7 @@ impl Renderer {
                         self.target_format
                     },
                     &self.texture_layout,
-                    &self.sky_sampler,
+                    [&self.sky_samplers[0], &self.sky_samplers[1]],
                     &self.lightmap_view,
                     &self.lightmap_sampler,
                 );
@@ -1191,7 +1196,7 @@ impl Renderer {
                         self.target_format
                     },
                     &self.texture_layout,
-                    &self.sky_sampler,
+                    [&self.sky_samplers[0], &self.sky_samplers[1]],
                     &self.lightmap_view,
                     &self.lightmap_sampler,
                 );
@@ -1692,13 +1697,13 @@ impl Renderer {
             &self.camera_bind_group,
             &self.blended_index_buffer,
             &blended_batches,
-            self.sky_target.as_ref().map(|target| &target.bind_group),
+            self.sky_target.as_ref(),
             None,
             None,
             ScenePass::Main,
         );
         if let Some(modern) = &self.modern {
-            draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups);
+            draw_calls += modern.draw_scene_effects(&mut pass, &self.texture_bind_groups[0]);
         }
         drop(pass);
         if let Some(modern) = &mut self.modern {
@@ -1732,7 +1737,7 @@ impl Renderer {
         camera_bind_group: &'pass wgpu::BindGroup,
         blended_index_buffer: &'pass wgpu::Buffer,
         blended_batches: &[DrawBatch],
-        backdrop_bind_group: Option<&'pass wgpu::BindGroup>,
+        backdrop_target: Option<&'pass SampledTarget>,
         nested_warp_portal: Option<(&'pass WarpPortal, &'pass SampledTarget)>,
         nested_mirror: Option<&'pass Mirror>,
         scene_pass: ScenePass,
@@ -1751,7 +1756,7 @@ impl Renderer {
         }
         if !self.opaque_batches.is_empty()
             || !blended_batches.is_empty()
-            || (backdrop_bind_group.is_some() && !self.backdrop_batches.is_empty())
+            || (backdrop_target.is_some() && !self.backdrop_batches.is_empty())
             || nested_warp_portal.is_some()
             || nested_mirror.is_some()
             || (matches!(scene_pass, ScenePass::Main) && !self.warp_portals.is_empty())
@@ -1766,7 +1771,7 @@ impl Renderer {
                 .filter(|portal| portal.destination.is_some())
             {
                 pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.set_bind_group(1, &portal.target.bind_group, &[]);
+                pass.set_bind_group(1, portal.target.bind_group(portal.no_smooth), &[]);
                 pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
                 pass.draw_indexed(0..portal.index_count, 0, 0..1);
                 draw_calls += 1;
@@ -1774,14 +1779,14 @@ impl Renderer {
         }
         if let Some((portal, target)) = nested_warp_portal {
             pass.set_index_buffer(portal.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_bind_group(1, &target.bind_group, &[]);
+            pass.set_bind_group(1, target.bind_group(portal.no_smooth), &[]);
             pass.set_pipeline(&self.mirror_pipelines[portal.pipeline]);
             pass.draw_indexed(0..portal.index_count, 0, 0..1);
             draw_calls += 1;
         }
         if let Some(mirror) = nested_mirror {
             pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_bind_group(1, &mirror.target.bind_group, &[]);
+            pass.set_bind_group(1, mirror.target.bind_group(mirror.no_smooth), &[]);
             pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
             pass.draw_indexed(0..mirror.index_count, 0, 0..1);
             draw_calls += 1;
@@ -1793,7 +1798,11 @@ impl Renderer {
             );
             for batch in &self.opaque_batches {
                 pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
+                pass.set_bind_group(
+                    1,
+                    &self.texture_bind_groups[usize::from(batch.no_smooth)][batch.texture],
+                    &[],
+                );
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
             }
@@ -1801,21 +1810,21 @@ impl Renderer {
         if matches!(scene_pass, ScenePass::Main) {
             for mirror in &self.mirrors {
                 pass.set_index_buffer(mirror.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.set_bind_group(1, &mirror.target.bind_group, &[]);
+                pass.set_bind_group(1, mirror.target.bind_group(mirror.no_smooth), &[]);
                 pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
                 pass.draw_indexed(0..mirror.index_count, 0, 0..1);
                 draw_calls += 1;
             }
         }
-        if let Some(backdrop_bind_group) = backdrop_bind_group
+        if let Some(backdrop_target) = backdrop_target
             && !self.backdrop_batches.is_empty()
         {
             pass.set_index_buffer(
                 self.backdrop_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            pass.set_bind_group(1, backdrop_bind_group, &[]);
             for batch in &self.backdrop_batches {
+                pass.set_bind_group(1, backdrop_target.bind_group(batch.no_smooth), &[]);
                 pass.set_pipeline(&self.backdrop_pipelines[batch.pipeline]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
@@ -1825,7 +1834,11 @@ impl Renderer {
             pass.set_index_buffer(blended_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in blended_batches {
                 pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(1, &self.texture_bind_groups[batch.texture], &[]);
+                pass.set_bind_group(
+                    1,
+                    &self.texture_bind_groups[usize::from(batch.no_smooth)][batch.texture],
+                    &[],
+                );
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
             }
@@ -1840,6 +1853,32 @@ fn quantized_flash(flash: [f32; 4]) -> [f32; 4] {
             .round_ties_even()
             .clamp(0.0, 255.0))
             / 255.0
+    })
+}
+
+fn texture_filter(no_smooth: bool) -> wgpu::FilterMode {
+    if no_smooth {
+        wgpu::FilterMode::Nearest
+    } else {
+        wgpu::FilterMode::Linear
+    }
+}
+
+fn texture_sampler(
+    device: &wgpu::Device,
+    label: &'static str,
+    address_mode: wgpu::AddressMode,
+    no_smooth: bool,
+) -> wgpu::Sampler {
+    let filter = texture_filter(no_smooth);
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some(label),
+        address_mode_u: address_mode,
+        address_mode_v: address_mode,
+        mag_filter: filter,
+        min_filter: filter,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
     })
 }
 
@@ -2206,6 +2245,44 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(0, 0, 0..3), (1, 3, 3..6), (2, 0, 6..9)]
         );
+    }
+
+    #[test]
+    fn no_smooth_selects_point_filter_and_separate_batches() {
+        assert_eq!(texture_filter(false), wgpu::FilterMode::Linear);
+        assert_eq!(texture_filter(true), wgpu::FilterMode::Nearest);
+
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..6).collect(),
+                triangle_surfaces: vec![0, 1],
+                ..Default::default()
+            },
+            textures: vec![checkerboard()],
+            lightmaps: vec![],
+            realtime_lightmaps: vec![],
+            coronas: vec![],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    texture: Some(0),
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    texture: Some(0),
+                    no_smooth: true,
+                    ..Default::default()
+                },
+            ],
+            warp_portals: vec![],
+            sky_zone: None,
+        };
+
+        let (_, batches) = texture_batches(&scene, 1);
+        assert_eq!(batches.len(), 2);
+        assert!(!batches[0].no_smooth);
+        assert!(batches[1].no_smooth);
+        assert_eq!(batches[0].texture, batches[1].texture);
+        assert_eq!(batches[0].pipeline, batches[1].pipeline);
     }
 
     #[test]
