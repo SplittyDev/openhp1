@@ -323,6 +323,31 @@ commit, and live-verification fields for each item.
         U/V multiplier case, environment plus Unlit precedence, and identical
         base behavior in Classic and Modern. Live acceptance uses
         `HPBase.spellEcto`; the corpus does not author the fallback cases.
+- [ ] `BASE-016` Preserve retail BSP traversal and dynamic-actor ordering in
+      one backend-neutral submission plan shared by Classic and Modern.
+      Direct Render.dll evidence: effective-list selection `7140-7253`, mirror
+      overlay/fallback save behavior `7662-7895`, list transforms and actor
+      plane interleave `2345-2463`, material-key sorter `2115-2144`, and actor
+      pass split `2874-2905`.
+  - [x] Exact classification is pinned: list 0 mirror overlays are restored to
+        traversal order; ordinary list 1 is sorted by the composite
+        zone/base/auxiliary-texture object key; `flags & 0x47 != 0` list 2
+        remains reverse traversal order. Retail never center-sorts list 2.
+  - [ ] Retain BSP node/save order and per-actor geometry records instead of
+        flattening those boundaries during scene assembly. Preserve the
+        current shared mesh/material data rather than introducing a second
+        renderer representation.
+  - [ ] Build one camera-dependent command plan with the three surface lists,
+        device-path actor insertion points, and traversal-time backdrop,
+        portal, and mirror children; consume it unchanged in both modes.
+        Decals must remain immediately after their owning surface, while
+        coronas remain a distinct post-geometry pass.
+  - [ ] Deterministic acceptance: exact flag/list matrix; traversal reversal
+        and material-key order; alternating BSP-plane actor insertion for
+        mesh, particle, and billboard records; style/opacity split; child-view
+        ordering; and a command-trace/pixel fixture in both modes. Live gates:
+        `Lev2_HogFront` WetWater, `Lev4_Sneak` masked/opacity actors,
+        `Lev5_Chess` opaque baseline, and a corpus-identified Erised map.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
