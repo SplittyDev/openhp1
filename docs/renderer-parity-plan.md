@@ -215,8 +215,16 @@ commit, and live-verification fields for each item.
       `renderer/pipeline.rs:126-134`.
 - [ ] `BASE-005` Select auto-pan rates from the camera-facing BSP node side and
       the actual Level actor fallback. Evidence: `Ghidra_Render.c:6452` and
-      `Ghidra_Engine.c:156900-156911`; current divergence:
+      `Ghidra_Engine.c:156900-156911`; former divergence:
       `openhp1-scene/src/loader.rs:3950-3970,4091-4105`.
+  - [x] Implemented in `08680a5`: each BSP vertex carries its node-plane normal
+        and both node-zone rates; the active render-pass camera selects Zone0
+        or Zone1, with an explicit `Level.Actors(0)` fallback.
+  - [x] Focused opposed-normal and missing-zone regressions, combined
+        map/scene/render nextest (139 passed, 4 skipped), touched-crate check,
+        format, and diff check passed without modifying the copyrighted corpus.
+  - [ ] Compare `Lev2_fire1` in retail, Classic, and Modern; keep the parent open
+        until camera-side switching and authored rates are visually accepted.
 - [ ] `BASE-006` Implement `PF_SmallWavy` time-varying UV motion. Evidence:
       `Ghidra_Render.c:2520`; current shared UV path: `scene.wgsl:86`.
   - [x] Implemented for Classic and Modern in `840976c` with the exact retail
