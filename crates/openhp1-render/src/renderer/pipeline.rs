@@ -155,6 +155,19 @@ pub(super) fn fragment_entry(
     unlit: bool,
     modern: bool,
 ) -> &'static str {
+    if unlit
+        && matches!(
+            mode,
+            SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::AlphaBlended
+        )
+    {
+        return match (modern, masked) {
+            (false, false) => "fragment_unlit_blended",
+            (false, true) => "fragment_unlit_blended_masked",
+            (true, false) => "fragment_modern_unlit_blended",
+            (true, true) => "fragment_modern_unlit_blended_masked",
+        };
+    }
     if modern {
         return match (mode, masked, unlit) {
             (SurfaceMode::Opaque, false, false) => "fragment_modern",

@@ -2128,6 +2128,32 @@ mod tests {
     }
 
     #[test]
+    fn unlit_blended_surfaces_skip_scene_lighting() {
+        for mode in [
+            SurfaceMode::Translucent,
+            SurfaceMode::Modulated,
+            SurfaceMode::AlphaBlended,
+        ] {
+            assert_eq!(
+                fragment_entry(mode, false, true, false),
+                "fragment_unlit_blended"
+            );
+            assert_eq!(
+                fragment_entry(mode, true, true, false),
+                "fragment_unlit_blended_masked"
+            );
+            assert_eq!(
+                fragment_entry(mode, false, true, true),
+                "fragment_modern_unlit_blended"
+            );
+            assert_eq!(
+                fragment_entry(mode, true, true, true),
+                "fragment_modern_unlit_blended_masked"
+            );
+        }
+    }
+
+    #[test]
     fn converts_ue1_screen_brightness_to_display_gamma() {
         assert_eq!(display_gamma(0.5), 1.0);
         assert_eq!(display_gamma(0.625), 0.8);
