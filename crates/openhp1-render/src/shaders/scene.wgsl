@@ -21,6 +21,10 @@ var lightmap_texture: texture_2d<f32>;
 @group(1) @binding(3)
 var lightmap_sampler: sampler;
 
+fn sample_color(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleBias(color_texture, color_sampler, uv, -0.5);
+}
+
 struct RealtimeLightmap {
     ambient: vec4<f32>,
     light_range: vec4<u32>,
@@ -121,13 +125,13 @@ fn vertex_main(
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_lightmap(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_lightmap(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -137,13 +141,13 @@ fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_vertex_light(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_vertex_light(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -153,13 +157,13 @@ fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_lightmap(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_lightmap(input, sample_color(input.texture_coordinates));
     return apply_opacity(input, color);
 }
 
 @fragment
 fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_opacity(input, apply_lightmap(input, texture_color));
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -169,13 +173,13 @@ fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_unlit_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_vertex_light(input, sample_color(input.texture_coordinates));
     return apply_opacity(input, color);
 }
 
 @fragment
 fn fragment_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_opacity(input, apply_vertex_light(input, texture_color));
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -186,7 +190,7 @@ fn fragment_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> 
 @fragment
 fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
-    let color = textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
+    let color = sample_color(input.clip_position.xy / dimensions);
     // The modern composite uses alpha to keep sky pixels out of ambient occlusion.
     return vec4(color.rgb, 0.0);
 }
@@ -194,18 +198,18 @@ fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fragment_mirror(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
-    return textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
+    return sample_color(input.clip_position.xy / dimensions);
 }
 
 @fragment
 fn fragment_modern(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_realtime_light(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_realtime_light(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -215,13 +219,13 @@ fn fragment_modern_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_modern_unlit(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_modern_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_modern_vertex_light(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = apply_modern_vertex_light(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
@@ -231,14 +235,14 @@ fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_realtime_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_realtime_light(input, sample_color(input.texture_coordinates));
     // UE1 clamps the lit source before blending; the modern target does not.
     return clamp(apply_opacity(input, color), vec4(0.0), vec4(1.0));
 }
 
 @fragment
 fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = clamp(
         apply_opacity(input, apply_realtime_light(input, texture_color)),
         vec4(0.0),
@@ -252,13 +256,13 @@ fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32>
 
 @fragment
 fn fragment_modern_unlit_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_modern_vertex_light(input, textureSample(color_texture, color_sampler, input.texture_coordinates));
+    let color = apply_modern_vertex_light(input, sample_color(input.texture_coordinates));
     return clamp(apply_opacity(input, color), vec4(0.0), vec4(1.0));
 }
 
 @fragment
 fn fragment_modern_unlit_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
-    let texture_color = textureSample(color_texture, color_sampler, input.texture_coordinates);
+    let texture_color = sample_color(input.texture_coordinates);
     let color = clamp(
         apply_opacity(input, apply_modern_vertex_light(input, texture_color)),
         vec4(0.0),
@@ -273,7 +277,7 @@ fn fragment_modern_unlit_blended_masked(input: VertexOutput) -> @location(0) vec
 @fragment
 fn fragment_backdrop_modern(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
-    let color = textureSample(color_texture, color_sampler, input.clip_position.xy / dimensions);
+    let color = sample_color(input.clip_position.xy / dimensions);
     return vec4(color.rgb, 0.0);
 }
 

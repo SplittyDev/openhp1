@@ -753,6 +753,7 @@ impl ViewerApp {
         match self.scene.tick_textures(delta_time) {
             Ok(changed)
                 if !self.renderer.update_textures(
+                    &self.state.device,
                     &self.state.queue,
                     &self.scene.render.textures,
                     &changed,

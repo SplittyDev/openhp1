@@ -1,7 +1,5 @@
 use std::mem::size_of;
 
-use wgpu::util::DeviceExt;
-
 use crate::{SurfaceMaterial, SurfaceMode, TextureImage};
 
 use super::{DEPTH_FORMAT, Vertex};
@@ -274,26 +272,91 @@ pub(super) fn texture(
     label: &str,
     image: &TextureImage,
 ) -> wgpu::Texture {
-    device.create_texture_with_data(
-        queue,
-        &wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: image.width,
+            height: image.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: image.mip_level_count(),
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // UE1's fixed-function path modulates palette and lightmap
+        // samples directly in display space.
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    assert!(write_texture_mips(queue, &texture, image));
+    texture
+}
+
+pub(super) fn write_texture_mips(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    image: &TextureImage,
+) -> bool {
+    if texture.width() != image.width
+        || texture.height() != image.height
+        || texture.mip_level_count() != image.mip_level_count()
+        || !valid_mip_chain(image)
+    {
+        return false;
+    }
+    for (level, (width, height, rgba)) in texture_levels(image).enumerate() {
+        let mut destination = texture.as_image_copy();
+        destination.mip_level = level as u32;
+        queue.write_texture(
+            destination,
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // UE1's fixed-function path modulates palette and lightmap
-            // samples directly in display space.
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        &image.rgba,
+        );
+    }
+    true
+}
+
+fn valid_mip_chain(image: &TextureImage) -> bool {
+    if image.width == 0
+        || image.height == 0
+        || image.mip_level_count() > image.width.max(image.height).ilog2() + 1
+    {
+        return false;
+    }
+    texture_levels(image)
+        .enumerate()
+        .all(|(level, (width, height, rgba))| {
+            let expected_width = image.width.checked_shr(level as u32).unwrap_or(0).max(1);
+            let expected_height = image.height.checked_shr(level as u32).unwrap_or(0).max(1);
+            width == expected_width
+                && height == expected_height
+                && usize::try_from(width)
+                    .ok()
+                    .and_then(|width| {
+                        usize::try_from(height)
+                            .ok()
+                            .and_then(|height| width.checked_mul(height))
+                    })
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    == Some(rgba.len())
+        })
+}
+
+fn texture_levels(image: &TextureImage) -> impl Iterator<Item = (u32, u32, &[u8])> {
+    std::iter::once((image.width, image.height, image.rgba.as_slice())).chain(
+        image
+            .mips
+            .iter()
+            .map(|mip| (mip.width, mip.height, mip.rgba.as_slice())),
     )
 }
 
@@ -305,5 +368,37 @@ mod tests {
     fn reflected_view_reverses_the_render_space_front_face() {
         assert!(matches!(front_face(false), wgpu::FrontFace::Cw));
         assert!(matches!(front_face(true), wgpu::FrontFace::Ccw));
+    }
+
+    #[test]
+    fn validates_exact_authored_mip_rows() {
+        let image = TextureImage {
+            width: 8,
+            height: 8,
+            rgba: vec![8; 8 * 8 * 4],
+            mips: [(4, 4), (2, 2), (1, 1)]
+                .map(|(width, height)| openhp1_scene::TextureMipImage {
+                    width,
+                    height,
+                    rgba: vec![width as u8; (width * height * 4) as usize],
+                })
+                .into(),
+        };
+        assert!(valid_mip_chain(&image));
+        assert_eq!(
+            texture_levels(&image)
+                .map(|(width, height, rgba)| (width, height, rgba[0]))
+                .collect::<Vec<_>>(),
+            [(8, 8, 8), (4, 4, 4), (2, 2, 2), (1, 1, 1)]
+        );
+        assert!(valid_mip_chain(&TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+            mips: Vec::new(),
+        }));
+        let mut invalid = image;
+        invalid.mips[0].width = 3;
+        assert!(!valid_mip_chain(&invalid));
     }
 }

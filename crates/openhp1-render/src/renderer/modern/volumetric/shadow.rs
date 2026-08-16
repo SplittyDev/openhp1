@@ -1532,6 +1532,7 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![255, 0, 0, 0],
+            mips: Vec::new(),
         });
 
         let color = shaft_color(&scene, &[0, 1, 2], Some(0));
@@ -1553,6 +1554,7 @@ mod tests {
             width: 5,
             height: 5,
             rgba,
+            mips: Vec::new(),
         });
 
         assert_eq!(
@@ -1633,6 +1635,7 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![255, 255, 255, 255],
+            mips: Vec::new(),
         });
 
         let vertices = shadow_vertices(&scene);
@@ -1666,11 +1669,13 @@ mod tests {
                 width: 1,
                 height: 1,
                 rgba: vec![255, 255, 255, 255],
+                mips: Vec::new(),
             },
             TextureImage {
                 width: 1,
                 height: 1,
                 rgba: vec![0, 0, 0, 255],
+                mips: Vec::new(),
             },
         ]);
 

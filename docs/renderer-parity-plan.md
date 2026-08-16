@@ -323,19 +323,29 @@ commit, and live-verification fields for each item.
         surface, so no authored visual replay exists. Four FireTexture exports
         set the texture property, but DrawFrame tests the raw BSP surface bit;
         synthetic exact-formula coverage is the available acceptance gate.
-- [ ] `BASE-007` Preserve, upload, and sample retail mip chains and LOD choices.
-      Engine evidence: `Ghidra_Engine.c:28739-28755,65770-65777,121084-121092`.
-      Direct D3D device evidence: `InitTextureStageState` RVA `0x10b9` → VA
-      `0x1000adf0` selects NONE/POINT/LINEAR mip filtering and LOD bias `-0.5`;
-      `SetTexture` RVA `0x10e6` → VA `0x10009a80` selects and uploads supported
+- [x] `BASE-007` Preserve, upload, and sample retail mip chains and LOD choices.
+      Engine evidence: [`UTexture::Lock` E:97004-97098](../res/Ghidra_Engine.c#L97004)
+      exposes every retained authored level. Direct D3D device evidence:
+      [`InitTextureStageState` D:3497](../res/Ghidra_D3DDrv.c#L3497) selects
+      NONE/POINT/LINEAR mip filtering and LOD bias `-0.5`;
+      [`SetTexture` D:4039](../res/Ghidra_D3DDrv.c#L4039) uploads all retained
       authored levels. Shipped D3D enables mipmapping and disables trilinear,
       so its default is linear min/mag with point selection between mip levels.
-      Current single-level paths: `openhp1-scene/src/loader.rs:4246` and
-      `openhp1-render/src/renderer.rs:495-502`.
-  - [ ] Deterministic acceptance: retain every valid decoded level, upload the
-        exact dimensions/rows, bind the complete view, select the shipped
-        point-mip policy for Classic, and cover no-mip and trilinear settings
-        independently. Live acceptance uses distant and oblique authored walls.
+  - [x] The shared scene image retains exact RGBA dimensions/rows for every
+        authored level; masked/unmasked copies carry the same chain. Shared GPU
+        creation and generic animation updates write every level for Classic
+        and Modern. Shape-changing AnimNext frames recreate only that texture
+        and its two material bindings. Generated Wet/Fire/Ice frames remain
+        one-level.
+  - [x] Shared base sampling uses linear min/mag, nearest mip selection, and
+        bias `-0.5`; NoSmooth changes only min/mag. Synthetic checks cover an
+        exact 8/4/2/1 chain, one-level input, and animation frames whose lower
+        mips differ.
+  - [x] A read-only full corpus scan found 3,750 textures with mip counts
+        `1:1045, 2:2, 5:2, 6:131, 7:307, 8:951, 9:1293, 10:19` and zero invalid
+        chains.
+  - [ ] Compare distant and oblique authored surfaces in `Lev3_Troll` and
+        `Lev2_HogFront` in retail, Classic, and Modern.
 - [ ] `BASE-013` Carry effective `bNoSmooth`/polyflag `0x800` into shared
       material state and select point min/mag filtering for that draw. Direct
       evidence: D3D `SetBlending` RVA `0x104b` → VA `0x100092d0`; the state is
@@ -346,7 +356,8 @@ commit, and live-verification fields for each item.
         use the same selection path, while Modern post-processing is unchanged.
   - [x] Synthetic surface-only, texture-only, neither, and both precedence
         checks pass; smooth and NoSmooth uses of one texture remain separate
-        batches. Mip filtering remains independently nearest pending `BASE-007`.
+        batches. Mip filtering remains independently nearest as implemented by
+        `BASE-007`.
   - [x] A read-only full-map scan found representatives in `Lev3_Intro`,
         `Lev3_PreDungeon`, `Lev3_PreTroll`, `Lev3_Troll`, `Lev_Tut1`, and
         `Lev_Tut3b`.

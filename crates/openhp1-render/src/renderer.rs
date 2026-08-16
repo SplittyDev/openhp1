@@ -29,7 +29,9 @@ use lighting::ModernLighting;
 use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
-use pipeline::{create_pipeline, create_screen_pipeline, texture, texture_bind_group};
+use pipeline::{
+    create_pipeline, create_screen_pipeline, texture, texture_bind_group, write_texture_mips,
+};
 use target::{DepthTarget, SampledTarget};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -37,6 +39,8 @@ const MAX_WARP_PORTAL_DEPTH: usize = 3;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 32;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
+const TEXTURE_MIP_FILTER: wgpu::MipmapFilterMode = wgpu::MipmapFilterMode::Nearest;
+const CHECKERBOARD_MEMORY_BYTES: usize = 2 * 2 * 4;
 #[cfg(test)]
 const SCENE_SHADER: &str = include_str!("shaders/scene.wgsl");
 
@@ -657,9 +661,9 @@ impl Renderer {
             texture_memory_bytes: scene
                 .textures
                 .iter()
-                .map(|texture| texture.rgba.len())
+                .map(TextureImage::byte_len)
                 .sum::<usize>()
-                + checkerboard.rgba.len(),
+                + CHECKERBOARD_MEMORY_BYTES,
             lightmap_memory_bytes: lightmap_atlas.image.rgba.len(),
         };
         let textures = scene
@@ -1044,6 +1048,7 @@ impl Renderer {
 
     pub fn update_textures(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         images: &[TextureImage],
         changed: &[usize],
@@ -1052,37 +1057,43 @@ impl Renderer {
             return false;
         }
         for &index in changed {
-            let (Some(texture), Some(image)) = (self.textures.get(index), images.get(index)) else {
+            let Some(image) = images.get(index) else {
                 return false;
             };
-            let expected = usize::try_from(image.width)
-                .ok()
-                .and_then(|width| {
-                    usize::try_from(image.height)
-                        .ok()
-                        .and_then(|height| width.checked_mul(height))
-                })
-                .and_then(|pixels| pixels.checked_mul(4));
-            let Some(bytes_per_row) = image.width.checked_mul(4) else {
+            let Some(current) = self.textures.get(index) else {
                 return false;
             };
-            if texture.width() != image.width
-                || texture.height() != image.height
-                || expected != Some(image.rgba.len())
-            {
+            if texture_needs_recreation(
+                current.width(),
+                current.height(),
+                current.mip_level_count(),
+                image,
+            ) {
+                let replacement = texture(device, queue, "OpenHP1 texture", image);
+                let view = replacement.create_view(&Default::default());
+                for (filter, no_smooth) in [false, true].into_iter().enumerate() {
+                    let sampler = texture_sampler(
+                        device,
+                        "OpenHP1 texture sampler",
+                        wgpu::AddressMode::Repeat,
+                        no_smooth,
+                    );
+                    self.texture_bind_groups[filter][index] = texture_bind_group(
+                        device,
+                        &self.texture_layout,
+                        &sampler,
+                        &view,
+                        &self.lightmap_view,
+                        &self.lightmap_sampler,
+                    );
+                }
+                self.textures[index] = replacement;
+            } else if !write_texture_mips(queue, current, image) {
                 return false;
             }
-            queue.write_texture(
-                texture.as_image_copy(),
-                &image.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(image.height),
-                },
-                texture.size(),
-            );
         }
+        self.stats.texture_memory_bytes =
+            images.iter().map(TextureImage::byte_len).sum::<usize>() + CHECKERBOARD_MEMORY_BYTES;
         self.modern
             .as_mut()
             .is_none_or(|modern| modern.update_textures(images, changed))
@@ -1851,6 +1862,15 @@ impl Renderer {
     }
 }
 
+fn texture_needs_recreation(
+    width: u32,
+    height: u32,
+    mip_level_count: u32,
+    image: &TextureImage,
+) -> bool {
+    width != image.width || height != image.height || mip_level_count != image.mip_level_count()
+}
+
 fn quantized_flash(flash: [f32; 4]) -> [f32; 4] {
     flash.map(|component| {
         ((component * 256.0 - 0.5)
@@ -1881,7 +1901,7 @@ fn texture_sampler(
         address_mode_v: address_mode,
         mag_filter: filter,
         min_filter: filter,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        mipmap_filter: TEXTURE_MIP_FILTER,
         ..Default::default()
     })
 }
@@ -1949,6 +1969,7 @@ fn checkerboard() -> TextureImage {
         rgba: vec![
             255, 0, 255, 255, 24, 24, 24, 255, 24, 24, 24, 255, 255, 0, 255, 255,
         ],
+        mips: Vec::new(),
     }
 }
 
@@ -2255,6 +2276,8 @@ mod tests {
     fn no_smooth_selects_point_filter_and_separate_batches() {
         assert_eq!(texture_filter(false), wgpu::FilterMode::Linear);
         assert_eq!(texture_filter(true), wgpu::FilterMode::Nearest);
+        assert_eq!(TEXTURE_MIP_FILTER, wgpu::MipmapFilterMode::Nearest);
+        assert!(SCENE_SHADER.contains("textureSampleBias(color_texture, color_sampler, uv, -0.5)"));
 
         let scene = RenderScene {
             mesh: TriangleMesh {
@@ -2287,6 +2310,24 @@ mod tests {
         assert!(batches[1].no_smooth);
         assert_eq!(batches[0].texture, batches[1].texture);
         assert_eq!(batches[0].pipeline, batches[1].pipeline);
+    }
+
+    #[test]
+    fn animated_texture_shape_changes_select_resource_recreation() {
+        let image = TextureImage {
+            width: 4,
+            height: 4,
+            rgba: vec![0; 4 * 4 * 4],
+            mips: vec![openhp1_scene::TextureMipImage {
+                width: 2,
+                height: 2,
+                rgba: vec![0; 2 * 2 * 4],
+            }],
+        };
+
+        assert!(!texture_needs_recreation(4, 4, 2, &image));
+        assert!(texture_needs_recreation(8, 8, 2, &image));
+        assert!(texture_needs_recreation(4, 4, 1, &image));
     }
 
     #[test]

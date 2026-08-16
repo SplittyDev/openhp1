@@ -751,6 +751,7 @@ mod tests {
                 width: 2,
                 height: 1,
                 rgba: vec![255, 255, 255, 255, 255, 128, 0, 255],
+                mips: Vec::new(),
             }],
             lightmaps: Vec::new(),
             realtime_lightmaps: vec![
@@ -835,6 +836,7 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![255, 0, 0, 255],
+            mips: Vec::new(),
         }];
         let mut colors = HashMap::from([(0, Vec3::ZERO)]);
         assert!(update_source_texture_colors(&mut colors, &textures, &[]));

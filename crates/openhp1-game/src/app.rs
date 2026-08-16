@@ -1387,6 +1387,7 @@ impl Graphics {
         match self.scene.tick_textures(delta_time) {
             Ok(changed)
                 if !self.renderer.update_textures(
+                    &self.device,
                     &self.queue,
                     &self.scene.render.textures,
                     &changed,

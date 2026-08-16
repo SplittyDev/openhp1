@@ -8,6 +8,25 @@ pub struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// Authored levels after mip zero, in descending size order.
+    pub mips: Vec<TextureMipImage>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextureMipImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl TextureImage {
+    pub fn byte_len(&self) -> usize {
+        self.rgba.len() + self.mips.iter().map(|mip| mip.rgba.len()).sum::<usize>()
+    }
+
+    pub fn mip_level_count(&self) -> u32 {
+        u32::try_from(self.mips.len() + 1).unwrap_or(u32::MAX)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

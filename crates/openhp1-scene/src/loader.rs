@@ -1664,9 +1664,7 @@ impl LoadedScene {
                     animation.index_frames[animation.current].clone(),
                 );
                 if let Some(texture) = animation.texture {
-                    self.render.textures[texture]
-                        .rgba
-                        .clone_from(&animation.frames[animation.current]);
+                    self.render.textures[texture].clone_from(&animation.frames[animation.current]);
                     changed.push(texture);
                 }
             }
@@ -2084,7 +2082,7 @@ struct AnimatedIceTexture {
 struct AnimatedGenericTexture {
     id: SceneObjectId,
     texture: Option<usize>,
-    frames: Vec<Vec<u8>>,
+    frames: Vec<TextureImage>,
     index_frames: Vec<Vec<u8>>,
     next: Vec<Option<usize>>,
     current: usize,
@@ -4631,18 +4629,50 @@ impl DecodedTexture {
             .mips
             .first()
             .context("texture has no mip levels")?;
-        Ok(TextureImage {
-            width: mip.width,
-            height: mip.height,
-            rgba: if let Some(water) = &self.water {
-                water.rgba(&self.palette, masked)?
-            } else if let Some(ice) = &self.ice {
-                ice.animation.rgba(&self.palette, masked)?
-            } else {
-                self.texture.rgba(0, &self.palette, masked)?
-            },
-        })
+        if let Some(water) = &self.water {
+            return Ok(TextureImage {
+                width: mip.width,
+                height: mip.height,
+                rgba: water.rgba(&self.palette, masked)?,
+                mips: Vec::new(),
+            });
+        }
+        if let Some(ice) = &self.ice {
+            return Ok(TextureImage {
+                width: mip.width,
+                height: mip.height,
+                rgba: ice.animation.rgba(&self.palette, masked)?,
+                mips: Vec::new(),
+            });
+        }
+        authored_texture_image(&self.texture, &self.palette, masked)
     }
+}
+
+fn authored_texture_image(
+    texture: &Texture,
+    palette: &Palette,
+    masked: bool,
+) -> Result<TextureImage> {
+    let mip = texture.mips.first().context("texture has no mip levels")?;
+    Ok(TextureImage {
+        width: mip.width,
+        height: mip.height,
+        rgba: texture.rgba(0, palette, masked)?,
+        mips: texture
+            .mips
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(index, mip)| {
+                Ok(crate::TextureMipImage {
+                    width: mip.width,
+                    height: mip.height,
+                    rgba: texture.rgba(index, palette, masked)?,
+                })
+            })
+            .collect::<Result<_>>()?,
+    })
 }
 
 fn append_texture_image(
@@ -4699,6 +4729,7 @@ fn append_texture_image(
             Some(index),
             animation,
             masked,
+            decoded.water.is_none() && decoded.ice.is_none(),
         )?);
     }
     Ok(index)
@@ -4729,6 +4760,7 @@ fn register_ice_dependency(
             None,
             generic,
             false,
+            dependency.water.is_none(),
         )?);
     }
     Ok(())
@@ -4739,12 +4771,19 @@ fn animated_generic_texture(
     texture: Option<usize>,
     animation: &GenericTextureAnimation,
     masked: bool,
+    mipmapped: bool,
 ) -> Result<AnimatedGenericTexture> {
     let frames = animation
         .frames
         .iter()
-        .map(|(texture, palette)| texture.rgba(0, palette, masked))
-        .collect::<openhp1_texture::Result<Vec<_>>>()?;
+        .map(|(texture, palette)| {
+            let mut image = authored_texture_image(texture, palette, masked)?;
+            if !mipmapped {
+                image.mips.clear();
+            }
+            Ok(image)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let index_frames = animation
         .frames
         .iter()
@@ -4841,12 +4880,79 @@ mod tests {
         ScriptRuntime, WeaponAttachment,
     };
     use openhp1_texture::{
-        Color, IcePanningStyle, IceTexture, IceTimeMethod, Palette, TextureRenderFlags,
+        Color, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Palette, Texture,
+        TextureRenderFlags,
     };
 
     use crate::SurfaceMode;
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn decoded_texture_preserves_exact_authored_mip_chain() {
+        let dimensions = [(8, 8), (4, 4), (2, 2), (1, 1)];
+        let decoded = super::DecodedTexture {
+            id: crate::SceneObjectId {
+                package: "mip-test".to_owned(),
+                export_index: 0,
+            },
+            texture: Texture {
+                palette: ObjectReference::None,
+                anim_next: ObjectReference::None,
+                prime_count: 0,
+                min_frame_rate: 0.0,
+                max_frame_rate: 0.0,
+                draw_scale: 1.0,
+                declared_width: Some(8),
+                declared_height: Some(8),
+                render_flags: TextureRenderFlags::default(),
+                mips: dimensions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &(width, height))| MipLevel {
+                        width,
+                        height,
+                        width_bits: width.ilog2() as u8,
+                        height_bits: height.ilog2() as u8,
+                        indices: vec![index as u8; (width * height) as usize],
+                    })
+                    .collect(),
+                wet: None,
+                ice: None,
+            },
+            palette: Palette {
+                colors: (0..4)
+                    .map(|index| Color {
+                        red: index,
+                        green: index + 10,
+                        blue: index + 20,
+                        alpha: 0,
+                    })
+                    .collect(),
+            },
+            water: None,
+            ice: None,
+            generic: None,
+        };
+
+        let image = decoded.image(false).unwrap();
+        assert_eq!(
+            (image.width, image.height, image.rgba[..4].to_vec()),
+            (8, 8, vec![0, 10, 20, 255])
+        );
+        assert_eq!(
+            image
+                .mips
+                .iter()
+                .map(|mip| (mip.width, mip.height, mip.rgba[..4].to_vec()))
+                .collect::<Vec<_>>(),
+            [
+                (4, 4, vec![1, 11, 21, 255]),
+                (2, 2, vec![2, 12, 22, 255]),
+                (1, 1, vec![3, 13, 23, 255]),
+            ]
+        );
+    }
 
     #[test]
     fn generic_texture_with_zero_maximum_advances_once_per_tick() {
@@ -4928,6 +5034,7 @@ mod tests {
             width: 1,
             height: 1,
             rgba: vec![0; 4],
+            mips: Vec::new(),
         });
         scene
             .water_animations
@@ -4937,6 +5044,38 @@ mod tests {
         assert!(scene.animations.is_empty());
         assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
         assert_eq!(scene.render.textures[0].rgba, [1; 4]);
+    }
+
+    #[test]
+    fn generic_texture_tick_replaces_every_authored_mip() {
+        let mut scene = particle_test_scene();
+        scene.render.textures.push(crate::TextureImage {
+            width: 2,
+            height: 2,
+            rgba: vec![0; 16],
+            mips: vec![crate::TextureMipImage {
+                width: 1,
+                height: 1,
+                rgba: vec![10; 4],
+            }],
+        });
+        let mut animation = generic_texture(vec![Some(1), Some(0)], 0, 0.0, 0.0);
+        animation.frames[0] = scene.render.textures[0].clone();
+        animation.frames[1] = crate::TextureImage {
+            width: 2,
+            height: 2,
+            rgba: vec![1; 16],
+            mips: vec![crate::TextureMipImage {
+                width: 1,
+                height: 1,
+                rgba: vec![11; 4],
+            }],
+        };
+        scene.water_animations.generic.push(animation);
+
+        assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
+        assert_eq!(scene.render.textures[0].rgba, [1; 16]);
+        assert_eq!(scene.render.textures[0].mips[0].rgba, [11; 4]);
     }
 
     #[test]
@@ -4965,6 +5104,7 @@ mod tests {
             width: 8,
             height: 8,
             rgba: vec![0; 8 * 8 * 4],
+            mips: Vec::new(),
         });
         let source = crate::SceneObjectId {
             package: "test".to_owned(),
@@ -5963,7 +6103,14 @@ mod tests {
                 export_index: 0,
             },
             texture: Some(0),
-            frames: (0..next.len()).map(|index| vec![index as u8; 4]).collect(),
+            frames: (0..next.len())
+                .map(|index| crate::TextureImage {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![index as u8; 4],
+                    mips: Vec::new(),
+                })
+                .collect(),
             index_frames: (0..next.len()).map(|index| vec![index as u8; 1]).collect(),
             next,
             current: 0,

@@ -9,9 +9,10 @@ on world BSP geometry.
 2. `openhp1-map` follows the `Level` export's world-model reference.
 3. `openhp1-package::PackageStore` discovers packages through the original
    `[Core.System] Paths` and resolves grouped imports case-insensitively.
-4. `openhp1-texture` expands the first P8 mip and its palette to RGBA8.
-   Water-backed `WetTexture` exports retain simulation state; `FireTexture`
-   exports currently produce static preview frames.
+4. `openhp1-texture` expands every authored P8 mip and its palette to RGBA8.
+   `openhp1-scene` retains that exact chain for Classic and Modern; generated
+   Wet, Fire, and Ice frames remain single-level. AnimNext frames may replace
+   the GPU texture when their authored chain shape changes.
 5. `Model::triangulate` emits node-local vertices with raw UE texture
    and lightmap coordinates.
 6. `openhp1-map` reconstructs Classic lightmap images and separately preserves
@@ -382,7 +383,9 @@ that single recursive branch.
 Surfaces carrying UE1's `PF_Unlit` flag bypass lightmap multiplication. This
 matters for sky-box cube faces.
 
-The renderer still uses only the first mip and does not cull by zones. Visible
+Base textures use every authored mip with linear min/mag filtering, point mip
+selection, and the shipped D3D `-0.5` LOD bias; `bNoSmooth` changes only
+min/mag to point. The renderer does not cull by zones. Visible
 vertex- and skeletal-mesh actors are decoded, lit, rendered, and can play
 serialized or runtime-selected animation sequences. Their transforms use
 HP1's upward-positive pitch, so their visual forward axis matches runtime
