@@ -257,28 +257,77 @@ commit, and live-verification fields for each item.
         `Hub5_Devils.ground.devilfloor1_128` loop advances and wraps at its
         authored 20/20 rate; retail/Classic/Modern replay in `Lev5_Snare` and
         `Lev2_Inc_A`.
-- [ ] `BASE-009` Implement exact shipped FireTexture and IceTexture procedural
-      animation through the same changed-texture upload seam. Direct ownership
-      evidence is in shipped `Fire.dll`, not Engine.dll or Render.dll.
-  - [ ] Decompile `UFireTexture::ConstantTimeTick` (RVA `0x82c0`) and its
-        reachable spark movement/redraw helpers. Do not promote the current
-        32-step static Fire snapshot to runtime behavior: its formula is not
-        proven by the audited Engine/Render sources.
-  - [ ] Decompile `UIceTexture::MoveIcePosition` (`0x5b40`), `BlitTexIce`
-        (`0x5e90`), `BlitIceTex` (`0x6210`), `ConstantTimeTick` (`0xa340`),
-        `Tick` (`0xa4b0`), `RenderIce` (`0xa600`), `Lock` (`0xe560`), and their
-        reachable helpers before implementing source/glass compositing,
-        panning, displacement, timing, or cache behavior.
-  - [ ] Preserve direct/inferred boundaries: Fire's ConstantTimeTick override
-        appears to use Engine's generic pacing, while Ice's Tick,
-        ConstantTimeTick, and Lock overrides prove additional hook ownership
-        but not the native formulas.
-  - [ ] Acceptance: exact recovered-state unit tests and incremental-upload
-        coverage; Fire comparisons using `Furnace` in `Lev5_Final`,
-        `ancflame1` in `Lev5_fluffy`, `lumos1` in `Lev3_DungeonB`, and
-        `owlstand1` in `Lev_Tut1`; Ice comparisons using the Snitch/Bludger
-        halos selected by shipped class defaults in `Lev2_Quid1`,
-        `Lev3_Quid2`, and representative `Quid_*` maps.
+- [ ] `BASE-009A` Implement exact shipped IceTexture animation through the
+      changed-texture upload seam as a focused feature/commit before Fire.
+      Direct `Fire.dll` evidence is complete for `MoveIcePosition`
+      (`0x10505b40-0x10505e4a`), `BlitTexIce` (`0x10505e90-0x10506120`),
+      `BlitIceTex` (`0x10506210-0x1050643b`), `ConstantTimeTick`
+      (`0x1050a340-0x1050a478`), `Tick` (`0x1050a4b0-0x1050a5c3`),
+      `RenderIce` (`0x1050a600-0x1050a6f5`), and `Lock`
+      (`0x1050e560-0x1050e5fc`).
+  - [ ] Preserve the recovered layout from `GlassTexture/SourceTexture` at
+        `0xd8/0xdc` through `ForceRefresh` at `0x118`, including cached prior
+        references/positions and the `LocalSource` blit guard.
+  - [ ] Implement movement exactly: `MasterCount += 120*dt`,
+        `UDisplace -= 2*signed(HorizPanSpeed-128)*dt`, and
+        `VDisplace += 2*signed(VertPanSpeed-128)*dt`; apply Linear, Circular,
+        Gestation, WavyX, and WavyY using `(Frequency+1)*MasterCount`, amplitude
+        `Amplitude+1`, `.0012` sine/cosine frequency (`.0011` only for
+        Gestation V), half amplitude for WavyX/Y, and nearest-integer positions.
+        Frame-rate-sync uses Engine's base tick plus an exact `1/120` native
+        step; the other time method consumes frame `dt`.
+  - [ ] For power-of-two masks and rounded `u/v`, implement `MoveIce=0` as
+        `D(x,y)=Source((x+u+Glass(x,y))&UMask,(y+v)&VMask)` and `MoveIce=1` as
+        `D(x,y)=Source((x+Glass((x+u)&UMask,(y+v)&VMask))&UMask,y)`. Preserve
+        unsigned glass samples, unchanged-state suppression, forced refresh,
+        source/glass replacement, and the recovered dependency lock/unlock
+        calls. Their virtual/device internals remain unresolved but do not
+        change the proved pixel equations.
+  - [ ] Acceptance: use an 8x8 `S(x,y)=8y+x`, `G(x,y)=x`, `u=1,v=2` fixture
+        for both blits; prove a `1/120` step at speeds `129/127` produces
+        master `+1` and U/V displacement `-1/60`; cover every panning/time
+        mode, cache/force/local-source/lock behavior, and incremental upload.
+        Compare `HP_Dungeon.doors.SlydoorICE` (linear 128/100, frequency 11,
+        amplitude 44), `HP_FX.Snitch_Halo` (circular 128/128, frequency 20,
+        amplitude 95), `BlueFog_01`, and `GreenFog`; replay halo users in
+        `Lev2_Quid1`, `Lev3_Quid2`, and representative `Quid_*` maps.
+- [ ] `BASE-009B` Implement exact shipped FireTexture animation as a separate
+      feature/commit after Ice. Direct evidence covers `ConstantTimeTick`
+      (`0x105082c0-0x105083d5`), `AddSpark` (`0x10501130-0x1050196f`),
+      close/delete/line/paint/movement/flash helpers (`0x10501a00-0x105025db`),
+      all of `RedrawSparks` (`0x105025e0-0x105058a3`), and `PostDrawSparks`
+      (`0x10505960-0x105059e3`). Do not retain or promote the current unproved
+      32-step warm-up.
+  - [ ] Preserve the `0x50c` object layout and exact eight-byte spark records.
+        Implement all 29 public `ESpark` values and all internal spawned types,
+        covering the complete 44-case `RedrawSparks` switch (`0x00..0x2b`);
+        shipped-asset subsets or placeholder cases are not acceptable.
+  - [ ] Rebuild all 1,028 render-table entries as
+        `clamp(round-to-nearest-even(i/4 + 1 - (255-RenderHeat)/16),0,255)`.
+        Apply wrapped non-rising samples `(x,y),(x+1,y),(x-1,y+1),(x,y+1)`;
+        for rising, shift the rows to `y+1,y+2`. Pentium/non-Pentium branches
+        are optimized equivalents and need only one exact scalar result.
+  - [ ] Reproduce RNG state rather than substituting a new generator: seed the
+        512-byte table from low bytes of 512 Core `appRand()` results, read a
+        little-endian word at `(index+0x80)&0xfc`, advance by four modulo
+        `0x100`, XOR the returned source word into the new table slot, and
+        retain the index/table across ticks. Permit injected initial state for
+        tests because retail's first bytes depend on process-global Core RNG
+        history.
+  - [ ] Preserve redraw mutation order: reload `NumSparks` so appended sparks
+        can execute in the same tick; swap removal causes the replacement to
+        wait until the next tick. Preserve Manhattan proximity deletion,
+        Bresenham's excluded final endpoint, and star restoration only when the
+        saved destination value is below 38.
+  - [ ] Acceptance: exhaustive render-table comparison; wrapped 8x8 filters in
+        both rising modes; injected RNG table/index sequence; per-case state
+        transitions for all 44 cases, including append/delete order; line and
+        star boundary tests; changed-texture upload. Compare `FireEng.Fire1`
+        and `Torch1`, `HP_FX.General.Furnace` and `Star`, and
+        `GreatFire.ancflame1`; replay direct imports in `Lev5_Final`,
+        `Lev5_fluffy`, `Lev3_DungeonB`, and `Lev_Tut1` in retail, Classic, and
+        Modern. Remaining blockers are only the semantic name of the client
+        `+0x54` tick-suppression field and retail-exact initial Core RNG state.
 - [ ] `CLASSIC-002` Re-evaluate Classic actor and world lighting when actors or
       lights move and when live light properties change. Evidence:
       `Ghidra_Render.c:1938-2013,22100-22606`; current partial projection:
@@ -292,16 +341,71 @@ commit, and live-verification fields for each item.
       distance-detail behavior instead of always rendering maximum detail.
       Evidence: `Ghidra_Render.c:10130-10134,31283-31361`; discarded fields:
       `openhp1-mesh/src/geometry.rs:71-125`.
+- [ ] `BASE-012` Implement original viewport screen flashes/fades through one
+      local-player runtime-to-render path shared by Classic and Modern, after
+      pinning the remaining native scheduling evidence. Direct evidence is the
+      compiled `Engine.u` `PlayerPawn` bytecode (`ClientFlash` export 4319,
+      `ClientInstantFlash` 3485, `ClientFadeIn` 4280, `ClientFadeOut` 3466,
+      `SetViewFlash` 3402, and `ViewFlash` 4100), Engine draw/config handling at
+      `Ghidra_Engine.c:117664-117768,121781-121788`, and shipped
+      `D3DDrv.dll` `EndFlash` RVA `0x1087` -> VA `0x10008be0` (SHA-256
+      `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`).
+  - [ ] First pin the native Engine call site, frequency, and ordering for
+        `APlayerPawn::eventViewFlash`; `Ghidra_Engine.c:103234-103250` proves
+        the wrapper and delta parameter but not when Engine invokes it. Do not
+        mark runtime cadence implementation-ready or simply assume placement
+        beside `PlayerTick` until this xref is recovered.
+  - [ ] Keep native `InterpolationManager` flash ownership unresolved. Its
+        shipped `SetStartParameters`/`UpdateCamera` script exports 3646/3650
+        contain only `Return; Nothing`; therefore embedded source mentioning
+        `FlashScale`, `DesiredFlashScale`, `ScreenFlashScale`, or
+        `ScreenFlashFog` is inactive and must not drive implementation. Resolve
+        the native writes before adding interpolation-point flash behavior.
+  - [ ] Reproduce the proved `PlayerPawn` plane state exactly: client writers
+        scale authored RGB by `.001`; `ViewFlash` caps delta at `.1`, advances
+        and clamps fade W to `[-1,0]`, combines desired/constant/zone fog with
+        one added to W, decays desired by `2d`, interpolates by `10d`, clears
+        instant fog each update, and applies the `.981` W and `.019` RGB snaps.
+        Treat `FlashFog.W` as the effective scale; a separate active
+        `FlashScale` property is not proved in this build.
+  - [ ] At the narrow shared seam, expose the owning local player's resulting
+        scale/fog through `PlayerView`, pass it to `Renderer::render`, and draw
+        one fullscreen pass after Classic output or Modern final composite/AA
+        but before game UI/egui. Match D3D's saturated
+        `fog + scene*clamp(scale,0,1)` equation using source `ONE`, destination
+        `SRC_ALPHA`, including its clamped 8-bit diffuse-color quantization.
+        Do not add per-actor scene state or duplicate backend-specific effects.
+  - [ ] Parse `WindowsClient.ScreenFlashes` with shipped default true. False
+        supplies identity (`scale=1`, zero fog) at draw time while runtime flash
+        state continues to advance; it must not reset the player properties.
+  - [ ] Deterministic acceptance: synthetic tests for client writers, delta cap,
+        desired decay, instant reset, fade clamps/rate clearing, snap thresholds,
+        and one dispatch per proved native cadence; config-disabled identity
+        without state destruction; 1x1/pure blend cases for identity, black,
+        fractional scale plus fog and saturation; and structural coverage that
+        both Classic and Modern use the same pass before UI. No copyrighted
+        package is required by public tests.
+  - [ ] Live acceptance: compare the two authored `ViewFlash` triggers in
+        `Lev2_fire1`; the repeated red flashes and `fadeout 2.0` in `Lev5_Final`;
+        HUD/console exclusion; `ScreenFlashes` true/false; and matching event
+        timing in retail, Classic, and Modern, including a hitch that exercises
+        the `.1` delta cap. `Lev3_Lumos` provides additional TriggeredViewFlash
+        coverage.
 
 ### Evidence still required
 
 - [ ] Audit the original render-device DLL before claiming exact sampler,
       `bNoSmooth`, mip-bias, 16-bit dithering, texture-cache, or fixed-function
       raster-precision parity; Render.dll delegates those operations.
-- [ ] Complete the cited shipped `Fire.dll` decompilation for exact
-      FireTexture/IceTexture simulation,
-      special-lit actors, lens flares, Fatness/Wideness, specular glow, and
-      runtime LOD bias before implementing them.
+- [x] Decompile shipped `Fire.dll` far enough to recover implementation-ready
+      FireTexture and IceTexture simulation; the exact native addresses,
+      formulas, state, ordering, and narrow unresolved hooks are recorded in
+      `BASE-009A/B` and the renderer audit. This does not resolve unrelated
+      special-lit actors, lens flares, Fatness/Wideness, specular glow, or
+      runtime LOD bias.
+- [ ] Recover the remaining unrelated native owners for special-lit actors,
+      lens flares, Fatness/Wideness, specular glow, and runtime LOD bias before
+      implementing those features.
 - [ ] Establish exact translucent span ordering and mirror/warp recursion
       termination with targeted retail traces where static evidence is
       insufficient.
