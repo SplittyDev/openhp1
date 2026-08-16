@@ -255,6 +255,15 @@ shipped D3D defaults disable detail textures. Macro remains an independent
 full-surface pass. `BASE-018` tracks serialized-property correlation, corpus
 reachability, shared implementation, and live validation.
 
+A read-only scan of 3,751 exports whose class name ends in `Texture`, including
+the one unsupported `WaveTexture`, found 24 non-null
+`DetailTexture` properties: 11 in `FractalFX.utx`, 12 in `Liquids.utx`, and the
+`HP_C.Detail.Sec_mes` self-reference. No texture has a non-null `MacroTexture`.
+No other shipped package—including all 41 maps—imports any of those 24 owning
+textures, so neither attachment has a shipped live representative. This proves
+the serialized property names and absence of caller reachability; synthetic
+coverage remains necessary for the original device capability.
+
 ## Lighting and volumetrics
 
 | Done | Feature / behavior | Primary evidence | Observable semantics | Classic | Modern | Verification |

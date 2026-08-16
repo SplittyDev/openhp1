@@ -459,9 +459,16 @@ commit, and live-verification fields for each item.
   - [x] Detail is suppressed when the device detail capability is disabled or
         a FogMap is also attached; shipped D3D defaults disable
         `DetailTextures`, so its default visible path does not draw this pass.
-  - [ ] Decode and census the texture-owned macro/detail object references,
-        establish shipped non-null representatives, then implement the shared
+  - [x] A read-only scan of 3,751 exports whose class name ends in `Texture`
+        (including the one unsupported `WaveTexture`) found 24 non-null
+        `DetailTexture` properties: 11 in `FractalFX.utx`, one self-reference
+        in `HP_C.utx`, and 12 in `Liquids.utx`. It found no non-null
+        `MacroTexture`, and no other shipped package or map imports any of the
+        24 owning textures; there is therefore no shipped live representative.
+  - [ ] Decode and preserve both object references, then implement the shared
         attachments without coupling either one to FogMap or Modern effects.
+        Use synthetic pass-order/band checks because the shipped corpus cannot
+        provide a live gate; retain the D3D default-disabled policy separately.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
