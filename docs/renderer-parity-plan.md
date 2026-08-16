@@ -371,7 +371,9 @@ commit, and live-verification fields for each item.
         leaves occlusion in retail, Classic, and Modern. The 2026-08-16
         gameplay capture shows the old Modern `LessEqual` billboard abruptly
         toggling on a stationary chandelier while its mesh and baked lighting
-        remain stable; replay that same stair movement after this change.
+        remain stable. The same OpenHP1 stair replay no longer pops after the
+        shared corona cache and the invalid Invisible-depth submission were
+        corrected; retail comparison and moving-brush occlusion remain open.
 - [ ] `MOD-002` Keep authored corona sprites when Modern volumetric enhancements
       are enabled. Evidence: independent retail sprite and volumetric paths at
       `Ghidra_Render.c:5819-5858,13034-13266`; current divergence:
@@ -717,19 +719,24 @@ commit, and live-verification fields for each item.
         Translucent, Modulated, or AlphaBlend bit remains omitted because the
         native path is both color-neutral and non-depth-writing. Actor-hidden
         materials remain unchanged.
-  - [x] Submit the shared depth-only batch in the existing post-opaque special
-        surface schedule with `LessEqual`, depth writes, and no color-channel
-        writes in both pipelines. Preserve independent root-texture portal
-        provenance and warp child classification; macro/detail passes remain
-        disabled. Exact list-2 reverse traversal and span consumption remain
-        assigned to `BASE-016`.
+  - [ ] Submit the shared depth-only batch only after the renderer has retail's
+        `OccludeBsp` span/frustum admission. The decoded `DepthOnly` material and
+        exact Classic/Modern pipeline state remain available, but the shared
+        planner deliberately skips it meanwhile. Submitting all serialized BSP
+        nodes made invisible partition planes contaminate depth after opaque
+        actors and before translucent actors/effects.
   - [x] Synthetic acceptance covers the surface/texture flag matrix, Masked,
-        portal provenance, batching, auxiliary suppression, and exact Classic
-        and Modern pipeline state. A read-only full-map scan found 1,277
-        node-referenced Invisible surfaces across 3,469 nodes.
-  - [ ] Live gate: compare a fixed Invisible BSP occlusion view in `Lev_Tut1`
-        between retail, Classic, and Modern, including a Masked representative
-        if the corpus supplies one.
+        portal provenance, auxiliary suppression, exact Classic/Modern pipeline
+        state, and the current safe planner deferral. A read-only full-map scan
+        found 1,277 node-referenced Invisible surfaces across 3,469 nodes.
+  - [x] Regression gate: commit `934cb09` submitted every decoded Invisible
+        polygon without span admission. In `Lev_Tut1`, moving across a BSP side
+        made coronas, translucent ghosts, and Modern depth-dependent effects pop
+        in and out. The shared planner now defers these draws; retain this live
+        replay while implementing the exact visibility prerequisite.
+  - [ ] Live gate after exact admission: compare a fixed Invisible BSP occlusion
+        view in `Lev_Tut1` between retail, Classic, and Modern, including a
+        Masked representative if the corpus supplies one.
 - [ ] `BASE-023` Implement exact `SHOT` framebuffer capture as its own feature
       commit. Retain the previous completed logical viewport including flash
       and Canvas/UI but before Classic display gamma, reproduce `ReadPixels`

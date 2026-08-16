@@ -119,12 +119,12 @@ impl SubmissionGeometry {
                 children.push(SpecialRecord::Portal(record));
             } else if material.mirror {
                 list0.push(record);
-            } else if material.mode == SurfaceMode::Hidden {
+            } else if matches!(material.mode, SurfaceMode::Hidden | SurfaceMode::DepthOnly) {
                 continue;
             } else if material.masked
                 || matches!(
                     material.mode,
-                    SurfaceMode::Translucent | SurfaceMode::Modulated | SurfaceMode::DepthOnly
+                    SurfaceMode::Translucent | SurfaceMode::Modulated
                 )
             {
                 list2.push(record);
@@ -663,6 +663,58 @@ mod tests {
             }
         )));
         assert_eq!(plan.indices.len(), 6);
+    }
+
+    #[test]
+    fn defers_invisible_depth_until_bsp_visibility_is_available() {
+        let geometry = geometry(
+            scene(
+                0..9,
+                vec![0, 1, 2],
+                vec![0],
+                vec![node(-1, -1, -1)],
+                vec![
+                    ActorSubmission {
+                        actor_index: 7,
+                        indices: 3..6,
+                        translucent_pass: false,
+                    },
+                    ActorSubmission {
+                        actor_index: 8,
+                        indices: 6..9,
+                        translucent_pass: true,
+                    },
+                ],
+                vec![
+                    SurfaceMaterial {
+                        mode: SurfaceMode::DepthOnly,
+                        ..Default::default()
+                    },
+                    SurfaceMaterial::default(),
+                    SurfaceMaterial {
+                        mode: SurfaceMode::Translucent,
+                        ..Default::default()
+                    },
+                ],
+            ),
+            vec![0, 1, 2],
+        );
+        let plan = geometry.plan(Vec3::ZERO, &[binding(0), binding(1), binding(2)]);
+
+        assert_eq!(plan.indices, [3, 4, 5, 6, 7, 8]);
+        assert_eq!(
+            plan.commands
+                .iter()
+                .filter_map(|command| match command {
+                    SubmissionCommand::Geometry { source, .. } => Some(*source),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [
+                GeometrySource::Actor { actor_index: 7 },
+                GeometrySource::Actor { actor_index: 8 }
+            ]
+        );
     }
 
     #[test]

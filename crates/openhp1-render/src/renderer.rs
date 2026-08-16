@@ -2683,7 +2683,7 @@ mod tests {
     }
 
     #[test]
-    fn depth_only_surfaces_follow_opaque_in_the_special_schedule() {
+    fn depth_only_pipeline_state_remains_available_while_submission_is_deferred() {
         let material = SurfaceMaterial {
             mode: SurfaceMode::DepthOnly,
             masked: true,
