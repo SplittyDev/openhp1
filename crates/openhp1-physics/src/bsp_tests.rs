@@ -1,5 +1,5 @@
 use glam::{Mat3, Vec3};
-use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds};
+use openhp1_map::{BspNode, BspSurface, BspVertex, Model, PolyFlags, PrimitiveBounds, Zone};
 use openhp1_package::ObjectReference;
 
 use super::*;
@@ -13,6 +13,48 @@ fn hull_clip_bounds_match_native_axis_bias() {
 
     assert_eq!(bounds.minimum, Vec3::new(-10.1, -20.1, -30.1));
     assert_eq!(bounds.maximum, Vec3::new(9.9, 19.9, 30.1));
+}
+
+#[test]
+fn point_region_uses_back_and_front_terminal_leaf_slots() {
+    let mut model = empty_model();
+    model.nodes.push(BspNode {
+        plane: [1.0, 0.0, 0.0, 0.0],
+        zone_mask: 0,
+        flags: 0,
+        vertex_pool: 0,
+        surface: 0,
+        back: -1,
+        front: -1,
+        coplanar: -1,
+        collision_bound: -1,
+        render_bound: -1,
+        zones: [0, 1],
+        vertex_count: 0,
+        leaves: [3, 7],
+    });
+    model.zones = vec![
+        Zone {
+            actor: ObjectReference::None,
+            connectivity: 0,
+            visibility: 0,
+        },
+        Zone {
+            actor: ObjectReference::None,
+            connectivity: 0,
+            visibility: 0,
+        },
+    ];
+    let collision = BspCollision::from_model(&model).unwrap();
+
+    assert_eq!(
+        collision.point_region(-Vec3::X),
+        Some(BspPointRegion { leaf: 3, zone: 0 })
+    );
+    assert_eq!(
+        collision.point_region(Vec3::X),
+        Some(BspPointRegion { leaf: 7, zone: 1 })
+    );
 }
 
 #[test]

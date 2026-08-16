@@ -286,7 +286,7 @@ pub fn bsp_sphere_leaves(nodes: &[crate::BspNode], center: Vec3, radius: f32) ->
             let child = if front { node.front } else { node.back };
             if let Ok(child) = usize::try_from(child) {
                 visit(nodes, child, center, radius, leaves);
-            } else if let Ok(leaf) = usize::try_from(node.leaves[usize::from(!front)])
+            } else if let Ok(leaf) = usize::try_from(node.leaves[usize::from(front)])
                 && !leaves.contains(&leaf)
             {
                 leaves.push(leaf);
@@ -418,9 +418,9 @@ mod tests {
         };
         assert_eq!(
             bsp_sphere_leaves(&[node.clone()], Vec3::X * 2.0, 1.0),
-            vec![3]
+            vec![7]
         );
-        assert_eq!(bsp_sphere_leaves(&[node], Vec3::ZERO, 1.0), vec![7, 3]);
+        assert_eq!(bsp_sphere_leaves(&[node], Vec3::ZERO, 1.0), vec![3, 7]);
     }
 
     #[test]

@@ -879,8 +879,8 @@ impl BspCollision {
             {
                 node_index = back;
             } else {
-                let index = usize::from(side < 0.0);
-                let zone = usize::try_from(node.zones[1 - index]).ok()?;
+                let index = usize::from(side >= 0.0);
+                let zone = usize::try_from(node.zones[index]).ok()?;
                 return (zone < self.zone_actors.len()).then_some(BspPointRegion {
                     leaf: node.leaves[index],
                     zone,
