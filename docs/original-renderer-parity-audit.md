@@ -243,6 +243,18 @@ and `output/engine_texture_vtable.txt`
 The retained virtual addresses refer to that exact `Fire.dll`; supplemental
 generated `/private/tmp` files are intentionally not linked or committed.
 
+The durable D3D decompilation also closes the previously unresolved detail
+band constants. `DrawComplexSurface` runs exactly three detail iterations from
+eye Z `380`; after each iteration it multiplies the threshold by `0.23679848`
+and the coordinate fade multiplier by `4.223`. Included vertices receive alpha
+`clamp(round((threshold / eye_z - 1) * 100), 0, 255)`, and crossing edges gain
+vertices at the current threshold ([D:7184-7326](../res/Ghidra_D3DDrv.c#L7184)).
+The device clears the detail attachment when detail capability is disabled or
+when FogMap is simultaneously present ([D:6541-6545](../res/Ghidra_D3DDrv.c#L6541));
+shipped D3D defaults disable detail textures. Macro remains an independent
+full-surface pass. `BASE-018` tracks serialized-property correlation, corpus
+reachability, shared implementation, and live validation.
+
 ## Lighting and volumetrics
 
 | Done | Feature / behavior | Primary evidence | Observable semantics | Classic | Modern | Verification |

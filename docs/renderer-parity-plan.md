@@ -441,6 +441,22 @@ commit, and live-verification fields for each item.
         `HP_Sneak.jellybeans01` (`0.5`). Trace their ordinary mesh bindings,
         then compare a confirmed representative in retail, Classic, and
         Modern.
+- [ ] `BASE-018` Carry original macro/detail texture attachments through the
+      shared BSP material path. Render supplies independent macro `+0x14` and
+      detail `+0x18` texture infos; shipped D3D draws macro after base and
+      detail after lighting (`Ghidra_D3DDrv.c:6496-7575`).
+  - [x] Exact detail bands are recovered: three iterations start at eye Z
+        `380`; after each band the threshold is multiplied by `0.23679848` and
+        the texture-coordinate fade multiplier by `4.223`. Included vertices
+        use alpha `clamp(round((threshold / eye_z - 1) * 100), 0, 255)`, with
+        clipped boundary vertices inserted at each threshold
+        ([D:7184-7326](../res/Ghidra_D3DDrv.c#L7184)).
+  - [x] Detail is suppressed when the device detail capability is disabled or
+        a FogMap is also attached; shipped D3D defaults disable
+        `DetailTextures`, so its default visible path does not draw this pass.
+  - [ ] Decode and census the texture-owned macro/detail object references,
+        establish shipped non-null representatives, then implement the shared
+        attachments without coupling either one to FogMap or Modern effects.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
@@ -661,9 +677,9 @@ commit, and live-verification fields for each item.
       promoting D3D's RenderFog/specular branch, Invisible `ZERO/ONE`
       depth-writing branch, or AlphaBlend-only `ONE/INVSRCALPHA` branch to an
       OpenHP1 defect. Preserve the live-confirmed actor-opacity path meanwhile.
-- [ ] Correlate Render.dll auxiliary texture slots with detail/macro/fog
-      properties and find shipped non-null representatives before implementing
-      the device's conditional follow-up passes. D3D ships DetailTextures off.
+- [ ] Correlate the now-proved macro/detail texture-info slots with their
+      serialized `UTexture` properties and find shipped non-null representatives;
+      exact D3D pass math and capability gates are recorded in `BASE-018`.
 - [ ] Use controlled retail captures before claiming spatial 16-bit dithering
       or fixed-function raster precision; D3D requests dithering, but driver
       output is implementation-dependent.
