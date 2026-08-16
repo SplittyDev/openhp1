@@ -68,8 +68,11 @@ source file was merely read end to end.
 | `implemented` | Code appears to cover the established behavior. |
 | `verified` | Focused automated and executable checks pass. |
 | `live-confirmed` | Relevant retail/OpenHP1 visual comparison is accepted. |
+| `not-applicable` | Internal mechanism or obsolete device/editor surface is inventory-only; its observable effect is tracked by another row. |
 
 `implemented` is not interchangeable with `live-confirmed`.
+`not-applicable` must name the observable replacement row; it cannot hide a
+game-visible behavior.
 
 ## Audit phases
 
@@ -198,6 +201,11 @@ commit, and live-verification fields for each item.
       are enabled. Evidence: independent retail sprite and volumetric paths at
       `Ghidra_Render.c:5819-5858,13034-13266`; current divergence:
       `renderer/modern.rs:381-390`.
+  - [x] Implemented in `982f259` by removing the Modern-only suppression path.
+  - [x] `openhp1-render` nextest (66 passed, 4 skipped), focused check, format,
+        and diff check passed without the copyrighted corpus.
+  - [ ] Replay an authored corona with Modern volumetrics enabled and disabled;
+        keep the parent open until visual acceptance.
 - [ ] `MOD-003` Replace Modern corona depth-test visibility with the original
       center-point BSP visibility rule. Evidence must be completed before
       implementation; current approximation: `renderer/modern.rs:599-600`.
@@ -211,6 +219,13 @@ commit, and live-verification fields for each item.
       `openhp1-scene/src/loader.rs:3950-3970,4091-4105`.
 - [ ] `BASE-006` Implement `PF_SmallWavy` time-varying UV motion. Evidence:
       `Ghidra_Render.c:2520`; current shared UV path: `scene.wgsl:86`.
+  - [x] Implemented for Classic and Modern in `840976c` with the exact retail
+        U/V formula and raw-texel-to-normalized conversion.
+  - [x] `openhp1-map` (12), `openhp1-scene` (57), and `openhp1-render` (67;
+        4 skipped) nextest suites, focused checks, format, and diff checks passed
+        without the copyrighted corpus.
+  - [ ] Locate and replay representative shipped `PF_SmallWavy` surfaces in
+        Classic, Modern, and retail; keep the parent open until visual acceptance.
 - [ ] `BASE-007` Preserve, upload, and sample retail mip chains and LOD choices.
       Evidence: `Ghidra_Engine.c:28739-28755,65770-65777,121084-121092`;
       current single-level paths: `openhp1-scene/src/loader.rs:4152-4154` and
