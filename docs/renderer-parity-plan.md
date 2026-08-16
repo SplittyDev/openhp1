@@ -212,10 +212,42 @@ commit, and live-verification fields for each item.
         and diff check passed without the copyrighted corpus.
   - [ ] Replay representative unlit blended content in Classic and Modern;
         keep the parent open until visual acceptance.
-- [ ] `BASE-002` Decode, clip, update, and render decals, including shipped
-      scorch, ecto-mark, and decal-shadow actors. Evidence:
-      `Ghidra_Render.c:2219-2818,4204-4267` and
-      `Ghidra_Engine.c:82088`.
+- [ ] `BASE-002` Reproduce the complete surface-attached decal lifecycle for
+      both renderers. Direct evidence: DrawFrame submission
+      `Ghidra_Render.c:2754-2855`, ClipDecal `4204-4598`, AttachDecal
+      `Ghidra_Engine.c:82088-82834`, DetachDecal `44017-44103`, and coplanar
+      node collection `316069-316282`. Active shipped use is actor shadows:
+      714 non-null shadow owners across 40 maps. Compiled gameplay contains no
+      active ecto/scorch spawn, so do not present those as authored live gates.
+  - [ ] `BASE-002A` Implement exact runtime BSP attach/detach: backward trace,
+        `0x600` auto-pan rejection, USize-only square projection, SurfList and
+        saved-node identities, `MultiDecalLevel` grid/upper clamp, unique
+        neighbor projection, and strict `abs(dot(normal)) > 0.7` acceptance.
+        Commit independently with synthetic adjacent/tilted BSP fixtures.
+  - [ ] `BASE-002B` Implement renderer-driven ActorShadow updates: owner
+        visibility and RendMap gates, stale-frame detach, translucent-owner
+        suppression, one-unit move threshold, orientation changes, and exact
+        8192-unit bounds/distance behavior. Keep this runtime commit separate.
+  - [ ] `BASE-002C` Add the smallest shared scene decal record retaining owner
+        surface/node identity and relative corners; keep package resolution and
+        runtime policy outside `openhp1-render`.
+  - [ ] `BASE-002D` Implement shared exact clipping: one-unit normal bias,
+        saved-edge planes and node filtering, intersection/deletion order,
+        24-vertex bound, projection clamp, and DrawScale UVs. Test inside,
+        partial, outside, maximum, and empty/populated saved-ID cases.
+  - [ ] `BASE-002E` Implement exact brightness/style/device state: grayscale
+        RGB with zero alpha, ignored Actor.Opacity, normal depth write, Style 3
+        `ONE/INVSRCCOLOR`, and Style 4 `DESTCOLOR/SRCCOLOR` with white diffuse.
+  - [ ] `BASE-002F` Insert decals immediately after each owning BSP surface,
+        preserve consecutive same-texture coalescing and animated replacement,
+        and honor `Decals`/mirrored gates. This depends on the backend-neutral
+        `BASE-016` submission plan; do not create a global pass.
+  - [ ] `BASE-002G` Feed successful clipped submission time back to
+        `LastRenderedTime` and verify compiled Scorch timers become sufficient;
+        add policy only if shipped bytecode still leaves a proved gap.
+  - [ ] Live acceptance: retail/Classic/Modern comparisons in `Lev2_HogFront`,
+        `Lev_Tut3`, one Quidditch map, `Lev4_Sneak`, and `startup`; toggle
+        `Decals`. Use a controlled spawn for ecto/scorch behavior.
 - [ ] `BASE-003` Implement original surface fog independently of optional
       Modern volumetric enhancements. Evidence: `Ghidra_Render.c:18112-18256`.
 - [ ] `CLASSIC-001` Render authored corona sprites and original volumetric
