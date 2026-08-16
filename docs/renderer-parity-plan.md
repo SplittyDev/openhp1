@@ -36,6 +36,12 @@ is implemented from a guessed heuristic or a map-specific exception.
 
 ## Coverage method
 
+The exhaustive device/procedural-texture reconciliations live in
+[`d3ddrv-render-device-inventory.md`](d3ddrv-render-device-inventory.md) and
+[`fire-procedural-texture-inventory.md`](fire-procedural-texture-inventory.md).
+Their machine-checkable counts and complete behavior/support closures are part
+of this plan's source inventory.
+
 - [ ] Enumerate every function and global in `Ghidra_Render.c`; classify each
       as behavior, setup/teardown, container/compiler artifact, or unresolved.
 - [ ] Trace every imported engine call and renderer-facing engine structure
@@ -251,7 +257,8 @@ commit, and live-verification fields for each item.
         add policy only if shipped bytecode still leaves a proved gap.
   - [ ] Live acceptance: retail/Classic/Modern comparisons in `Lev2_HogFront`,
         `Lev_Tut3`, one Quidditch map, `Lev4_Sneak`, and `startup`; toggle
-        `Decals`. Use a controlled spawn for ecto/scorch behavior.
+        `Decals`. Use a generic controlled decal fixture for otherwise
+        unreachable style/clipping branches; ecto was cut and is not rendered.
 - [ ] `BASE-003` Implement the three original fog contracts independently of
       optional Modern volumetric/AO enhancements; do not replace them with one
       generic depth-fog shader.
@@ -622,6 +629,29 @@ commit, and live-verification fields for each item.
   - [ ] Live gate: compare a fixed Invisible BSP occlusion view in `Lev_Tut1`
         between retail, Classic, and Modern, including a Masked representative
         if the corpus supplies one.
+- [ ] `BASE-023` Implement exact `SHOT` framebuffer capture as its own feature
+      commit. Retain the previous completed logical viewport including flash
+      and Canvas/UI but before Classic display gamma, reproduce `ReadPixels`
+      mask extraction and its separate `Brightness*1.5` correction, then write
+      first-free `Shot0000..0255.bmp` as bottom-up 24-bit BGR. Modern retains
+      final tone-mapped logical output rather than raw HDR. Exact Classic
+      16-bit pixels depend on `CLASSIC-004`; nonmatching logical/window sizes
+      depend on `HOST-001`. Evidence and deterministic BMP/layer acceptance are
+      in
+      [`d3ddrv-render-device-inventory.md`](d3ddrv-render-device-inventory.md#shot-framebuffer-capture).
+- [ ] `BASE-024` Implement `SNAP N` as a separate feature commit. Replace the
+      persistent viewport snap with the exact `2^N` integer box-filtered
+      downsample; crop remainders and write no file. Do not retain the current
+      screenshot alias. Exact lifetime and fixtures are in the D3D inventory.
+- [ ] `BASE-025` Implement `SAVESNAP token` and snap-backed transient texture
+      loading as a separate feature commit. Preserve strict next-power-of-two
+      padding, first-pixel fill, bottom-up 24-bit output, exact token path, and
+      persistent snap lifetime.
+- [ ] `BASE-026` Close D3D device drawing/diagnostic parity: runtime `LODBIAS`,
+      compatible `GETRES`/`SHOWPOOLS`, device `GetStats`, DrawTile palette-entry
+      zero AlphaBlend-only selection, and exact Gouraud/line/point acceptance.
+      Keep obsolete pool/COM mechanisms internal and split independent code
+      changes into focused commits.
 - [ ] `HOST-001` Implement the original viewport-size control surface in the
       existing game host: authored startup fullscreen, stored windowed and
       fullscreen sizes/color depth, arbitrary valid `SETRES`, `GETRES`, and
@@ -799,13 +829,16 @@ commit, and live-verification fields for each item.
         rather than guessed. Fixed-identity pixel refresh, native smaller-source
         expansion/`LocalSource`, first-lock output, priming, signed time, and
         same-tick incremental upload are implemented.
-- [ ] `BASE-009B` Implement exact shipped FireTexture animation as a separate
-      feature/commit after Ice. Direct evidence covers `ConstantTimeTick`
+- [ ] `BASE-009B` Implement exact shipped FireTexture, shared UWater, and
+      WetTexture animation as focused commits after Ice. Direct Fire evidence
+      covers `ConstantTimeTick`
       (`0x105082c0-0x105083d5`), `AddSpark` (`0x10501130-0x1050196f`),
       close/delete/line/paint/movement/flash helpers (`0x10501a00-0x105025db`),
       all of `RedrawSparks` (`0x105025e0-0x105058a3`), and `PostDrawSparks`
-      (`0x10505960-0x105059e3`). Do not retain or promote the current unproved
-      32-step warm-up.
+      (`0x10505960-0x105059e3`). Do not retain the current 32-step warm-up:
+      `UFractalTexture::Prime` directly raises `PrimeCount` to at least 48,
+      temporarily enables ticking through Client `+0x54`, ticks until primed,
+      and restores the field ([F:4864-5088](../res/Ghidra_Fire.c#L4864)).
   - [ ] Preserve the `0x50c` object layout and exact eight-byte spark records.
         Implement all 29 public `ESpark` values and all internal spawned types,
         covering the complete 44-case `RedrawSparks` switch (`0x00..0x2b`);
@@ -836,28 +869,39 @@ commit, and live-verification fields for each item.
         `Lev5_fluffy`, `Lev3_DungeonB`, and `Lev_Tut1` in retail, Classic, and
         Modern. Remaining blockers are only the semantic name of the client
         `+0x54` tick-suppression field and retail-exact initial Core RNG state.
-- [ ] `BASE-009C` Replace the approximate shared water simulation and implement
-      `UWaveTexture`. Direct Fire evidence covers Water construction/init
+  - [ ] Preserve the shared 1,536-byte water table, the single in-place
+        `width*height/2` SourceFields byte buffer processed by alternating
+        parity-0/parity-1 kernels, 256 eight-byte drop records, process-global
+        Fire RNG, native priming, all public `0x00..0x13` and internal
+        `0x40/0x41` cases, and once-per-nonzero-update cadence when
+        `MaxFrameRate==0`.
+  - [ ] Recover both self-modifying/pipelined parity kernels with a mechanical
+        instruction-order scalar port from shipped x86 or native-harness
+        synthetic goldens. The C at
+        [F:12658-13326](../res/Ghidra_Fire.c#L12658) has corrupted aliases and
+        impossible stores; no algebraically similar substitute may claim byte
+        parity.
+  - [ ] Implement Wet's exact refraction table
+        `clamp(ftol((i-511)*WaveAmp/512),-128,127)` for `i=0..1023`, then sample
+        `Source((x+signed(displacement))&(width-1),y)`. Preserve nearest smaller
+        source expansion and source-palette adoption. The current eight-case
+        full-resolution float/LCG/gradient path is divergent.
+  - [ ] Water/Wet acceptance: both parity kernels on wrapped 8x8 or 16x8
+        inputs; injected mutation/RNG cases; clear bits; all 22 drop cases;
+        Wet tables, signed-wrap offsets, source/palette replacement; exact
+        1/2/48-step checksums; and identical Classic/Modern uploads.
+- [ ] `BASE-009C` Implement Wave-only output over the exact shared UWater core
+      delivered by `BASE-009B`. Direct Fire evidence covers Water construction/init
       ([F:5808-5940](../res/Ghidra_Fire.c#L5808)), source allocation
       ([F:5947-5996](../res/Ghidra_Fire.c#L5947)), Wave initialization and
       palette ownership ([F:6282-6498](../res/Ghidra_Fire.c#L6282)), exact
       lighting-table construction ([F:6606-6678](../res/Ghidra_Fire.c#L6606)),
       drop mutation ([F:4247-4690](../res/Ghidra_Fire.c#L4247)), and the parity
       kernel dispatcher ([F:10895-10915](../res/Ghidra_Fire.c#L10895)).
-  - [ ] Recover both optimized half-resolution byte-field kernels from shipped
-        x86 disassembly or complete injected-state golden vectors. The C at
-        [F:12658-13619](../res/Ghidra_Fire.c#L12658) has corrupted register
-        aliases and impossible stores; do not translate it or retain the
-        current full-resolution float/30 Hz approximation.
-  - [ ] Preserve the shared 1,536-byte water table, two parity fields, 256
-        eight-byte drop records, process-global Fire RNG, native priming, and
-        once-per-nonzero-update cadence when `MaxFrameRate==0`. Implement
-        Wave's exact 1,024-byte render table and generated 256-color palette,
-        then reuse the shared palette-to-RGBA changed-texture upload path.
-  - [ ] Deterministic acceptance: full tables/palette; both parity kernels on
-        wrapped 8x8 or 16x8 inputs; injected RandomMover, BigWhirly, and
-        LeakyTap mutation/RNG cases; clear bits; 1/2/48-step checksums; and
-        identical Classic/Modern uploads.
+  - [ ] Implement Wave's exact 1,024-byte lighting table and generated
+        256-color palette, then reuse the shared palette-to-RGBA changed-texture
+        upload path. Deterministic acceptance covers the full table/palette and
+        exact 1/2/48-step output against the `BASE-009B` core.
   - [x] Reachability boundary: the only shipped export is
         `Detail.WaterDE2`; all twelve `Liquids` WetTextures reference it as
         `DetailTexture`, but a read-only 248-package scan finds no map or class
@@ -972,7 +1016,9 @@ commit, and live-verification fields for each item.
       Ghidra 12.1.2 headless workflow. `SoftDrv.dll` was used only to separate
       software clear and `(Brightness+0.5)/128` shade-table behavior from D3D's
       final `2.5` gamma ramp; temporary analysis files are not repository
-      dependencies.
+      dependencies. The complete 523-body/45-named/125-unnamed reconciliation
+      and newly separated feature checklists are in
+      [`d3ddrv-render-device-inventory.md`](d3ddrv-render-device-inventory.md).
 - [x] Trace the Render.dll Invisible caller path: effective surface and texture
       flags reach the saved special list and later device submission. Combined
       with D3D normalization and the 1,277-surface corpus result, this proves
@@ -986,7 +1032,10 @@ commit, and live-verification fields for each item.
 - [x] Decompile shipped [`Fire.dll`](../res/Ghidra_Fire.c) far enough to recover implementation-ready
       FireTexture and IceTexture simulation; the exact native addresses,
       formulas, state, ordering, and narrow unresolved hooks are recorded in
-      `BASE-009A/B` and the renderer audit. This does not resolve unrelated
+      `BASE-009A/B/C`, the renderer audit, and the complete 333-body export/support
+      reconciliation in
+      [`fire-procedural-texture-inventory.md`](fire-procedural-texture-inventory.md).
+      This does not resolve unrelated
       special-lit actors, lens flares, Fatness/Wideness, specular glow, or
       runtime LOD bias.
 - [ ] Recover the remaining unrelated native owners for special-lit actors,
