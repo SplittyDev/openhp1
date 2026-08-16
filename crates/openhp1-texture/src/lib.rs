@@ -8,6 +8,6 @@ mod texture;
 pub use error::{Error, Result};
 pub use palette::{Color, Palette};
 pub use texture::{
-    MipLevel, Texture, TextureRenderFlags, WaterAnimation, WaterDrop, WetTexture,
-    texture_poly_flags,
+    IceAnimation, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Texture,
+    TextureRenderFlags, WaterAnimation, WaterDrop, WetTexture, texture_poly_flags,
 };

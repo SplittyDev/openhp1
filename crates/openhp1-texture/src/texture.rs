@@ -26,6 +26,7 @@ pub struct Texture {
     pub render_flags: TextureRenderFlags,
     pub mips: Vec<MipLevel>,
     pub wet: Option<WetTexture>,
+    pub ice: Option<IceTexture>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -71,6 +72,59 @@ pub struct WaterDrop {
     pub bytes: [u8; 4],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum IcePanningStyle {
+    Linear,
+    Circular,
+    Gestation,
+    WavyX,
+    WavyY,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IceTimeMethod {
+    FrameRateSync,
+    Realtime,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IceTexture {
+    pub glass_texture: ObjectReference,
+    pub source_texture: ObjectReference,
+    pub panning_style: IcePanningStyle,
+    pub time_method: IceTimeMethod,
+    pub horiz_pan_speed: u8,
+    pub vert_pan_speed: u8,
+    pub frequency: u8,
+    pub amplitude: u8,
+    pub move_ice: bool,
+    pub master_count: f32,
+    pub u_displace: f32,
+    pub v_displace: f32,
+    pub u_position: f32,
+    pub v_position: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct IceAnimation {
+    config: IceTexture,
+    width: usize,
+    height: usize,
+    source: Vec<u8>,
+    glass: Vec<u8>,
+    indices: Vec<u8>,
+    accumulator: f32,
+    prime_count: u8,
+    prime_current: u8,
+    min_frame_rate: f32,
+    max_frame_rate: f32,
+    last_position: [i32; 2],
+    force_refresh: bool,
+    dependency_refresh: bool,
+    local_source: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct WaterCell {
     pressure: f32,
@@ -104,6 +158,19 @@ impl Texture {
         let mut clamp_width = None;
         let mut clamp_height = None;
         let mut source_texture = ObjectReference::None;
+        let mut glass_texture = ObjectReference::None;
+        let mut panning_style = IcePanningStyle::Linear;
+        let mut time_method = IceTimeMethod::FrameRateSync;
+        let mut horiz_pan_speed = 128;
+        let mut vert_pan_speed = 128;
+        let mut frequency = 11;
+        let mut amplitude = 44;
+        let mut move_ice = true;
+        let mut master_count = 0.0;
+        let mut u_displace = 0.0;
+        let mut v_displace = 0.0;
+        let mut u_position = 0.0;
+        let mut v_position = 0.0;
         let mut render_heat = 255;
         let mut rising = false;
         let mut water_drop_count = 0;
@@ -142,6 +209,58 @@ impl Texture {
                 }
                 "SourceTexture" if property.kind == PropertyKind::Object => {
                     source_texture = reader.property_reader(&property).read_object_reference()?;
+                }
+                "GlassTexture" if property.kind == PropertyKind::Object => {
+                    glass_texture = reader.property_reader(&property).read_object_reference()?;
+                }
+                "PanningStyle"
+                    if class == TextureClass::Ice && property.kind == PropertyKind::Byte =>
+                {
+                    panning_style = match reader.property_reader(&property).read_u8()? {
+                        0 => IcePanningStyle::Linear,
+                        1 => IcePanningStyle::Circular,
+                        2 => IcePanningStyle::Gestation,
+                        3 => IcePanningStyle::WavyX,
+                        4 => IcePanningStyle::WavyY,
+                        value => return Err(Error::UnsupportedIcePanningStyle(value)),
+                    };
+                }
+                "TimeMethod" if property.kind == PropertyKind::Byte => {
+                    time_method = if reader.property_reader(&property).read_u8()? == 0 {
+                        IceTimeMethod::FrameRateSync
+                    } else {
+                        IceTimeMethod::Realtime
+                    };
+                }
+                "HorizPanSpeed" if property.kind == PropertyKind::Byte => {
+                    horiz_pan_speed = reader.property_reader(&property).read_u8()?;
+                }
+                "VertPanSpeed" if property.kind == PropertyKind::Byte => {
+                    vert_pan_speed = reader.property_reader(&property).read_u8()?;
+                }
+                "Frequency" if property.kind == PropertyKind::Byte => {
+                    frequency = reader.property_reader(&property).read_u8()?;
+                }
+                "Amplitude" if property.kind == PropertyKind::Byte => {
+                    amplitude = reader.property_reader(&property).read_u8()?;
+                }
+                "MoveIce" if property.kind == PropertyKind::Bool => {
+                    move_ice = property.bool_value.unwrap_or(false);
+                }
+                "MasterCount" if property.kind == PropertyKind::Float => {
+                    master_count = reader.property_reader(&property).read_f32()?;
+                }
+                "UDisplace" if property.kind == PropertyKind::Float => {
+                    u_displace = reader.property_reader(&property).read_f32()?;
+                }
+                "VDisplace" if property.kind == PropertyKind::Float => {
+                    v_displace = reader.property_reader(&property).read_f32()?;
+                }
+                "UPosition" if property.kind == PropertyKind::Float => {
+                    u_position = reader.property_reader(&property).read_f32()?;
+                }
+                "VPosition" if property.kind == PropertyKind::Float => {
+                    v_position = reader.property_reader(&property).read_f32()?;
                 }
                 "RenderHeat" if property.kind == PropertyKind::Byte => {
                     render_heat = reader.property_reader(&property).read_u8()?;
@@ -233,6 +352,22 @@ impl Texture {
                 source_texture,
                 drops,
             });
+        let ice = (class == TextureClass::Ice).then_some(IceTexture {
+            glass_texture,
+            source_texture,
+            panning_style,
+            time_method,
+            horiz_pan_speed,
+            vert_pan_speed,
+            frequency,
+            amplitude,
+            move_ice,
+            master_count,
+            u_displace,
+            v_displace,
+            u_position,
+            v_position,
+        });
 
         Ok(Self {
             palette,
@@ -245,6 +380,7 @@ impl Texture {
             render_flags,
             mips,
             wet,
+            ice,
         })
     }
 
@@ -257,6 +393,295 @@ impl Texture {
             .ok_or(Error::MissingMip { mip_index })?;
         rgba(&mip.indices, palette, masked)
     }
+}
+
+impl IceTexture {
+    #[allow(clippy::too_many_arguments)]
+    pub fn animate(
+        &self,
+        width: u32,
+        height: u32,
+        source_width: u32,
+        source_height: u32,
+        source: &[u8],
+        glass_width: u32,
+        glass_height: u32,
+        glass: &[u8],
+        min_frame_rate: f32,
+        max_frame_rate: f32,
+        prime_count: u8,
+    ) -> Result<IceAnimation> {
+        validate_ice_pixels("texture", width, height, pixel_count(width, height)?)?;
+        validate_ice_pixels("source", source_width, source_height, source.len())?;
+        validate_ice_pixels("glass", glass_width, glass_height, glass.len())?;
+        require_ice_dimensions("glass", width, height, glass_width, glass_height)?;
+        if source_width > width || source_height > height {
+            return Err(Error::IceDimensionMismatch {
+                field: "source",
+                expected_width: width,
+                expected_height: height,
+                actual_width: source_width,
+                actual_height: source_height,
+            });
+        }
+        let local_source = (source_width, source_height) != (width, height);
+        let mut animation = IceAnimation {
+            config: self.clone(),
+            width: width as usize,
+            height: height as usize,
+            source: source.to_vec(),
+            glass: glass.to_vec(),
+            indices: if local_source {
+                expand_ice_source(width, height, source_width, source_height, source)
+            } else {
+                vec![0; pixel_count(width, height)?]
+            },
+            accumulator: 0.0,
+            prime_count,
+            prime_current: 0,
+            min_frame_rate,
+            max_frame_rate,
+            last_position: [-1; 2],
+            force_refresh: true,
+            dependency_refresh: false,
+            local_source,
+        };
+        animation.render(0.0);
+        Ok(animation)
+    }
+}
+
+impl IceAnimation {
+    pub fn tick(&mut self, delta_time: f32) -> bool {
+        if !delta_time.is_finite() || delta_time == 0.0 {
+            return false;
+        }
+        if self.config.time_method == IceTimeMethod::Realtime {
+            return self.render(delta_time);
+        }
+        let mut changed = false;
+        while self.prime_current < self.prime_count {
+            self.prime_current += 1;
+            changed |= self.render(1.0 / 120.0);
+        }
+        self.accumulator += delta_time;
+        if self.max_frame_rate != 0.0 {
+            let maximum = texture_frame_rate(self.max_frame_rate);
+            if self.accumulator < 1.0 / maximum {
+                return if self.dependency_refresh {
+                    self.render(0.0) || changed
+                } else {
+                    changed
+                };
+            }
+            let minimum_period = 1.0 / texture_frame_rate(self.min_frame_rate);
+            if self.accumulator < minimum_period {
+                self.accumulator = 0.0;
+            } else {
+                self.accumulator -= minimum_period;
+                if self.accumulator > minimum_period {
+                    self.accumulator = minimum_period;
+                }
+            }
+        } else {
+            self.accumulator = 0.0;
+        }
+        self.render(1.0 / 120.0) || changed
+    }
+
+    pub fn indices(&self) -> &[u8] {
+        &self.indices
+    }
+
+    pub fn rgba(&self, palette: &Palette, masked: bool) -> Result<Vec<u8>> {
+        rgba(&self.indices, palette, masked)
+    }
+
+    pub fn update_dependencies(
+        &mut self,
+        source_width: u32,
+        source_height: u32,
+        source: &[u8],
+        glass_width: u32,
+        glass_height: u32,
+        glass: &[u8],
+    ) -> Result<bool> {
+        validate_ice_pixels("source", source_width, source_height, source.len())?;
+        validate_ice_pixels("glass", glass_width, glass_height, glass.len())?;
+        require_ice_dimensions(
+            "glass",
+            self.width as u32,
+            self.height as u32,
+            glass_width,
+            glass_height,
+        )?;
+        if source_width as usize > self.width || source_height as usize > self.height {
+            return Err(Error::IceDimensionMismatch {
+                field: "source",
+                expected_width: self.width as u32,
+                expected_height: self.height as u32,
+                actual_width: source_width,
+                actual_height: source_height,
+            });
+        }
+        let local_source =
+            (source_width as usize, source_height as usize) != (self.width, self.height);
+        let expanded_source = local_source.then(|| {
+            expand_ice_source(
+                self.width as u32,
+                self.height as u32,
+                source_width,
+                source_height,
+                source,
+            )
+        });
+        let changed = self.source != source
+            || self.glass != glass
+            || self.local_source != local_source
+            || expanded_source
+                .as_ref()
+                .is_some_and(|expanded| self.indices != *expanded);
+        self.source.clear();
+        self.source.extend_from_slice(source);
+        self.glass.clear();
+        self.glass.extend_from_slice(glass);
+        self.local_source = local_source;
+        if let Some(expanded_source) = expanded_source {
+            self.indices = expanded_source;
+        }
+        self.force_refresh |= changed;
+        self.dependency_refresh |= changed;
+        Ok(changed)
+    }
+
+    fn render(&mut self, delta_time: f32) -> bool {
+        self.move_position(delta_time);
+        let position = [
+            self.config.u_position.round() as i32,
+            self.config.v_position.round() as i32,
+        ];
+        if position == self.last_position && !self.force_refresh {
+            return false;
+        }
+        self.last_position = position;
+        if self.local_source {
+            let changed = self.dependency_refresh;
+            self.force_refresh = false;
+            self.dependency_refresh = false;
+            return changed;
+        }
+        let u_mask = self.width - 1;
+        let v_mask = self.height - 1;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let destination = x + y * self.width;
+                self.indices[destination] = if self.config.move_ice {
+                    let glass = self.glass[wrap(x as i32 + position[0], u_mask)
+                        + wrap(y as i32 + position[1], v_mask) * self.width];
+                    self.source[wrap(x as i32 + i32::from(glass), u_mask) + y * self.width]
+                } else {
+                    let glass = self.glass[destination];
+                    self.source[wrap(x as i32 + position[0] + i32::from(glass), u_mask)
+                        + wrap(y as i32 + position[1], v_mask) * self.width]
+                };
+            }
+        }
+        self.force_refresh = false;
+        self.dependency_refresh = false;
+        true
+    }
+
+    fn move_position(&mut self, delta_time: f32) {
+        self.config.master_count += 120.0 * delta_time;
+        self.config.u_displace -=
+            2.0 * f32::from(i16::from(self.config.horiz_pan_speed) - 128) * delta_time;
+        self.config.v_displace +=
+            2.0 * f32::from(i16::from(self.config.vert_pan_speed) - 128) * delta_time;
+        let q = f32::from(u16::from(self.config.frequency) + 1) * self.config.master_count;
+        let amplitude = f32::from(u16::from(self.config.amplitude) + 1);
+        let sine = (q * 0.0012).sin();
+        let cosine = (q * if self.config.panning_style == IcePanningStyle::Gestation {
+            0.0011
+        } else {
+            0.0012
+        })
+        .cos();
+        let (u, v) = match self.config.panning_style {
+            IcePanningStyle::Linear => (0.0, 0.0),
+            IcePanningStyle::Circular | IcePanningStyle::Gestation => {
+                ((amplitude * sine).round(), (amplitude * cosine).round())
+            }
+            IcePanningStyle::WavyX => ((amplitude * 0.5 * sine).round(), 0.0),
+            IcePanningStyle::WavyY => (0.0, (amplitude * 0.5 * cosine).round()),
+        };
+        self.config.u_position = self.config.u_displace + u;
+        self.config.v_position = self.config.v_displace + v;
+    }
+}
+
+fn wrap(value: i32, mask: usize) -> usize {
+    value as usize & mask
+}
+
+fn expand_ice_source(
+    width: u32,
+    height: u32,
+    source_width: u32,
+    source_height: u32,
+    source: &[u8],
+) -> Vec<u8> {
+    let u_shift = width.ilog2() - source_width.ilog2();
+    let v_shift = height.ilog2() - source_height.ilog2();
+    let mut expanded = Vec::with_capacity(width as usize * height as usize);
+    for y in 0..height {
+        for x in 0..width {
+            expanded.push(source[((x >> u_shift) + (y >> v_shift) * source_width) as usize]);
+        }
+    }
+    expanded
+}
+
+fn validate_ice_pixels(field: &'static str, width: u32, height: u32, actual: usize) -> Result<()> {
+    if width == 0 || height == 0 || !width.is_power_of_two() || !height.is_power_of_two() {
+        return Err(Error::InvalidIceDimensions {
+            field,
+            width,
+            height,
+        });
+    }
+    let expected = pixel_count(width, height)?;
+    if actual != expected {
+        return Err(Error::InvalidIcePixels {
+            field,
+            width,
+            height,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+fn require_ice_dimensions(
+    field: &'static str,
+    expected_width: u32,
+    expected_height: u32,
+    actual_width: u32,
+    actual_height: u32,
+) -> Result<()> {
+    if (actual_width, actual_height) != (expected_width, expected_height) {
+        return Err(Error::IceDimensionMismatch {
+            field,
+            expected_width,
+            expected_height,
+            actual_width,
+            actual_height,
+        });
+    }
+    Ok(())
+}
+
+fn texture_frame_rate(value: f32) -> f32 {
+    if 0.1 <= value { value.min(100.0) } else { 0.1 }
 }
 
 impl WetTexture {
@@ -341,6 +766,10 @@ impl WaterAnimation {
 
     pub fn rgba(&self, palette: &Palette, masked: bool) -> Result<Vec<u8>> {
         rgba(&self.indices, palette, masked)
+    }
+
+    pub fn indices(&self) -> &[u8] {
+        &self.indices
     }
 
     fn step(&mut self) {
@@ -738,7 +1167,10 @@ mod tests {
 
     use openhp1_package::{ObjectReference, PACKAGE_MAGIC, Package};
 
-    use crate::{Color, MipLevel, Palette, Texture, TextureRenderFlags};
+    use crate::{
+        Color, IcePanningStyle, IceTexture, IceTimeMethod, MipLevel, Palette, Texture,
+        TextureRenderFlags,
+    };
 
     #[test]
     fn masked_palette_index_zero_becomes_transparent_black() {
@@ -759,6 +1191,7 @@ mod tests {
                 indices: vec![0, 1],
             }],
             wet: None,
+            ice: None,
         };
         let palette = Palette {
             colors: vec![
@@ -860,6 +1293,319 @@ mod tests {
             [1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
         );
         assert!(wet.animate(2, 2, 4, 4, &[0; 16]).unwrap().is_none());
+    }
+
+    #[test]
+    fn decodes_ice_texture_properties_and_runtime_state() {
+        let texture = Texture::decode(&synthetic_ice_texture(), 0).unwrap();
+        let ice = texture.ice.unwrap();
+
+        assert_eq!(ice.glass_texture, ObjectReference::Export(0));
+        assert_eq!(ice.source_texture, ObjectReference::Export(0));
+        assert_eq!(ice.panning_style, IcePanningStyle::WavyY);
+        assert_eq!(ice.time_method, IceTimeMethod::Realtime);
+        assert_eq!(ice.horiz_pan_speed, 129);
+        assert_eq!(ice.vert_pan_speed, 127);
+        assert_eq!(ice.frequency, 12);
+        assert_eq!(ice.amplitude, 45);
+        assert!(!ice.move_ice);
+        assert_eq!(
+            [
+                ice.master_count,
+                ice.u_displace,
+                ice.v_displace,
+                ice.u_position,
+                ice.v_position,
+            ],
+            [10.0, 1.0, 2.0, 3.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn ice_blits_every_8x8_pixel_like_fire_dll() {
+        let source = (0..64).collect::<Vec<_>>();
+        let glass = (0..64).map(|index| index % 8).collect::<Vec<_>>();
+        let not_moving = [
+            17, 19, 21, 23, 17, 19, 21, 23, 25, 27, 29, 31, 25, 27, 29, 31, 33, 35, 37, 39, 33, 35,
+            37, 39, 41, 43, 45, 47, 41, 43, 45, 47, 49, 51, 53, 55, 49, 51, 53, 55, 57, 59, 61, 63,
+            57, 59, 61, 63, 1, 3, 5, 7, 1, 3, 5, 7, 9, 11, 13, 15, 9, 11, 13, 15,
+        ];
+        let moving = [
+            1, 3, 5, 7, 1, 3, 5, 7, 9, 11, 13, 15, 9, 11, 13, 15, 17, 19, 21, 23, 17, 19, 21, 23,
+            25, 27, 29, 31, 25, 27, 29, 31, 33, 35, 37, 39, 33, 35, 37, 39, 41, 43, 45, 47, 41, 43,
+            45, 47, 49, 51, 53, 55, 49, 51, 53, 55, 57, 59, 61, 63, 57, 59, 61, 63,
+        ];
+
+        for (move_ice, expected) in [(false, not_moving), (true, moving)] {
+            let mut config = ice_config(IcePanningStyle::Linear);
+            config.move_ice = move_ice;
+            config.u_displace = 1.0;
+            config.v_displace = 2.0;
+            let animation = config
+                .animate(8, 8, 8, 8, &source, 8, 8, &glass, 0.0, 0.0, 0)
+                .unwrap();
+            assert_eq!(animation.indices(), expected);
+        }
+    }
+
+    #[test]
+    fn ice_movement_covers_speeds_panning_and_time_modes() {
+        let pixels = [0; 64];
+        let mut speed = ice_config(IcePanningStyle::Linear)
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 0)
+            .unwrap();
+        speed.config.horiz_pan_speed = 129;
+        speed.config.vert_pan_speed = 127;
+        assert!(!speed.tick(1.0 / 120.0));
+        assert!((speed.config.master_count - 1.0).abs() < 1.0e-6);
+        assert!((speed.config.u_displace + 1.0 / 60.0).abs() < 1.0e-6);
+        assert!((speed.config.v_displace + 1.0 / 60.0).abs() < 1.0e-6);
+
+        let master = std::f32::consts::PI / (4.0 * 0.0012) - 1.0;
+        for (style, expected) in [
+            (IcePanningStyle::Linear, [0.0, 0.0]),
+            (IcePanningStyle::Circular, [7.0, 7.0]),
+            (IcePanningStyle::Gestation, [7.0, 8.0]),
+            (IcePanningStyle::WavyX, [4.0, 0.0]),
+            (IcePanningStyle::WavyY, [0.0, 4.0]),
+        ] {
+            let mut config = ice_config(style);
+            config.master_count = master;
+            config.amplitude = 9;
+            let mut animation = config
+                .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 0)
+                .unwrap();
+            animation.tick(1.0 / 120.0);
+            assert_eq!(
+                [animation.config.u_position, animation.config.v_position],
+                expected
+            );
+        }
+
+        let mut synced = ice_config(IcePanningStyle::Linear)
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 20.0, 30.0, 0)
+            .unwrap();
+        synced.config.time_method = IceTimeMethod::FrameRateSync;
+        assert!(!synced.tick(1.0 / 60.0));
+        assert!(!synced.tick(1.0 / 60.0));
+        assert_eq!(synced.config.master_count, 1.0);
+        let mut realtime = ice_config(IcePanningStyle::Linear);
+        realtime.time_method = IceTimeMethod::Realtime;
+        let mut realtime = realtime
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 20.0, 30.0, 0)
+            .unwrap();
+        assert!(!realtime.tick(1.0 / 60.0));
+        assert_eq!(realtime.config.master_count, 2.0);
+    }
+
+    #[test]
+    fn ice_frame_sync_primes_before_scheduling_and_time_accepts_negative_nonzero_only() {
+        let pixels = [0; 64];
+        let mut synced = ice_config(IcePanningStyle::Linear);
+        synced.time_method = IceTimeMethod::FrameRateSync;
+        let mut synced = synced
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 2)
+            .unwrap();
+        assert!(!synced.tick(0.0));
+        assert_eq!((synced.prime_current, synced.config.master_count), (0, 0.0));
+        assert!(!synced.tick(1.0 / 60.0));
+        assert_eq!((synced.prime_current, synced.config.master_count), (2, 3.0));
+
+        let mut realtime = ice_config(IcePanningStyle::Linear)
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 2)
+            .unwrap();
+        assert!(!realtime.tick(0.0));
+        assert!(!realtime.tick(-1.0 / 120.0));
+        assert_eq!(
+            (realtime.prime_current, realtime.config.master_count),
+            (0, -1.0)
+        );
+
+        let mut negative_sync = ice_config(IcePanningStyle::Linear);
+        negative_sync.time_method = IceTimeMethod::FrameRateSync;
+        let mut negative_sync = negative_sync
+            .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 0)
+            .unwrap();
+        assert!(!negative_sync.tick(-1.0));
+        assert_eq!(negative_sync.config.master_count, 1.0);
+    }
+
+    #[test]
+    fn ice_cache_force_local_source_and_dependency_replacement_match_native_guards() {
+        let source = (0..64).collect::<Vec<_>>();
+        let glass = [0; 64];
+        let mut animation = ice_config(IcePanningStyle::Linear)
+            .animate(8, 8, 8, 8, &source, 8, 8, &glass, 0.0, 0.0, 0)
+            .unwrap();
+        assert!(!animation.tick(1.0 / 120.0));
+        assert!(!animation.tick(1.0 / 120.0));
+        animation.force_refresh = true;
+        assert!(animation.tick(1.0 / 120.0));
+        let before = animation.indices.clone();
+        let replacement = source.iter().map(|value| 63 - value).collect::<Vec<_>>();
+        animation
+            .update_dependencies(8, 8, &replacement, 8, 8, &glass)
+            .unwrap();
+        assert!(animation.tick(1.0 / 120.0));
+        assert_ne!(animation.indices, before);
+        let source_output = animation.indices.clone();
+        animation
+            .update_dependencies(8, 8, &replacement, 8, 8, &[1; 64])
+            .unwrap();
+        assert!(animation.tick(1.0 / 120.0));
+        assert_ne!(animation.indices, source_output);
+
+        let smaller_source = (0..16).collect::<Vec<_>>();
+        let mut local_source = ice_config(IcePanningStyle::Linear)
+            .animate(8, 8, 4, 4, &smaller_source, 8, 8, &glass, 0.0, 0.0, 0)
+            .unwrap();
+        assert_eq!(
+            local_source.indices(),
+            &[
+                0, 0, 1, 1, 2, 2, 3, 3, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 4, 4, 5, 5,
+                6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+                14, 14, 15, 15, 12, 12, 13, 13, 14, 14, 15, 15,
+            ]
+        );
+        assert!(!local_source.tick(1.0));
+        let smaller_replacement = (0..16).rev().collect::<Vec<_>>();
+        local_source
+            .update_dependencies(4, 4, &smaller_replacement, 8, 8, &glass)
+            .unwrap();
+        assert!(local_source.tick(1.0));
+        assert_eq!(
+            local_source.indices(),
+            &[
+                15, 15, 14, 14, 13, 13, 12, 12, 15, 15, 14, 14, 13, 13, 12, 12, 11, 11, 10, 10, 9,
+                9, 8, 8, 11, 11, 10, 10, 9, 9, 8, 8, 7, 7, 6, 6, 5, 5, 4, 4, 7, 7, 6, 6, 5, 5, 4,
+                4, 3, 3, 2, 2, 1, 1, 0, 0, 3, 3, 2, 2, 1, 1, 0, 0,
+            ]
+        );
+
+        let mut synced = ice_config(IcePanningStyle::Linear);
+        synced.time_method = IceTimeMethod::FrameRateSync;
+        let mut synced = synced
+            .animate(8, 8, 8, 8, &source, 8, 8, &glass, 20.0, 30.0, 0)
+            .unwrap();
+        assert!(!synced.tick(1.0 / 30.0));
+        let master_count = synced.config.master_count;
+        synced
+            .update_dependencies(8, 8, &replacement, 8, 8, &glass)
+            .unwrap();
+        assert!(synced.tick(1.0 / 120.0));
+        assert_eq!(synced.config.master_count, master_count);
+    }
+
+    fn ice_config(panning_style: IcePanningStyle) -> IceTexture {
+        IceTexture {
+            glass_texture: ObjectReference::None,
+            source_texture: ObjectReference::None,
+            panning_style,
+            time_method: IceTimeMethod::Realtime,
+            horiz_pan_speed: 128,
+            vert_pan_speed: 128,
+            frequency: 0,
+            amplitude: 0,
+            move_ice: false,
+            master_count: 0.0,
+            u_displace: 0.0,
+            v_displace: 0.0,
+            u_position: 0.0,
+            v_position: 0.0,
+        }
+    }
+
+    fn synthetic_ice_texture() -> Package {
+        let names = [
+            "None",
+            "Core",
+            "Class",
+            "IceTexture",
+            "Frozen",
+            "Palette",
+            "GlassTexture",
+            "SourceTexture",
+            "PanningStyle",
+            "TimeMethod",
+            "HorizPanSpeed",
+            "VertPanSpeed",
+            "Frequency",
+            "Amplitude",
+            "MoveIce",
+            "MasterCount",
+            "UDisplace",
+            "VDisplace",
+            "UPosition",
+            "VPosition",
+        ];
+        let mut name_table = Vec::new();
+        for name in names {
+            name_table.extend(name.as_bytes());
+            name_table.push(0);
+            push_u32(&mut name_table, 0);
+        }
+        let mut import_table = vec![1, 2];
+        push_i32(&mut import_table, 0);
+        import_table.push(3);
+
+        let mut payload = vec![5, 0x05, 1, 6, 0x05, 1, 7, 0x05, 1];
+        for (name, value) in [(8, 4), (9, 1), (10, 129), (11, 127), (12, 12), (13, 45)] {
+            payload.extend([name, 0x01, value]);
+        }
+        payload.extend([14, 0x03]);
+        for (name, value) in [(15, 10.0_f32), (16, 1.0), (17, 2.0), (18, 3.0), (19, 4.0)] {
+            payload.extend([name, 0x24]);
+            payload.extend(value.to_le_bytes());
+        }
+        payload.extend([0, 1, 0]);
+        payload.extend(8_u32.to_le_bytes());
+        payload.extend(8_u32.to_le_bytes());
+        payload.extend([3, 3]);
+
+        const HEADER_SIZE: usize = 48;
+        let name_offset = HEADER_SIZE;
+        let import_offset = name_offset + name_table.len();
+        let export_offset = import_offset + import_table.len();
+        let mut export = vec![0x81, 0];
+        push_i32(&mut export, 0);
+        export.push(4);
+        push_u32(&mut export, 0);
+        export.extend(compact_index(payload.len() as i32));
+        let mut payload_offset = export_offset + export.len() + 1;
+        loop {
+            let encoded = compact_index(payload_offset as i32);
+            let next = export_offset + export.len() + encoded.len();
+            if next == payload_offset {
+                export.extend(encoded);
+                break;
+            }
+            payload_offset = next;
+        }
+
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, PACKAGE_MAGIC);
+        bytes.extend(61_u16.to_le_bytes());
+        bytes.extend(0_u16.to_le_bytes());
+        push_u32(&mut bytes, 0);
+        for value in [
+            names.len(),
+            name_offset,
+            1,
+            export_offset,
+            1,
+            import_offset,
+            0,
+            0,
+            0,
+        ] {
+            push_i32(&mut bytes, value as i32);
+        }
+        bytes.extend(name_table);
+        bytes.extend(import_table);
+        bytes.extend(export);
+        assert_eq!(bytes.len(), payload_offset);
+        bytes.extend(payload);
+        Package::parse("synthetic ice texture", Arc::from(bytes)).unwrap()
     }
 
     fn synthetic_animated_texture() -> Package {

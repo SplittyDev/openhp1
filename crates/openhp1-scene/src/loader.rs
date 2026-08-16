@@ -18,7 +18,7 @@ use openhp1_runtime::{
     ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject, WeaponAttachment,
 };
 use openhp1_script::class_defaults_reader;
-use openhp1_texture::{Palette, Texture, TextureRenderFlags, WaterAnimation};
+use openhp1_texture::{IceAnimation, Palette, Texture, TextureRenderFlags, WaterAnimation};
 use tracing::{info, warn};
 
 use crate::{
@@ -317,6 +317,7 @@ impl LoadedScene {
             actor_meshes,
             animated_actor_meshes,
             animated_water_textures = water_animations.water.len(),
+            animated_ice_textures = water_animations.ice.len(),
             animated_generic_textures = water_animations.generic.len(),
             "loaded map"
         );
@@ -1637,19 +1638,57 @@ impl LoadedScene {
 
     pub fn tick_textures(&mut self, delta_time: f32) -> Result<Vec<usize>> {
         let mut changed = Vec::new();
-        for water in &mut self.water_animations.water {
+        let animations = &mut self.water_animations;
+        for water in &mut animations.water {
             if water.animation.tick(delta_time) {
-                self.render.textures[water.texture].rgba =
-                    water.animation.rgba(&water.palette, water.masked)?;
-                changed.push(water.texture);
+                animations
+                    .pixels
+                    .insert(water.id.clone(), water.animation.indices().to_vec());
+                if let Some(texture) = water.texture {
+                    self.render.textures[texture].rgba =
+                        water.animation.rgba(&water.palette, water.masked)?;
+                    changed.push(texture);
+                }
             }
         }
-        for animation in &mut self.water_animations.generic {
+        for animation in &mut animations.generic {
             if animation.tick(delta_time) {
-                self.render.textures[animation.texture]
-                    .rgba
-                    .clone_from(&animation.frames[animation.current]);
-                changed.push(animation.texture);
+                animations.pixels.insert(
+                    animation.id.clone(),
+                    animation.index_frames[animation.current].clone(),
+                );
+                if let Some(texture) = animation.texture {
+                    self.render.textures[texture]
+                        .rgba
+                        .clone_from(&animation.frames[animation.current]);
+                    changed.push(texture);
+                }
+            }
+        }
+        for ice in &mut animations.ice {
+            let source = animations
+                .pixels
+                .get(&ice.source)
+                .context("ice source runtime pixels are missing")?;
+            let glass = animations
+                .pixels
+                .get(&ice.glass)
+                .context("ice glass runtime pixels are missing")?;
+            ice.animation.update_dependencies(
+                ice.source_dimensions[0],
+                ice.source_dimensions[1],
+                source,
+                ice.glass_dimensions[0],
+                ice.glass_dimensions[1],
+                glass,
+            )?;
+            if ice.animation.tick(delta_time) {
+                animations
+                    .pixels
+                    .insert(ice.id.clone(), ice.animation.indices().to_vec());
+                self.render.textures[ice.texture].rgba =
+                    ice.animation.rgba(&ice.palette, ice.masked)?;
+                changed.push(ice.texture);
             }
         }
         Ok(changed)
@@ -2009,7 +2048,8 @@ struct AnimatedActorMesh {
 }
 
 struct AnimatedWaterTexture {
-    texture: usize,
+    id: SceneObjectId,
+    texture: Option<usize>,
     masked: bool,
     palette: Palette,
     animation: WaterAnimation,
@@ -2018,12 +2058,28 @@ struct AnimatedWaterTexture {
 #[derive(Default)]
 struct TextureAnimations {
     water: Vec<AnimatedWaterTexture>,
+    ice: Vec<AnimatedIceTexture>,
     generic: Vec<AnimatedGenericTexture>,
+    pixels: HashMap<SceneObjectId, Vec<u8>>,
+}
+
+struct AnimatedIceTexture {
+    id: SceneObjectId,
+    texture: usize,
+    masked: bool,
+    palette: Palette,
+    animation: IceAnimation,
+    source: SceneObjectId,
+    glass: SceneObjectId,
+    source_dimensions: [u32; 2],
+    glass_dimensions: [u32; 2],
 }
 
 struct AnimatedGenericTexture {
-    texture: usize,
+    id: SceneObjectId,
+    texture: Option<usize>,
     frames: Vec<Vec<u8>>,
+    index_frames: Vec<Vec<u8>>,
     next: Vec<Option<usize>>,
     current: usize,
     accumulator: f32,
@@ -4254,6 +4310,39 @@ fn decode_texture(
     let palette = Palette::decode(&palette.package, palette.export_index)?;
     let generic = decode_generic_texture_animation(packages, resolved, &texture, &palette)?;
     let mut palette = palette;
+    let ice = if let Some(ice) = &texture.ice {
+        let source_object = packages
+            .resolve(&resolved.package, ice.source_texture)?
+            .context("ice texture has no source texture")?;
+        let source_texture = Texture::decode(&source_object.package, source_object.export_index)?;
+        let glass_object = packages
+            .resolve(&resolved.package, ice.glass_texture)?
+            .context("ice texture has no glass texture")?;
+        let glass_texture = Texture::decode(&glass_object.package, glass_object.export_index)?;
+        let source = decode_ice_dependency(packages, &source_object, source_texture)?;
+        let glass = decode_ice_dependency(packages, &glass_object, glass_texture)?;
+        let animation = ice.animate(
+            mip.width,
+            mip.height,
+            source.width,
+            source.height,
+            &source.pixels,
+            glass.width,
+            glass.height,
+            &glass.pixels,
+            texture.min_frame_rate,
+            texture.max_frame_rate,
+            texture.prime_count,
+        )?;
+        palette = source.palette.clone();
+        Some(DecodedIceTexture {
+            animation,
+            source,
+            glass,
+        })
+    } else {
+        None
+    };
     let water = if let Some(wet) = &texture.wet {
         let source_object = packages
             .resolve(&resolved.package, wet.source_texture)?
@@ -4281,9 +4370,14 @@ fn decode_texture(
         None
     };
     Ok(DecodedTexture {
+        id: SceneObjectId {
+            package: resolved.package.summary().source.to_string(),
+            export_index: resolved.export_index,
+        },
         texture,
         palette,
         water,
+        ice,
         generic,
     })
 }
@@ -4353,8 +4447,79 @@ fn decode_generic_texture_animation(
     }))
 }
 
-struct DecodedTexture {
+fn decode_ice_dependency(
+    packages: &mut PackageStore,
+    resolved: &ResolvedObject,
     texture: Texture,
+) -> Result<DecodedIceDependency> {
+    ensure!(
+        texture.ice.is_none(),
+        "recursive IceTexture dependencies are not supported"
+    );
+    let mip = texture
+        .mips
+        .first()
+        .context("ice dependency has no mip levels")?;
+    let palette = packages
+        .resolve(&resolved.package, texture.palette)?
+        .context("ice dependency has no palette reference")?;
+    let palette = Palette::decode(&palette.package, palette.export_index)?;
+    let generic = decode_generic_texture_animation(packages, resolved, &texture, &palette)?;
+    let water = if let Some(wet) = &texture.wet {
+        let source_object = packages
+            .resolve(&resolved.package, wet.source_texture)?
+            .context("ice water dependency has no source texture")?;
+        let source_texture = Texture::decode(&source_object.package, source_object.export_index)?;
+        let source = source_texture
+            .mips
+            .first()
+            .context("ice water dependency source has no mip levels")?;
+        wet.animate(
+            mip.width,
+            mip.height,
+            source.width,
+            source.height,
+            &source.indices,
+        )?
+    } else {
+        None
+    };
+    Ok(DecodedIceDependency {
+        id: SceneObjectId {
+            package: resolved.package.summary().source.to_string(),
+            export_index: resolved.export_index,
+        },
+        width: mip.width,
+        height: mip.height,
+        pixels: water
+            .as_ref()
+            .map_or_else(|| mip.indices.clone(), |water| water.indices().to_vec()),
+        palette,
+        water,
+        generic,
+    })
+}
+
+struct DecodedTexture {
+    id: SceneObjectId,
+    texture: Texture,
+    palette: Palette,
+    water: Option<WaterAnimation>,
+    ice: Option<DecodedIceTexture>,
+    generic: Option<GenericTextureAnimation>,
+}
+
+struct DecodedIceTexture {
+    animation: IceAnimation,
+    source: DecodedIceDependency,
+    glass: DecodedIceDependency,
+}
+
+struct DecodedIceDependency {
+    id: SceneObjectId,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
     palette: Palette,
     water: Option<WaterAnimation>,
     generic: Option<GenericTextureAnimation>,
@@ -4370,9 +4535,12 @@ impl DecodedTexture {
         Ok(TextureImage {
             width: mip.width,
             height: mip.height,
-            rgba: match &self.water {
-                Some(water) => water.rgba(&self.palette, masked)?,
-                None => self.texture.rgba(0, &self.palette, masked)?,
+            rgba: if let Some(water) = &self.water {
+                water.rgba(&self.palette, masked)?
+            } else if let Some(ice) = &self.ice {
+                ice.animation.rgba(&self.palette, masked)?
+            } else {
+                self.texture.rgba(0, &self.palette, masked)?
             },
         })
     }
@@ -4386,33 +4554,122 @@ fn append_texture_image(
 ) -> Result<usize> {
     let index = textures.len();
     textures.push(decoded.image(masked)?);
+    let mip = decoded
+        .texture
+        .mips
+        .first()
+        .context("texture has no mip levels")?;
+    let pixels = if let Some(water) = &decoded.water {
+        water.indices().to_vec()
+    } else if let Some(ice) = &decoded.ice {
+        ice.animation.indices().to_vec()
+    } else {
+        mip.indices.clone()
+    };
+    water_animations
+        .pixels
+        .entry(decoded.id.clone())
+        .or_insert(pixels);
     if let Some(animation) = &decoded.water {
         water_animations.water.push(AnimatedWaterTexture {
-            texture: index,
+            id: decoded.id.clone(),
+            texture: Some(index),
             masked,
             palette: decoded.palette.clone(),
             animation: animation.clone(),
         });
     }
-    if let Some(animation) = &decoded.generic {
-        let frames = animation
-            .frames
-            .iter()
-            .map(|(texture, palette)| texture.rgba(0, palette, masked))
-            .collect::<openhp1_texture::Result<Vec<_>>>()?;
-        water_animations.generic.push(AnimatedGenericTexture {
+    if let Some(ice) = &decoded.ice {
+        register_ice_dependency(water_animations, &ice.source)?;
+        register_ice_dependency(water_animations, &ice.glass)?;
+        water_animations.ice.push(AnimatedIceTexture {
+            id: decoded.id.clone(),
             texture: index,
-            frames,
-            next: animation.next.clone(),
-            current: 0,
-            accumulator: 0.0,
-            prime_count: animation.prime_count,
-            prime_current: 0,
-            min_frame_rate: animation.min_frame_rate,
-            max_frame_rate: animation.max_frame_rate,
+            masked,
+            palette: decoded.palette.clone(),
+            animation: ice.animation.clone(),
+            source: ice.source.id.clone(),
+            glass: ice.glass.id.clone(),
+            source_dimensions: [ice.source.width, ice.source.height],
+            glass_dimensions: [ice.glass.width, ice.glass.height],
         });
     }
+    if let Some(animation) = &decoded.generic {
+        water_animations.generic.push(animated_generic_texture(
+            decoded.id.clone(),
+            Some(index),
+            animation,
+            masked,
+        )?);
+    }
     Ok(index)
+}
+
+fn register_ice_dependency(
+    animations: &mut TextureAnimations,
+    dependency: &DecodedIceDependency,
+) -> Result<()> {
+    if animations.pixels.contains_key(&dependency.id) {
+        return Ok(());
+    }
+    animations
+        .pixels
+        .insert(dependency.id.clone(), dependency.pixels.clone());
+    if let Some(water) = &dependency.water {
+        animations.water.push(AnimatedWaterTexture {
+            id: dependency.id.clone(),
+            texture: None,
+            masked: false,
+            palette: dependency.palette.clone(),
+            animation: water.clone(),
+        });
+    }
+    if let Some(generic) = &dependency.generic {
+        animations.generic.push(animated_generic_texture(
+            dependency.id.clone(),
+            None,
+            generic,
+            false,
+        )?);
+    }
+    Ok(())
+}
+
+fn animated_generic_texture(
+    id: SceneObjectId,
+    texture: Option<usize>,
+    animation: &GenericTextureAnimation,
+    masked: bool,
+) -> Result<AnimatedGenericTexture> {
+    let frames = animation
+        .frames
+        .iter()
+        .map(|(texture, palette)| texture.rgba(0, palette, masked))
+        .collect::<openhp1_texture::Result<Vec<_>>>()?;
+    let index_frames = animation
+        .frames
+        .iter()
+        .map(|(texture, _)| {
+            texture
+                .mips
+                .first()
+                .context("texture animation frame has no mip levels")
+                .map(|mip| mip.indices.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AnimatedGenericTexture {
+        id,
+        texture,
+        frames,
+        index_frames,
+        next: animation.next.clone(),
+        current: 0,
+        accumulator: 0.0,
+        prime_count: animation.prime_count,
+        prime_current: 0,
+        min_frame_rate: animation.min_frame_rate,
+        max_frame_rate: animation.max_frame_rate,
+    })
 }
 
 fn surface_material(
@@ -4481,7 +4738,9 @@ mod tests {
         ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject,
         ScriptRuntime, WeaponAttachment,
     };
-    use openhp1_texture::TextureRenderFlags;
+    use openhp1_texture::{
+        Color, IcePanningStyle, IceTexture, IceTimeMethod, Palette, TextureRenderFlags,
+    };
 
     use crate::SurfaceMode;
 
@@ -4576,6 +4835,97 @@ mod tests {
         assert!(scene.animations.is_empty());
         assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
         assert_eq!(scene.render.textures[0].rgba, [1; 4]);
+    }
+
+    #[test]
+    fn scene_ice_tick_reports_only_changed_texture_indices() {
+        let pixels = [0; 64];
+        let animation = IceTexture {
+            glass_texture: ObjectReference::None,
+            source_texture: ObjectReference::None,
+            panning_style: IcePanningStyle::Linear,
+            time_method: IceTimeMethod::Realtime,
+            horiz_pan_speed: 128,
+            vert_pan_speed: 128,
+            frequency: 0,
+            amplitude: 0,
+            move_ice: false,
+            master_count: 0.0,
+            u_displace: 0.0,
+            v_displace: 0.0,
+            u_position: 0.0,
+            v_position: 0.0,
+        }
+        .animate(8, 8, 8, 8, &pixels, 8, 8, &pixels, 0.0, 0.0, 0)
+        .unwrap();
+        let mut scene = particle_test_scene();
+        scene.render.textures.push(crate::TextureImage {
+            width: 8,
+            height: 8,
+            rgba: vec![0; 8 * 8 * 4],
+        });
+        let source = crate::SceneObjectId {
+            package: "test".to_owned(),
+            export_index: 1,
+        };
+        let glass = crate::SceneObjectId {
+            package: "test".to_owned(),
+            export_index: 2,
+        };
+        scene
+            .water_animations
+            .pixels
+            .insert(source.clone(), pixels.to_vec());
+        scene
+            .water_animations
+            .pixels
+            .insert(glass.clone(), pixels.to_vec());
+        scene.water_animations.ice.push(super::AnimatedIceTexture {
+            id: crate::SceneObjectId {
+                package: "test".to_owned(),
+                export_index: 0,
+            },
+            texture: 0,
+            masked: false,
+            palette: Palette {
+                colors: vec![
+                    Color {
+                        red: 1,
+                        green: 2,
+                        blue: 3,
+                        alpha: 0,
+                    },
+                    Color {
+                        red: 9,
+                        green: 8,
+                        blue: 7,
+                        alpha: 0,
+                    },
+                ],
+            },
+            animation,
+            source: source.clone(),
+            glass,
+            source_dimensions: [8, 8],
+            glass_dimensions: [8, 8],
+        });
+
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
+
+        let mut dependency = generic_texture(vec![Some(1), Some(1)], 0, 0.0, 0.0);
+        dependency.id = source;
+        dependency.texture = None;
+        dependency.index_frames = vec![vec![0; 64], vec![1; 64]];
+        scene.water_animations.generic.push(dependency);
+        assert_eq!(scene.tick_textures(1.0 / 120.0).unwrap(), [0]);
+        assert!(
+            scene.render.textures[0]
+                .rgba
+                .chunks_exact(4)
+                .all(|pixel| pixel == [9, 8, 7, 255])
+        );
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
     }
 
     #[test]
@@ -5504,8 +5854,13 @@ mod tests {
         max_frame_rate: f32,
     ) -> super::AnimatedGenericTexture {
         super::AnimatedGenericTexture {
-            texture: 0,
+            id: crate::SceneObjectId {
+                package: "generic-test".to_owned(),
+                export_index: 0,
+            },
+            texture: Some(0),
             frames: (0..next.len()).map(|index| vec![index as u8; 4]).collect(),
+            index_frames: (0..next.len()).map(|index| vec![index as u8; 1]).collect(),
             next,
             current: 0,
             accumulator: 0.0,

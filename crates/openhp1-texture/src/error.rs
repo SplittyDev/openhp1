@@ -67,6 +67,35 @@ pub enum Error {
         actual: usize,
     },
 
+    #[error("ice {field} dimensions must be nonzero powers of two, got {width}x{height}")]
+    InvalidIceDimensions {
+        field: &'static str,
+        width: u32,
+        height: u32,
+    },
+
+    #[error("ice {field} is {width}x{height} but contains {actual} palette indices")]
+    InvalidIcePixels {
+        field: &'static str,
+        width: u32,
+        height: u32,
+        actual: usize,
+    },
+
+    #[error(
+        "ice {field} dimensions {actual_width}x{actual_height} do not match {expected_width}x{expected_height}"
+    )]
+    IceDimensionMismatch {
+        field: &'static str,
+        expected_width: u32,
+        expected_height: u32,
+        actual_width: u32,
+        actual_height: u32,
+    },
+
+    #[error("unsupported ice panning style {0}")]
+    UnsupportedIcePanningStyle(u8),
+
     #[error("unsupported water drop type {0}")]
     UnsupportedWaterDropType(u8),
 

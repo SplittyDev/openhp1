@@ -336,10 +336,10 @@ commit, and live-verification fields for each item.
       (`0x1050a340-0x1050a478`), `Tick` (`0x1050a4b0-0x1050a5c3`),
       `RenderIce` (`0x1050a600-0x1050a6f5`), and `Lock`
       (`0x1050e560-0x1050e5fc`).
-  - [ ] Preserve the recovered layout from `GlassTexture/SourceTexture` at
+  - [x] Preserve the recovered layout from `GlassTexture/SourceTexture` at
         `0xd8/0xdc` through `ForceRefresh` at `0x118`, including cached prior
         references/positions and the `LocalSource` blit guard.
-  - [ ] Implement movement exactly: `MasterCount += 120*dt`,
+  - [x] Implement movement exactly: `MasterCount += 120*dt`,
         `UDisplace -= 2*signed(HorizPanSpeed-128)*dt`, and
         `VDisplace += 2*signed(VertPanSpeed-128)*dt`; apply Linear, Circular,
         Gestation, WavyX, and WavyY using `(Frequency+1)*MasterCount`, amplitude
@@ -347,21 +347,35 @@ commit, and live-verification fields for each item.
         Gestation V), half amplitude for WavyX/Y, and nearest-integer positions.
         Frame-rate-sync uses Engine's base tick plus an exact `1/120` native
         step; the other time method consumes frame `dt`.
-  - [ ] For power-of-two masks and rounded `u/v`, implement `MoveIce=0` as
+  - [x] For power-of-two masks and rounded `u/v`, implement `MoveIce=0` as
         `D(x,y)=Source((x+u+Glass(x,y))&UMask,(y+v)&VMask)` and `MoveIce=1` as
         `D(x,y)=Source((x+Glass((x+u)&UMask,(y+v)&VMask))&UMask,y)`. Preserve
         unsigned glass samples, unchanged-state suppression, forced refresh,
         source/glass replacement, and the recovered dependency lock/unlock
         calls. Their virtual/device internals remain unresolved but do not
         change the proved pixel equations.
-  - [ ] Acceptance: use an 8x8 `S(x,y)=8y+x`, `G(x,y)=x`, `u=1,v=2` fixture
+  - [x] Deterministic acceptance: use an 8x8 `S(x,y)=8y+x`, `G(x,y)=x`, `u=1,v=2` fixture
         for both blits; prove a `1/120` step at speeds `129/127` produces
         master `+1` and U/V displacement `-1/60`; cover every panning/time
         mode, cache/force/local-source/lock behavior, and incremental upload.
-        Compare `HP_Dungeon.doors.SlydoorICE` (linear 128/100, frequency 11,
+        Focused texture/scene nextest passes 79 tests, and checks through the
+        game/viewer pass. A read-only census decodes and animates all six
+        shipped Ice textures with stable checksums. All twelve dependencies are
+        ordinary static `Texture` objects with exact destination dimensions.
+  - [ ] Live acceptance: compare `HP_Dungeon.doors.SlydoorICE` (linear 128/100,
+        frequency 11,
         amplitude 44), `HP_FX.Snitch_Halo` (circular 128/128, frequency 20,
         amplitude 95), `BlueFog_01`, and `GreenFog`; replay halo users in
         `Lev2_Quid1`, `Lev3_Quid2`, and representative `Quid_*` maps.
+  - [ ] Unproved engine-general boundary: native virtual locks structurally
+        permit an Ice dependency that is itself Ice, but the complete shipped
+        corpus has none and establishes no cycle/order semantics. OpenHP1 fails
+        that case explicitly. A scan of 6,816 compiled Class/State/Function/
+        Struct exports also found no `SourceTexture` or `GlassTexture` writes;
+        runtime dependency-identity replacement therefore remains unimplemented
+        rather than guessed. Fixed-identity pixel refresh, native smaller-source
+        expansion/`LocalSource`, first-lock output, priming, signed time, and
+        same-tick incremental upload are implemented.
 - [ ] `BASE-009B` Implement exact shipped FireTexture animation as a separate
       feature/commit after Ice. Direct evidence covers `ConstantTimeTick`
       (`0x105082c0-0x105083d5`), `AddSpark` (`0x10501130-0x1050196f`),
