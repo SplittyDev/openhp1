@@ -513,6 +513,20 @@ commit, and live-verification fields for each item.
   - [x] Reachability boundary: stock HP1 bindings do not expose `RMODE`; retail
         access is through editor/custom console binding. Manual acceptance may
         use a custom binding, but no map-specific gameplay gate exists.
+- [x] `EDITOR-001` Classify renderer hit proxies as shipped editor selection,
+      not player-facing game-renderer behavior. DrawFrame wraps BSP surfaces in
+      `HBspSurf` and actor dispatch in redirected `HActor` proxies
+      ([R:2766-2777](../res/Ghidra_Render.c#L2766),
+      [R:13126-13628](../res/Ghidra_Render.c#L13126)); a viewport enters hit
+      mode only when its caller supplies a hit buffer
+      ([E:59840-59937](../res/Ghidra_Engine.c#L59840)). Shipped Editor.dll
+      consumes `ExecuteHits`; HP.exe has no corresponding imports.
+  - [x] No Classic/Modern implementation is required for stock HP1 gameplay.
+        Runtime collision and `Trace` own gameplay interaction and are not
+        renderer-pick substitutes. If editor/viewer picking becomes scope,
+        preserve actor/surface IDs on the shared submission plan and add one
+        on-demand scissored integer-ID/depth pass shared by both pipelines;
+        do not reproduce D3D's framebuffer-sentinel mechanism.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
