@@ -170,6 +170,24 @@ This is the implementation queue discovered by the initial code/evidence pass.
 The audit matrix owns the detailed semantics, code mapping, tests, corpus input,
 commit, and live-verification fields for each item.
 
+- [ ] `CLASSIC-003` Move Classic brightness correction to one final
+      post-composite transform and use the shipped D3D exponent
+      `1/(Brightness*2.5)`. Direct evidence: shipped `D3DDrv.dll` SHA-256
+      `7683b11647dafe3926eff7d0d055abbe3d728648a19f5f8a613fd03efd151599`,
+      `Flush` RVA `0x10aa` → VA `0x10002e00`. D3D installs a final hardware
+      gamma ramp with `pow(i/255, exponent)`; OpenHP1 currently uses
+      `1/(Brightness*2.0)` inside material shaders before blending
+      (`renderer.rs:1715-1717`, `scene.wgsl:370-372`). This is the highest
+      confidence independent device gap; preserve Modern's explicit HDR/tone
+      pipeline.
+  - [ ] Deterministic acceptance: `.5 -> .8`, `.6 -> 2/3`, a case that
+        distinguishes blend-then-gamma from gamma-then-blend, disabled/neutral
+        behavior, and proof that Classic applies the transform once after
+        scene blending/flash while Modern remains unchanged.
+  - [ ] Live acceptance: fixed-camera retail/Classic captures at identical
+        brightness values, including opaque, translucent, and modulated pixels;
+        record OS/display gamma conditions.
+
 - [ ] `MOD-001` Stop decoding the already-linear Modern sky render target from
       sRGB a second time when projecting fake backdrops. Evidence:
       `Ghidra_Render.c:2323-3156`; current divergence: `scene.wgsl:204`.
@@ -235,9 +253,39 @@ commit, and live-verification fields for each item.
   - [ ] Locate and replay representative shipped `PF_SmallWavy` surfaces in
         Classic, Modern, and retail; keep the parent open until visual acceptance.
 - [ ] `BASE-007` Preserve, upload, and sample retail mip chains and LOD choices.
-      Evidence: `Ghidra_Engine.c:28739-28755,65770-65777,121084-121092`;
-      current single-level paths: `openhp1-scene/src/loader.rs:4152-4154` and
-      `renderer/pipeline.rs:263-270`.
+      Engine evidence: `Ghidra_Engine.c:28739-28755,65770-65777,121084-121092`.
+      Direct D3D device evidence: `InitTextureStageState` RVA `0x10b9` → VA
+      `0x1000adf0` selects NONE/POINT/LINEAR mip filtering and LOD bias `-0.5`;
+      `SetTexture` RVA `0x10e6` → VA `0x10009a80` selects and uploads supported
+      authored levels. Shipped D3D enables mipmapping and disables trilinear,
+      so its default is linear min/mag with point selection between mip levels.
+      Current single-level paths: `openhp1-scene/src/loader.rs:4246` and
+      `openhp1-render/src/renderer.rs:495-502`.
+  - [ ] Deterministic acceptance: retain every valid decoded level, upload the
+        exact dimensions/rows, bind the complete view, select the shipped
+        point-mip policy for Classic, and cover no-mip and trilinear settings
+        independently. Live acceptance uses distant and oblique authored walls.
+- [ ] `BASE-013` Carry effective `bNoSmooth`/polyflag `0x800` into shared
+      material state and select point min/mag filtering for that draw. Direct
+      evidence: D3D `SetBlending` RVA `0x104b` → VA `0x100092d0`; the state is
+      independent of the mip-chain policy in `BASE-007`. Current gaps:
+      `openhp1-map/src/bsp.rs:44-64` has no named flag and the renderer has one
+      global linear sampler (`renderer.rs:495-502`).
+  - [ ] Deterministic acceptance: effective surface-or-texture NoSmooth selects
+        point min/mag while the default stays linear; prove mip choice remains
+        independently configured. Scan the shipped corpus before naming a live
+        representative.
+- [ ] `BASE-014` Disable hardware back-face culling in both renderers after the
+      renderer's CPU/BSP side-admission decision. Direct evidence: D3D `SetRes`
+      RVA `0x1064` → VA `0x1000b360` sets `CULLMODE=NONE`, and the shipped DLL
+      has no other render-state-22 write. Current shared pipelines back-cull
+      non-TwoSided materials (`renderer/pipeline.rs:47-57`). The original
+      side-admission behavior belongs in the shared scene/traversal path, not a
+      mode-specific device state.
+  - [ ] Deterministic acceptance: both triangle windings submitted after CPU
+        admission render in Classic and Modern, including reflected winding.
+        Select a shipped live representative from a corpus/capture showing an
+        actually submitted back-facing primitive.
 - [ ] `BASE-008` Advance generic `AnimNext` texture chains with their authored
       `PrimeCount`, `MinFrameRate`, and `MaxFrameRate` semantics through the
       shared texture-update path. Direct evidence:
@@ -418,9 +466,24 @@ commit, and live-verification fields for each item.
 
 ### Evidence still required
 
-- [ ] Audit the original render-device DLL before claiming exact sampler,
-      `bNoSmooth`, mip-bias, 16-bit dithering, texture-cache, or fixed-function
-      raster-precision parity; Render.dll delegates those operations.
+- [x] Audit the shipped D3D render-device DLL for delegated visual/config
+      behavior. The renderer audit records the 40-entry `UD3DRenderDevice`
+      export block, direct blend/polyflag/depth/filter/stage/attachment/frame/
+      gamma states, source and generated-artifact hashes, and a reproducible
+      Ghidra 12.1.2 headless workflow. `SoftDrv.dll` was used only to separate
+      software clear and `(Brightness+0.5)/128` shade-table behavior from D3D's
+      final `2.5` gamma ramp; temporary analysis files are not repository
+      dependencies.
+- [ ] Trace Render.dll caller reachability and effective configuration before
+      promoting D3D's RenderFog/specular branch, Invisible `ZERO/ONE`
+      depth-writing branch, or AlphaBlend-only `ONE/INVSRCALPHA` branch to an
+      OpenHP1 defect. Preserve the live-confirmed actor-opacity path meanwhile.
+- [ ] Correlate Render.dll auxiliary texture slots with detail/macro/fog
+      properties and find shipped non-null representatives before implementing
+      the device's conditional follow-up passes. D3D ships DetailTextures off.
+- [ ] Use controlled retail captures before claiming spatial 16-bit dithering
+      or fixed-function raster precision; D3D requests dithering, but driver
+      output is implementation-dependent.
 - [x] Decompile shipped `Fire.dll` far enough to recover implementation-ready
       FireTexture and IceTexture simulation; the exact native addresses,
       formulas, state, ordering, and narrow unresolved hooks are recorded in
