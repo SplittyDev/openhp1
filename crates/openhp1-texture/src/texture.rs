@@ -18,6 +18,10 @@ pub struct MipLevel {
 pub struct Texture {
     pub palette: ObjectReference,
     pub anim_next: ObjectReference,
+    /// Optional close-range detail overlay (`UTexture::DetailTexture`, +0x58).
+    pub detail_texture: ObjectReference,
+    /// Optional large-scale macro overlay (`UTexture::MacroTexture`, +0x5c).
+    pub macro_texture: ObjectReference,
     pub prime_count: u8,
     pub min_frame_rate: f32,
     pub max_frame_rate: f32,
@@ -40,6 +44,7 @@ pub struct TextureRenderFlags {
     pub fake_backdrop: bool,
     pub two_sided: bool,
     pub no_smooth: bool,
+    pub portal: bool,
     pub mirrored: bool,
 }
 
@@ -153,6 +158,8 @@ impl Texture {
         let mut reader = package.export_reader(export_index)?;
         let mut palette = None;
         let mut anim_next = ObjectReference::None;
+        let mut detail_texture = ObjectReference::None;
+        let mut macro_texture = ObjectReference::None;
         let mut prime_count = 0;
         let mut min_frame_rate = 0.0;
         let mut max_frame_rate = 0.0;
@@ -189,6 +196,12 @@ impl Texture {
                 }
                 "AnimNext" if property.kind == PropertyKind::Object => {
                     anim_next = reader.property_reader(&property).read_object_reference()?;
+                }
+                "DetailTexture" if property.kind == PropertyKind::Object => {
+                    detail_texture = reader.property_reader(&property).read_object_reference()?;
+                }
+                "MacroTexture" if property.kind == PropertyKind::Object => {
+                    macro_texture = reader.property_reader(&property).read_object_reference()?;
                 }
                 "PrimeCount" if property.kind == PropertyKind::Byte => {
                     prime_count = reader.property_reader(&property).read_u8()?;
@@ -379,6 +392,8 @@ impl Texture {
         Ok(Self {
             palette,
             anim_next,
+            detail_texture,
+            macro_texture,
             prime_count,
             min_frame_rate,
             max_frame_rate,
@@ -1134,6 +1149,8 @@ impl TextureRenderFlags {
             self.two_sided = value;
         } else if name.eq_ignore_ascii_case("bNoSmooth") {
             self.no_smooth = value;
+        } else if name.eq_ignore_ascii_case("bPortal") {
+            self.portal = value;
         } else if name.eq_ignore_ascii_case("bMirrored") {
             self.mirrored = value;
         }
@@ -1187,6 +1204,8 @@ mod tests {
         let texture = Texture {
             palette: ObjectReference::None,
             anim_next: ObjectReference::None,
+            detail_texture: ObjectReference::None,
+            macro_texture: ObjectReference::None,
             prime_count: 0,
             min_frame_rate: 0.0,
             max_frame_rate: 0.0,
@@ -1234,12 +1253,14 @@ mod tests {
         flags.set("bModulate", true);
         flags.set("bTwoSided", true);
         flags.set("bNoSmooth", true);
+        flags.set("bPortal", true);
         flags.set("bMirrored", true);
         assert!(flags.masked);
         assert!(flags.translucent);
         assert!(flags.modulated);
         assert!(flags.two_sided);
         assert!(flags.no_smooth);
+        assert!(flags.portal);
         assert!(flags.mirrored);
     }
 
@@ -1248,9 +1269,12 @@ mod tests {
         let texture = Texture::decode(&synthetic_animated_texture(), 0).unwrap();
 
         assert_eq!(texture.anim_next, ObjectReference::Export(0));
+        assert_eq!(texture.detail_texture, ObjectReference::Export(0));
+        assert_eq!(texture.macro_texture, ObjectReference::Export(0));
         assert_eq!(texture.prime_count, 3);
         assert_eq!(texture.min_frame_rate, 12.0);
         assert_eq!(texture.max_frame_rate, 24.0);
+        assert!(texture.render_flags.portal);
     }
 
     #[test]
@@ -1630,9 +1654,12 @@ mod tests {
             "Animated",
             "Palette",
             "AnimNext",
+            "DetailTexture",
+            "MacroTexture",
             "PrimeCount",
             "MinFrameRate",
             "MaxFrameRate",
+            "bPortal",
         ];
         let mut name_table = Vec::new();
         for name in names {
@@ -1644,10 +1671,13 @@ mod tests {
         push_i32(&mut import_table, 0);
         import_table.push(3);
 
-        let mut payload = vec![5, 0x05, 0, 6, 0x05, 1, 7, 0x01, 3, 8, 0x24];
+        let mut payload = vec![
+            5, 0x05, 0, 6, 0x05, 1, 7, 0x05, 1, 8, 0x05, 1, 9, 0x01, 3, 10, 0x24,
+        ];
         payload.extend(12.0_f32.to_le_bytes());
-        payload.extend([9, 0x24]);
+        payload.extend([11, 0x24]);
         payload.extend(24.0_f32.to_le_bytes());
+        payload.extend([12, 0x83]);
         payload.extend([0, 1, 1, 7]);
         payload.extend(1_u32.to_le_bytes());
         payload.extend(1_u32.to_le_bytes());

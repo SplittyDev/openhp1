@@ -21,8 +21,9 @@ mod target;
 use crate::camera::{reflected_view, warp_view};
 use atlas::{AtlasRectangle, build_lightmap_atlas, lightmap_patch};
 use batch::{
-    BackdropBatch, BlendedSurface, DrawBatch, backdrop_batches, blended_surfaces,
-    mirror_geometries, sorted_blended_batches, texture_batches, update_blended_centers,
+    BackdropBatch, BlendedSurface, DrawBatch, MaterialBinding, attachment_enabled,
+    backdrop_batches, blended_surfaces, material_bindings, mirror_geometries,
+    sorted_blended_batches, texture_batches, update_blended_centers,
 };
 use classic::ClassicDisplay;
 use lighting::ModernLighting;
@@ -30,7 +31,8 @@ use modern::{HDR_FORMAT, ModernRenderer};
 #[cfg(test)]
 use pipeline::{blend_state, fragment_entry};
 use pipeline::{
-    create_pipeline, create_screen_pipeline, texture, texture_bind_group, write_texture_mips,
+    create_attachment_pipeline, create_pipeline, create_screen_pipeline,
+    material_texture_bind_group, texture, texture_bind_group, write_texture_mips,
 };
 use target::{DepthTarget, SampledTarget};
 
@@ -66,6 +68,9 @@ struct Vertex {
     lighting_index: u32,
     uv_effect_scale: [f32; 2],
     node_plane_normal: [f32; 3],
+    macro_texture_coordinates: [f32; 2],
+    detail_texture_coordinates: [f32; 2],
+    attachment_flags: [u32; 2],
 }
 
 #[repr(C)]
@@ -92,6 +97,7 @@ struct FlashPass {
 
 struct Mirror {
     surface: usize,
+    binding: usize,
     plane: (Vec3, Vec3),
     bounds: (Vec3, Vec3),
     camera_buffer: wgpu::Buffer,
@@ -137,6 +143,7 @@ enum ScenePass {
 pub struct Renderer {
     pipelines: [wgpu::RenderPipeline; PIPELINE_COUNT],
     reflected_pipelines: Option<[wgpu::RenderPipeline; PIPELINE_COUNT]>,
+    attachment_pipelines: [wgpu::RenderPipeline; 20],
     backdrop_pipelines: [wgpu::RenderPipeline; 2],
     mirror_pipelines: [wgpu::RenderPipeline; 2],
     camera_buffer: wgpu::Buffer,
@@ -145,6 +152,8 @@ pub struct Renderer {
     sky_camera_bind_group: Option<wgpu::BindGroup>,
     textures: Vec<wgpu::Texture>,
     texture_bind_groups: [Vec<wgpu::BindGroup>; 2],
+    material_bind_groups: Vec<wgpu::BindGroup>,
+    material_bindings: Vec<MaterialBinding>,
     vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
     opaque_index_buffer: wgpu::Buffer,
@@ -166,6 +175,7 @@ pub struct Renderer {
     sky_zone: Option<openhp1_scene::SkyZone>,
     target_format: wgpu::TextureFormat,
     texture_layout: wgpu::BindGroupLayout,
+    texture_samplers: [wgpu::Sampler; 2],
     sky_samplers: [wgpu::Sampler; 2],
     lightmap_texture: wgpu::Texture,
     lightmap_view: wgpu::TextureView,
@@ -386,6 +396,13 @@ impl Renderer {
                     [texture.width as f32, texture.height as f32]
                 });
                 let coordinates = scene.mesh.texture_coordinates[vertex_index];
+                let attachment_draw_scale = |draw_scale: f32| {
+                    if draw_scale.is_finite() && draw_scale != 0.0 {
+                        draw_scale
+                    } else {
+                        1.0
+                    }
+                };
                 let lightmap_index = scene
                     .surface_materials
                     .get(surface)
@@ -478,13 +495,28 @@ impl Renderer {
                             .unwrap_or(Vec3::ZERO),
                     )
                     .to_array(),
+                    macro_texture_coordinates: macro_attachment_coordinates(
+                        coordinates.to_array(),
+                        material.bsp_texture_pan,
+                        attachment_draw_scale(material.macro_draw_scale),
+                    ),
+                    detail_texture_coordinates: detail_attachment_coordinates(
+                        coordinates.to_array(),
+                        material.bsp_texture_pan,
+                        attachment_draw_scale(material.detail_draw_scale),
+                    ),
+                    attachment_flags: attachment_enabled(material, settings.detail_textures)
+                        .map(u32::from),
                 }
             })
             .collect();
         let bounds = scene_bounds(&vertices);
-        let (opaque_indices, opaque_batches) = texture_batches(scene, fallback_texture);
+        let (material_bindings, surface_bindings) =
+            material_bindings(scene, fallback_texture, settings.detail_textures);
+        let (opaque_indices, opaque_batches) =
+            texture_batches(scene, &material_bindings, &surface_bindings);
         let (backdrop_indices, backdrop_batches) = backdrop_batches(scene);
-        let mirror_geometries = mirror_geometries(scene);
+        let mirror_geometries = mirror_geometries(scene, &surface_bindings);
         let warp_portal_geometries = scene
             .warp_portals
             .iter()
@@ -500,7 +532,13 @@ impl Renderer {
                 (!indices.is_empty()).then_some((*portal, indices))
             })
             .collect::<Vec<_>>();
-        let blended_surfaces = blended_surfaces(scene, fallback_texture, &vertices);
+        let blended_surfaces = blended_surfaces(
+            scene,
+            fallback_texture,
+            &vertices,
+            &material_bindings,
+            &surface_bindings,
+        );
         let blended_index_count = blended_surfaces
             .iter()
             .map(|surface| surface.indices.len())
@@ -622,6 +660,38 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let texture_samplers = [false, true].map(|no_smooth| {
@@ -688,6 +758,16 @@ impl Renderer {
                 })
                 .collect()
         });
+        let material_bind_groups = build_material_bind_groups(
+            device,
+            &texture_layout,
+            &texture_samplers,
+            &textures,
+            fallback_texture,
+            &lightmap_view,
+            &lightmap_sampler,
+            &material_bindings,
+        );
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
         let lighting_layout = modern_enabled.then(|| ModernLighting::layout(device));
         let mut bind_group_layouts = vec![Some(&camera_layout), Some(&texture_layout)];
@@ -721,6 +801,32 @@ impl Renderer {
                 },
                 modern_enabled,
                 false,
+            )
+        });
+        let attachment_entries = [
+            if modern_enabled {
+                "fragment_modern_macro"
+            } else {
+                "fragment_macro"
+            },
+            if modern_enabled {
+                "fragment_modern_attachment_light"
+            } else {
+                "fragment_attachment_light"
+            },
+            "fragment_detail_0",
+            "fragment_detail_1",
+            "fragment_detail_2",
+        ];
+        let attachment_pipelines = std::array::from_fn(|index| {
+            create_attachment_pipeline(
+                device,
+                scene_format,
+                &pipeline_layout,
+                &shader,
+                attachment_entries[index % 5],
+                index / 5 % 2 != 0,
+                index >= 10,
             )
         });
         let reflected_pipelines = (!mirror_geometries.is_empty()).then(|| {
@@ -770,7 +876,11 @@ impl Renderer {
                 &pipeline_layout,
                 &shader,
                 index != 0,
-                "fragment_mirror",
+                if modern_enabled {
+                    "fragment_modern_mirror"
+                } else {
+                    "fragment_mirror"
+                },
             )
         });
         let sky_target = scene.sky_zone.map(|_| {
@@ -809,6 +919,7 @@ impl Renderer {
                 });
                 Some(Mirror {
                     surface: geometry.surface,
+                    binding: geometry.binding,
                     plane,
                     bounds: surface_bounds(scene, &vertices, geometry.surface)?,
                     camera_buffer,
@@ -908,6 +1019,7 @@ impl Renderer {
         Self {
             pipelines,
             reflected_pipelines,
+            attachment_pipelines,
             backdrop_pipelines,
             mirror_pipelines,
             camera_buffer,
@@ -916,6 +1028,8 @@ impl Renderer {
             sky_camera_bind_group,
             textures,
             texture_bind_groups,
+            material_bind_groups,
+            material_bindings,
             vertices,
             vertex_buffer,
             opaque_index_buffer,
@@ -937,6 +1051,7 @@ impl Renderer {
             sky_zone: scene.sky_zone,
             target_format,
             texture_layout,
+            texture_samplers,
             sky_samplers,
             lightmap_texture,
             lightmap_view,
@@ -1056,6 +1171,7 @@ impl Renderer {
         if images.len() + 1 != self.textures.len() {
             return false;
         }
+        let mut recreated = false;
         for &index in changed {
             let Some(image) = images.get(index) else {
                 return false;
@@ -1071,26 +1187,33 @@ impl Renderer {
             ) {
                 let replacement = texture(device, queue, "OpenHP1 texture", image);
                 let view = replacement.create_view(&Default::default());
-                for (filter, no_smooth) in [false, true].into_iter().enumerate() {
-                    let sampler = texture_sampler(
-                        device,
-                        "OpenHP1 texture sampler",
-                        wgpu::AddressMode::Repeat,
-                        no_smooth,
-                    );
+                for filter in 0..2 {
                     self.texture_bind_groups[filter][index] = texture_bind_group(
                         device,
                         &self.texture_layout,
-                        &sampler,
+                        &self.texture_samplers[filter],
                         &view,
                         &self.lightmap_view,
                         &self.lightmap_sampler,
                     );
                 }
                 self.textures[index] = replacement;
+                recreated = true;
             } else if !write_texture_mips(queue, current, image) {
                 return false;
             }
+        }
+        if recreated {
+            self.material_bind_groups = build_material_bind_groups(
+                device,
+                &self.texture_layout,
+                &self.texture_samplers,
+                &self.textures,
+                self.textures.len() - 1,
+                &self.lightmap_view,
+                &self.lightmap_sampler,
+                &self.material_bindings,
+            );
         }
         self.stats.texture_memory_bytes =
             images.iter().map(TextureImage::byte_len).sum::<usize>() + CHECKERBOARD_MEMORY_BYTES;
@@ -1765,6 +1888,7 @@ impl Renderer {
         } else {
             &self.pipelines
         };
+        let reflected = matches!(scene_pass, ScenePass::Reflection);
         pass.set_bind_group(0, camera_bind_group, &[]);
         if let Some(lighting) = &self.lighting {
             pass.set_bind_group(2, &lighting.bind_group, &[]);
@@ -1805,6 +1929,9 @@ impl Renderer {
             pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
             pass.draw_indexed(0..mirror.index_count, 0, 0..1);
             draw_calls += 1;
+            pass.set_bind_group(1, &self.material_bind_groups[mirror.binding], &[]);
+            draw_calls +=
+                self.draw_attachments(pass, mirror.binding, 0..mirror.index_count, reflected);
         }
         if !self.opaque_batches.is_empty() {
             pass.set_index_buffer(
@@ -1813,13 +1940,11 @@ impl Renderer {
             );
             for batch in &self.opaque_batches {
                 pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(
-                    1,
-                    &self.texture_bind_groups[usize::from(batch.no_smooth)][batch.texture],
-                    &[],
-                );
+                pass.set_bind_group(1, &self.material_bind_groups[batch.binding], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
+                draw_calls +=
+                    self.draw_attachments(pass, batch.binding, batch.indices.clone(), reflected);
             }
         }
         if matches!(scene_pass, ScenePass::Main) {
@@ -1829,6 +1954,9 @@ impl Renderer {
                 pass.set_pipeline(&self.mirror_pipelines[mirror.pipeline]);
                 pass.draw_indexed(0..mirror.index_count, 0, 0..1);
                 draw_calls += 1;
+                pass.set_bind_group(1, &self.material_bind_groups[mirror.binding], &[]);
+                draw_calls +=
+                    self.draw_attachments(pass, mirror.binding, 0..mirror.index_count, reflected);
             }
         }
         if let Some(backdrop_target) = backdrop_target
@@ -1849,17 +1977,113 @@ impl Renderer {
             pass.set_index_buffer(blended_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             for batch in blended_batches {
                 pass.set_pipeline(&pipelines[batch.pipeline]);
-                pass.set_bind_group(
-                    1,
-                    &self.texture_bind_groups[usize::from(batch.no_smooth)][batch.texture],
-                    &[],
-                );
+                pass.set_bind_group(1, &self.material_bind_groups[batch.binding], &[]);
                 pass.draw_indexed(batch.indices.clone(), 0, 0..1);
                 draw_calls += 1;
+                draw_calls +=
+                    self.draw_attachments(pass, batch.binding, batch.indices.clone(), reflected);
             }
         }
         draw_calls
     }
+
+    fn draw_attachments<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        binding: usize,
+        indices: std::ops::Range<u32>,
+        reflected: bool,
+    ) -> usize {
+        let material = self.material_bindings[binding];
+        let mut draw_calls = 0;
+        for pipeline in attachment_pipeline_indices(material) {
+            pass.set_pipeline(
+                &self.attachment_pipelines
+                    [attachment_pipeline_index(material, pipeline, reflected)],
+            );
+            pass.draw_indexed(indices.clone(), 0, 0..1);
+            draw_calls += 1;
+        }
+        draw_calls
+    }
+}
+
+fn attachment_pipeline_index(material: MaterialBinding, pass: usize, reflected: bool) -> usize {
+    pass + usize::from(material.pipeline % 2 != 0) * 5 + usize::from(reflected) * 10
+}
+
+fn attachment_pipeline_indices(material: MaterialBinding) -> impl Iterator<Item = usize> {
+    let mut passes = [None; 5];
+    let mut count = 0;
+    if material.macro_enabled {
+        passes[count] = Some(0);
+        count += 1;
+        if material.lit {
+            passes[count] = Some(1);
+            count += 1;
+        }
+    }
+    if material.detail_enabled {
+        for pipeline in 2..5 {
+            passes[count] = Some(pipeline);
+            count += 1;
+        }
+    }
+    passes.into_iter().flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_material_bind_groups(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    samplers: &[wgpu::Sampler; 2],
+    textures: &[wgpu::Texture],
+    fallback_texture: usize,
+    lightmap_view: &wgpu::TextureView,
+    lightmap_sampler: &wgpu::Sampler,
+    materials: &[MaterialBinding],
+) -> Vec<wgpu::BindGroup> {
+    let view =
+        |index: usize| textures[index.min(fallback_texture)].create_view(&Default::default());
+    materials
+        .iter()
+        .map(|material| {
+            let base = view(material.texture);
+            let macro_texture = view(material.macro_texture);
+            let detail_texture = view(material.detail_texture);
+            material_texture_bind_group(
+                device,
+                layout,
+                samplers,
+                material.no_smooth,
+                &base,
+                &macro_texture,
+                &detail_texture,
+                lightmap_view,
+                lightmap_sampler,
+            )
+        })
+        .collect()
+}
+
+fn detail_attachment_coordinates(
+    coordinates: [f32; 2],
+    bsp_pan: [f32; 2],
+    draw_scale: f32,
+) -> [f32; 2] {
+    [
+        (coordinates[0] - bsp_pan[0]) / draw_scale,
+        (coordinates[1] - bsp_pan[1]) / draw_scale,
+    ]
+}
+
+fn macro_attachment_coordinates(
+    coordinates: [f32; 2],
+    bsp_pan: [f32; 2],
+    draw_scale: f32,
+) -> [f32; 2] {
+    detail_attachment_coordinates(coordinates, bsp_pan, draw_scale)
+        .map(|coordinate| coordinate + 0.5)
 }
 
 fn texture_needs_recreation(
@@ -2142,7 +2366,8 @@ mod tests {
         assert!(shader.contains("scene.a >= 0.5"));
         assert!(scene_shader.contains("vec4(color.rgb, 0.0)"));
         assert!(scene_shader.contains("min(light.color.rgb * strength, vec3(1.0))"));
-        assert!(scene_shader.contains("srgb_to_linear(color.rgb * illumination * 2.0)"));
+        assert!(scene_shader.contains("color.rgb * illumination * 2.0"));
+        assert!(scene_shader.contains("srgb_to_linear(display_color.rgb)"));
         assert!(scene_shader.contains("srgb_to_linear(color.rgb * input.vertex_color.rgb)"));
         assert!(corona_shader.contains("corner * vec2(1.6, 1.6 * aspect) * color_and_scale.w;"));
         assert!(corona_shader.contains("srgb_to_linear(lit) * CORONA_HDR_GAIN"));
@@ -2208,6 +2433,9 @@ mod tests {
                 lighting_index: u32::MAX,
                 uv_effect_scale: [0.0; 2],
                 node_plane_normal: [0.0; 3],
+                macro_texture_coordinates: [0.0; 2],
+                detail_texture_coordinates: [0.0; 2],
+                attachment_flags: [0; 2],
             },
             Vertex {
                 position: [4.0, -1.0, 7.0],
@@ -2222,6 +2450,9 @@ mod tests {
                 lighting_index: u32::MAX,
                 uv_effect_scale: [0.0; 2],
                 node_plane_normal: [0.0; 3],
+                macro_texture_coordinates: [0.0; 2],
+                detail_texture_coordinates: [0.0; 2],
+                attachment_flags: [0; 2],
             },
         ];
         let bounds = scene_bounds(&vertices);
@@ -2261,14 +2492,20 @@ mod tests {
             warp_portals: vec![],
             sky_zone: None,
         };
-        let (indices, batches) = texture_batches(&scene, 2);
+        let (bindings, surfaces) = material_bindings(&scene, 2, false);
+        let (indices, batches) = texture_batches(&scene, &bindings, &surfaces);
         assert_eq!(indices, [6, 7, 8, 0, 1, 2, 3, 4, 5]);
         assert_eq!(
             batches
                 .iter()
-                .map(|batch| (batch.texture, batch.pipeline, batch.indices.clone()))
+                .map(|batch| (
+                    batch.binding,
+                    batch.texture,
+                    batch.pipeline,
+                    batch.indices.clone()
+                ))
                 .collect::<Vec<_>>(),
-            [(0, 0, 0..3), (1, 3, 3..6), (2, 0, 6..9)]
+            [(0, 0, 0, 0..3), (1, 1, 3, 3..6), (2, 2, 0, 6..9)]
         );
     }
 
@@ -2304,12 +2541,167 @@ mod tests {
             sky_zone: None,
         };
 
-        let (_, batches) = texture_batches(&scene, 1);
+        let (bindings, surfaces) = material_bindings(&scene, 1, false);
+        let (_, batches) = texture_batches(&scene, &bindings, &surfaces);
         assert_eq!(batches.len(), 2);
         assert!(!batches[0].no_smooth);
         assert!(batches[1].no_smooth);
         assert_eq!(batches[0].texture, batches[1].texture);
         assert_eq!(batches[0].pipeline, batches[1].pipeline);
+    }
+
+    #[test]
+    fn attachment_batches_group_only_by_bound_resources_and_pipeline() {
+        let scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..9).collect(),
+                triangle_surfaces: vec![0, 1, 2],
+                ..Default::default()
+            },
+            textures: vec![
+                checkerboard(),
+                checkerboard(),
+                checkerboard(),
+                checkerboard(),
+            ],
+            lightmaps: vec![],
+            realtime_lightmaps: vec![],
+            coronas: vec![],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    texture: Some(0),
+                    macro_texture: Some(1),
+                    detail_texture: Some(2),
+                    macro_draw_scale: 2.0,
+                    bsp_texture_pan: [3.0, 4.0],
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    texture: Some(0),
+                    macro_texture: Some(1),
+                    detail_texture: Some(2),
+                    macro_draw_scale: 8.0,
+                    bsp_texture_pan: [9.0, 10.0],
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    texture: Some(0),
+                    macro_texture: Some(1),
+                    detail_texture: Some(3),
+                    ..Default::default()
+                },
+            ],
+            warp_portals: vec![],
+            sky_zone: None,
+        };
+
+        let (bindings, surfaces) = material_bindings(&scene, 4, true);
+        let (indices, batches) = texture_batches(&scene, &bindings, &surfaces);
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(indices, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(batches[0].indices, 0..6);
+        assert_eq!(batches[1].indices, 6..9);
+    }
+
+    #[test]
+    fn blended_attachment_surfaces_complete_auxiliary_passes_before_the_next_surface() {
+        let vertices = [
+            vertex_at(0.0, 0.0, 1.0),
+            vertex_at(1.0, 0.0, 1.0),
+            vertex_at(0.0, 1.0, 1.0),
+            vertex_at(0.0, 0.0, 2.0),
+            vertex_at(1.0, 0.0, 2.0),
+            vertex_at(0.0, 1.0, 2.0),
+        ];
+        let mut scene = RenderScene {
+            mesh: TriangleMesh {
+                indices: (0..6).collect(),
+                triangle_surfaces: vec![0, 1],
+                ..Default::default()
+            },
+            textures: vec![checkerboard(), checkerboard()],
+            lightmaps: vec![],
+            realtime_lightmaps: vec![],
+            coronas: vec![],
+            surface_materials: vec![
+                SurfaceMaterial {
+                    texture: Some(0),
+                    macro_texture: Some(1),
+                    mode: SurfaceMode::Translucent,
+                    ..Default::default()
+                },
+                SurfaceMaterial {
+                    texture: Some(0),
+                    macro_texture: Some(1),
+                    mode: SurfaceMode::Translucent,
+                    ..Default::default()
+                },
+            ],
+            warp_portals: vec![],
+            sky_zone: None,
+        };
+
+        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
+        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
+        assert_eq!(sorted_blended_batches(&surfaces, Vec3::ZERO).1.len(), 2);
+
+        for material in &mut scene.surface_materials {
+            material.macro_texture = None;
+        }
+        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
+        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
+        let (_, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].indices, 0..6);
+    }
+
+    #[test]
+    fn portal_and_fog_map_suppress_only_the_detail_pass() {
+        let bindings_for = |material| {
+            material_bindings(
+                &RenderScene {
+                    textures: vec![checkerboard(), checkerboard(), checkerboard()],
+                    mesh: TriangleMesh::default(),
+                    lightmaps: vec![],
+                    realtime_lightmaps: vec![],
+                    coronas: vec![],
+                    surface_materials: vec![material],
+                    warp_portals: vec![],
+                    sky_zone: None,
+                },
+                3,
+                true,
+            )
+            .0[0]
+        };
+        let attached = SurfaceMaterial {
+            macro_texture: Some(1),
+            detail_texture: Some(2),
+            ..Default::default()
+        };
+        assert!(bindings_for(attached).detail_enabled);
+        assert!(
+            !bindings_for(SurfaceMaterial {
+                portal: true,
+                ..attached
+            })
+            .detail_enabled
+        );
+        assert!(
+            !bindings_for(SurfaceMaterial {
+                fog_map_attached: true,
+                ..attached
+            })
+            .detail_enabled
+        );
+        assert!(
+            bindings_for(SurfaceMaterial {
+                portal: true,
+                ..attached
+            })
+            .macro_enabled
+        );
     }
 
     #[test]
@@ -2367,13 +2759,16 @@ mod tests {
             sky_zone: None,
         };
 
-        assert!(texture_batches(&scene, 0).0.is_empty());
-        let geometries = mirror_geometries(&scene);
+        let (bindings, surfaces) = material_bindings(&scene, 0, false);
+        assert!(texture_batches(&scene, &bindings, &surfaces).0.is_empty());
+        let geometries = mirror_geometries(&scene, &surfaces);
         assert_eq!(geometries.len(), 2);
         assert_eq!(geometries[0].surface, 0);
+        assert_eq!(geometries[0].binding, surfaces[0]);
         assert_eq!(geometries[0].indices, [0, 1, 2]);
         assert_eq!(geometries[0].pipeline, 0);
         assert_eq!(geometries[1].surface, 1);
+        assert_eq!(geometries[1].binding, surfaces[1]);
         assert_eq!(geometries[1].indices, [3, 4, 5]);
         assert_eq!(geometries[1].pipeline, 1);
         assert_eq!(
@@ -2443,7 +2838,8 @@ mod tests {
             warp_portals: vec![],
             sky_zone: None,
         };
-        let surfaces = blended_surfaces(&scene, 2, &vertices);
+        let (bindings, surface_bindings) = material_bindings(&scene, 2, false);
+        let surfaces = blended_surfaces(&scene, 2, &vertices, &bindings, &surface_bindings);
         let (indices, batches) = sorted_blended_batches(&surfaces, Vec3::ZERO);
         assert_eq!(indices, [3, 4, 5, 0, 1, 2]);
         assert_eq!(
@@ -2695,6 +3091,125 @@ mod tests {
     }
 
     #[test]
+    fn attachment_passes_saturate_in_native_order() {
+        assert_eq!(
+            macro_attachment_coordinates([37.0, -11.0], [5.0, -3.0], 2.0),
+            [16.5, -3.5]
+        );
+        assert_eq!(
+            detail_attachment_coordinates([37.0, -11.0], [5.0, -3.0], 2.0),
+            [16.0, -4.0]
+        );
+        let base = 0.8_f32;
+        let macro_pass = (base * 1.0 * 2.0).min(1.0);
+        let light_pass = (macro_pass * 0.25 * 2.0).min(1.0);
+        let collapsed = (base * 1.0 * 2.0 * 0.25 * 2.0).min(1.0);
+        assert_eq!(light_pass, 0.5);
+        assert_eq!(collapsed, 0.8);
+
+        let destination = 0.2_f32;
+        let base_modulated = destination * 1.0 * 2.0;
+        let native_macro = base_modulated * 1.0 * 2.0;
+        let folded_once = destination * (1.0 * 1.0) * 2.0;
+        assert_eq!(native_macro, 0.8);
+        assert_eq!(folded_once, 0.4);
+
+        let detail_alpha = ((380.0_f32 / 190.0 - 1.0) * 100.0).round() / 255.0;
+        let detail_source = detail_alpha * 0.75 + (1.0 - detail_alpha) * (128.0 / 255.0);
+        let detail_pass = (light_pass * detail_source * 2.0).min(1.0);
+        assert!((detail_pass - 0.599_231).abs() < 0.000_001);
+        let detail_visible =
+            |setting: bool, attachment: bool, fog_map: bool| setting && attachment && !fog_map;
+        assert!(detail_visible(true, true, false));
+        assert!(!detail_visible(false, true, false));
+        assert!(!detail_visible(true, true, true));
+        assert!(SCENE_SHADER.contains("380.0 * 0.23679848"));
+        assert!(SCENE_SHADER.contains("4.223 * 4.223"));
+    }
+
+    #[test]
+    fn attachment_pass_planner_matches_multitexture_and_filter_rules() {
+        let binding = |macro_enabled, detail_enabled, lit| MaterialBinding {
+            texture: 0,
+            macro_texture: 1,
+            detail_texture: 2,
+            no_smooth: true,
+            pipeline: 0,
+            macro_enabled,
+            detail_enabled,
+            lit,
+        };
+        assert_eq!(
+            attachment_pipeline_indices(binding(true, true, true)).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            attachment_pipeline_indices(binding(false, true, true)).collect::<Vec<_>>(),
+            [2, 3, 4]
+        );
+        assert_eq!(pipeline::SMOOTH_SAMPLER_INDEX, 0);
+        let one_sided = binding(true, false, true);
+        let two_sided = MaterialBinding {
+            pipeline: 1,
+            ..one_sided
+        };
+        assert_eq!(attachment_pipeline_index(one_sided, 0, false), 0);
+        assert_eq!(attachment_pipeline_index(two_sided, 0, false), 5);
+        assert_eq!(attachment_pipeline_index(one_sided, 0, true), 10);
+
+        let modern_macro = SCENE_SHADER
+            .split_once("fn fragment_modern_macro")
+            .unwrap()
+            .1
+            .split_once("\n}")
+            .unwrap()
+            .0;
+        assert!(modern_macro.contains("return sample_macro(input);"));
+        assert!(!modern_macro.contains("srgb_to_linear"));
+        let neutral = 128.0_f32 / 255.0;
+        assert_eq!(neutral * 2.0, 256.0 / 255.0);
+
+        for function in [
+            "fragment_macro",
+            "fragment_modern_macro",
+            "fragment_attachment_light",
+            "fragment_modern_attachment_light",
+            "detail_source",
+        ] {
+            let body = SCENE_SHADER
+                .split_once(&format!("fn {function}"))
+                .unwrap()
+                .1
+                .split_once("\n}")
+                .unwrap()
+                .0;
+            assert!(body.contains("clip_to_portal(input);"));
+            assert!(!body.contains("sample_color"));
+        }
+        assert!(SCENE_SHADER.contains("if input.attachment_flags.x != 0u"));
+        assert!(SCENE_SHADER.contains("fn fragment_modern_mirror"));
+    }
+
+    #[test]
+    fn detail_alpha_rounds_halfway_values_to_even() {
+        let round_ties_even = |value: f32| {
+            let lower = value.floor();
+            let fraction = value - lower;
+            if fraction > 0.5 || (fraction == 0.5 && lower as u32 % 2 == 1) {
+                lower + 1.0
+            } else {
+                lower
+            }
+        };
+
+        assert_eq!(round_ties_even(0.5), 0.0);
+        assert_eq!(round_ties_even(1.5), 2.0);
+        assert_eq!(round_ties_even(2.5), 2.0);
+        assert_eq!(round_ties_even(3.5), 4.0);
+        assert!(SCENE_SHADER.contains("fraction == 0.5 && u32(lower) % 2u == 1u"));
+    }
+
+    #[test]
     fn extracts_only_fake_backdrop_triangles() {
         let scene = RenderScene {
             mesh: TriangleMesh {
@@ -2742,6 +3257,9 @@ mod tests {
             lighting_index: u32::MAX,
             uv_effect_scale: [0.0; 2],
             node_plane_normal: [0.0; 3],
+            macro_texture_coordinates: [0.0; 2],
+            detail_texture_coordinates: [0.0; 2],
+            attachment_flags: [0; 2],
         }
     }
 }

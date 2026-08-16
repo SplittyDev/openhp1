@@ -90,3 +90,28 @@ The only shipped Wave export is `Detail.WaterDE2`. It is referenced as
 `DetailTexture` by twelve unused `Liquids` textures, and a full-package scan
 finds no map or class import of those owners. This removes a shipped live test
 case, not the engine-compatibility requirement.
+
+## Macro and detail attachments
+
+Regular texture exports may carry independent `MacroTexture` and
+`DetailTexture` object references. OpenHP1 preserves both through the shared
+BSP material path. Attachment palettes are expanded without the base
+surface's masked-index-zero rule because the shipped D3D attachment calls pass
+zero poly flags to `SetTexture`; this also means the auxiliary draws do not
+alpha-test against the base image. Their normalized coordinates remove the BSP
+pan already present in the mesh coordinates, then apply the attachment's own
+dimensions and `DrawScale`, matching `FTextureInfo`. Macro and detail always
+sample smoothly even when the base texture authors `bNoSmooth`. Macro adds the
+native half-texel center offset; detail does not. The base texture's current
+generic-animation frame owns the two attachment references, while only the
+non-null raw root `FBspSurf.Texture`'s authored `bPortal` contributes to stable
+portal classification and detail suppression; a raw-null surface does not
+inherit portal state from `LevelInfo.DefaultTexture`. When `AnimCurrent` changes, OpenHP1
+switches the material attachment identities and UV normalization for the newly
+bound dimensions without changing portal state. The selected attachment object
+is locked directly, so its own `AnimNext` chain is not followed.
+
+The shipped corpus has no reachable owner of either attachment: the 24
+non-null detail properties are confined to otherwise-unused texture exports,
+and no non-null macro property exists. Synthetic checks therefore protect the
+decode, UV, pass-order, saturation, and detail-band equations.

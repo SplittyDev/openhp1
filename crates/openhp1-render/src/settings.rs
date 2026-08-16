@@ -216,6 +216,8 @@ impl DisplaySettings {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RendererSettings {
     pub mode: RendererMode,
+    /// Enables the original three-band `UTexture::DetailTexture` pass.
+    pub detail_textures: bool,
     pub tone_mapper: ToneMapper,
     pub ambient_occlusion: AmbientOcclusion,
     pub antialiasing: Antialiasing,
@@ -227,6 +229,7 @@ impl Default for RendererSettings {
     fn default() -> Self {
         Self {
             mode: RendererMode::Classic,
+            detail_textures: false,
             tone_mapper: ToneMapper::default(),
             ambient_occlusion: AmbientOcclusion::default(),
             antialiasing: Antialiasing::Smaa,
@@ -282,6 +285,7 @@ mod tests {
             AmbientOcclusion::XeGtao
         );
         assert!(RendererSettings::default().volumetric_lighting);
+        assert!(!RendererSettings::default().detail_textures);
         assert_eq!(
             VolumetricTuning::default(),
             VolumetricTuning {

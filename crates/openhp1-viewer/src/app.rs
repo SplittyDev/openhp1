@@ -751,18 +751,23 @@ impl ViewerApp {
     fn update_animations(&mut self, delta_time: f32) {
         let delta_time = delta_time * self.animation_speed;
         match self.scene.tick_textures(delta_time) {
-            Ok(changed)
-                if !self.renderer.update_textures(
+            Ok((changed, materials_changed)) => {
+                if materials_changed {
+                    self.renderer.reload_scene(
+                        &self.state.device,
+                        &self.state.queue,
+                        &self.scene.render,
+                    );
+                } else if !self.renderer.update_textures(
                     &self.state.device,
                     &self.state.queue,
                     &self.scene.render.textures,
                     &changed,
-                ) =>
-            {
-                self.animations_playing = false;
-                self.load_error = Some("animation changed the scene textures".to_owned());
+                ) {
+                    self.animations_playing = false;
+                    self.load_error = Some("animation changed the scene textures".to_owned());
+                }
             }
-            Ok(_) => {}
             Err(error) => {
                 self.animations_playing = false;
                 self.load_error = Some(format!("texture animation failed: {error:#}"));

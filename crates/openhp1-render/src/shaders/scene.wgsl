@@ -21,6 +21,18 @@ var lightmap_texture: texture_2d<f32>;
 @group(1) @binding(3)
 var lightmap_sampler: sampler;
 
+@group(1) @binding(4)
+var macro_texture: texture_2d<f32>;
+
+@group(1) @binding(5)
+var macro_sampler: sampler;
+
+@group(1) @binding(6)
+var detail_texture: texture_2d<f32>;
+
+@group(1) @binding(7)
+var detail_sampler: sampler;
+
 fn sample_color(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleBias(color_texture, color_sampler, uv, -0.5);
 }
@@ -61,6 +73,10 @@ struct VertexOutput {
     @location(6) @interpolate(flat) lighting_index: u32,
     @location(7) lighting_coordinates: vec2<f32>,
     @location(8) environment_color: vec4<f32>,
+    @location(9) macro_texture_coordinates: vec2<f32>,
+    @location(10) detail_texture_coordinates: vec2<f32>,
+    @location(11) @interpolate(flat) attachment_flags: vec2<u32>,
+    @location(12) eye_z: f32,
 };
 
 @vertex
@@ -77,6 +93,9 @@ fn vertex_main(
     @location(9) lighting_index: u32,
     @location(10) uv_effect_scale: vec2<f32>,
     @location(11) node_plane_normal: vec3<f32>,
+    @location(12) macro_texture_coordinates: vec2<f32>,
+    @location(13) detail_texture_coordinates: vec2<f32>,
+    @location(14) attachment_flags: vec2<u32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = camera.view_projection * vec4(position, 1.0);
@@ -120,19 +139,23 @@ fn vertex_main(
     output.world_normal = normal;
     output.lighting_index = lighting_index;
     output.lighting_coordinates = lighting_coordinates;
+    output.macro_texture_coordinates = macro_texture_coordinates;
+    output.detail_texture_coordinates = detail_texture_coordinates;
+    output.attachment_flags = attachment_flags;
+    output.eye_z = -(camera.world_to_view * vec4(position, 1.0)).z;
     return output;
 }
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_lightmap(input, sample_color(input.texture_coordinates));
+    let color = apply_classic_light(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     let texture_color = sample_color(input.texture_coordinates);
-    let color = apply_lightmap(input, texture_color);
+    let color = apply_classic_light(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
@@ -157,14 +180,14 @@ fn fragment_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_lightmap(input, sample_color(input.texture_coordinates));
+    let color = apply_classic_light(input, sample_color(input.texture_coordinates));
     return apply_opacity(input, color);
 }
 
 @fragment
 fn fragment_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     let texture_color = sample_color(input.texture_coordinates);
-    let color = apply_opacity(input, apply_lightmap(input, texture_color));
+    let color = apply_opacity(input, apply_classic_light(input, texture_color));
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
@@ -198,19 +221,38 @@ fn fragment_backdrop(input: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fragment_mirror(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
-    return sample_color(input.clip_position.xy / dimensions);
+    let color = sample_color(input.clip_position.xy / dimensions);
+    if any(input.attachment_flags != vec2(0u)) {
+        return apply_classic_light(input, color);
+    }
+    return color;
+}
+
+@fragment
+fn fragment_modern_mirror(input: VertexOutput) -> @location(0) vec4<f32> {
+    let dimensions = vec2<f32>(textureDimensions(color_texture));
+    let color = sample_color(input.clip_position.xy / dimensions);
+    if input.attachment_flags.x != 0u {
+        clip_to_portal(input);
+        return color;
+    }
+    if input.attachment_flags.y != 0u {
+        let light = apply_realtime_light_display(input, vec4(0.5, 0.5, 0.5, 1.0));
+        return vec4(color.rgb * light.rgb * 2.0, color.a);
+    }
+    return color;
 }
 
 @fragment
 fn fragment_modern(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_realtime_light(input, sample_color(input.texture_coordinates));
+    let color = apply_modern_light(input, sample_color(input.texture_coordinates));
     return preserve_environment_coverage(input, color);
 }
 
 @fragment
 fn fragment_modern_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     let texture_color = sample_color(input.texture_coordinates);
-    let color = apply_realtime_light(input, texture_color);
+    let color = apply_modern_light(input, texture_color);
     if masked_alpha(input, texture_color.a, color.a) < 0.5 {
         discard;
     }
@@ -235,7 +277,7 @@ fn fragment_modern_unlit_masked(input: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
-    let color = apply_realtime_light(input, sample_color(input.texture_coordinates));
+    let color = apply_modern_light(input, sample_color(input.texture_coordinates));
     // UE1 clamps the lit source before blending; the modern target does not.
     return clamp(apply_opacity(input, color), vec4(0.0), vec4(1.0));
 }
@@ -244,7 +286,7 @@ fn fragment_modern_blended(input: VertexOutput) -> @location(0) vec4<f32> {
 fn fragment_modern_blended_masked(input: VertexOutput) -> @location(0) vec4<f32> {
     let texture_color = sample_color(input.texture_coordinates);
     let color = clamp(
-        apply_opacity(input, apply_realtime_light(input, texture_color)),
+        apply_opacity(input, apply_modern_light(input, texture_color)),
         vec4(0.0),
         vec4(1.0),
     );
@@ -279,6 +321,108 @@ fn fragment_backdrop_modern(input: VertexOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(color_texture));
     let color = sample_color(input.clip_position.xy / dimensions);
     return vec4(color.rgb, 0.0);
+}
+
+@fragment
+fn fragment_macro(input: VertexOutput) -> @location(0) vec4<f32> {
+    clip_to_portal(input);
+    return sample_macro(input);
+}
+
+fn sample_macro(input: VertexOutput) -> vec4<f32> {
+    let dimensions = vec2<f32>(textureDimensions(macro_texture));
+    return textureSampleBias(
+        macro_texture,
+        macro_sampler,
+        input.macro_texture_coordinates / dimensions,
+        -0.5,
+    );
+}
+
+@fragment
+fn fragment_modern_macro(input: VertexOutput) -> @location(0) vec4<f32> {
+    clip_to_portal(input);
+    return sample_macro(input);
+}
+
+@fragment
+fn fragment_attachment_light(input: VertexOutput) -> @location(0) vec4<f32> {
+    clip_to_portal(input);
+    let light = textureSample(
+        lightmap_texture,
+        lightmap_sampler,
+        input.lightmap_coordinates,
+    ).rgb;
+    let vertex_light = select(
+        input.vertex_color.rgb * 0.5,
+        input.environment_color.rgb * 0.5,
+        input.environment_color.r >= 0.0,
+    );
+    return vec4(mix(vertex_light, light, input.has_lightmap), 1.0);
+}
+
+@fragment
+fn fragment_modern_attachment_light(input: VertexOutput) -> @location(0) vec4<f32> {
+    clip_to_portal(input);
+    return apply_realtime_light_display(input, vec4(0.5, 0.5, 0.5, 1.0));
+}
+
+fn detail_source(input: VertexOutput, threshold: f32, uv_scale: f32) -> vec4<f32> {
+    clip_to_portal(input);
+    if input.eye_z <= 0.0 || input.eye_z >= threshold {
+        discard;
+    }
+    let detail_color = textureSampleBias(
+        detail_texture,
+        detail_sampler,
+        input.detail_texture_coordinates * uv_scale
+            / vec2<f32>(textureDimensions(detail_texture)),
+        -0.5,
+    );
+    let alpha_byte = clamp(round_ties_even((threshold / input.eye_z - 1.0) * 100.0), 0.0, 255.0);
+    let alpha = alpha_byte / 255.0;
+    let source = alpha * detail_color.rgb + (1.0 - alpha) * (128.0 / 255.0);
+    return vec4(source, 1.0);
+}
+
+fn round_ties_even(value: f32) -> f32 {
+    let lower = floor(value);
+    let fraction = value - lower;
+    if fraction > 0.5 || (fraction == 0.5 && u32(lower) % 2u == 1u) {
+        return lower + 1.0;
+    }
+    return lower;
+}
+
+@fragment
+fn fragment_detail_0(input: VertexOutput) -> @location(0) vec4<f32> {
+    return detail_source(input, 380.0, 1.0);
+}
+
+@fragment
+fn fragment_detail_1(input: VertexOutput) -> @location(0) vec4<f32> {
+    return detail_source(input, 380.0 * 0.23679848, 4.223);
+}
+
+@fragment
+fn fragment_detail_2(input: VertexOutput) -> @location(0) vec4<f32> {
+    return detail_source(input, 380.0 * 0.23679848 * 0.23679848, 4.223 * 4.223);
+}
+
+fn apply_classic_light(input: VertexOutput, base: vec4<f32>) -> vec4<f32> {
+    if input.attachment_flags.x != 0u {
+        clip_to_portal(input);
+        return base;
+    }
+    return apply_lightmap(input, base);
+}
+
+fn apply_modern_light(input: VertexOutput, base: vec4<f32>) -> vec4<f32> {
+    if input.attachment_flags.x != 0u {
+        clip_to_portal(input);
+        return vec4(srgb_to_linear(base.rgb), base.a);
+    }
+    return apply_realtime_light(input, base);
 }
 
 fn apply_lightmap(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
@@ -322,15 +466,20 @@ fn apply_modern_vertex_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32>
 }
 
 fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
+    let display_color = apply_realtime_light_display(input, color);
+    return vec4(srgb_to_linear(display_color.rgb), display_color.a);
+}
+
+fn apply_realtime_light_display(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     clip_to_portal(input);
     if input.environment_color.r >= 0.0 {
         return vec4(
-            srgb_to_linear(color.rgb * input.environment_color.rgb),
+            color.rgb * input.environment_color.rgb,
             color.a * input.environment_color.a,
         );
     }
     if input.lighting_index == 0xffffffffu {
-        return apply_modern_vertex_light(input, color);
+        return apply_vertex_light(input, color);
     }
     let lightmap = realtime_lightmaps[input.lighting_index];
     var illumination = lightmap.ambient.rgb;
@@ -396,7 +545,7 @@ fn apply_realtime_light(input: VertexOutput, color: vec4<f32>) -> vec4<f32> {
             illumination += contribution;
         }
     }
-    return vec4(srgb_to_linear(color.rgb * illumination * 2.0), color.a);
+    return vec4(color.rgb * illumination * 2.0, color.a);
 }
 
 fn ue1_distance_falloff(distance_squared: f32) -> f32 {

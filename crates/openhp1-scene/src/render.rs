@@ -129,6 +129,21 @@ pub enum SurfaceMode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceMaterial {
     pub texture: Option<usize>,
+    /// `UTexture::MacroTexture`, sampled independently of the base texture.
+    pub macro_texture: Option<usize>,
+    /// `UTexture::DetailTexture`, sampled independently of the base texture.
+    pub detail_texture: Option<usize>,
+    /// A generated BSP FogMap suppresses only the detail attachment.
+    pub fog_map_attached: bool,
+    /// Native `PF_Portal` suppresses the detail attachment.
+    pub portal: bool,
+    /// Native `FTextureInfo` scale for the macro attachment.
+    pub macro_draw_scale: f32,
+    /// Native `FTextureInfo` scale for the detail attachment.
+    pub detail_draw_scale: f32,
+    /// Authored BSP pan already included in the base mesh coordinates. Native
+    /// attachment locks leave their own PanU/PanV at zero, so it is removed.
+    pub bsp_texture_pan: [f32; 2],
     pub mode: SurfaceMode,
     /// Discard palette index zero. This remains independent of the blend mode
     /// because UE1 permits masked modulated surfaces.
@@ -156,6 +171,13 @@ impl Default for SurfaceMaterial {
     fn default() -> Self {
         Self {
             texture: None,
+            macro_texture: None,
+            detail_texture: None,
+            fog_map_attached: false,
+            portal: false,
+            macro_draw_scale: 1.0,
+            detail_draw_scale: 1.0,
+            bsp_texture_pan: [0.0; 2],
             mode: SurfaceMode::Opaque,
             masked: false,
             two_sided: false,

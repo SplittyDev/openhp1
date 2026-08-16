@@ -255,8 +255,13 @@ impl LoadedScene {
             .filter(|(_, actor)| actor.id.package == package.summary().source.as_ref())
             .map(|(index, actor)| (actor.id.export_index, index))
             .collect::<HashMap<_, _>>();
-        let warp_portals =
-            load_warp_portals(&package, &actor_render.model, &actors, &actor_indices)?;
+        let warp_portals = load_warp_portals(
+            &package,
+            &actor_render.model,
+            &surface_materials,
+            &actors,
+            &actor_indices,
+        )?;
         let visible_light_sources = sprites
             .iter()
             .filter(|sprite| actor_states[sprite.actor_index].is_light)
@@ -1655,7 +1660,7 @@ impl LoadedScene {
         Ok((changed, completed))
     }
 
-    pub fn tick_textures(&mut self, delta_time: f32) -> Result<Vec<usize>> {
+    pub fn tick_textures(&mut self, delta_time: f32) -> Result<(Vec<usize>, bool)> {
         let mut changed = Vec::new();
         let animations = &mut self.water_animations;
         for water in &mut animations.water {
@@ -1708,11 +1713,42 @@ impl LoadedScene {
                 changed.push(ice.texture);
             }
         }
-        Ok(changed)
+        let mut materials_changed = false;
+        for attachments in &animations.attachments {
+            let Some(frame) = animations
+                .generic
+                .get(attachments.animation)
+                .and_then(|animation| attachments.frames.get(animation.current))
+                .copied()
+            else {
+                continue;
+            };
+            let Some(material) = self.render.surface_materials.get_mut(attachments.surface) else {
+                continue;
+            };
+            let before = (
+                material.macro_texture,
+                material.detail_texture,
+                material.macro_draw_scale,
+                material.detail_draw_scale,
+            );
+            material.macro_texture = frame.macro_texture;
+            material.detail_texture = frame.detail_texture;
+            material.macro_draw_scale = frame.macro_draw_scale;
+            material.detail_draw_scale = frame.detail_draw_scale;
+            materials_changed |= before
+                != (
+                    material.macro_texture,
+                    material.detail_texture,
+                    material.macro_draw_scale,
+                    material.detail_draw_scale,
+                );
+        }
+        Ok((changed, materials_changed))
     }
 
     pub fn tick_water(&mut self, delta_time: f32) -> Result<Vec<usize>> {
-        self.tick_textures(delta_time)
+        self.tick_textures(delta_time).map(|changes| changes.0)
     }
 
     pub fn loop_actor_animation(
@@ -2077,7 +2113,22 @@ struct TextureAnimations {
     water: Vec<AnimatedWaterTexture>,
     ice: Vec<AnimatedIceTexture>,
     generic: Vec<AnimatedGenericTexture>,
+    attachments: Vec<AnimatedSurfaceAttachments>,
     pixels: HashMap<SceneObjectId, Vec<u8>>,
+}
+
+struct AnimatedSurfaceAttachments {
+    surface: usize,
+    animation: usize,
+    frames: Vec<SurfaceAttachmentFrame>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceAttachmentFrame {
+    macro_texture: Option<usize>,
+    detail_texture: Option<usize>,
+    macro_draw_scale: f32,
+    detail_draw_scale: f32,
 }
 
 struct AnimatedIceTexture {
@@ -2107,7 +2158,7 @@ struct AnimatedGenericTexture {
 }
 
 struct GenericTextureAnimation {
-    frames: Vec<(Texture, Palette)>,
+    frames: Vec<(Texture, Palette, Arc<Package>)>,
     next: Vec<Option<usize>>,
     prime_count: u8,
     min_frame_rate: f32,
@@ -3960,7 +4011,7 @@ fn actor_surface_material(
             package: Arc::clone(&texture.package),
             export_index: texture.export_index,
         };
-        let value = match decode_texture(packages, &resolved) {
+        let value = match decode_texture(packages, &resolved, true) {
             Ok(texture) => Some(texture),
             Err(error) => {
                 warn!(%error, "could not decode actor texture");
@@ -3984,7 +4035,7 @@ fn actor_surface_material(
     let image = if let Some(index) = images.get(&image_key) {
         Some(*index)
     } else {
-        match append_texture_image(textures, water_animations, texture, material.masked) {
+        match append_texture_image(textures, water_animations, texture, material.masked, true) {
             Ok(index) => {
                 images.insert(image_key, index);
                 Some(index)
@@ -4038,6 +4089,7 @@ fn rotate_unreal(rotation: Rotator, vector: Vec3) -> Vec3 {
 fn load_warp_portals(
     package: &Package,
     model: &Model,
+    surface_materials: &[SurfaceMaterial],
     actors: &[SceneActor],
     actor_indices: &HashMap<usize, usize>,
 ) -> Result<Vec<WarpPortal>> {
@@ -4045,7 +4097,7 @@ fn load_warp_portals(
         .surfaces
         .iter()
         .enumerate()
-        .filter(|(_, surface)| surface.poly_flags.contains(PolyFlags::PORTAL))
+        .filter(|(surface, _)| is_portal_surface(surface_materials, *surface))
         .filter_map(|(surface, _)| {
             let (source_actor, plane, source_on_positive_side) = model
                 .nodes
@@ -4099,6 +4151,12 @@ fn load_warp_portals(
         .collect()
 }
 
+fn is_portal_surface(surface_materials: &[SurfaceMaterial], surface: usize) -> bool {
+    surface_materials
+        .get(surface)
+        .is_some_and(|material| material.portal)
+}
+
 fn mesh_to_object_transform(scale: Vec3, origin: Vec3, rotation_origin: Rotator) -> Mat4 {
     rotation_matrix(rotation_origin) * Mat4::from_scale(scale) * Mat4::from_translation(-origin)
 }
@@ -4136,15 +4194,14 @@ fn load_materials(
     water_animations: &mut TextureAnimations,
 ) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
     let mut textures = Vec::new();
-    let mut decoded = HashMap::<(String, usize), Option<DecodedTexture>>::new();
+    let mut decoded = HashMap::<(String, usize, bool), Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
+    let mut attachment_images = HashMap::<(String, usize), usize>::new();
     let mut materials = Vec::with_capacity(model.surfaces.len());
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
-        if surface.poly_flags.contains(PolyFlags::INVISIBLE) {
-            materials.push(SurfaceMaterial {
-                mode: SurfaceMode::Hidden,
-                ..Default::default()
-            });
+        let raw_texture_present = !matches!(surface.texture, ObjectReference::None);
+        if surface.poly_flags.contains(PolyFlags::INVISIBLE) && !raw_texture_present {
+            materials.push(bsp_surface_material(surface.poly_flags, None, None));
             continue;
         }
         let authored = match surface.texture {
@@ -4170,9 +4227,10 @@ fn load_materials(
         let key = (
             resolved.package.summary().source.to_string(),
             resolved.export_index,
+            true,
         );
         if !decoded.contains_key(&key) {
-            let texture = match decode_texture(packages, &resolved) {
+            let texture = match decode_texture(packages, &resolved, true) {
                 Ok(texture) => Some(texture),
                 Err(error) => {
                     warn!(surface_index, %error, "could not decode surface texture");
@@ -4186,7 +4244,28 @@ fn load_materials(
             continue;
         };
         let texture_flags = decoded_texture.texture.render_flags;
-        let material = bsp_surface_material(surface.poly_flags, None, Some(texture_flags));
+        let macro_reference = decoded_texture.texture.macro_texture;
+        let detail_reference = decoded_texture.texture.detail_texture;
+        let animated_attachments = decoded_texture.generic.as_ref().map(|animation| {
+            animation
+                .frames
+                .iter()
+                .map(|(texture, _, owner)| {
+                    (
+                        texture.macro_texture,
+                        texture.detail_texture,
+                        Arc::clone(owner),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut material = bsp_surface_material(surface.poly_flags, None, Some(texture_flags));
+        material.portal =
+            bsp_root_portal(surface.poly_flags, raw_texture_present, Some(texture_flags));
+        if material.mode == SurfaceMode::Hidden {
+            materials.push(material);
+            continue;
+        }
         let volumetric_source = material.volumetric_source
             || is_window_texture(
                 resolved
@@ -4213,6 +4292,7 @@ fn load_materials(
                 water_animations,
                 decoded_texture,
                 material.masked,
+                true,
             ) {
                 Ok(index) => index,
                 Err(error) => {
@@ -4224,8 +4304,97 @@ fn load_materials(
             images.insert(image_key, index);
             index
         };
+        let macro_attachment = load_texture_attachment(
+            packages,
+            &resolved.package,
+            macro_reference,
+            &mut decoded,
+            &mut attachment_images,
+            &mut textures,
+            water_animations,
+        )
+        .inspect_err(|error| warn!(surface_index, %error, "could not decode macro texture"))
+        .ok()
+        .flatten();
+        let detail_attachment = (!material.portal)
+            .then(|| {
+                load_texture_attachment(
+                    packages,
+                    &resolved.package,
+                    detail_reference,
+                    &mut decoded,
+                    &mut attachment_images,
+                    &mut textures,
+                    water_animations,
+                )
+            })
+            .transpose()
+            .inspect_err(|error| warn!(surface_index, %error, "could not decode detail texture"))
+            .ok()
+            .flatten()
+            .flatten();
+        if let Some(frames) = animated_attachments {
+            let frames = frames
+                .into_iter()
+                .map(|(macro_reference, detail_reference, owner)| {
+                    let macro_texture = load_texture_attachment(
+                        packages,
+                        &owner,
+                        macro_reference,
+                        &mut decoded,
+                        &mut attachment_images,
+                        &mut textures,
+                        water_animations,
+                    )?;
+                    let detail_texture = if material.portal {
+                        None
+                    } else {
+                        load_texture_attachment(
+                            packages,
+                            &owner,
+                            detail_reference,
+                            &mut decoded,
+                            &mut attachment_images,
+                            &mut textures,
+                            water_animations,
+                        )?
+                    };
+                    Ok(SurfaceAttachmentFrame {
+                        macro_texture: macro_texture.map(|attachment| attachment.0),
+                        detail_texture: detail_texture.map(|attachment| attachment.0),
+                        macro_draw_scale: macro_texture.map_or(1.0, |attachment| attachment.1),
+                        detail_draw_scale: detail_texture.map_or(1.0, |attachment| attachment.1),
+                    })
+                })
+                .collect::<Result<Vec<_>>>();
+            match frames {
+                Ok(frames) => {
+                    if let Some(animation) = water_animations
+                        .generic
+                        .iter()
+                        .rposition(|animation| animation.texture == Some(texture_index))
+                    {
+                        water_animations
+                            .attachments
+                            .push(AnimatedSurfaceAttachments {
+                                surface: surface_index,
+                                animation,
+                                frames,
+                            });
+                    }
+                }
+                Err(error) => {
+                    warn!(surface_index, %error, "could not decode animated texture attachments");
+                }
+            }
+        }
         materials.push(SurfaceMaterial {
             texture: Some(texture_index),
+            macro_texture: macro_attachment.map(|attachment| attachment.0),
+            detail_texture: detail_attachment.map(|attachment| attachment.0),
+            macro_draw_scale: macro_attachment.map_or(1.0, |attachment| attachment.1),
+            detail_draw_scale: detail_attachment.map_or(1.0, |attachment| attachment.1),
+            bsp_texture_pan: [f32::from(surface.pan_u), f32::from(surface.pan_v)],
             volumetric_source,
             ..material
         });
@@ -4242,6 +4411,45 @@ fn select_bsp_texture<T, E>(
         Some(resolved) => resolved,
         None => Ok(default),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_texture_attachment(
+    packages: &mut PackageStore,
+    owner: &Arc<Package>,
+    reference: ObjectReference,
+    decoded: &mut HashMap<(String, usize, bool), Option<DecodedTexture>>,
+    images: &mut HashMap<(String, usize), usize>,
+    textures: &mut Vec<TextureImage>,
+    animations: &mut TextureAnimations,
+) -> Result<Option<(usize, f32)>> {
+    let Some(resolved) = packages.resolve(owner, reference)? else {
+        return Ok(None);
+    };
+    let key = (
+        resolved.package.summary().source.to_string(),
+        resolved.export_index,
+        false,
+    );
+    if !decoded.contains_key(&key) {
+        let texture = decode_texture(packages, &resolved, false)?;
+        decoded.insert(key.clone(), Some(texture));
+    }
+    let Some(texture) = decoded.get(&key).and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    let draw_scale = texture.texture.draw_scale;
+    // SetTexture receives zero poly flags for both native attachment passes;
+    // palette index zero therefore stays opaque even on a masked base surface.
+    let image_key = (key.0.clone(), key.1);
+    let index = if let Some(index) = images.get(&image_key) {
+        *index
+    } else {
+        let index = append_texture_image(textures, animations, texture, false, false)?;
+        images.insert(image_key, index);
+        index
+    };
+    Ok(Some((index, draw_scale)))
 }
 
 fn is_window_texture(name: &str) -> bool {
@@ -4452,6 +4660,7 @@ fn actor_default_texture(
 fn decode_texture(
     packages: &mut PackageStore,
     resolved: &ResolvedObject,
+    follow_generic: bool,
 ) -> Result<DecodedTexture> {
     let texture = Texture::decode(&resolved.package, resolved.export_index)?;
     let mip = texture.mips.first().context("texture has no mip levels")?;
@@ -4463,7 +4672,10 @@ fn decode_texture(
         .resolve(&resolved.package, texture.palette)?
         .context("texture has no palette reference")?;
     let palette = Palette::decode(&palette.package, palette.export_index)?;
-    let generic = decode_generic_texture_animation(packages, resolved, &texture, &palette)?;
+    let generic = follow_generic
+        .then(|| decode_generic_texture_animation(packages, resolved, &texture, &palette))
+        .transpose()?
+        .flatten();
     let mut palette = palette;
     let ice = if let Some(ice) = &texture.ice {
         let source_object = packages
@@ -4550,7 +4762,7 @@ fn decode_generic_texture_animation(
     let root_dimensions = (root_mip.width, root_mip.height);
     let root_id = (root.package.summary().source.to_string(), root.export_index);
     let mut indices = HashMap::from([(root_id, 0)]);
-    let mut frames = vec![(texture.clone(), palette.clone())];
+    let mut frames = vec![(texture.clone(), palette.clone(), Arc::clone(&root.package))];
     let mut next = Vec::new();
     let mut current = ResolvedObject {
         package: Arc::clone(&root.package),
@@ -4589,7 +4801,7 @@ fn decode_generic_texture_animation(
         let index = frames.len();
         indices.insert(id, index);
         next.push(Some(index));
-        frames.push((frame, frame_palette));
+        frames.push((frame, frame_palette, Arc::clone(&resolved.package)));
         current = resolved;
     }
 
@@ -4738,6 +4950,7 @@ fn append_texture_image(
     water_animations: &mut TextureAnimations,
     decoded: &DecodedTexture,
     masked: bool,
+    follow_generic: bool,
 ) -> Result<usize> {
     let index = textures.len();
     textures.push(decoded.image(masked)?);
@@ -4781,7 +4994,7 @@ fn append_texture_image(
             glass_dimensions: [ice.glass.width, ice.glass.height],
         });
     }
-    if let Some(animation) = &decoded.generic {
+    if follow_generic && let Some(animation) = &decoded.generic {
         water_animations.generic.push(animated_generic_texture(
             decoded.id.clone(),
             Some(index),
@@ -4834,7 +5047,7 @@ fn animated_generic_texture(
     let frames = animation
         .frames
         .iter()
-        .map(|(texture, palette)| {
+        .map(|(texture, palette, _)| {
             let mut image = authored_texture_image(texture, palette, masked)?;
             if !mipmapped {
                 image.mips.clear();
@@ -4845,7 +5058,7 @@ fn animated_generic_texture(
     let index_frames = animation
         .frames
         .iter()
-        .map(|(texture, _)| {
+        .map(|(texture, _, _)| {
             texture
                 .mips
                 .first()
@@ -4878,6 +5091,13 @@ fn surface_material(
     let modulated = flags.contains(PolyFlags::MODULATED) || texture_flags.modulated;
     SurfaceMaterial {
         texture,
+        macro_texture: None,
+        detail_texture: None,
+        fog_map_attached: false,
+        portal: flags.contains(PolyFlags::PORTAL) || texture_flags.portal,
+        macro_draw_scale: 1.0,
+        detail_draw_scale: 1.0,
+        bsp_texture_pan: [0.0; 2],
         mode: if is_hidden(flags, texture_flags) {
             SurfaceMode::Hidden
         } else if flags.contains(PolyFlags::FAKE_BACKDROP) || texture_flags.fake_backdrop {
@@ -4915,6 +5135,15 @@ fn bsp_surface_material(
     material
 }
 
+fn bsp_root_portal(
+    flags: PolyFlags,
+    raw_texture_present: bool,
+    texture_flags: Option<TextureRenderFlags>,
+) -> bool {
+    flags.contains(PolyFlags::PORTAL)
+        || (raw_texture_present && texture_flags.is_some_and(|flags| flags.portal))
+}
+
 fn is_hidden(flags: PolyFlags, texture_flags: TextureRenderFlags) -> bool {
     flags.contains(PolyFlags::INVISIBLE) || texture_flags.invisible
 }
@@ -4942,7 +5171,7 @@ mod tests {
         TextureRenderFlags,
     };
 
-    use crate::SurfaceMode;
+    use crate::{SurfaceMaterial, SurfaceMode};
 
     static PARTICLE_TEST_ROOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -4977,6 +5206,8 @@ mod tests {
             texture: Texture {
                 palette: ObjectReference::None,
                 anim_next: ObjectReference::None,
+                detail_texture: ObjectReference::None,
+                macro_texture: ObjectReference::None,
                 prime_count: 0,
                 min_frame_rate: 0.0,
                 max_frame_rate: 0.0,
@@ -5030,6 +5261,62 @@ mod tests {
                 (1, 1, vec![3, 13, 23, 255]),
             ]
         );
+    }
+
+    #[test]
+    fn direct_attachment_lock_does_not_follow_its_own_anim_next() {
+        let decoded = super::DecodedTexture {
+            id: crate::SceneObjectId {
+                package: "attachment-test".to_owned(),
+                export_index: 0,
+            },
+            texture: Texture {
+                palette: ObjectReference::None,
+                anim_next: ObjectReference::Export(1),
+                detail_texture: ObjectReference::None,
+                macro_texture: ObjectReference::None,
+                prime_count: 0,
+                min_frame_rate: 0.0,
+                max_frame_rate: 0.0,
+                draw_scale: 1.0,
+                declared_width: Some(1),
+                declared_height: Some(1),
+                render_flags: TextureRenderFlags::default(),
+                mips: vec![MipLevel {
+                    width: 1,
+                    height: 1,
+                    width_bits: 0,
+                    height_bits: 0,
+                    indices: vec![0],
+                }],
+                wet: None,
+                ice: None,
+            },
+            palette: Palette {
+                colors: vec![Color {
+                    red: 1,
+                    green: 2,
+                    blue: 3,
+                    alpha: 255,
+                }],
+            },
+            water: None,
+            ice: None,
+            generic: Some(super::GenericTextureAnimation {
+                frames: Vec::new(),
+                next: Vec::new(),
+                prime_count: 0,
+                min_frame_rate: 0.0,
+                max_frame_rate: 0.0,
+            }),
+        };
+        let mut images = Vec::new();
+        let mut animations = super::TextureAnimations::default();
+
+        super::append_texture_image(&mut images, &mut animations, &decoded, false, false).unwrap();
+
+        assert_eq!(images.len(), 1);
+        assert!(animations.generic.is_empty());
     }
 
     #[test]
@@ -5120,8 +5407,58 @@ mod tests {
             .push(generic_texture(vec![Some(1), Some(0)], 0, 0.0, 0.0));
 
         assert!(scene.animations.is_empty());
-        assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
+        assert_eq!(scene.tick_textures(0.01).unwrap(), (vec![0], false));
         assert_eq!(scene.render.textures[0].rgba, [1; 4]);
+    }
+
+    #[test]
+    fn base_anim_current_swaps_attachments_without_changing_root_portal() {
+        let mut scene = particle_test_scene();
+        scene.render.textures.push(crate::TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+            mips: Vec::new(),
+        });
+        scene.render.surface_materials.push(SurfaceMaterial {
+            macro_texture: Some(1),
+            macro_draw_scale: 1.0,
+            portal: true,
+            ..Default::default()
+        });
+        scene
+            .water_animations
+            .generic
+            .push(generic_texture(vec![Some(1), Some(0)], 0, 0.0, 0.0));
+        scene
+            .water_animations
+            .attachments
+            .push(super::AnimatedSurfaceAttachments {
+                surface: 0,
+                animation: 0,
+                frames: vec![
+                    super::SurfaceAttachmentFrame {
+                        macro_texture: Some(1),
+                        detail_texture: None,
+                        macro_draw_scale: 1.0,
+                        detail_draw_scale: 1.0,
+                    },
+                    super::SurfaceAttachmentFrame {
+                        macro_texture: Some(2),
+                        detail_texture: None,
+                        macro_draw_scale: 2.0,
+                        detail_draw_scale: 4.0,
+                    },
+                ],
+            });
+
+        assert_eq!(scene.tick_textures(0.01).unwrap(), (vec![0], true));
+        let material = scene.render.surface_materials[0];
+        assert_eq!(material.macro_texture, Some(2));
+        assert_eq!(material.detail_texture, None);
+        assert_eq!(material.macro_draw_scale, 2.0);
+        assert_eq!(material.detail_draw_scale, 4.0);
+        assert!(material.portal);
     }
 
     #[test]
@@ -5151,7 +5488,7 @@ mod tests {
         };
         scene.water_animations.generic.push(animation);
 
-        assert_eq!(scene.tick_textures(0.01).unwrap(), [0]);
+        assert_eq!(scene.tick_textures(0.01).unwrap(), (vec![0], false));
         assert_eq!(scene.render.textures[0].rgba, [1; 16]);
         assert_eq!(scene.render.textures[0].mips[0].rgba, [11; 4]);
     }
@@ -5230,22 +5567,22 @@ mod tests {
             glass_dimensions: [8, 8],
         });
 
-        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
-        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().0.is_empty());
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().0.is_empty());
 
         let mut dependency = generic_texture(vec![Some(1), Some(1)], 0, 0.0, 0.0);
         dependency.id = source;
         dependency.texture = None;
         dependency.index_frames = vec![vec![0; 64], vec![1; 64]];
         scene.water_animations.generic.push(dependency);
-        assert_eq!(scene.tick_textures(1.0 / 120.0).unwrap(), [0]);
+        assert_eq!(scene.tick_textures(1.0 / 120.0).unwrap(), (vec![0], false));
         assert!(
             scene.render.textures[0]
                 .rgba
                 .chunks_exact(4)
                 .all(|pixel| pixel == [9, 8, 7, 255])
         );
-        assert!(scene.tick_textures(1.0 / 120.0).unwrap().is_empty());
+        assert!(scene.tick_textures(1.0 / 120.0).unwrap().0.is_empty());
     }
 
     #[test]
@@ -6836,6 +7173,21 @@ mod tests {
         );
         assert!(texture_mirror.mirror);
 
+        let texture_portal = super::surface_material(
+            PolyFlags::default(),
+            None,
+            Some(TextureRenderFlags {
+                portal: true,
+                ..Default::default()
+            }),
+        );
+        assert!(texture_portal.portal);
+
+        let raw_portal = super::surface_material(PolyFlags::PORTAL, None, None);
+        assert!(super::is_portal_surface(&[raw_portal, texture_portal], 0));
+        assert!(super::is_portal_surface(&[raw_portal, texture_portal], 1));
+        assert!(!super::is_portal_surface(&[SurfaceMaterial::default()], 0));
+
         let smooth = super::surface_material(PolyFlags::default(), None, None);
         let surface_no_smooth = super::surface_material(PolyFlags::NO_SMOOTH, None, None);
         let texture_no_smooth = super::surface_material(
@@ -6880,6 +7232,26 @@ mod tests {
         let bsp_environment =
             super::bsp_surface_material(PolyFlags::from_bits(0x0000_0010), None, None);
         assert!(!bsp_environment.environment_map);
+    }
+
+    #[test]
+    fn bsp_portal_provenance_uses_only_explicit_root_textures() {
+        let portal_texture = TextureRenderFlags {
+            portal: true,
+            ..Default::default()
+        };
+
+        assert!(super::bsp_root_portal(
+            PolyFlags::INVISIBLE,
+            true,
+            Some(portal_texture),
+        ));
+        assert!(!super::bsp_root_portal(
+            PolyFlags::default(),
+            false,
+            Some(portal_texture),
+        ));
+        assert!(super::bsp_root_portal(PolyFlags::PORTAL, false, None,));
     }
 
     #[test]

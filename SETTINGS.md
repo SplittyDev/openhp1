@@ -34,6 +34,7 @@ ResolutionY=768
 WindowSizeX=1280
 WindowSizeY=800
 Renderer=Classic
+DetailTextures=false
 
 [WinDrv.WindowsClient]
 ScreenFlashes=true
@@ -81,6 +82,7 @@ pipeline.
 | `WindowSizeX` | `1280` | `320` to `8192` | Sets the width of the window when OpenHP1 starts. The window remains resizable. |
 | `WindowSizeY` | `800` | `320` to `8192` | Sets the height of the window when OpenHP1 starts. The window remains resizable. |
 | `Renderer` | `Classic` | `Classic`, `Modern` | Chooses the original-style or enhanced render pipeline. |
+| `DetailTextures` | `false` | `true`, `false` | Enables the original three-band close-range detail-texture overlay in both renderers. Macro textures remain enabled independently. |
 
 Both values in a width and height pair must be valid. OpenHP1 limits each pair
 to no more total pixels than 3840x2160. If a pair is incomplete, invalid, or too

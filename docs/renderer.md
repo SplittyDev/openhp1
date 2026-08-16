@@ -25,7 +25,8 @@ on world BSP geometry.
    materials and render ranges. Actor-mesh faces whose selected material has no
    texture are retained but hidden, matching UE1's mesh rendering path.
 9. `openhp1-scene` combines BSP, texture, mesh, and actor flags into
-   backend-neutral surface materials, including `ZoneInfo` texture-pan speeds.
+   backend-neutral surface materials, including independent MacroTexture and
+   DetailTexture attachments and `ZoneInfo` texture-pan speeds.
 10. `openhp1-render` packs Classic lightmaps or Modern visibility masks with
    replicated edge gutters, batches opaque triangles, sorts blended BSP
    surfaces, advances `PF_AutoUPan`/`PF_AutoVPan` texture coordinates, and draws
@@ -72,6 +73,37 @@ accumulation. Classic reconstruction and Modern per-fragment lighting preserve
 that flag through their shared authored-light data.
 Zone-zero surfaces inherit the active `LevelInfo` ambient color. Unlit and
 lightmap-less surfaces bypass that multiply.
+
+BSP texture attachments retain the native display-space order: base, macro,
+light, then detail. Macro uses the fixed-function 2x modulated blend and is
+always independent of the `DetailTextures` setting. Detail is disabled by
+default, matching the shipped D3D configuration; when enabled it uses the
+original three eye-distance bands and their quantized alpha fade. Portal
+surfaces suppress detail, including `bPortal` authored on a non-null raw root
+`FBspSurf.Texture`; `LevelInfo.DefaultTexture` substitution does not contribute
+portal state, and that classification remains stable while `AnimCurrent`
+selects attachment references. Detail-only surfaces retain the D3D base-plus-light combined
+pass; only macro forces lighting into a later modulation draw. Auxiliary
+textures always use smooth filtering independently of base `bNoSmooth`, and
+their draws do not inherit the base texture's masked-alpha test while retaining
+the base surface's one-sided or TwoSided culling. Blended surfaces finish every
+auxiliary draw before the next surface, and mirrored surfaces issue them
+immediately after the projected mirror base. Classic's
+UNORM scene target supplies the original clamp and byte quantization after
+every draw; Modern deliberately executes the same ordered draws in its
+floating-point HDR target and treats macro texels as display-space modulation
+coefficients rather than decoding them to linear. Surfaces without either
+attachment retain the existing unclamped Modern lighting path. The FogMap
+detail-suppression field is retained, but remains dormant until `BASE-003A`
+produces the light-manager FogMap.
+
+The attachment references are selected from the base texture's current
+`AnimCurrent` frame on every generic-animation advance. The referenced macro
+or detail object is locked directly: its own `AnimNext` chain is not followed.
+An identity or size change rebuilds the affected material bindings and derives
+normalization from the newly bound texture dimensions. Macro coordinates add
+the native half-texel center offset after `DrawScale`; detail coordinates do
+not.
 
 ## Modern rendering
 

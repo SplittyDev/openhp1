@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut scene = LoadedScene::load(path)?;
         let before = scene.render.mesh.positions.clone();
         scene.tick_animations(1.0 / 60.0)?;
-        let textures = scene.tick_textures(1.0 / 30.0)?;
+        let (textures, _) = scene.tick_textures(1.0 / 30.0)?;
         if scene.animated_actor_meshes == 0 && textures.is_empty() {
             continue;
         }

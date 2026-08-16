@@ -87,6 +87,14 @@ impl GraphicsSettings {
         renderer.mode = config(console, RENDERER_SECTION, "Renderer", "Renderer")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.mode);
+        renderer.detail_textures = config(
+            console,
+            RENDERER_SECTION,
+            "DetailTextures",
+            "DetailTextures",
+        )
+        .and_then(|value| parse_bool(&value))
+        .unwrap_or(renderer.detail_textures);
         renderer.tone_mapper = config(console, MODERN_SECTION, "ToneMapper", "ToneMapper")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.tone_mapper);
@@ -200,6 +208,7 @@ impl GraphicsSettings {
                 ("WindowSizeX", self.window_size[0].to_string()),
                 ("WindowSizeY", self.window_size[1].to_string()),
                 ("Renderer", renderer_name(self.renderer.mode).to_owned()),
+                ("DetailTextures", self.renderer.detail_textures.to_string()),
             ],
         )?;
         console.save_config_values(

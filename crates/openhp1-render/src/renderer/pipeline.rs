@@ -4,6 +4,8 @@ use crate::{SurfaceMaterial, SurfaceMode, TextureImage};
 
 use super::{DEPTH_FORMAT, Vertex};
 
+pub(super) const SMOOTH_SAMPLER_INDEX: usize = 0;
+
 pub(super) fn create_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
@@ -39,7 +41,10 @@ pub(super) fn create_pipeline(
                     8 => Float32x2,
                     9 => Uint32,
                     10 => Float32x2,
-                    11 => Float32x3
+                    11 => Float32x3,
+                    12 => Float32x2,
+                    13 => Float32x2,
+                    14 => Uint32x2
                 ],
             }],
         },
@@ -76,6 +81,81 @@ pub(super) fn create_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+pub(super) fn create_attachment_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &str,
+    two_sided: bool,
+    reflected: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("OpenHP1 BSP attachment pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![
+                    0 => Float32x3,
+                    1 => Float32x2,
+                    2 => Float32x4,
+                    3 => Float32x2,
+                    4 => Float32,
+                    5 => Unorm8x4,
+                    6 => Float32x3,
+                    7 => Float32,
+                    8 => Float32x2,
+                    9 => Uint32,
+                    10 => Float32x2,
+                    11 => Float32x3,
+                    12 => Float32x2,
+                    13 => Float32x2,
+                    14 => Uint32x2
+                ],
+            }],
+        },
+        primitive: attachment_primitive(two_sided, reflected),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: blend_state(SurfaceMode::Modulated),
+                // Retail does not consume destination alpha. Modern reserves
+                // it as its geometry/AO coverage mask, so auxiliary RGB
+                // modulation must not overwrite the base pass's coverage.
+                write_mask: wgpu::ColorWrites::RED
+                    | wgpu::ColorWrites::GREEN
+                    | wgpu::ColorWrites::BLUE,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn attachment_primitive(two_sided: bool, reflected: bool) -> wgpu::PrimitiveState {
+    wgpu::PrimitiveState {
+        front_face: front_face(reflected),
+        cull_mode: cull_mode(two_sided),
+        ..Default::default()
+    }
 }
 
 fn front_face(reflected: bool) -> wgpu::FrontFace {
@@ -116,7 +196,10 @@ pub(super) fn create_screen_pipeline(
                     8 => Float32x2,
                     9 => Uint32,
                     10 => Float32x2,
-                    11 => Float32x3
+                    11 => Float32x3,
+                    12 => Float32x2,
+                    13 => Float32x2,
+                    14 => Uint32x2
                 ],
             }],
         },
@@ -266,6 +349,74 @@ pub(super) fn texture_bind_group(
                 binding: 3,
                 resource: wgpu::BindingResource::Sampler(lightmap_sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn material_texture_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    samplers: &[wgpu::Sampler; 2],
+    base_no_smooth: bool,
+    base_view: &wgpu::TextureView,
+    macro_view: &wgpu::TextureView,
+    detail_view: &wgpu::TextureView,
+    lightmap_view: &wgpu::TextureView,
+    lightmap_sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("OpenHP1 surface material bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(base_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&samplers[usize::from(base_no_smooth)]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(lightmap_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(macro_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&samplers[SMOOTH_SAMPLER_INDEX]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(detail_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(&samplers[SMOOTH_SAMPLER_INDEX]),
+            },
         ],
     })
 }
@@ -378,6 +529,21 @@ mod tests {
     fn reflected_view_reverses_the_render_space_front_face() {
         assert!(matches!(front_face(false), wgpu::FrontFace::Cw));
         assert!(matches!(front_face(true), wgpu::FrontFace::Ccw));
+    }
+
+    #[test]
+    fn attachment_pipeline_preserves_one_sided_and_two_sided_culling() {
+        let one_sided = attachment_primitive(false, false);
+        assert_eq!(one_sided.front_face, wgpu::FrontFace::Cw);
+        assert_eq!(one_sided.cull_mode, Some(wgpu::Face::Back));
+
+        let two_sided = attachment_primitive(true, false);
+        assert_eq!(two_sided.front_face, wgpu::FrontFace::Cw);
+        assert_eq!(two_sided.cull_mode, None);
+
+        let reflected = attachment_primitive(false, true);
+        assert_eq!(reflected.front_face, wgpu::FrontFace::Ccw);
+        assert_eq!(reflected.cull_mode, Some(wgpu::Face::Back));
     }
 
     #[test]

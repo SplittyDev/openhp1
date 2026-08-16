@@ -475,7 +475,7 @@ commit, and live-verification fields for each item.
         `HP_Sneak.jellybeans01` (`0.5`). Trace their ordinary mesh bindings,
         then compare a confirmed representative in retail, Classic, and
         Modern.
-- [ ] `BASE-018` Carry original macro/detail texture attachments through the
+- [x] `BASE-018` Carry original macro/detail texture attachments through the
       shared BSP material path. Render supplies independent macro `+0x14` and
       detail `+0x18` texture infos; shipped D3D draws macro after base and
       detail after lighting (`Ghidra_D3DDrv.c:6496-7575`).
@@ -486,18 +486,47 @@ commit, and live-verification fields for each item.
         clipped boundary vertices inserted at each threshold
         ([D:7184-7326](../res/Ghidra_D3DDrv.c#L7184)).
   - [x] Detail is suppressed when the device detail capability is disabled or
-        a FogMap is also attached; shipped D3D defaults disable
-        `DetailTextures`, so its default visible path does not draw this pass.
+        a FogMap is also attached, and `PF_Portal` suppresses it independently;
+        shipped D3D defaults disable `DetailTextures`, so its default visible
+        path does not draw this pass. The FogMap field/gate is dormant until
+        `BASE-003A` supplies that light-manager attachment.
   - [x] A read-only scan of 3,751 exports whose class name ends in `Texture`
         (including the one unsupported `WaveTexture`) found 24 non-null
         `DetailTexture` properties: 11 in `FractalFX.utx`, one self-reference
         in `HP_C.utx`, and 12 in `Liquids.utx`. It found no non-null
         `MacroTexture`, and no other shipped package or map imports any of the
         24 owning textures; there is therefore no shipped live representative.
-  - [ ] Decode and preserve both object references, then implement the shared
-        attachments without coupling either one to FogMap or Modern effects.
-        Use synthetic pass-order/band checks because the shipped corpus cannot
-        provide a live gate; retain the D3D default-disabled policy separately.
+  - [x] Decode and preserve both object references, resolve their unmasked
+        palette images and `DrawScale` UVs, and bind by the actual base/macro/
+        detail/filter/pipeline resource key. The draw planner issues distinct
+        base -> macro -> light -> repeated-detail draws, completing the chain
+        per blended surface and after each projected mirror base. Detail-only
+        materials retain the shipped combined base-plus-light pass; only macro
+        forces a separate light draw. Classic therefore receives native UNORM
+        clamp/byte quantization between passes; Modern intentionally keeps the
+        same order in HDR float, samples macro as a display-space modulation
+        coefficient, and leaves its attachment-free unclamped path unchanged.
+        Attachment sampling remains smooth independently of base `bNoSmooth`,
+        auxiliary draws do not inherit the base masked-alpha test, and their
+        GPU culling retains the base surface's one-sided or TwoSided state.
+  - [x] Select the two attachment references from the base texture's current
+        `AnimCurrent` frame. Lock the selected attachment object directly and
+        do not follow its own `AnimNext`; identity/shape changes rebuild the
+        material and texture-dimension UV normalization. Macro applies the
+        native half-texel center offset after `DrawScale`; detail does not. The
+        non-null raw root `FBspSurf.Texture`'s authored `bPortal`, not the
+        selected animation frame's flag or `LevelInfo.DefaultTexture`, is ORed
+        with the BSP surface and stably drives warp-portal classification and
+        detail suppression, including when the surface is invisible.
+  - [x] Synthetic acceptance distinguishes staged saturation and non-opaque
+        framebuffer draws from a folded shader; protects the neutral
+        `128/255` detail algebra, strict three-band thresholds, coordinate
+        multipliers, quantized alpha, portal/default capability gates,
+        attachment animation identity, direct-lock behavior, blended and mirror
+        submission boundaries, smooth auxiliary filtering, masked-alpha
+        independence, detail-only multitexture planning, and valid WGSL. The
+        corpus has no reachable live representative, so no shipped visual gate
+        exists.
 - [ ] `BASE-019` Implement viewport `RendMap`/`RMODE` BSP debug rendering in
       shared scene state and shaders. Engine accepts values `1..20`, defaults
       to `5`, and preserves the value on invalid `RMODE` input

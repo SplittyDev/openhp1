@@ -1385,17 +1385,19 @@ impl Graphics {
             self.last_error = Some(format!("animation pose sync failed: {error:#}"));
         }
         match self.scene.tick_textures(delta_time) {
-            Ok(changed)
-                if !self.renderer.update_textures(
+            Ok((changed, materials_changed)) => {
+                if materials_changed {
+                    self.renderer
+                        .reload_scene(&self.device, &self.queue, &self.scene.render);
+                } else if !self.renderer.update_textures(
                     &self.device,
                     &self.queue,
                     &self.scene.render.textures,
                     &changed,
-                ) =>
-            {
-                self.last_error = Some("animation changed the scene textures".to_owned());
+                ) {
+                    self.last_error = Some("animation changed the scene textures".to_owned());
+                }
             }
-            Ok(_) => {}
             Err(error) => self.last_error = Some(format!("texture animation failed: {error:#}")),
         }
     }
