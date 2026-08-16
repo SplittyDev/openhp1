@@ -13,6 +13,7 @@ pub struct Actor {
 pub struct ActorProperties {
     pub location: Option<Vec3>,
     pub rotation: Option<Rotator>,
+    pub warp_coordinates: Option<[Vec3; 4]>,
     pub pre_pivot: Option<Vec3>,
     pub collision_height: Option<f32>,
     pub collide_type: Option<u8>,
@@ -76,6 +77,14 @@ impl ActorProperties {
                         yaw: value.read_i32()?,
                         roll: value.read_i32()?,
                     });
+                }
+                ("WarpCoords", PropertyKind::Struct, Some("Coords")) => {
+                    properties.warp_coordinates = Some([
+                        read_vec3(&mut value)?,
+                        read_vec3(&mut value)?,
+                        read_vec3(&mut value)?,
+                        read_vec3(&mut value)?,
+                    ]);
                 }
                 ("PrePivot", PropertyKind::Struct, Some("Vector")) => {
                     properties.pre_pivot = Some(read_vec3(&mut value)?);
