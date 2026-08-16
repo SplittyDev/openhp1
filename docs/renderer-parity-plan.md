@@ -267,9 +267,11 @@ commit, and live-verification fields for each item.
         last as a full-facet AlphaBlend-only `ONE/INVSRCALPHA` texture pass
         after base/macro/light/detail
         (`Ghidra_Render.c:2550-2575`, `Ghidra_D3DDrv.c:7077-7082`).
-    - [ ] Trace the exact BSP surface-generation caller and data equation before
-          implementing the producer. The recovered actor `LightAndFog` vertex
-          equation is not evidence for FogMap texels.
+    - [x] Trace the BSP producer, eligibility, grid/projection, cached color
+          ramp, multi-light composition, device pass, and lifetime. The exact
+          evidence and remaining coefficient-name boundaries are recorded in
+          [`original-bsp-fogmap.md`](original-bsp-fogmap.md); actor
+          `LightAndFog` is a separate feature.
     - [ ] Carry the generated image/texture-info pan and scale only on BSP
           surfaces, suppress detail when present, and issue the final ordered
           pass in shared Classic/Modern rendering. Do not reuse generic actor
@@ -295,6 +297,9 @@ commit, and live-verification fields for each item.
         collects fog lights and returns `0x40000000`; DrawMesh/DrawLodMesh run
         `LightAndFog` per vertex and carry fog RGB to D3D specular
         (`Ghidra_Render.c:10518-10765,15986-16157,22540-22554`).
+    - [x] Recover the exact camera-to-vertex sphere integral, ordered fog-light
+          composition, material/capability gates, and D3D specular-add path in
+          [`original-actor-renderfog.md`](original-actor-renderfog.md).
     - [ ] Add one shared per-vertex fog RGB channel/evaluator and apply its
           post-texture diffuse add in both pipelines before optional Modern
           volumetric enhancements. Retain it only for non-Translucent and
