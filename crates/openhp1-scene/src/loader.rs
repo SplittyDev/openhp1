@@ -4198,7 +4198,8 @@ mod tests {
     use openhp1_package::{ObjectReference, PackageStore};
     use openhp1_physics::BspCollision;
     use openhp1_runtime::{
-        ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, ScriptRuntime,
+        ActorAction, ParticleColor, ParticleEmitter, ParticleFloat, ParticleWind, RuntimeObject,
+        ScriptRuntime, WeaponAttachment,
     };
     use openhp1_texture::TextureRenderFlags;
 
@@ -4497,6 +4498,47 @@ mod tests {
         scene.set_actor_physics(0, 2).unwrap();
 
         assert!(scene.actors[0].animation.is_none());
+    }
+
+    #[test]
+    fn weapon_attachment_is_removed_when_its_owner_is_hidden() {
+        let mut scene = particle_test_scene();
+        scene.actors[0].hidden = true;
+        scene.actors[0].render = Some(crate::SceneActorRenderRange {
+            vertices: 3..4,
+            indices: 0..0,
+        });
+        let mesh = Arc::new(synthetic_mesh_package("All"));
+        let mesh_object = super::SceneObject {
+            package: Arc::clone(&mesh),
+            export_index: 0,
+        };
+        let mut weapon = scene.actors[0].clone();
+        weapon.name = "baseWand".to_owned();
+        weapon.draw_type = 2;
+        weapon.render = Some(crate::SceneActorRenderRange {
+            vertices: 0..3,
+            indices: 0..0,
+        });
+        scene.actors.push(weapon);
+        scene.actor_states.push(super::ActorRenderState::default());
+        scene.attached_weapons.insert(1, mesh_object);
+
+        assert!(
+            scene
+                .sync_weapon_attachments(vec![WeaponAttachment {
+                    pawn: 0,
+                    weapon: 1,
+                    mesh: RuntimeObject {
+                        package: Arc::clone(&mesh.summary().source),
+                        export_index: 0,
+                    },
+                    scale: 1.0,
+                }])
+                .unwrap()
+        );
+        assert!(scene.attached_weapons.is_empty());
+        assert!(scene.actors[1].render.is_none());
     }
 
     #[test]

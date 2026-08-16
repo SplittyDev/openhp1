@@ -252,7 +252,9 @@ in-place: `DrawScale` resizes mesh or sprite vertices and bounds,
 updates the actor's materials in place and rebuilds them when crossing 1 to
 enter or leave HP1's alpha-blended path. `Mesh=None` removes a weapon's
 standalone geometry, while its `ThirdPersonMesh` remains independently
-attached at the pawn transform, matching UE1's carried-weapon path.
+attached while the visible owning pawn supplies an attachment pose. UE1 draws
+that carried geometry from inside the pawn mesh path, so hiding, destroying, or
+removing the pawn mesh also removes its weapon attachment.
 
 Effective `LightBrightness` changes update movable actor vertex lighting and
 rebuild only BSP lightmaps whose serialized light list references that actor.

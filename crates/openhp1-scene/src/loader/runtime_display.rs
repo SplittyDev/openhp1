@@ -4,7 +4,24 @@ impl LoadedScene {
     pub fn sync_weapon_attachments(&mut self, attachments: Vec<WeaponAttachment>) -> Result<bool> {
         let mut changed = false;
         let mut attached_weapons = HashMap::new();
+        let mut attachment_transforms = HashMap::new();
         for attachment in &attachments {
+            let Some(pawn) = self.actors.get(attachment.pawn) else {
+                continue;
+            };
+            if pawn.hidden || pawn.render.is_none() {
+                continue;
+            }
+            let Some(attachment_transform) = self
+                .animations
+                .iter()
+                .find(|animation| animation.actor_index == attachment.pawn)
+                .map(AnimatedActorMesh::attachment)
+                .transpose()?
+                .flatten()
+            else {
+                continue;
+            };
             let mesh = self
                 .attached_weapons
                 .get(&attachment.weapon)
@@ -17,6 +34,7 @@ impl LoadedScene {
                 .map(Ok)
                 .unwrap_or_else(|| self.resolve_runtime_object(&attachment.mesh))?;
             attached_weapons.insert(attachment.weapon, mesh);
+            attachment_transforms.insert(attachment.weapon, attachment_transform);
         }
         let removed = self
             .attached_weapons
@@ -37,13 +55,7 @@ impl LoadedScene {
             }
         }
         for attachment in attachments {
-            let Some(attachment_transform) = self
-                .animations
-                .iter()
-                .find(|animation| animation.actor_index == attachment.pawn)
-                .map(AnimatedActorMesh::attachment)
-                .transpose()?
-                .flatten()
+            let Some(attachment_transform) = attachment_transforms.remove(&attachment.weapon)
             else {
                 continue;
             };
