@@ -248,8 +248,35 @@ commit, and live-verification fields for each item.
   - [ ] Live acceptance: retail/Classic/Modern comparisons in `Lev2_HogFront`,
         `Lev_Tut3`, one Quidditch map, `Lev4_Sneak`, and `startup`; toggle
         `Decals`. Use a controlled spawn for ecto/scorch behavior.
-- [ ] `BASE-003` Implement original surface fog independently of optional
-      Modern volumetric enhancements. Evidence: `Ghidra_Render.c:18112-18256`.
+- [ ] `BASE-003` Implement both original fog contracts independently of
+      optional Modern volumetric/AO enhancements; do not replace them with one
+      generic depth-fog shader.
+  - [ ] `BASE-003A` Implement legacy BSP FogMap. Direct evidence:
+        `FLightManager::LightAndFog` and exact accumulation
+        `Ghidra_Render.c:17903-18228`, fog-light collection/color
+        `22540-22568`, DrawFrame surface layout/lifetime `2550-2575,2862-2870`,
+        and shipped D3D `DrawComplexSurface` VA `0x10003ac0-0x1000548b`.
+    - [ ] Carry the optional light-manager-generated FogMap only on BSP
+          surfaces. Preserve `PF_Unlit` suppression and the `0x40000000` gate;
+          do not attach it to actor meshes without direct caller proof.
+    - [ ] Reproduce `f2=2f`, premultiplied light-color accumulation and alpha
+          clamps, FogMap texture-info UVs, and the one full-facet AlphaBlend
+          pass after base/macro/light/detail in the shared Classic/Modern path.
+    - [ ] Deterministic acceptance: one/two fog lights, clamp boundaries,
+          Unlit/gate suppression, independent macro/detail/FogMap toggles, and
+          pass-order trace. Modern volumetrics on/off must not change base fog.
+  - [ ] `BASE-003B` Recover and implement camera-zone distance fog separately.
+        Shipped properties and authored reachability are proved, including
+        `bFogZone`, `FogColor`, and `FogDistance`; native FogColor replication
+        is at `Ghidra_Engine.c:156927-156950,225743-225766`.
+    - [ ] Decode/default-inherit the three inputs and select them from the
+          camera's active ZoneInfo/LevelInfo, but do not render until the native
+          enable handoff, curve/start/end derivation, distance coordinate,
+          color space, actor/translucency/backdrop reach, and blend equation are
+          direct evidence.
+    - [ ] Live evidence targets: `Lev2_Fire2`, `Lev2_fire1`, `Lev_Tut1`,
+          `Lev_Tut3b`, `Lev3_PreDungeon`, and `Lev3_PreTroll`, using fixed
+          near/far views and a zone crossing in retail, Classic, and Modern.
 - [ ] `CLASSIC-001` Render authored corona sprites and original volumetric
       lighting in Classic. Evidence: `Ghidra_Render.c:5819-5858,18256,
       21906-21928` and `Ghidra_Engine.c:153257-153281`.
