@@ -289,7 +289,9 @@ impl PackageStore {
                     .into_iter()
                     .find(|value| !value.is_empty())
                     .map(PathBuf::from);
-                (configured_root.as_deref() == Some(root))
+                configured_root
+                    .as_deref()
+                    .is_some_and(|configured_root| same_existing_path(configured_root, root))
                     .then(|| {
                         ini_values(&contents, GAME_DATA_SECTION, GAME_LANGUAGE_KEY)
                             .into_iter()
@@ -691,6 +693,14 @@ impl PackageStore {
             fallbacks: vec![self.system_dir.join(format!("{config_name}.ini"))],
         })
     }
+}
+
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    left == right
+        || fs::canonicalize(left)
+            .ok()
+            .zip(fs::canonicalize(right).ok())
+            .is_some_and(|(left, right)| left == right)
 }
 
 struct ConfigFiles {
@@ -1497,6 +1507,36 @@ mod tests {
                 .unwrap()
                 .contains("Language=fre")
         );
+        fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn selected_language_survives_an_equivalent_canonical_game_root() {
+        let (game_root, settings_dir) = game_installation_fixture("canonical-game-root");
+        let language_dir = game_root.join("System/1");
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(
+            language_dir.join("Default.ini"),
+            "[URL]\nLocalMap=Startup.unr\n[Engine.Engine]\nLanguage=fre\n[Core.System]\nPaths=../Maps/*.unr\n",
+        )
+        .unwrap();
+        let configured_root = game_root.join("..").join("game");
+        fs::write(
+            settings_dir.join("OpenHP1.ini"),
+            format!(
+                "[OpenHP1.GameData]\nRoot={}\nLanguage=fre\n",
+                configured_root.display()
+            ),
+        )
+        .unwrap();
+
+        let store = super::PackageStore::scan_game_root_with_settings_dir(
+            game_root.canonicalize().unwrap(),
+            &settings_dir,
+        )
+        .unwrap();
+
+        assert_eq!(store.language, "fre");
         fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
     }
 
