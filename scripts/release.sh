@@ -89,7 +89,8 @@ for binary in openhp1-game openhp1-launcher; do
         "target/$MACOS_X64_TARGET/release/$binary" \
         -output "$staging_dir/openhp1_macos/$binary"
     chmod 0755 "$staging_dir/openhp1_macos/$binary"
-    lipo -verify_arch arm64 x86_64 "$staging_dir/openhp1_macos/$binary"
+    lipo "$staging_dir/openhp1_macos/$binary" -verify_arch arm64
+    lipo "$staging_dir/openhp1_macos/$binary" -verify_arch x86_64
 
     install -m 0755 \
         "target/$WINDOWS_TARGET/release/$binary.exe" \
