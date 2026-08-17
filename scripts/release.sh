@@ -64,10 +64,12 @@ cleanup() {
 trap cleanup EXIT
 
 rustup target add --toolchain stable "$MACOS_ARM_TARGET" "$MACOS_X64_TARGET"
-stable_toolchain_bin="$(dirname "$(rustup which --toolchain stable cargo)")"
-readonly stable_toolchain_bin
+stable_toolchain_root="$(dirname "$(dirname "$(rustup which --toolchain stable cargo)")")"
+stable_toolchain_bin="$stable_toolchain_root/bin"
+stable_toolchain="$(basename "$stable_toolchain_root")"
+readonly stable_toolchain_root stable_toolchain_bin stable_toolchain
 export PATH="$stable_toolchain_bin:$PATH"
-export RUSTUP_TOOLCHAIN=stable
+export RUSTUP_TOOLCHAIN="$stable_toolchain"
 
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_ARM_TARGET"
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_X64_TARGET"
