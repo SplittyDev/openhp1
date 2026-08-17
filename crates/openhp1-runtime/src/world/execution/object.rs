@@ -270,7 +270,7 @@ impl ScriptRuntime {
                 .name(class.package.summary().exports[class.export_index].object_name)
                 .to_owned()
         };
-        let Some(object) = self.packages.find_object(name, &class_name)? else {
+        let Some(object) = self.packages.find_localized_object(name, &class_name)? else {
             return Ok(Value::Object(0));
         };
         self.object_handle(object_id(&object.package, object.export_index))
