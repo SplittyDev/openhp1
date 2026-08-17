@@ -1,8 +1,3 @@
-[target.x86_64-pc-windows-gnu]
-pre-build = [
-    "test -e /usr/x86_64-w64-mingw32/lib/libKernel32.a || ln -s libkernel32.a /usr/x86_64-w64-mingw32/lib/libKernel32.a",
-]
-
 [target.x86_64-unknown-linux-gnu]
 pre-build = [
     "dpkg --add-architecture $CROSS_DEB_ARCH",

@@ -3,7 +3,8 @@ set -euo pipefail
 
 readonly MACOS_ARM_TARGET="aarch64-apple-darwin"
 readonly MACOS_X64_TARGET="x86_64-apple-darwin"
-readonly WINDOWS_TARGET="x86_64-pc-windows-gnu"
+readonly WINDOWS_TARGET="x86_64-pc-windows-msvc"
+readonly WINDOWS_ARM_TARGET="aarch64-pc-windows-msvc"
 readonly LINUX_X64_TARGET="x86_64-unknown-linux-gnu"
 readonly LINUX_ARM_TARGET="aarch64-unknown-linux-gnu"
 
@@ -30,7 +31,7 @@ readonly repo_root
 cd "$repo_root"
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS is required to build the universal macOS bundle"
-for command in cargo cross git install lipo rustup zip; do
+for command in cargo cargo-xwin cross git install lipo rustup zip; do
     require_command "$command"
 done
 if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
@@ -63,7 +64,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rustup target add --toolchain stable "$MACOS_ARM_TARGET" "$MACOS_X64_TARGET"
+rustup target add --toolchain stable \
+    "$MACOS_ARM_TARGET" \
+    "$MACOS_X64_TARGET" \
+    "$WINDOWS_TARGET" \
+    "$WINDOWS_ARM_TARGET"
 stable_toolchain_root="$(dirname "$(dirname "$(rustup which --toolchain stable cargo)")")"
 stable_toolchain_bin="$stable_toolchain_root/bin"
 stable_toolchain="$(basename "$stable_toolchain_root")"
@@ -73,12 +78,14 @@ export RUSTUP_TOOLCHAIN="$stable_toolchain"
 
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_ARM_TARGET"
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_X64_TARGET"
-cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_TARGET"
+cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_TARGET"
+cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_ARM_TARGET"
 cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_X64_TARGET"
 cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_ARM_TARGET"
 
 mkdir -p \
     "$staging_dir/openhp1_win" \
+    "$staging_dir/openhp1_win_arm" \
     "$staging_dir/openhp1_macos" \
     "$staging_dir/openhp1_linux_x64" \
     "$staging_dir/openhp1_linux_arm"
@@ -96,6 +103,9 @@ for binary in openhp1-game openhp1-launcher; do
         "target/$WINDOWS_TARGET/release/$binary.exe" \
         "$staging_dir/openhp1_win/$binary.exe"
     install -m 0755 \
+        "target/$WINDOWS_ARM_TARGET/release/$binary.exe" \
+        "$staging_dir/openhp1_win_arm/$binary.exe"
+    install -m 0755 \
         "target/$LINUX_X64_TARGET/release/$binary" \
         "$staging_dir/openhp1_linux_x64/$binary"
     install -m 0755 \
@@ -103,7 +113,7 @@ for binary in openhp1-game openhp1-launcher; do
         "$staging_dir/openhp1_linux_arm/$binary"
 done
 
-for name in openhp1_win openhp1_macos openhp1_linux_x64 openhp1_linux_arm; do
+for name in openhp1_win openhp1_win_arm openhp1_macos openhp1_linux_x64 openhp1_linux_arm; do
     bundle "$name"
 done
 

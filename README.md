@@ -96,16 +96,17 @@ cargo run -p openhp1-game # debug build
 cargo run -p openhp1-game --release # release build
 ```
 
-To build a versioned release containing universal macOS, Windows x64, Linux
-x64, and Linux ARM64 bundles, install
-[`cross`](https://github.com/cross-rs/cross) and start Docker or Podman, then
-run:
+To build a versioned release containing universal macOS, Windows x64 and
+ARM64, Linux x64, and Linux ARM64 bundles, install
+[`cross`](https://github.com/cross-rs/cross),
+[`cargo-xwin`](https://github.com/rust-cross/cargo-xwin), and LLVM, start Docker
+or Podman, then run:
 
 ```sh
 ./scripts/release.sh
 ```
 
-The script writes the four directories and matching zip archives under
+The script writes the five directories and matching zip archives under
 `release/<tag>/`. Tags are made path-safe (for example, `v0.1.0` becomes
 `v0_1_0`); an untagged commit uses `<UTC date>_<short commit>`. It refuses to
 overwrite an existing release or package uncommitted tracked changes.
