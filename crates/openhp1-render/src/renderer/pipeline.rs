@@ -6,6 +6,21 @@ use super::{DEPTH_FORMAT, Vertex};
 
 pub(super) const SMOOTH_SAMPLER_INDEX: usize = 0;
 
+pub(super) fn fragment_compilation_options(
+    modern: bool,
+) -> wgpu::PipelineCompilationOptions<'static> {
+    const CLASSIC_CONSTANTS: &[(&str, f64)] = &[("texture_lod_bias", -0.5)];
+    const MODERN_CONSTANTS: &[(&str, f64)] = &[("texture_lod_bias", 0.0)];
+    wgpu::PipelineCompilationOptions {
+        constants: if modern {
+            MODERN_CONSTANTS
+        } else {
+            CLASSIC_CONSTANTS
+        },
+        ..Default::default()
+    }
+}
+
 pub(super) fn create_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
@@ -67,7 +82,7 @@ pub(super) fn create_pipeline(
                 material.unlit,
                 modern,
             )),
-            compilation_options: Default::default(),
+            compilation_options: fragment_compilation_options(modern),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: blend_state(material.mode),
@@ -87,6 +102,7 @@ pub(super) fn create_attachment_pipeline(
     fragment_entry: &str,
     two_sided: bool,
     reflected: bool,
+    modern: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 BSP attachment pipeline"),
@@ -129,7 +145,7 @@ pub(super) fn create_attachment_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
+            compilation_options: fragment_compilation_options(modern),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: blend_state(SurfaceMode::Modulated),
@@ -169,6 +185,7 @@ pub(super) fn create_screen_pipeline(
     shader: &wgpu::ShaderModule,
     two_sided: bool,
     fragment_entry: &str,
+    modern: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("OpenHP1 screen-projected surface pipeline"),
@@ -218,7 +235,7 @@ pub(super) fn create_screen_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
+            compilation_options: fragment_compilation_options(modern),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: None,

@@ -41,7 +41,6 @@ const MAX_WARP_PORTAL_DEPTH: usize = 3;
 const PIPELINES_PER_MODE: usize = 8;
 const PIPELINE_COUNT: usize = 40;
 const AUTO_UV_PER_SECOND: f32 = 64.0;
-const TEXTURE_MIP_FILTER: wgpu::MipmapFilterMode = wgpu::MipmapFilterMode::Nearest;
 const CHECKERBOARD_MEMORY_BYTES: usize = 2 * 2 * 4;
 #[cfg(test)]
 const SCENE_SHADER: &str = include_str!("shaders/scene.wgsl");
@@ -664,6 +663,7 @@ impl Renderer {
                 "OpenHP1 texture sampler",
                 wgpu::AddressMode::Repeat,
                 no_smooth,
+                modern_enabled,
             )
         });
         let sky_samplers = [false, true].map(|no_smooth| {
@@ -672,6 +672,7 @@ impl Renderer {
                 "OpenHP1 sky sampler",
                 wgpu::AddressMode::ClampToEdge,
                 no_smooth,
+                modern_enabled,
             )
         });
         let lightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -792,6 +793,7 @@ impl Renderer {
                 attachment_entries[index % 5],
                 index / 5 % 2 != 0,
                 index >= 10,
+                modern_enabled,
             )
         });
         let reflected_pipelines = (!mirror_geometries.is_empty()).then(|| {
@@ -833,6 +835,7 @@ impl Renderer {
                 } else {
                     "fragment_backdrop"
                 },
+                modern_enabled,
             )
         });
         let mirror_pipelines = std::array::from_fn(|index| {
@@ -847,6 +850,7 @@ impl Renderer {
                 } else {
                     "fragment_mirror"
                 },
+                modern_enabled,
             )
         });
         let sky_target = scene.sky_zone.map(|_| {
@@ -2110,17 +2114,31 @@ fn texture_sampler(
     label: &'static str,
     address_mode: wgpu::AddressMode,
     no_smooth: bool,
+    modern: bool,
 ) -> wgpu::Sampler {
-    let filter = texture_filter(no_smooth);
+    let (filter, mipmap_filter, anisotropy_clamp) = texture_sampler_settings(modern, no_smooth);
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some(label),
         address_mode_u: address_mode,
         address_mode_v: address_mode,
         mag_filter: filter,
         min_filter: filter,
-        mipmap_filter: TEXTURE_MIP_FILTER,
+        mipmap_filter,
+        anisotropy_clamp,
         ..Default::default()
     })
+}
+
+fn texture_sampler_settings(
+    modern: bool,
+    no_smooth: bool,
+) -> (wgpu::FilterMode, wgpu::MipmapFilterMode, u16) {
+    let filter = texture_filter(no_smooth);
+    if modern && !no_smooth {
+        (filter, wgpu::MipmapFilterMode::Linear, 16)
+    } else {
+        (filter, wgpu::MipmapFilterMode::Nearest, 1)
+    }
 }
 
 fn flash_blend_state() -> wgpu::BlendState {
@@ -2457,8 +2475,31 @@ mod tests {
     fn no_smooth_selects_point_filter_and_separate_batches() {
         assert_eq!(texture_filter(false), wgpu::FilterMode::Linear);
         assert_eq!(texture_filter(true), wgpu::FilterMode::Nearest);
-        assert_eq!(TEXTURE_MIP_FILTER, wgpu::MipmapFilterMode::Nearest);
-        assert!(SCENE_SHADER.contains("textureSampleBias(color_texture, color_sampler, uv, -0.5)"));
+        assert_eq!(
+            texture_sampler_settings(false, false),
+            (wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Nearest, 1,)
+        );
+        assert_eq!(
+            texture_sampler_settings(true, false),
+            (wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Linear, 16,)
+        );
+        assert_eq!(
+            texture_sampler_settings(true, true),
+            (
+                wgpu::FilterMode::Nearest,
+                wgpu::MipmapFilterMode::Nearest,
+                1,
+            )
+        );
+        assert_eq!(
+            pipeline::fragment_compilation_options(false).constants,
+            &[("texture_lod_bias", -0.5)]
+        );
+        assert_eq!(
+            pipeline::fragment_compilation_options(true).constants,
+            &[("texture_lod_bias", 0.0)]
+        );
+        assert!(SCENE_SHADER.contains("override texture_lod_bias: f32 = -0.5;"));
     }
 
     #[test]

@@ -415,11 +415,11 @@ commit, and live-verification fields for each item.
       Implemented through the same shared path as Classic under `CLASSIC-001`;
       the old per-fragment depth approximation and always-present list are gone.
       Moving-brush occlusion remains before this aggregate item is exact.
-- [ ] `MOD-004` Add optional anisotropic texture filtering to the Modern
-      pipeline after base filtering parity is closed. Keep Classic on the
-      original linear/point min-mag and point-mip behavior with default LOD
-      bias `-0.5`; Modern anisotropy is an explicit enhancement, not a change
-      to shared material semantics.
+- [x] `MOD-004` Use trilinear mip filtering, 16x anisotropy, and LOD bias `0.0`
+      for smooth Modern material and sky sampling. Authored `NoSmooth` remains
+      point-filtered. Classic retains the original linear/point min-mag,
+      point-mip behavior, and LOD bias `-0.5`. Renderer nextest (90 passed,
+      4 skipped), focused check, and a 60-frame Metal Modern benchmark passed.
 - [ ] `BASE-004` Reproduce BSP node/zone/span visibility for world, sky,
       reflection, warp, blended, and dynamic submissions. Evidence:
       `Ghidra_Render.c:1938-2044,6452`; current approximation:

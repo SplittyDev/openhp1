@@ -33,8 +33,10 @@ var detail_texture: texture_2d<f32>;
 @group(1) @binding(7)
 var detail_sampler: sampler;
 
+override texture_lod_bias: f32 = -0.5;
+
 fn sample_color(uv: vec2<f32>) -> vec4<f32> {
-    return textureSampleBias(color_texture, color_sampler, uv, -0.5);
+    return textureSampleBias(color_texture, color_sampler, uv, texture_lod_bias);
 }
 
 struct RealtimeLightmap {
@@ -335,7 +337,7 @@ fn sample_macro(input: VertexOutput) -> vec4<f32> {
         macro_texture,
         macro_sampler,
         input.macro_texture_coordinates / dimensions,
-        -0.5,
+        texture_lod_bias,
     );
 }
 
@@ -377,7 +379,7 @@ fn detail_source(input: VertexOutput, threshold: f32, uv_scale: f32) -> vec4<f32
         detail_sampler,
         input.detail_texture_coordinates * uv_scale
             / vec2<f32>(textureDimensions(detail_texture)),
-        -0.5,
+        texture_lod_bias,
     );
     let alpha_byte = clamp(round_ties_even((threshold / input.eye_z - 1.0) * 100.0), 0.0, 255.0);
     let alpha = alpha_byte / 255.0;
