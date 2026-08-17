@@ -87,18 +87,26 @@ fn resolve_game_installation_with(
     inferred_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<GameInstallation, GameInstallationError> {
     let (configured_root, configured_language) = configured_game_data(settings_dir)?;
-    if let Some(root) = configured_root {
-        let installation = validate_game_root(&root, settings_dir, configured_language.as_deref())?;
-        write_game_installation(settings_dir, &installation)?;
-        return Ok(installation);
-    }
+    let configured_error = if let Some(root) = configured_root {
+        match validate_game_root(&root, settings_dir, configured_language.as_deref()) {
+            Ok(installation) => {
+                write_game_installation(settings_dir, &installation)?;
+                return Ok(installation);
+            }
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
     for root in inferred_roots {
-        if let Ok(installation) = validate_game_root(&root, settings_dir, None) {
+        let installation = validate_game_root(&root, settings_dir, configured_language.as_deref())
+            .or_else(|_| validate_game_root(&root, settings_dir, None));
+        if let Ok(installation) = installation {
             write_game_installation(settings_dir, &installation)?;
             return Ok(installation);
         }
     }
-    Err(GameInstallationError::NotConfigured)
+    Err(configured_error.unwrap_or(GameInstallationError::NotConfigured))
 }
 
 fn configured_game_data(
@@ -1509,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_configured_root_does_not_fall_back_to_an_inferred_root() {
+    fn stale_configured_root_falls_back_to_an_inferred_root() {
         let (game_root, settings_dir) = game_installation_fixture("bad-game-root");
         let missing = game_root.parent().unwrap().join("missing");
         fs::write(
@@ -1518,9 +1526,13 @@ mod tests {
         )
         .unwrap();
 
-        let error = resolve_game_installation_with(&settings_dir, [game_root.clone()]).unwrap_err();
+        let resolved = resolve_game_installation_with(&settings_dir, [game_root.clone()]).unwrap();
+
+        assert_eq!(resolved.root(), game_root);
         assert!(
-            matches!(error, GameInstallationError::InvalidRoot { root, .. } if root == missing)
+            fs::read_to_string(settings_dir.join("OpenHP1.ini"))
+                .unwrap()
+                .contains(&format!("Root={}", resolved.root().display()))
         );
         fs::remove_dir_all(game_root.parent().unwrap()).unwrap();
     }

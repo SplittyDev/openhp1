@@ -66,9 +66,10 @@ VolumetricLighting=false
 
 The launcher discovers languages from the selected game files and validates both
 values before writing them. When `Root` is absent, OpenHP1 checks for a local
-`res` directory and the standard Windows installation directory. A configured
-but unavailable root or language produces an error instead of silently selecting
-different game files.
+`res` directory and the standard Windows installation directory. If the saved
+root is no longer valid, OpenHP1 tries those locations again and remembers the
+first valid replacement. It reports the saved-root error only when auto-detection
+also fails.
 
 ## `[OpenHP1.Renderer]`
 
