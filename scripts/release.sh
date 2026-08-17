@@ -111,8 +111,10 @@ build_linux_image \
 
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_ARM_TARGET"
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_X64_TARGET"
-cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_TARGET"
-cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_ARM_TARGET"
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static" \
+    cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_TARGET"
+CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS="-C target-feature=+crt-static" \
+    cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_ARM_TARGET"
 CARGO_TARGET_DIR="$linux_x64_target_dir" \
     cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_X64_TARGET"
 CARGO_TARGET_DIR="$linux_arm_target_dir" \
