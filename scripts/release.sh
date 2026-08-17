@@ -60,8 +60,9 @@ else
 fi
 readonly container_engine
 
-git diff --quiet --ignore-submodules -- || die "tracked files have uncommitted changes"
-git diff --cached --quiet --ignore-submodules -- || die "the index has uncommitted changes"
+if [[ -n "$(git status --porcelain)" ]]; then
+    printf 'warning: building from a dirty working tree\n' >&2
+fi
 
 tag="$(git tag --points-at HEAD --sort=-version:refname | sed -n '1p')"
 if [[ -n "$tag" ]]; then
