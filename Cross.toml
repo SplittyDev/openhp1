@@ -1,8 +1,5 @@
 [target.x86_64-unknown-linux-gnu]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libasound2-dev:$CROSS_DEB_ARCH libwayland-dev:$CROSS_DEB_ARCH",
-]
+image = "openhp1-linux-x86_64:glibc-2.31"
 
 [target.x86_64-unknown-linux-gnu.env]
 passthrough = [
@@ -11,10 +8,7 @@ passthrough = [
 ]
 
 [target.aarch64-unknown-linux-gnu]
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get --assume-yes install libasound2-dev:$CROSS_DEB_ARCH libwayland-dev:$CROSS_DEB_ARCH",
-]
+image = "openhp1-linux-aarch64:glibc-2.31"
 
 [target.aarch64-unknown-linux-gnu.env]
 passthrough = [

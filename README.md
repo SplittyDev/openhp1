@@ -7,6 +7,16 @@ Experience the first Harry Potter PC game as if you were sitting in front of you
 
 OpenHP1 requires the original game files to run.
 
+## Supported Platforms
+
+| Platform | OS Version | Architecture | Renderer |
+| - | - | - | - |
+| Windows | 10 or higher | `x86_64`, `ARM64` | DirectX 12 |
+| macOS | 11.0 or higher | `Intel`, `Apple Silicon` | Metal |
+| Linux[^1] | 5.4 or higher | `x86_64`, `aarch64` | Vulkan |
+
+[^1]: Linux support requires kernel 5.4 or higher and glibc 2.31 or higher, as well as a Vulkan-capable GPU with suitable drivers. Most modern systems should easily fulfill these requirements.
+
 ## Features
 
 

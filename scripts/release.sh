@@ -7,6 +7,8 @@ readonly WINDOWS_TARGET="x86_64-pc-windows-msvc"
 readonly WINDOWS_ARM_TARGET="aarch64-pc-windows-msvc"
 readonly LINUX_X64_TARGET="x86_64-unknown-linux-gnu"
 readonly LINUX_ARM_TARGET="aarch64-unknown-linux-gnu"
+readonly LINUX_X64_IMAGE="openhp1-linux-x86_64:glibc-2.31"
+readonly LINUX_ARM_IMAGE="openhp1-linux-aarch64:glibc-2.31"
 
 die() {
     printf 'error: %s\n' "$*" >&2
@@ -26,6 +28,19 @@ bundle() {
     )
 }
 
+build_linux_image() {
+    local image="$1"
+    local base_image="$2"
+    local deb_arch="$3"
+    "$container_engine" build \
+        --platform linux/amd64 \
+        --build-arg "CROSS_BASE_IMAGE=$base_image" \
+        --build-arg "CROSS_DEB_ARCH=$deb_arch" \
+        --tag "$image" \
+        --file docker/linux/Dockerfile \
+        docker/linux
+}
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
 cd "$repo_root"
@@ -34,9 +49,14 @@ cd "$repo_root"
 for command in cargo cargo-xwin cross git install lipo rustup zip; do
     require_command "$command"
 done
-if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1; then
+    container_engine="docker"
+elif command -v podman >/dev/null 2>&1; then
+    container_engine="podman"
+else
     die "cross requires Docker or Podman"
 fi
+readonly container_engine
 
 git diff --quiet --ignore-submodules -- || die "tracked files have uncommitted changes"
 git diff --cached --quiet --ignore-submodules -- || die "the index has uncommitted changes"
@@ -75,6 +95,15 @@ stable_toolchain="$(basename "$stable_toolchain_root")"
 readonly stable_toolchain_root stable_toolchain_bin stable_toolchain
 export PATH="$stable_toolchain_bin:$PATH"
 export RUSTUP_TOOLCHAIN="$stable_toolchain"
+
+build_linux_image \
+    "$LINUX_X64_IMAGE" \
+    "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:latest" \
+    amd64
+build_linux_image \
+    "$LINUX_ARM_IMAGE" \
+    "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest" \
+    arm64
 
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_ARM_TARGET"
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_X64_TARGET"
