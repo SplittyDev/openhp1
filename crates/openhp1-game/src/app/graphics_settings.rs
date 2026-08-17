@@ -428,7 +428,7 @@ mod tests {
                 color_depth: ColorDepth::TrueColor,
                 screen_flashes: true,
                 classic_display: DisplaySettings {
-                    brightness: 0.6,
+                    brightness: 0.5,
                     contrast: 1.0,
                 },
                 modern_agx_display: DisplaySettings::for_tone_mapper(ToneMapper::AgX),

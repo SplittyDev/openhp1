@@ -188,7 +188,7 @@ impl DisplaySettings {
     pub const fn for_mode(mode: RendererMode) -> Self {
         match mode {
             RendererMode::Classic => Self {
-                brightness: 0.6,
+                brightness: 0.5,
                 contrast: 1.0,
             },
             RendererMode::Modern => Self::for_tone_mapper(ToneMapper::Reinhard),
@@ -233,8 +233,8 @@ impl Default for RendererSettings {
             tone_mapper: ToneMapper::default(),
             ambient_occlusion: AmbientOcclusion::default(),
             antialiasing: Antialiasing::Smaa,
-            bloom: true,
-            volumetric_lighting: true,
+            bloom: false,
+            volumetric_lighting: false,
         }
     }
 }
@@ -284,7 +284,8 @@ mod tests {
             RendererSettings::default().ambient_occlusion,
             AmbientOcclusion::XeGtao
         );
-        assert!(RendererSettings::default().volumetric_lighting);
+        assert!(!RendererSettings::default().bloom);
+        assert!(!RendererSettings::default().volumetric_lighting);
         assert!(!RendererSettings::default().detail_textures);
         assert_eq!(
             VolumetricTuning::default(),
@@ -328,7 +329,7 @@ mod tests {
         assert_eq!(
             DisplaySettings::for_mode(RendererMode::Classic),
             DisplaySettings {
-                brightness: 0.6,
+                brightness: 0.5,
                 contrast: 1.0,
             }
         );

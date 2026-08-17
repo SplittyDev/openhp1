@@ -40,7 +40,7 @@ DetailTextures=false
 ScreenFlashes=true
 
 [OpenHP1.Renderer.Classic]
-Brightness=0.6
+Brightness=0.5
 ColorMode=32Bit
 
 [OpenHP1.Renderer.Modern]
@@ -53,8 +53,8 @@ AgXBrightness=0.6
 AgXContrast=0.9
 AmbientOcclusion=XeGTAO
 AntiAliasing=SMAA
-Bloom=true
-VolumetricLighting=true
+Bloom=false
+VolumetricLighting=false
 ```
 
 ## `[OpenHP1.GameData]`
@@ -105,7 +105,7 @@ These settings apply when `Renderer=Classic`.
 
 | Key | Default | Accepted values | What it does |
 | --- | --- | --- | --- |
-| `Brightness` | `0.6` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
+| `Brightness` | `0.5` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
 | `ColorMode` | `32Bit` | `32Bit`, `RGB565` | Uses full colour or emulates the original 16-bit RGB565 output. |
 
 For compatibility, `ColorMode` also accepts `32`, `TrueColor`, and `RGBA8888`
@@ -127,8 +127,8 @@ These settings apply when `Renderer=Modern`.
 | `AgXContrast` | `0.9` | `0.5` to `2.0` | Sets contrast when using AgX. Values outside this range are moved to the nearest limit. |
 | `AmbientOcclusion` | `XeGTAO` | `Off`, `SSAO`, `XeGTAO` | Chooses the Modern renderer's screen-space contact-shadow method, or disables it. |
 | `AntiAliasing` | `SMAA` | `Off`, `FXAA`, `SMAA` | Chooses the Modern renderer's edge-smoothing method, or disables it. |
-| `Bloom` | `true` | `true`, `false` | Turns the soft glow around bright areas off or on. |
-| `VolumetricLighting` | `true` | `true`, `false` | Turns depth-aware atmospheric scattering around authored lights off or on. |
+| `Bloom` | `false` | `true`, `false` | Turns the soft glow around bright areas off or on. |
+| `VolumetricLighting` | `false` | `true`, `false` | Turns depth-aware atmospheric scattering around authored lights off or on. |
 
 `Bloom` and `VolumetricLighting` also accept `1`, `on`, `0`, and `off`.
 `ToneMapper=Classic` is accepted as an older name for `Reinhard`, and

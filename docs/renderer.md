@@ -304,7 +304,7 @@ The viewer exposes these choices in its sidebar, keeps independent Classic and
 per-tone-mapper Modern display values, and provides a Modern-only contrast
 control. The game and viewer default to brightness/contrast `0.66/1.05` for
 Reinhard, `0.64/0.75` for ACES, and `0.6/0.9` for AgX. Classic retains
-brightness `0.6` and neutral contrast. Reinhard is the default tone mapper.
+brightness `0.5` and neutral contrast. Reinhard is the default tone mapper.
 Renderer mode, tone mapper, ambient occlusion, and anti-aliasing are also
 available on the command line:
 
