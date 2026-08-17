@@ -194,6 +194,9 @@ storybook action, the existing game UI presents the catalogued shipped page
 art/dialogue (or the credits page), and completion re-enters the compiled
 `Actor.TriggerEvent` path. Empty shipped indices complete immediately. It does
 not special-case a map, force travel, or skip an authored populated interlude.
+After the resulting level replacement, cursor capture is synchronized from the
+destination UI state; the startup main menu therefore owns the mouse after the
+credits path returns there.
 
 ## End-of-level travel
 

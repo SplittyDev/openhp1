@@ -70,6 +70,10 @@ fn next_redraw_deadline(frame_started: Instant, now: Instant) -> Instant {
     (frame_started + FRAME_INTERVAL).max(now)
 }
 
+fn input_should_be_captured(game_ui_open: bool, console_open: bool) -> bool {
+    !game_ui_open && !console_open
+}
+
 impl ApplicationHandler for GameApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.graphics.is_some() {
@@ -93,9 +97,7 @@ impl ApplicationHandler for GameApp {
             });
         match result {
             Ok(mut graphics) => {
-                if !graphics.game_ui.is_open() {
-                    graphics.capture_input();
-                }
+                graphics.sync_input_capture();
                 graphics.window.request_redraw();
                 self.graphics = Some(graphics);
             }
@@ -143,9 +145,7 @@ impl ApplicationHandler for GameApp {
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
                             );
-                            if !replacement.game_ui.is_open() {
-                                replacement.capture_input();
-                            }
+                            replacement.sync_input_capture();
                             replacement.window.request_redraw();
                             self.graphics = Some(replacement);
                         }
@@ -192,9 +192,7 @@ impl ApplicationHandler for GameApp {
                                 &mut replacement.debug_console,
                                 &mut graphics.debug_console,
                             );
-                            if !replacement.game_ui.is_open() {
-                                replacement.capture_input();
-                            }
+                            replacement.sync_input_capture();
                             replacement.window.request_redraw();
                             self.graphics = Some(replacement);
                         }
@@ -840,15 +838,21 @@ impl Graphics {
         }
     }
 
+    fn sync_input_capture(&mut self) {
+        if input_should_be_captured(self.game_ui.is_open(), self.debug_console.is_open()) {
+            self.capture_input();
+        } else {
+            self.release_input();
+        }
+    }
+
     fn release_input(&mut self) {
         self.input.clear();
-        if self.input.captured {
-            if let Err(error) = self.window.set_cursor_grab(CursorGrabMode::None) {
-                self.last_error = Some(format!("could not release the mouse: {error}"));
-            }
-            self.window.set_cursor_visible(true);
-            self.input.captured = false;
+        if let Err(error) = self.window.set_cursor_grab(CursorGrabMode::None) {
+            self.last_error = Some(format!("could not release the mouse: {error}"));
         }
+        self.window.set_cursor_visible(true);
+        self.input.captured = false;
     }
 
     fn render(&mut self) -> RenderOutcome {
@@ -1981,6 +1985,13 @@ mod tests {
             next_redraw_deadline(started, started + Duration::from_millis(20)),
             started + Duration::from_millis(20)
         );
+    }
+
+    #[test]
+    fn menus_and_console_release_cursor_capture() {
+        assert!(input_should_be_captured(false, false));
+        assert!(!input_should_be_captured(true, false));
+        assert!(!input_should_be_captured(false, true));
     }
 
     #[test]
