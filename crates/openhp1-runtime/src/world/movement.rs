@@ -117,6 +117,7 @@ impl ScriptRuntime {
         extent: Vec3,
         current_actor: usize,
         current_instance: &InstanceState,
+        trace_actors: bool,
     ) -> std::result::Result<Vec<ActorSweep>, String> {
         self.ensure_collision_actors(current_actor, current_instance)?;
         let trace = CollisionActor {
@@ -149,7 +150,8 @@ impl ScriptRuntime {
             else {
                 continue;
             };
-            if !other.collide_actors {
+            if !actor_matches_trace_flags(other.collide_actors, other.brush.is_some(), trace_actors)
+            {
                 continue;
             }
             let Some(hit) = sweep_collision_actors(&trace, other, delta) else {
@@ -184,7 +186,7 @@ impl ScriptRuntime {
         let end = location - Vec3::Z * distance;
         let extent = Vec3::new(radius, radius, 1.0);
         let actor_hit = self
-            .trace_collision_actors(start, end, extent, actor, instance)?
+            .trace_collision_actors(start, end, extent, actor, instance, true)?
             .into_iter()
             .next()
             .map(|hit| (hit.fraction, hit.normal));
@@ -2611,6 +2613,10 @@ fn sweep_world_collision(
     }
 }
 
+fn actor_matches_trace_flags(collide_actors: bool, moving_brush: bool, trace_actors: bool) -> bool {
+    collide_actors && (moving_brush || trace_actors)
+}
+
 fn move_hit_fraction(trace_fraction: f32, delta_length: f32, trace_padding: f32) -> f32 {
     let fraction = ((delta_length + trace_padding) * trace_fraction - trace_padding) / delta_length;
     if fraction <= MOVE_HIT_EPSILON {
@@ -2624,6 +2630,14 @@ fn move_hit_fraction(trace_fraction: f32, delta_length: f32, trace_padding: f32)
 mod world_collision_tests {
     use super::*;
     use crate::world::tests::solid_box_collision;
+
+    #[test]
+    fn trace_without_actor_flag_still_includes_moving_brushes() {
+        assert!(actor_matches_trace_flags(true, true, false));
+        assert!(!actor_matches_trace_flags(true, false, false));
+        assert!(actor_matches_trace_flags(true, false, true));
+        assert!(!actor_matches_trace_flags(false, true, true));
+    }
 
     #[test]
     fn aligned_cylinder_uses_native_box_extent_against_world_bsp() {

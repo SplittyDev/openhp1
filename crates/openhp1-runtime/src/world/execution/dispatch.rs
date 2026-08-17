@@ -330,17 +330,11 @@ impl ScriptRuntime {
         if !start.is_finite() || !end.is_finite() || !extent.is_finite() {
             return Err("Trace coordinates are not finite".to_owned());
         }
-        let actor_hit = trace_actors
-            .then(|| {
-                self.trace_collision_actors(start, end, extent, actor, instance)
-                    .map(|hits| {
-                        hits.into_iter()
-                            .next()
-                            .map(|hit| (hit.fraction, hit.actor, hit.normal))
-                    })
-            })
-            .transpose()?
-            .flatten();
+        let actor_hit = self
+            .trace_collision_actors(start, end, extent, actor, instance, trace_actors)?
+            .into_iter()
+            .next()
+            .map(|hit| (hit.fraction, hit.actor, hit.normal));
         let bsp_hit = self
             .collision
             .as_ref()
@@ -1326,11 +1320,19 @@ impl ScriptRuntime {
                 extent,
                 current_actor,
                 current_instance,
+                true,
             )
             .map_err(|message| DispatchError::UnresolvedObject { message })?
             .into_iter()
             .map(|hit| (hit.fraction, hit.actor, hit.normal))
             .collect::<Vec<_>>();
+        if let Some((level_info, hit)) = self.level_info.zip(
+            self.collision
+                .as_ref()
+                .and_then(|collision| collision.sweep_aabb(trace_start, trace_end, extent)),
+        ) {
+            hits.push((hit.fraction, level_info, hit.normal));
+        }
         hits.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -1736,6 +1738,49 @@ mod iterator_tests {
         let actor = Vec3::new(512.0, 0.0, 0.0);
         assert!(within_radius(None, location, actor));
         assert!(!within_radius(Some(15.0), location, actor));
+    }
+
+    #[test]
+    fn trace_actors_includes_level_bsp_hits() {
+        let root = radius_actors_test_root();
+        let mut runtime = ScriptRuntime::new(&root.0).unwrap();
+        let source = runtime.packages.load("RadiusActorsTest").unwrap();
+        let class = object_id(&source, 0);
+        let level_object = runtime_actor_id(8);
+        runtime.actor_classes.insert(7, class.clone());
+        runtime.actor_classes.insert(8, class.clone());
+        runtime.actor_objects.insert(8, level_object.clone());
+        runtime.object_actors.insert(level_object.clone(), 8);
+        runtime.level_info = Some(8);
+        runtime.collision = Some(Arc::new(
+            BspCollision::from_model(&plane_model(ObjectReference::None, PolyFlags::default()))
+                .unwrap(),
+        ));
+        runtime.collision_actors.push(None);
+        let class = runtime.object_handle(class).unwrap();
+        let level_object = runtime.object_handle(level_object).unwrap();
+
+        let values = runtime
+            .trace_actors_iterator(
+                7,
+                &source,
+                &[
+                    Value::Object(class),
+                    Value::Object(0),
+                    Value::Vector(Vec3::ZERO.to_array()),
+                    Value::Vector(Vec3::ZERO.to_array()),
+                    Value::Vector((Vec3::NEG_X * 10.0).to_array()),
+                    Value::Vector((Vec3::X * 10.0).to_array()),
+                    Value::None,
+                ],
+                &InstanceState::default(),
+            )
+            .unwrap();
+
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].value, Value::Object(level_object));
+        assert_eq!(values[0].outputs[0], (2, Value::Vector([0.5, 0.0, 0.0])));
+        assert_eq!(values[0].outputs[1], (3, Value::Vector([1.0, 0.0, 0.0])));
     }
 
     #[test]

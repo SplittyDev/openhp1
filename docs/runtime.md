@@ -665,7 +665,11 @@ the requested name as an arbitrary filesystem path.
 
 Cutscene cameras use UE1 vector/rotator transforms, `Trace`, and pawn visibility
 tests. BSP trace hits return the active `LevelInfo`, as UE1 UnrealScript
-expects; when `bTraceActors` is true, the closest actor or BSP hit wins.
+expects. Native `Actor.Trace` always checks world BSP and moving brushes;
+`bTraceActors` additionally enables other colliding actors. This matters for
+the compiled `BaseCam` positioning code, which avoids walls with traces while
+its normal state disables physical camera collision. The closest enabled actor
+or BSP hit wins.
 `TraceActors` returns actor and BSP hits with their output locations and
 normals.
 The shipped game authors its horizontal `FOVAngle` for a 640x480 viewport.
