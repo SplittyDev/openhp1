@@ -44,6 +44,8 @@ build_linux_image() {
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
 cd "$repo_root"
+readonly linux_x64_target_dir="$repo_root/target/cross/$LINUX_X64_TARGET"
+readonly linux_arm_target_dir="$repo_root/target/cross/$LINUX_ARM_TARGET"
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS is required to build the universal macOS bundle"
 for command in cargo cargo-xwin cross git install lipo rustup zip; do
@@ -109,8 +111,10 @@ cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MA
 cargo build --locked --release -p openhp1-game -p openhp1-launcher --target "$MACOS_X64_TARGET"
 cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_TARGET"
 cargo xwin build --locked --release -p openhp1-game -p openhp1-launcher --target "$WINDOWS_ARM_TARGET"
-cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_X64_TARGET"
-cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_ARM_TARGET"
+CARGO_TARGET_DIR="$linux_x64_target_dir" \
+    cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_X64_TARGET"
+CARGO_TARGET_DIR="$linux_arm_target_dir" \
+    cross build --locked --release -p openhp1-game -p openhp1-launcher --target "$LINUX_ARM_TARGET"
 
 mkdir -p \
     "$staging_dir/openhp1_win" \
@@ -135,10 +139,10 @@ for binary in openhp1-game openhp1-launcher; do
         "target/$WINDOWS_ARM_TARGET/release/$binary.exe" \
         "$staging_dir/openhp1_win_arm/$binary.exe"
     install -m 0755 \
-        "target/$LINUX_X64_TARGET/release/$binary" \
+        "$linux_x64_target_dir/$LINUX_X64_TARGET/release/$binary" \
         "$staging_dir/openhp1_linux_x64/$binary"
     install -m 0755 \
-        "target/$LINUX_ARM_TARGET/release/$binary" \
+        "$linux_arm_target_dir/$LINUX_ARM_TARGET/release/$binary" \
         "$staging_dir/openhp1_linux_arm/$binary"
 done
 
