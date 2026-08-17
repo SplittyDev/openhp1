@@ -475,6 +475,18 @@ impl ScriptRuntime {
                         transfer_items: *transfer_items,
                     });
                 }
+                (Some(name), [Value::Int(story), event_when_done])
+                    if object == host_menu_book_id()
+                        && name.eq_ignore_ascii_case("DoStoryBookInterlude") =>
+                {
+                    let event_when_done = runtime_name(source, event_when_done)
+                        .map_err(|message| DispatchError::UnresolvedObject { message })?;
+                    actions.push(ActorAction::StoryBookInterlude {
+                        actor: current_actor,
+                        story: *story,
+                        event_when_done,
+                    });
+                }
                 _ => {}
             }
             return Ok(CallOutput::value(Value::None));

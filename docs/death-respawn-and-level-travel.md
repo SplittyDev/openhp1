@@ -154,6 +154,45 @@ explicit selected slot, this uses the shipped `FESlotPage` fallback slot 99.
 Building the entire legacy UWindow object graph, adding a death timer, or
 resetting the map would bypass the authored selected-slot behavior.
 
+## Storybook interludes
+
+The final `Lev5_Final.unr` cutscene does not travel immediately after Harry
+faints. Its serialized cast script fades out for two seconds, sleeps for five,
+releases the cutscene, and triggers `ReallyGotoStoryBook`. Map export 1235 is a
+`TriggerGotoStoryBook` with `StoryBookIdx=6` and
+`TriggerToSendWhenDone=ChangeLevel`; export 1668 is the matching
+`TriggerChangeLevel` tagged `ChangeLevel`.
+
+The active shipped call chain is also explicit:
+
+- `HarryPotter.u` `TriggerGotoStoryBook.ProcessTrigger`, export 1602, finds
+  `baseHarry` and calls `hpconsole(p.player.console).menuBook.DoStoryBookInterlude`
+  with the two serialized actor properties.
+- `HPMenu.u` `FEBook.DoStoryBookInterlude`, export 1068, calls
+  `FEStoryBookPage.SetStory` and opens `STORYBOOKPAGE`. `SetStory`, export 1965,
+  retains the completion event.
+- `FEStoryBookPage.SetStoryAndPage`, export 1971, closes the book at the end and
+  calls the viewport actor's `TriggerEvent` with that event. `Engine.u`
+  `Actor.TriggerEvent`, export 5171, iterates matching actor tags and dispatches
+  `Trigger`; the authored `ChangeLevel` actor then uses the existing travel
+  path.
+
+The compiled `FEStoryBookPage` defaults are the page catalog for all 17 story
+indices. Indices 7, 8, 10, 11, and 12 have zero shipped pages; authored maps
+use indices 2, 5, 6, 9, 15, and 16. Story 6 has 13 pages, from
+`("6_1_", "StoryBook29")` through `("6_8_", "StoryBook41")`. Active
+`GotoNextPage`, export 1970, skips pages 3 through 5 unless Harry has at least
+250 beans and 24 cards; otherwise it awards card 100 before continuing. Story
+16 is the credits case: its sole default page uses `TempCredits0_`, has no
+dialogue, and active `Created`, `SetCreditsLines`, and `PaintCredits` use the
+six-second default page timer and the shipped credit strings.
+
+OpenHP1 keeps that boundary narrow: the host-backed menu book emits a
+storybook action, the existing game UI presents the catalogued shipped page
+art/dialogue (or the credits page), and completion re-enters the compiled
+`Actor.TriggerEvent` path. Empty shipped indices complete immediately. It does
+not special-case a map, force travel, or skip an authored populated interlude.
+
 ## End-of-level travel
 
 The active authored route is server travel, not local `ClientTravel`:

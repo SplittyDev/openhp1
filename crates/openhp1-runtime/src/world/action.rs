@@ -545,6 +545,11 @@ pub enum ActorAction {
         travel_type: u8,
         transfer_items: bool,
     },
+    StoryBookInterlude {
+        actor: usize,
+        story: i32,
+        event_when_done: String,
+    },
     UnlockQuidditch {
         actor: usize,
         level: u8,
@@ -668,6 +673,7 @@ impl ActorAction {
             | Self::ModifySound { actor, .. }
             | Self::StopSound { actor, .. }
             | Self::ClientTravel { actor, .. }
+            | Self::StoryBookInterlude { actor, .. }
             | Self::UnlockQuidditch { actor, .. }
             | Self::FinishQuidditchMatch { actor, .. }
             | Self::UpdateUrl { actor, .. }

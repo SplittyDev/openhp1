@@ -390,6 +390,7 @@ fn apply_actions(
             ActorAction::ModifySound { .. } => {}
             ActorAction::StopSound { .. } => {}
             ActorAction::ClientTravel { .. } => {}
+            ActorAction::StoryBookInterlude { .. } => {}
             ActorAction::UnlockQuidditch { .. } => {}
             ActorAction::FinishQuidditchMatch { .. } => {}
             ActorAction::UpdateUrl { .. } => {}

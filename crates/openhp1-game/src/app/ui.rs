@@ -29,21 +29,172 @@ const QUIDDITCH_FIXTURES: [QuidditchFixture; 6] = [
 ];
 const QUIDDITCH_FINAL_LEVELS: [&str; 4] =
     ["", "Quid_RavenC.unr", "Quid_HuffleC.unr", "Quid_SlythC.unr"];
-const NEW_GAME_STORY: [(&str, &str); 14] = [
-    ("3_1_", "StoryBook1"),
-    ("3_2_", "StoryBook2"),
-    ("3_3_", "StoryBook3"),
-    ("3_3_", "StoryBook52"),
-    ("3_4_", "StoryBook4"),
-    ("3_5_", "StoryBook5"),
-    ("3_5_", "storybook_new_20"),
-    ("3_6_", "storybook50"),
-    ("6_6_", "storybook_new_21"),
-    ("3_7_", "StoryBook7"),
-    ("3_7_", "StoryBook53"),
-    ("3_7_", "StoryBook54"),
-    ("3_7_", "StoryBook55"),
-    ("3_7_", "StoryBook49"),
+const STORY_BOOKS: [&[(&str, &str)]; 17] = [
+    &[
+        ("CommonRoom", "storybook_new_7"),
+        ("CommonRoom", "storybook_new_8"),
+    ],
+    &[("HarryGetsBroom", "storybook_new_4")],
+    &[("HarryStudy", "storybook_new_3")],
+    &[
+        ("3_1_", "StoryBook1"),
+        ("3_2_", "StoryBook2"),
+        ("3_3_", "StoryBook3"),
+        ("3_3_", "StoryBook52"),
+        ("3_4_", "StoryBook4"),
+        ("3_5_", "StoryBook5"),
+        ("3_5_", "storybook_new_20"),
+        ("3_6_", "storybook50"),
+        ("6_6_", "storybook_new_21"),
+        ("3_7_", "StoryBook7"),
+        ("3_7_", "StoryBook53"),
+        ("3_7_", "StoryBook54"),
+        ("3_7_", "StoryBook55"),
+        ("3_7_", "StoryBook49"),
+    ],
+    &[
+        ("4_1_", "StoryBook9"),
+        ("4_1_", "StoryBook10"),
+        ("4_2_", "StoryBook11"),
+        ("4_2_", "StoryBook12"),
+        ("4_1_", "StoryBook13"),
+        ("4_1_", "StoryBook14"),
+        ("4_2_", "StoryBook15"),
+        ("4_2_", "StoryBook16"),
+    ],
+    &[
+        ("QuidditchVictory", "storybook_new_6"),
+        ("HermioneLibrary", "storybook_new_9"),
+        ("HarryGetsCloak", "storybook_new_4"),
+        ("5_1_", "StoryBook17"),
+        ("5_1_", "StoryBook18"),
+        ("HarryStudy", "storybook_new_1"),
+    ],
+    &[
+        ("6_1_", "StoryBook29"),
+        ("6_1_", "StoryBook30"),
+        ("6_1_", "StoryBook31"),
+        ("6_2_", "StoryBook44"),
+        ("6_3_", "StoryBook45"),
+        ("6_4_", "StoryBook46"),
+        ("6_5_", "StoryBook34"),
+        ("6_5_", "StoryBook35"),
+        ("6_6_", "StoryBook37"),
+        ("8_0_", "StoryBook38"),
+        ("6_6_", "StoryBook39"),
+        ("6_7_", "StoryBook40"),
+        ("6_8_", "StoryBook41"),
+    ],
+    &[],
+    &[],
+    &[("QuidditchVictory", "storybook_new_5")],
+    &[],
+    &[],
+    &[],
+    &[
+        ("5_3_", "StoryBook21"),
+        ("5_4_", "StoryBook23"),
+        ("5_5_", "storybook_new_10"),
+        ("5_5_", "storybook_new_11"),
+        ("5_6_", "StoryBook24"),
+        ("5_6_", "StoryBook25"),
+        ("5_6_", "StoryBook26"),
+        ("5_6_", "StoryBook28"),
+    ],
+    &[("CommonRoom", "storybook_new_2")],
+    &[("5_2_", "StoryBook20")],
+    &[("TempCredits0_", "")],
+];
+const CREDITS_LINES: &[&str] = &[
+    "Executive Producers",
+    "Dan Elenbaas",
+    "David Mann",
+    "",
+    "Producer",
+    "Elizabeth Smith",
+    "",
+    "Creative Director",
+    "Phil Trumbo",
+    "",
+    "Director of Design",
+    "Kris Summers",
+    "",
+    "Director of QA",
+    "Jack Brummet",
+    "",
+    "Lead Programmer",
+    "Glen Kirk",
+    "",
+    "Lead Artist",
+    "Christopher Vuchetich",
+    "",
+    "Composer",
+    "Jeremy Soule",
+    "",
+    "Programming",
+    "Chris Phillips",
+    "David Lawson",
+    "Fraser Thompson",
+    "Paul Furio",
+    "Peter Kolarov",
+    "",
+    "Art",
+    "Sharon Plotkin",
+    "Kerwin Burton",
+    "Tiffany Vongerichten",
+    "Bill Sears",
+    "Eric Gingrich",
+    "Lorian Kiesel",
+    "",
+    "Animation",
+    "Nathan Hocken",
+    "Laura Smith",
+    "",
+    "Design and Level Design",
+    "Benjamin Golus",
+    "Chad Verrall",
+    "Jordan Thomas",
+    "",
+    "Sound Design",
+    "Mark Yeend",
+    "",
+    "Production Manager",
+    "Frank Peterson",
+    "",
+    "Art Coordinator",
+    "Aspen Price",
+    "",
+    "Additional Art",
+    "David Stevenson",
+    "Forrest Keyes",
+    "Jason Zayas",
+    "Jeff Willis",
+    "Bill Meyer",
+    "Keith Himebaugh",
+    "Les Betterley",
+    "Lynne Startup",
+    "Mike Ingrassia",
+    "Mike Prittie",
+    "Todd Lovering",
+    "Tony Ravo",
+    "",
+    "QA Test Lead",
+    "Cheryl Penick",
+    "",
+    "Testing",
+    "Jason Bay",
+    "",
+    "Special Thanks",
+    "Steve Ettinger",
+    "Daryle Conners",
+    "JC Connors",
+    "Laurie Bauman",
+    "Mike Dean",
+    "Stephanie Hertager",
+    "Susan DeMerit",
+    "Aaron Rice",
+    "Kevin Burdick",
+    "Curtis Asplund",
 ];
 const WIZARD_CARDS: [(i32, &str, &str); 25] = [
     (101, "Dumbledore", "wizard_card_new_04b"),
@@ -79,6 +230,8 @@ pub(super) enum Action {
     LoadLevel(String),
     NewGame(u32),
     PlayUiSound(AudioClip),
+    AddCard(i32),
+    DispatchStoryEvent(String),
     Resume,
     ApplyGraphics(GraphicsSettings),
     SaveGraphics(GraphicsSettings),
@@ -315,7 +468,7 @@ struct CardTextures {
 struct StoryPage {
     art: [TextureHandle; 4],
     text: String,
-    sound: AudioClip,
+    sound: Option<AudioClip>,
     duration: Duration,
 }
 
@@ -387,6 +540,7 @@ struct OptionValues {
 }
 
 pub(super) struct GameUi {
+    context: egui::Context,
     open: bool,
     startup: bool,
     page: Page,
@@ -414,7 +568,9 @@ pub(super) struct GameUi {
     selected_card: Option<i32>,
     story_pages: Vec<StoryPage>,
     story_page: usize,
+    story_index: Option<i32>,
     story_slot: Option<u32>,
+    story_event: Option<String>,
     story_sound_at: Option<Instant>,
     story_deadline: Option<Instant>,
     card_descriptions: HashMap<i32, String>,
@@ -902,45 +1058,7 @@ impl GameUi {
                 })
                 .collect::<Result<_>>()?,
         };
-        let mut story_art = HashMap::new();
-        for (graphic, _) in NEW_GAME_STORY {
-            if !story_art.contains_key(graphic) {
-                let art: [TextureHandle; 4] = [1, 2, 3, 4]
-                    .map(|piece| {
-                        load_texture(
-                            context,
-                            &mut packages,
-                            &format!("StoryBookTest.Default.{graphic}00{piece}"),
-                            true,
-                        )
-                    })
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("new-game story art needs four pieces"))?;
-                story_art.insert(graphic, art);
-            }
-        }
-        let story_pages = NEW_GAME_STORY
-            .iter()
-            .map(|(graphic, dialog)| {
-                let art = story_art
-                    .get(graphic)
-                    .context("new-game story art was not loaded")?
-                    .clone();
-                let text = packages.localize("HPDialog", "all", dialog);
-                if text.is_empty() {
-                    bail!("HPDialog.int is missing [all] {dialog}");
-                }
-                let sound = load_audio_clip(&mut packages, &format!("AllDialog.{dialog}"))?;
-                Ok(StoryPage {
-                    art,
-                    text,
-                    duration: wav_duration(sound.data()).unwrap_or(Duration::from_secs(6)),
-                    sound,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let story_pages = load_story_pages(context, &mut packages, STORY_BOOKS[3])?;
         let localized = |key: &str| -> Result<String> {
             let value = packages.localize("HPMenu", "text", key);
             if value.is_empty() {
@@ -1053,6 +1171,7 @@ impl GameUi {
         }
         let startup = is_startup_map(map);
         Ok(Self {
+            context: context.clone(),
             open: startup,
             startup,
             page: Page::Main,
@@ -1080,7 +1199,9 @@ impl GameUi {
             selected_card: None,
             story_pages,
             story_page: 0,
+            story_index: None,
             story_slot: None,
+            story_event: None,
             story_sound_at: None,
             story_deadline: None,
             card_descriptions,
@@ -1115,12 +1236,16 @@ impl GameUi {
             return false;
         }
         if !self.startup {
+            if self.page == Page::StoryBook {
+                return false;
+            }
             self.open = false;
             return true;
         }
         self.story_deadline = None;
         self.story_sound_at = None;
         self.story_slot = None;
+        self.story_event = None;
         self.page = Page::Main;
         self.open_combo = None;
         false
@@ -1461,14 +1586,58 @@ impl GameUi {
 
     fn start_new_game_story(&mut self, slot: u32) {
         self.story_page = 0;
+        self.story_index = None;
         self.story_slot = Some(slot);
+        self.story_event = None;
         self.page = Page::StoryBook;
         let page = &self.story_pages[0];
         (self.story_sound_at, self.story_deadline) = story_timing(Instant::now(), page.duration);
     }
 
+    pub(super) fn start_storybook_interlude(
+        &mut self,
+        story: i32,
+        event_when_done: String,
+    ) -> Result<()> {
+        let Some(pages) = usize::try_from(story)
+            .ok()
+            .and_then(|story| STORY_BOOKS.get(story))
+        else {
+            bail!("story book interlude {story} is outside the shipped 0..16 range");
+        };
+        self.story_page = 0;
+        self.story_index = Some(story);
+        self.story_slot = None;
+        self.story_event = Some(event_when_done);
+        if pages.is_empty() {
+            self.story_pages.clear();
+            self.story_sound_at = None;
+            self.story_deadline = None;
+            self.open = false;
+            self.story_index = None;
+            self.action = self.story_event.take().map(Action::DispatchStoryEvent);
+            return Ok(());
+        }
+        let mut packages =
+            PackageStore::scan_game_root_with_settings_dir(&self.game_root, &self.settings_dir)?;
+        self.story_pages = load_story_pages(&self.context, &mut packages, pages)?;
+        self.open = true;
+        self.page = Page::StoryBook;
+        let page = &self.story_pages[0];
+        (self.story_sound_at, self.story_deadline) = story_timing(Instant::now(), page.duration);
+        Ok(())
+    }
+
     fn advance_story(&mut self) {
-        self.story_page += 1;
+        let (advance, add_card) = if self.story_index == Some(6) {
+            end_game_story_advance(self.story_page, self.player.beans, self.player.cards)
+        } else {
+            (1, false)
+        };
+        self.story_page += advance;
+        if add_card {
+            self.action = Some(Action::AddCard(100));
+        }
         if let Some(page) = self.story_pages.get(self.story_page) {
             (self.story_sound_at, self.story_deadline) =
                 story_timing(Instant::now(), page.duration);
@@ -1476,6 +1645,12 @@ impl GameUi {
             self.story_sound_at = None;
             self.story_deadline = None;
             self.action = Some(Action::NewGame(slot));
+        } else if let Some(event) = self.story_event.take() {
+            self.story_sound_at = None;
+            self.story_deadline = None;
+            self.story_index = None;
+            self.open = false;
+            self.action = Some(Action::DispatchStoryEvent(event));
         }
     }
 
@@ -1485,9 +1660,10 @@ impl GameUi {
             self.advance_story();
         } else if self.story_sound_at.is_some_and(|sound_at| now >= sound_at) {
             self.story_sound_at = None;
-            self.action = Some(Action::PlayUiSound(
-                self.story_pages[self.story_page].sound.clone(),
-            ));
+            self.action = self.story_pages[self.story_page]
+                .sound
+                .clone()
+                .map(Action::PlayUiSound);
         }
         let page = &self.story_pages[self.story_page.min(self.story_pages.len() - 1)];
         for (index, texture) in page.art.iter().enumerate() {
@@ -1513,6 +1689,9 @@ impl GameUi {
             galley,
             Color32::WHITE,
         );
+        if self.story_index == Some(16) {
+            draw_credits(ui, scale);
+        }
     }
 
     fn slot_page(&mut self, ui: &mut egui::Ui, scale: f32) {
@@ -2674,6 +2853,58 @@ fn load_color_image(
     ))
 }
 
+fn load_story_pages(
+    context: &egui::Context,
+    packages: &mut PackageStore,
+    pages: &[(&str, &str)],
+) -> Result<Vec<StoryPage>> {
+    let mut art = HashMap::new();
+    for &(graphic, _) in pages {
+        if art.contains_key(graphic) {
+            continue;
+        }
+        let pieces: [TextureHandle; 4] = [1, 2, 3, 4]
+            .map(|piece| {
+                load_texture(
+                    context,
+                    packages,
+                    &format!("StoryBookTest.Default.{graphic}00{piece}"),
+                    true,
+                )
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("story art needs four pieces"))?;
+        art.insert(graphic, pieces);
+    }
+    pages
+        .iter()
+        .map(|(graphic, dialog)| {
+            let (sound, text, duration) = if dialog.is_empty() {
+                (None, String::new(), Duration::from_secs(3))
+            } else {
+                let sound = load_audio_clip(packages, &format!("AllDialog.{dialog}"))?;
+                let text = packages.localize("HPDialog", "all", dialog);
+                if text.is_empty() {
+                    bail!("HPDialog.int is missing [all] {dialog}");
+                }
+                let duration = wav_duration(sound.data()).unwrap_or(Duration::from_secs(6));
+                (Some(sound), text, duration)
+            };
+            Ok(StoryPage {
+                art: art
+                    .get(graphic)
+                    .context("story art was not loaded")?
+                    .clone(),
+                text,
+                sound,
+                duration,
+            })
+        })
+        .collect()
+}
+
 fn load_options_background(
     context: &egui::Context,
     packages: &mut PackageStore,
@@ -2927,6 +3158,33 @@ fn story_timing(now: Instant, narration: Duration) -> (Option<Instant>, Option<I
         Some(now + STORY_MIN_TIME_ON_PAGE - STORY_SOUND_ADVANCE),
         Some(now + STORY_MIN_TIME_ON_PAGE + narration + STORY_TRAILING_TIME),
     )
+}
+
+fn end_game_story_advance(page: usize, beans: i32, cards: u8) -> (usize, bool) {
+    if page == 2 && (beans < 250 || cards < 24) {
+        (4, false)
+    } else {
+        (1, page == 2)
+    }
+}
+
+fn draw_credits(ui: &egui::Ui, scale: f32) {
+    let font = FontId::proportional(14.0 * scale);
+    let line_height = ui
+        .painter()
+        .layout_no_wrap("Final Results".to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .y;
+    let lines_per_page = (350.0 * scale / line_height) as usize;
+    for (index, line) in CREDITS_LINES.iter().take(lines_per_page).enumerate() {
+        ui.painter().text(
+            ui.min_rect().min + Vec2::new(320.0 * scale, 50.0 * scale + index as f32 * line_height),
+            Align2::CENTER_TOP,
+            *line,
+            font.clone(),
+            Color32::WHITE,
+        );
+    }
 }
 
 fn draw_texture(
@@ -3607,6 +3865,40 @@ mod tests {
     }
 
     #[test]
+    fn final_story_skips_reward_pages_or_awards_harrys_card() {
+        assert_eq!(end_game_story_advance(2, 249, 24), (4, false));
+        assert_eq!(end_game_story_advance(2, 250, 23), (4, false));
+        assert_eq!(end_game_story_advance(2, 250, 24), (1, true));
+        assert_eq!(end_game_story_advance(3, 0, 0), (1, false));
+    }
+
+    #[test]
+    fn story_catalog_matches_shipped_page_counts() {
+        assert_eq!(
+            STORY_BOOKS.map(|story| story.len()),
+            [2, 1, 1, 14, 8, 6, 13, 0, 0, 1, 0, 0, 0, 8, 1, 1, 1]
+        );
+        assert_eq!(STORY_BOOKS[16], [("TempCredits0_", "")]);
+    }
+
+    #[test]
+    #[ignore = "requires local original game files"]
+    fn all_story_assets_load_from_shipped_packages() {
+        let game_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res");
+        let mut packages = PackageStore::scan_game_root(&game_root).unwrap();
+        let context = egui::Context::default();
+        let loaded = STORY_BOOKS
+            .iter()
+            .map(|story| {
+                load_story_pages(&context, &mut packages, story)
+                    .unwrap()
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(loaded, 57);
+    }
+
+    #[test]
     #[ignore = "requires local original game files"]
     fn quidditch_unlock_migrates_from_the_misplaced_save_config() {
         let game_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../res");
@@ -3768,9 +4060,9 @@ mod tests {
 
     #[test]
     fn new_game_story_uses_all_compiled_pages_and_wav_timing() {
-        assert_eq!(NEW_GAME_STORY.len(), 14);
-        assert_eq!(NEW_GAME_STORY[0], ("3_1_", "StoryBook1"));
-        assert_eq!(NEW_GAME_STORY[13], ("3_7_", "StoryBook49"));
+        assert_eq!(STORY_BOOKS[3].len(), 14);
+        assert_eq!(STORY_BOOKS[3][0], ("3_1_", "StoryBook1"));
+        assert_eq!(STORY_BOOKS[3][13], ("3_7_", "StoryBook49"));
 
         let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
         wav.extend(16_u32.to_le_bytes());

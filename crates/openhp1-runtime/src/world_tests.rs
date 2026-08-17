@@ -1524,6 +1524,7 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
         ("Save.u", "HPConsole", "SaveSelectedSlot"),
         ("Load.u", "HPConsole", "LoadSelectedSlot"),
         ("Travel.u", "HPConsole", "ChangeLevel"),
+        ("Story.u", "FEBook", "DoStoryBookInterlude"),
         ("SpaceFlag.u", "baseConsole", "bSpaceReleased"),
         ("HubFlow.u", "HPConsole", "bInHubFlow"),
         ("Book.u", "HPConsole", "menuBook"),
@@ -1671,6 +1672,29 @@ fn player_console_and_menu_bridges_emit_authored_host_actions() {
     else {
         panic!("FEBook cast rejected the host bridge");
     };
+    let source = runtime.packages.load_path(system.join("Story.u")).unwrap();
+    runtime
+        .dispatch_context_call(
+            7,
+            &player_class,
+            book,
+            &source,
+            FunctionCall::Virtual(1),
+            &[Value::Int(6), Value::NameText("ChangeLevel".to_owned())],
+            &mut instance,
+            &mut actions,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        actions,
+        [ActorAction::StoryBookInterlude {
+            actor: 7,
+            story: 6,
+            event_when_done: "ChangeLevel".to_owned(),
+        }]
+    );
+    actions.clear();
     let save_source = runtime.packages.load_path(system.join("Save.u")).unwrap();
     runtime
         .dispatch_context_call(

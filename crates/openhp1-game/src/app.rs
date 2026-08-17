@@ -1094,6 +1094,18 @@ impl Graphics {
                 }
                 RenderOutcome::Continue
             }
+            Some(ui::Action::AddCard(id)) => {
+                self.dispatch_player_function("addcard", &[Value::Int(id)]);
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::DispatchStoryEvent(event)) => {
+                self.dispatch_player_function(
+                    "TriggerEvent",
+                    &[Value::NameText(event), Value::Object(0), Value::Object(0)],
+                );
+                self.capture_input();
+                RenderOutcome::Continue
+            }
             Some(ui::Action::Resume) => {
                 self.capture_input();
                 RenderOutcome::Continue
@@ -1120,15 +1132,15 @@ impl Graphics {
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetMouseSensitivity(sensitivity)) => {
-                self.dispatch_player_option("SetSensitivity", &[Value::Float(sensitivity)]);
+                self.dispatch_player_function("SetSensitivity", &[Value::Float(sensitivity)]);
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetAutoJump(enabled)) => {
-                self.dispatch_player_option("AutoJump", &[Value::Bool(enabled)]);
+                self.dispatch_player_function("AutoJump", &[Value::Bool(enabled)]);
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetInvertBroom(enabled)) => {
-                self.dispatch_player_option("InvertBroomPitch", &[Value::Bool(enabled)]);
+                self.dispatch_player_function("InvertBroomPitch", &[Value::Bool(enabled)]);
                 RenderOutcome::Continue
             }
             Some(ui::Action::SetSoundVolume(volume)) => {
@@ -1176,20 +1188,12 @@ impl Graphics {
         self.game_ui.set_graphics_settings(settings);
     }
 
-    fn dispatch_player_option(&mut self, function: &str, arguments: &[Value]) {
-        let result = (|| -> Result<()> {
-            let actions = self.runtime.dispatch_player_event(function, arguments)?;
-            self.deferred_calls += apply_runtime_actions_with(
-                &mut self.scene,
-                &mut self.runtime,
-                actions,
-                |action| play_audio_action(self.audio.as_mut(), action),
-            )?
-            .1;
-            Ok(())
-        })();
-        if let Err(error) = result {
-            self.last_error = Some(format!("could not apply {function}: {error:#}"));
+    fn dispatch_player_function(&mut self, function: &str, arguments: &[Value]) {
+        match self.runtime.dispatch_player_event(function, arguments) {
+            Ok(actions) => self.apply_actions(actions),
+            Err(error) => {
+                self.last_error = Some(format!("could not apply {function}: {error:#}"));
+            }
         }
     }
 
@@ -1533,10 +1537,20 @@ impl Graphics {
         let game_ui = &mut self.game_ui;
         let pending_level_travel = &mut self.pending_level_travel;
         let mut opened_quidditch = false;
+        let mut opened_storybook = false;
         match apply_runtime_actions_with(&mut self.scene, &mut self.runtime, actions, |action| {
             match action {
                 ActorAction::ClientTravel { url, .. } => {
                     *pending_level_travel = Some(url);
+                    Ok(())
+                }
+                ActorAction::StoryBookInterlude {
+                    story,
+                    event_when_done,
+                    ..
+                } => {
+                    game_ui.start_storybook_interlude(story, event_when_done)?;
+                    opened_storybook = true;
                     Ok(())
                 }
                 ActorAction::UnlockQuidditch { level, .. } => game_ui.unlock_quidditch(level),
@@ -1560,7 +1574,7 @@ impl Graphics {
             }
             Err(error) => self.last_error = Some(format!("runtime action failed: {error:#}")),
         }
-        if opened_quidditch {
+        if opened_quidditch || opened_storybook {
             self.release_input();
         }
     }
