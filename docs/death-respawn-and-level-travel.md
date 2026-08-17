@@ -183,9 +183,11 @@ use indices 2, 5, 6, 9, 15, and 16. Story 6 has 13 pages, from
 `("6_1_", "StoryBook29")` through `("6_8_", "StoryBook41")`. Active
 `GotoNextPage`, export 1970, skips pages 3 through 5 unless Harry has at least
 250 beans and 24 cards; otherwise it awards card 100 before continuing. Story
-16 is the credits case: its sole default page uses `TempCredits0_`, has no
-dialogue, and active `Created`, `SetCreditsLines`, and `PaintCredits` use the
-six-second default page timer and the shipped credit strings.
+16 is the credits case: its sole default page uses the unshipped
+`TempCredits0_` placeholder and has no dialogue. Active `Created` accepts the
+null textures returned by `DynamicLoadObject`; `SetCreditsLines` and
+`PaintCredits` render the credits over the standard background with the
+six-second default page timer.
 
 OpenHP1 keeps that boundary narrow: the host-backed menu book emits a
 storybook action, the existing game UI presents the catalogued shipped page

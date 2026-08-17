@@ -466,7 +466,7 @@ struct CardTextures {
 }
 
 struct StoryPage {
-    art: [TextureHandle; 4],
+    art: [Option<TextureHandle>; 4],
     text: String,
     sound: Option<AudioClip>,
     duration: Duration,
@@ -1667,16 +1667,18 @@ impl GameUi {
         }
         let page = &self.story_pages[self.story_page.min(self.story_pages.len() - 1)];
         for (index, texture) in page.art.iter().enumerate() {
-            draw_texture(
-                ui.painter(),
-                ui.min_rect().min,
-                scale,
-                texture,
-                Pos2::new(
-                    92.0 + (index % 2) as f32 * 256.0,
-                    42.0 + (index / 2) as f32 * 256.0,
-                ),
-            );
+            if let Some(texture) = texture {
+                draw_texture(
+                    ui.painter(),
+                    ui.min_rect().min,
+                    scale,
+                    texture,
+                    Pos2::new(
+                        92.0 + (index % 2) as f32 * 256.0,
+                        42.0 + (index / 2) as f32 * 256.0,
+                    ),
+                );
+            }
         }
         let galley = ui.painter().layout(
             page.text.clone(),
@@ -2826,6 +2828,18 @@ fn load_texture(
     Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
 }
 
+fn load_optional_texture(
+    context: &egui::Context,
+    packages: &mut PackageStore,
+    name: &str,
+    masked: bool,
+) -> Result<Option<TextureHandle>> {
+    if packages.find_localized_object(name, "Texture")?.is_none() {
+        return Ok(None);
+    }
+    load_texture(context, packages, name, masked).map(Some)
+}
+
 fn load_color_image(
     packages: &mut PackageStore,
     name: &str,
@@ -2863,9 +2877,9 @@ fn load_story_pages(
         if art.contains_key(graphic) {
             continue;
         }
-        let pieces: [TextureHandle; 4] = [1, 2, 3, 4]
+        let pieces: [Option<TextureHandle>; 4] = [1, 2, 3, 4]
             .map(|piece| {
-                load_texture(
+                load_optional_texture(
                     context,
                     packages,
                     &format!("StoryBookTest.Default.{graphic}00{piece}"),
@@ -3889,13 +3903,11 @@ mod tests {
         let context = egui::Context::default();
         let loaded = STORY_BOOKS
             .iter()
-            .map(|story| {
-                load_story_pages(&context, &mut packages, story)
-                    .unwrap()
-                    .len()
-            })
-            .sum::<usize>();
-        assert_eq!(loaded, 57);
+            .map(|story| load_story_pages(&context, &mut packages, story).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(loaded.iter().map(Vec::len).sum::<usize>(), 57);
+        assert!(loaded[16][0].art.iter().all(Option::is_none));
+        assert!(loaded[16][0].sound.is_none());
     }
 
     #[test]
