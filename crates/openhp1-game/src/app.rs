@@ -132,53 +132,73 @@ impl ApplicationHandler for GameApp {
                 }
                 RenderOutcome::Exit => event_loop.exit(),
                 RenderOutcome::Load(saved) => {
-                    let window = Arc::clone(&graphics.window);
-                    let graphics_settings = graphics.graphics_settings;
-                    let slot = saved.slot;
-                    let path = saved.map_path(&graphics.scene.path);
-                    match path.and_then(LoadedScene::load).and_then(|scene| {
-                        Graphics::new_with_save(window, scene, &saved.bytes, graphics_settings)
-                    }) {
-                        Ok(mut replacement) => {
-                            replacement.last_save_slot = Some(slot);
-                            std::mem::swap(
-                                &mut replacement.debug_console,
-                                &mut graphics.debug_console,
-                            );
-                            replacement.sync_input_capture();
-                            replacement.window.request_redraw();
-                            self.graphics = Some(replacement);
-                        }
+                    let scene = match saved
+                        .map_path(&graphics.scene.path)
+                        .and_then(LoadedScene::load)
+                    {
+                        Ok(scene) => scene,
                         Err(error) => {
                             graphics.last_error = Some(format!(
                                 "could not load saved game {}: {error:#}",
                                 saved.map
                             ));
                             self.graphics = Some(graphics);
+                            return;
+                        }
+                    };
+                    let window = Arc::clone(&graphics.window);
+                    let graphics_settings = graphics.graphics_settings;
+                    let slot = saved.slot;
+                    let mut debug_console = DeveloperConsole::new();
+                    std::mem::swap(&mut debug_console, &mut graphics.debug_console);
+                    // Some Windows configurations reject overlapping wgpu stacks for one window.
+                    drop(graphics);
+                    match Graphics::new_with_save(window, scene, &saved.bytes, graphics_settings) {
+                        Ok(mut replacement) => {
+                            replacement.last_save_slot = Some(slot);
+                            replacement.debug_console = debug_console;
+                            replacement.sync_input_capture();
+                            replacement.window.request_redraw();
+                            self.graphics = Some(replacement);
+                        }
+                        Err(error) => {
+                            error!(save = saved.map, %error, "could not load saved game");
+                            event_loop.exit();
                         }
                     }
                 }
                 RenderOutcome::LoadLevel(path, save_slot, travel) => {
+                    let scene = match LoadedScene::load(path.clone()) {
+                        Ok(scene) => scene,
+                        Err(error) => {
+                            graphics.last_error =
+                                Some(format!("could not load {}: {error:#}", path.display()));
+                            self.graphics = Some(graphics);
+                            return;
+                        }
+                    };
                     let window = Arc::clone(&graphics.window);
                     let graphics_settings = graphics.graphics_settings;
-                    match LoadedScene::load(path.clone())
-                        .and_then(|scene| {
-                            Graphics::new_with_settings(
-                                window,
-                                scene,
-                                graphics_settings,
-                                save_slot.is_some(),
-                            )
-                        })
-                        .and_then(|mut replacement| {
-                            if let Some(travel) = &travel {
-                                replacement
-                                    .runtime
-                                    .restore_player_travel_state(travel)
-                                    .context("could not restore player travel properties")?;
-                            }
-                            Ok(replacement)
-                        }) {
+                    let session = graphics.game_ui.session();
+                    let mut debug_console = DeveloperConsole::new();
+                    std::mem::swap(&mut debug_console, &mut graphics.debug_console);
+                    // Some Windows configurations reject overlapping wgpu stacks for one window.
+                    drop(graphics);
+                    match Graphics::new_with_settings(
+                        window,
+                        scene,
+                        graphics_settings,
+                        save_slot.is_some(),
+                    )
+                    .and_then(|mut replacement| {
+                        if let Some(travel) = &travel {
+                            replacement
+                                .runtime
+                                .restore_player_travel_state(travel)
+                                .context("could not restore player travel properties")?;
+                        }
+                        Ok(replacement)
+                    }) {
                         Ok(mut replacement) => {
                             replacement.last_save_slot = save_slot;
                             if let Some(slot) = save_slot
@@ -187,19 +207,15 @@ impl ApplicationHandler for GameApp {
                                 replacement.last_error =
                                     Some(format!("could not save new level: {error:#}"));
                             }
-                            replacement.game_ui.preserve_session_from(&graphics.game_ui);
-                            std::mem::swap(
-                                &mut replacement.debug_console,
-                                &mut graphics.debug_console,
-                            );
+                            replacement.game_ui.restore_session(session);
+                            replacement.debug_console = debug_console;
                             replacement.sync_input_capture();
                             replacement.window.request_redraw();
                             self.graphics = Some(replacement);
                         }
                         Err(error) => {
-                            graphics.last_error =
-                                Some(format!("could not load {}: {error:#}", path.display()));
-                            self.graphics = Some(graphics);
+                            error!(level = %path.display(), %error, "could not initialize level");
+                            event_loop.exit();
                         }
                     }
                 }

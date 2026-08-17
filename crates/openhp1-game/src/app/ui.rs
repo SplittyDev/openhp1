@@ -312,7 +312,7 @@ struct QuidditchTeam {
 }
 
 #[derive(Clone)]
-struct QuidditchLeague {
+pub(super) struct QuidditchLeague {
     screen: QuidditchScreen,
     current_game: usize,
     finals: bool,
@@ -1287,8 +1287,12 @@ impl GameUi {
         Ok(())
     }
 
-    pub(super) fn preserve_session_from(&mut self, previous: &Self) {
-        self.quidditch = previous.quidditch.clone();
+    pub(super) fn session(&self) -> QuidditchLeague {
+        self.quidditch.clone()
+    }
+
+    pub(super) fn restore_session(&mut self, session: QuidditchLeague) {
+        self.quidditch = session;
     }
 
     pub(super) fn finish_quidditch_match(&mut self, team0_score: i32, opponent_score: i32) {
