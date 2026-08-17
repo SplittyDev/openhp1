@@ -20,11 +20,12 @@ require_command() {
 }
 
 bundle() {
-    local name="$1"
+    local directory="$1"
+    local archive="$2"
     (
         cd "$staging_dir"
-        zip -qry "${name}.zip" "$name"
-        zip -T "${name}.zip" >/dev/null
+        zip -qry "${archive}.zip" "$directory"
+        zip -T "${archive}.zip" >/dev/null
     )
 }
 
@@ -147,9 +148,11 @@ for binary in openhp1-game openhp1-launcher; do
         "$staging_dir/openhp1_linux_arm/$binary"
 done
 
-for name in openhp1_win openhp1_win_arm openhp1_macos openhp1_linux_x64 openhp1_linux_arm; do
-    bundle "$name"
-done
+bundle openhp1_win openhp1_windows_x64
+bundle openhp1_win_arm openhp1_windows_arm
+bundle openhp1_macos openhp1_macos_universal
+bundle openhp1_linux_x64 openhp1_linux_x64
+bundle openhp1_linux_arm openhp1_linux_arm
 
 mv "$staging_dir" "$release_dir"
 staging_dir=""
