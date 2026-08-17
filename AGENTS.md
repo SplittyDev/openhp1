@@ -184,5 +184,6 @@ Keep the focused notes in
 - Run focused formatting, compilation, and tests for touched crates. State
   exactly what ran and whether tests used the local copyrighted corpus.
 - Run `cargo fmt --all` before each commit; format rather than using `--check`.
+- Use Conventional Commits format: `type(scope): imperative summary`.
 - Commit each logical change set separately instead of packing unrelated work
   into one large commit.
