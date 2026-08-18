@@ -5,10 +5,11 @@ use eframe::{
     egui::{self, Key, Sense},
     wgpu,
 };
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use openhp1_render::{
     AmbientOcclusion, Antialiasing, Camera, DisplaySettings, RenderStats, Renderer, RendererMode,
-    RendererSettings, ToneMapper, VolumetricDebugView, VolumetricTuning,
+    RendererSettings, SurfaceMode, ToneMapper, VolumetricDebugView, VolumetricTuning,
+    unreal_to_render,
 };
 use openhp1_runtime::ScriptRuntime;
 use openhp1_scene::{
@@ -76,6 +77,7 @@ pub(crate) struct ViewerApp {
     animation_speed: f32,
     actor_filter: String,
     selected_actor: Option<usize>,
+    selected_surface: Option<usize>,
     scene: LoadedScene,
     runtime: ScriptRuntime,
     player_touch_position: Option<Vec3>,
@@ -131,6 +133,7 @@ impl ViewerApp {
             animation_speed: 1.0,
             actor_filter: String::new(),
             selected_actor: None,
+            selected_surface: None,
             scene,
             runtime,
             player_touch_position: None,
@@ -201,6 +204,7 @@ impl ViewerApp {
         self.player_touch_position = None;
         self.actor_filter.clear();
         self.selected_actor = None;
+        self.selected_surface = None;
         self.render_stats = RenderStats::default();
         self.last_frame = Instant::now();
         self.frame_timing = FrameTiming::default();
@@ -490,6 +494,9 @@ impl ViewerApp {
         egui::CollapsingHeader::new(format!("Actors ({})", self.scene.actors.len()))
             .default_open(false)
             .show(ui, |ui| self.actor_inspector(ui));
+        egui::CollapsingHeader::new("Selected surface")
+            .default_open(true)
+            .show(ui, |ui| self.surface_inspector(ui));
         egui::CollapsingHeader::new("Performance")
             .default_open(true)
             .show(ui, |ui| {
@@ -597,6 +604,7 @@ impl ViewerApp {
                     egui::Slider::new(&mut self.animation_speed, 0.1..=2.0).text("Animation speed"),
                 );
                 ui.label("Drag to look");
+                ui.label("Click to inspect a surface");
                 ui.label("WASD move · Q/E down/up");
                 ui.label("Hold Shift to move faster");
             });
@@ -723,6 +731,38 @@ impl ViewerApp {
         for diagnostic in &actor.diagnostics {
             ui.label(format!("Diagnostic: {diagnostic}"));
         }
+    }
+
+    fn surface_inspector(&self, ui: &mut egui::Ui) {
+        let Some(surface) = self.selected_surface else {
+            ui.small("Click a visible surface to inspect its material.");
+            return;
+        };
+        let Some(material) = self.scene.render.surface_materials.get(surface) else {
+            ui.small("The selected surface is no longer available.");
+            return;
+        };
+        egui::Grid::new("selected surface details").show(ui, |ui| {
+            detail_row(ui, "Surface", surface.to_string());
+            detail_row(
+                ui,
+                "Texture",
+                self.scene
+                    .surface_texture_name(surface)
+                    .unwrap_or("none")
+                    .to_owned(),
+            );
+            detail_row(
+                ui,
+                "Texture image",
+                material
+                    .texture
+                    .map_or_else(|| "none".to_owned(), |index| index.to_string()),
+            );
+            detail_row(ui, "Mode", format!("{:?}", material.mode));
+            detail_row(ui, "Masked", yes_no(material.masked));
+            detail_row(ui, "Volumetric source", yes_no(material.volumetric_source));
+        });
     }
 
     fn update_camera(&mut self, ui: &egui::Ui, response: &egui::Response, delta_time: f32) {
@@ -929,11 +969,28 @@ impl eframe::App for ViewerApp {
                     ui.add(
                         egui::Image::new((self.target.id, source_size))
                             .fit_to_exact_size(available)
-                            .sense(Sense::drag()),
+                            .sense(Sense::click_and_drag()),
                     )
                 })
                 .inner;
             self.update_camera(ui, &response, delta_time);
+            if response.clicked_by(egui::PointerButton::Primary)
+                && let Some(position) = response.interact_pointer_pos()
+            {
+                let uv = (position - response.rect.min) / response.rect.size();
+                let ndc = Vec2::new(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+                let direction = camera_ray(
+                    &self.camera,
+                    ndc,
+                    render_size[0] as f32 / render_size[1].max(1) as f32,
+                );
+                self.selected_surface = pick_surface(
+                    &self.scene.render,
+                    self.camera.position,
+                    direction,
+                    self.camera.far,
+                );
+            }
             self.update_animations(delta_time);
             self.update_runtime(delta_time);
             if self.vertices_dirty {
@@ -1013,9 +1070,79 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
+fn camera_ray(camera: &Camera, ndc: Vec2, aspect: f32) -> Vec3 {
+    let forward = camera.forward();
+    let right = camera.right();
+    let up = right.cross(forward).normalize_or_zero();
+    let vertical = (camera.vertical_fov * 0.5).tan();
+    (forward + right * ndc.x * vertical * aspect + up * ndc.y * vertical).normalize_or_zero()
+}
+
+// ponytail: Viewer picking is click-only; replace this linear scan if large scenes measure poorly.
+fn pick_surface(
+    scene: &openhp1_render::RenderScene,
+    origin: Vec3,
+    direction: Vec3,
+    maximum_distance: f32,
+) -> Option<usize> {
+    scene
+        .mesh
+        .indices
+        .chunks_exact(3)
+        .zip(&scene.mesh.triangle_surfaces)
+        .filter_map(|(triangle, &surface)| {
+            let material = scene.surface_materials.get(surface)?;
+            if matches!(material.mode, SurfaceMode::Hidden | SurfaceMode::DepthOnly) {
+                return None;
+            }
+            let &[a, b, c] = triangle else {
+                return None;
+            };
+            let [Some(a), Some(b), Some(c)] = [a, b, c].map(|index| {
+                scene
+                    .mesh
+                    .positions
+                    .get(index as usize)
+                    .copied()
+                    .map(unreal_to_render)
+            }) else {
+                return None;
+            };
+            let distance = ray_triangle_distance(origin, direction, a, b, c)?;
+            (distance <= maximum_distance).then_some((distance, surface))
+        })
+        .min_by(|left, right| left.0.total_cmp(&right.0))
+        .map(|(_, surface)| surface)
+}
+
+fn ray_triangle_distance(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let edge_ab = b - a;
+    let edge_ac = c - a;
+    let perpendicular = direction.cross(edge_ac);
+    let determinant = edge_ab.dot(perpendicular);
+    if determinant.abs() <= 0.000_001 {
+        return None;
+    }
+    let inverse_determinant = determinant.recip();
+    let origin_to_a = origin - a;
+    let u = origin_to_a.dot(perpendicular) * inverse_determinant;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let crossed = origin_to_a.cross(edge_ab);
+    let v = direction.dot(crossed) * inverse_determinant;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let distance = edge_ac.dot(crossed) * inverse_determinant;
+    (distance >= 0.0).then_some(distance)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::FrameTiming;
+    use glam::Vec3;
+
+    use super::{FrameTiming, ray_triangle_distance};
 
     #[test]
     fn frame_timing_updates_only_after_half_a_second() {
@@ -1026,5 +1153,20 @@ mod tests {
 
         timing.record(0.25);
         assert_eq!(timing.average_seconds, 0.25);
+    }
+
+    #[test]
+    fn ray_triangle_distance_hits_only_the_triangle_area() {
+        let origin = Vec3::ZERO;
+        let direction = -Vec3::Z;
+        let a = Vec3::new(-1.0, -1.0, -2.0);
+        let b = Vec3::new(1.0, -1.0, -2.0);
+        let c = Vec3::new(0.0, 1.0, -2.0);
+
+        assert_eq!(ray_triangle_distance(origin, direction, a, b, c), Some(2.0));
+        assert_eq!(
+            ray_triangle_distance(origin + Vec3::X * 2.0, direction, a, b, c),
+            None
+        );
     }
 }

@@ -219,9 +219,10 @@ approximates the softer transmission and penumbra produced by stained glass
 without exposing BSP triangle edges.
 Fake-backdrop surfaces are authored sky openings. The fixed shipped
 maps do not mark indoor stained-glass windows, so the scene loader also marks
-surface texture names containing `win`, excluding known frame and non-aperture
-tokens `arch`, `column`, `wood`, `wallwindow`, and `furnace`. This corpus-backed
-fallback finds the `Lev_Tut1` windows while finding none in `Lev3_Dungeon`.
+surface textures whose qualified name contains a `Window`, `Windows`,
+`Window Frame`, or `Window Frames` group, or whose object name contains
+`window` case-insensitively. Textures in the `HP_Outside` package are excluded
+from volumetric lighting but remain available to inspection tools.
 Classified window textures feed a renderer-owned 128-pixel transmission-mask
 array. Because the shipped textures include both the window and its surrounding
 stone wall, mask construction flood-fills the border-connected wall and retains

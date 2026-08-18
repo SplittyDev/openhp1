@@ -59,6 +59,8 @@ committed copies.
   `openhp1-audio`; keep game/runtime audio policy out of the renderer.
 - `openhp1-viewer` uses eframe for its UI and displays the renderer's offscreen
   target. `openhp1-render` must remain independent of eframe.
+- `openhp1-window-editor` uses eframe and the read-only package/texture decoders
+  to author derived window masks without storing original texture pixels.
 - `openhp1-launcher` uses eframe for game-data configuration and starts the
   sibling `openhp1-game` executable. Both executables resolve the original
   game root through `openhp1-package` and `OpenHP1.ini`.

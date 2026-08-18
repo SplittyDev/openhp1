@@ -19,7 +19,7 @@ pub use package::Package;
 pub use resolver::{
     ConfigEntry, GameInstallation, GameInstallationError, PackageStore, ResolveError,
     ResolveResult, ResolvedObject, configure_game_installation, resolve_game_installation,
-    settings_dir,
+    settings_dir, write_derived_file_atomically,
 };
 pub use summary::{
     Export, Generation, HeaderHistory, Import, NameEntry, ObjectReference, PackageHeader,

@@ -79,12 +79,27 @@ You will also need a modern Rust toolchain installed. You can install Rust with 
 
 The OpenHP1 viewer is a cross-platform, real-time 3D renderer for the original Harry Potter 1 maps and actors.
 It does not implement the full game logic, but it lets you fly through the original levels and inspect the actors, meshes, and textures.
+Click a visible surface to inspect its qualified texture name and material flags in the sidebar.
 
 You can build and run the viewer with:
 
 ```sh
 cargo run -p openhp1-viewer -- res/Maps/Lev_Tut1.unr # debug build
 cargo run -p openhp1-viewer --release -- res/Maps/Lev_Tut1.unr # release build
+```
+
+### Window Mask Editor
+
+The window editor reads candidate window textures directly from the configured
+original game installation. Click colors to add include or exclude rules,
+adjust their similarity thresholds and optional pixel radius, drag rectangular
+hard exclusions, and inspect the source, mask, or overlay preview. Rules are
+saved to the committable `window_editor.state.json`; exported
+8-bit grayscale PNGs under `window_masks/` contain only the authored mask, not
+original texture pixels. Black blocks light and white transmits it.
+
+```sh
+cargo run -p openhp1-window-editor
 ```
 
 ### Game

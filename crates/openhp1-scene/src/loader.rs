@@ -20,6 +20,7 @@ use openhp1_runtime::{
 use openhp1_script::class_defaults_reader;
 use openhp1_texture::{
     FireAnimation, FireTexture, IceAnimation, Palette, Texture, TextureRenderFlags, WaterAnimation,
+    is_window_texture_name,
 };
 use tracing::{info, warn};
 
@@ -51,6 +52,7 @@ pub struct LoadedScene {
     pub actor_meshes: usize,
     pub animated_actor_meshes: usize,
     pub actors: Vec<SceneActor>,
+    surface_texture_names: Vec<Option<String>>,
     actor_states: Vec<ActorRenderState>,
     collision: Arc<BspCollision>,
     zone_nodes: Vec<BspNode>,
@@ -189,7 +191,7 @@ impl LoadedScene {
         });
         mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
         let mut water_animations = TextureAnimations::default();
-        let (mut textures, mut surface_materials) = load_materials(
+        let (mut textures, mut surface_materials, surface_texture_names) = load_materials(
             &mut packages,
             &package,
             &model,
@@ -395,6 +397,7 @@ impl LoadedScene {
             actor_meshes,
             animated_actor_meshes,
             actors,
+            surface_texture_names,
             actor_states,
             collision,
             zone_nodes: actor_render.model.nodes.clone(),
@@ -414,6 +417,10 @@ impl LoadedScene {
 
     pub fn collision(&self) -> Arc<BspCollision> {
         Arc::clone(&self.collision)
+    }
+
+    pub fn surface_texture_name(&self, surface: usize) -> Option<&str> {
+        self.surface_texture_names.get(surface)?.as_deref()
     }
 
     pub fn set_warp_destination(
@@ -4417,13 +4424,15 @@ fn load_materials(
     model: &Model,
     default_texture: Option<&SceneObject>,
     water_animations: &mut TextureAnimations,
-) -> (Vec<TextureImage>, Vec<SurfaceMaterial>) {
+) -> (Vec<TextureImage>, Vec<SurfaceMaterial>, Vec<Option<String>>) {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize, bool), Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut attachment_images = HashMap::<(String, usize), usize>::new();
     let mut materials = Vec::with_capacity(model.surfaces.len());
+    let mut texture_names = Vec::with_capacity(model.surfaces.len());
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
+        texture_names.push(None);
         let raw_texture_present = !matches!(surface.texture, ObjectReference::None);
         let authored = match surface.texture {
             ObjectReference::None => None,
@@ -4445,6 +4454,9 @@ fn load_materials(
             materials.push(bsp_surface_material(surface.poly_flags, None, None));
             continue;
         };
+        texture_names[surface_index] = PackageStore::qualified_object_name(&resolved)
+            .inspect_err(|error| warn!(surface_index, %error, "could not name surface texture"))
+            .ok();
         let key = (
             resolved.package.summary().source.to_string(),
             resolved.export_index,
@@ -4492,15 +4504,9 @@ fn load_materials(
             continue;
         }
         let volumetric_source = material.volumetric_source
-            || is_window_texture(
-                resolved
-                    .package
-                    .summary()
-                    .exports
-                    .get(resolved.export_index)
-                    .map(|export| resolved.package.summary().name(export.object_name))
-                    .unwrap_or_default(),
-            );
+            || texture_names[surface_index]
+                .as_deref()
+                .is_some_and(is_window_texture);
         if material.mode == SurfaceMode::Backdrop {
             materials.push(SurfaceMaterial {
                 volumetric_source,
@@ -4625,7 +4631,7 @@ fn load_materials(
         });
     }
 
-    (textures, materials)
+    (textures, materials, texture_names)
 }
 
 fn select_bsp_texture<T, E>(
@@ -4678,11 +4684,11 @@ fn load_texture_attachment(
 }
 
 fn is_window_texture(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name.contains("win")
-        && !["arch", "column", "wood", "wallwindow", "furnace"]
-            .iter()
-            .any(|token| name.contains(token))
+    !name
+        .split('.')
+        .next()
+        .is_some_and(|package| package.eq_ignore_ascii_case("HP_Outside"))
+        && is_window_texture_name(name)
 }
 
 fn load_zone_pan_speeds(
@@ -7033,6 +7039,7 @@ mod tests {
                 visual_bounds: None,
                 diagnostics: Vec::new(),
             }],
+            surface_texture_names: Vec::new(),
             actor_states: vec![super::ActorRenderState::default()],
             collision,
             zone_nodes: Vec::new(),
@@ -7972,14 +7979,25 @@ mod tests {
     }
 
     #[test]
-    fn identifies_fixed_game_window_materials_without_frames_or_furnaces() {
-        assert!(super::is_window_texture("StainedGlassWind"));
-        assert!(super::is_window_texture("Topwindow13_B"));
-        assert!(super::is_window_texture("bottomBRWind"));
-        assert!(!super::is_window_texture("WindowArch"));
-        assert!(!super::is_window_texture("Win9_Wood_3"));
-        assert!(!super::is_window_texture("Furnacewindow"));
-        assert!(!super::is_window_texture("CastleWall"));
+    fn identifies_qualified_interior_window_groups() {
+        assert!(super::is_window_texture(
+            "Hub_3_Lumos.Window.StainedGlassWind"
+        ));
+        assert!(super::is_window_texture("HP_K.Window Frames.Win14_T1"));
+        assert!(super::is_window_texture("HP_3rd.Window.Win9_Wood_3"));
+        assert!(super::is_window_texture("HP_C.Detail.gryffindorwindow"));
+        assert!(super::is_window_texture(
+            "jordantemp.Wall.benGreenWindowOut"
+        ));
+        assert!(!super::is_window_texture(
+            "HP_Outside.windows.Exteriorwindow"
+        ));
+        assert!(!super::is_window_texture("HP_Outside.Wall.CastleExtWindow"));
+        assert!(!super::is_window_texture("HPBase.FXPackage.Spells.WIN_A"));
+        assert!(super::is_window_texture("Harry Potter.pillar.Window"));
+        assert!(!super::is_window_texture(
+            "Hub2_Greenhouse.Wall.Greenhousewall"
+        ));
     }
 
     #[test]

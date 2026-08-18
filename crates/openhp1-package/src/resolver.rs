@@ -1179,6 +1179,11 @@ fn append_missing_ini_entries(
 }
 
 fn write_ini_atomically(path: &Path, contents: String) -> ResolveResult<()> {
+    write_derived_file_atomically(path, contents.as_bytes())
+}
+
+/// Replaces a derived file only after its complete contents have reached disk.
+pub fn write_derived_file_atomically(path: &Path, contents: &[u8]) -> ResolveResult<()> {
     let parent = path
         .parent()
         .ok_or_else(|| ResolveError::InvalidConfigPath {
@@ -1207,9 +1212,7 @@ fn write_ini_atomically(path: &Path, contents: String) -> ResolveResult<()> {
             path: temporary.clone(),
             source,
         })?;
-    let write_result = file
-        .write_all(contents.as_bytes())
-        .and_then(|()| file.sync_all());
+    let write_result = file.write_all(contents).and_then(|()| file.sync_all());
     drop(file);
     if let Err(source) = write_result {
         let _ = fs::remove_file(&temporary);

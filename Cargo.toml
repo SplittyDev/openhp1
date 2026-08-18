@@ -13,6 +13,7 @@ members = [
     "crates/openhp1-script",
     "crates/openhp1-texture",
     "crates/openhp1-viewer",
+    "crates/openhp1-window-editor",
 ]
 resolver = "3"
 
@@ -35,6 +36,8 @@ kira = { version = "0.12", default-features = false, features = ["cpal", "mp2", 
 mint = "0.5"
 rustc-hash = "2.1"
 rfd = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
