@@ -244,6 +244,9 @@ resulting volume.
 The accumulation is forward-weighted along the light-to-camera path and uses
 additive HDR scattering with no scene-wide extinction, retaining values for
 bloom and tone mapping without tinting the whole room.
+When volumetric lighting is disabled, Modern does not construct or resize its
+shadow, froxel, or scattering resources and skips all scene updates, frame
+preparation, compute, and draw work for the effect.
 Window shafts and local volumetric sources share a slowly drifting world-space
 density field with configurable haze cells. Window shafts also carry
 sparse world-space motes inside their authored prisms. Their soft, mostly tiny

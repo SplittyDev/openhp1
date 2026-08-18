@@ -44,7 +44,7 @@ struct BloomTarget {
 }
 
 pub(super) struct ModernRenderer {
-    volumetrics: VolumetricRenderer,
+    volumetrics: Option<VolumetricRenderer>,
     ao: AoRenderer,
     aa: Option<AaRenderer>,
     _scene_texture: wgpu::Texture,
@@ -67,7 +67,6 @@ pub(super) struct ModernRenderer {
     tone_mapper: ToneMapper,
     ambient_occlusion: AmbientOcclusion,
     bloom: bool,
-    volumetric_lighting: bool,
     volumetric_debug_view: VolumetricDebugView,
 }
 
@@ -222,7 +221,9 @@ impl ModernRenderer {
             "fragment_bloom_vertical",
             HDR_FORMAT,
         );
-        let volumetrics = VolumetricRenderer::new(device, queue, size, depth_view, scene);
+        let volumetrics = settings
+            .volumetric_lighting
+            .then(|| VolumetricRenderer::new(device, queue, size, depth_view, scene));
 
         Self {
             volumetrics,
@@ -248,7 +249,6 @@ impl ModernRenderer {
             tone_mapper: settings.tone_mapper,
             ambient_occlusion: settings.ambient_occlusion,
             bloom: settings.bloom,
-            volumetric_lighting: settings.volumetric_lighting,
             volumetric_debug_view: VolumetricDebugView::Composite,
         }
     }
@@ -267,7 +267,9 @@ impl ModernRenderer {
         let bloom_a = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom A");
         let bloom_b = BloomTarget::new(device, bloom_size(size), "OpenHP1 bloom B");
         self.ao.resize(device, size, depth_view);
-        self.volumetrics.resize(device, size, depth_view);
+        if let Some(volumetrics) = &mut self.volumetrics {
+            volumetrics.resize(device, size, depth_view);
+        }
         if let Some(aa) = &mut self.aa {
             aa.resize(device, size);
         }
@@ -297,16 +299,25 @@ impl ModernRenderer {
     }
 
     pub(super) fn set_volumetric_tuning(&mut self, tuning: VolumetricTuning) {
-        self.volumetric_debug_view = tuning.debug_view;
-        self.volumetrics.set_tuning(tuning);
+        self.volumetric_debug_view = self
+            .volumetrics
+            .as_ref()
+            .map_or(VolumetricDebugView::Composite, |_| tuning.debug_view);
+        if let Some(volumetrics) = &mut self.volumetrics {
+            volumetrics.set_tuning(tuning);
+        }
     }
 
     pub(super) fn update_scene(&mut self, queue: &wgpu::Queue, scene: &RenderScene) -> bool {
-        !self.volumetric_lighting || self.volumetrics.update(queue, scene)
+        self.volumetrics
+            .as_mut()
+            .is_none_or(|volumetrics| volumetrics.update(queue, scene))
     }
 
     pub(super) fn update_textures(&mut self, textures: &[TextureImage], changed: &[usize]) -> bool {
-        !self.volumetric_lighting || self.volumetrics.update_textures(textures, changed)
+        self.volumetrics
+            .as_mut()
+            .is_none_or(|volumetrics| volumetrics.update_textures(textures, changed))
     }
 
     pub(super) fn prepare_frame(
@@ -316,9 +327,8 @@ impl ModernRenderer {
         viewport_size: [u32; 2],
         elapsed_time: f32,
     ) {
-        if self.volumetric_lighting {
-            self.volumetrics
-                .prepare_frame(queue, camera, viewport_size, elapsed_time);
+        if let Some(volumetrics) = &mut self.volumetrics {
+            volumetrics.prepare_frame(queue, camera, viewport_size, elapsed_time);
         }
     }
 
@@ -372,11 +382,9 @@ impl ModernRenderer {
                 &self.scene_view,
             )
         };
-        let volumetric_passes = if self.volumetric_lighting {
-            self.volumetrics.render(encoder, &self.scene_view)
-        } else {
-            0
-        };
+        let volumetric_passes = self.volumetrics.as_mut().map_or(0, |volumetrics| {
+            volumetrics.render(encoder, &self.scene_view)
+        });
         if bloom {
             draw_fullscreen(
                 encoder,
