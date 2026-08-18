@@ -1789,7 +1789,6 @@ impl ScriptRuntime {
         else {
             return Ok(None);
         };
-        let state_revision = self.state_revision(actor);
         let value = self
             .execute_function(
                 actor,
@@ -1801,10 +1800,6 @@ impl ScriptRuntime {
                 depth + 1,
             )
             .map_err(|error| error.to_string())?;
-        if self.state_revision(actor) != state_revision {
-            self.execute_ready_state(actor, class, instance, actions)
-                .map_err(|error| error.to_string())?;
-        }
         Ok(Some(value))
     }
 

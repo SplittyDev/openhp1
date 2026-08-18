@@ -2,18 +2,17 @@
 
 ## Scope and conclusion
 
-This note investigates the report that, after the Quidditch catch sequence
-starts, Harry follows the Snitch slowly and there is no apparent way to catch
-it. It also checks the separate perception that the Snitch is too slow.
+This note investigates the Snitch chase and catch path, including the separate
+report that menu-launched league matches never make the Snitch catchable.
 
-The evidence supports two current defects. The second became provable only
-after a fresh launch exposed the loaded level clock:
+The evidence supports three OpenHP1 defects:
 
 | Finding | Status | Evidence boundary |
 | --- | --- | --- |
 | The catch interaction is absent | **Confirmed OpenHP1 defect** | Shipped bytecode makes the catch a timed `BaseQHudGame` interaction. `QuidHud.PostRender` lazily creates, advances, and paints it. OpenHP1 does not execute that Canvas path or project an equivalent catch state into its host HUD. |
 | Harry follows the Snitch during the catch phase | **Authored behavior** | Compiled `GamePlay.Tick` enters `GameCatch` without stopping or attaching the Snitch. `GameCatch.BeginState` puts Harry in `Pursue`; successful HUD input later stops the Snitch and calls `CatchTarget`. |
 | The Snitch is already very slow when play starts | **Confirmed OpenHP1 defect** | The map serializes an editor-time `LevelInfo.TimeSeconds` value of `743.39136`. OpenHP1 retained it, so the scripted 240/300/360-second slowdowns all ran during startup. The shipped engine resets that field to zero before startup events. The authored path speed remains 350 and is not tuned. |
+| League matches never enable Snitch proximity progress | **Confirmed OpenHP1 defect** | Event dispatch eagerly ran latent initial-state code before `BroomHarry.Possess` called `QuidditchReferee.OnPlayerPossessed`. The referee consequently missed its league-only intro branch and waited forever in the story-only `GameIntro2` state. |
 
 The apparent inactivity was therefore not user confusion and should not be
 addressed by changing pursuit physics. The original catch UI and its update
@@ -27,6 +26,7 @@ UnrealScript, configuration, localization, and native engine binary:
 | File | SHA-256 |
 | --- | --- |
 | `res/Maps/Lev2_Quid1.unr` | `206238162d51518633aabb2b5d04d9caa254dc65b01fa45d5c4b74e900d168cd` |
+| `res/Maps/Quid_SlythA.unr` | `d937fe1f087ddd667d0adb66fe6de8298bdbe1bcd11142367b65b6dd6c2d2ccc` |
 | `res/System/Hub2.u` | `b44c845961a45d6b34577a59309c569c4c8236ec9ff7f7bb82526e7f499e39d1` |
 | `res/System/HPBase.u` | `0cec62e098ded3a16024ee15dbc982bf9662b443f630cd19890b7b5d325bf503` |
 | `res/System/HPMenu.u` | `42da2a2f43ac6a15ea87eace4ebd59a69bab7685cda854e9e7a86e7e6d9c6dbd` |
@@ -49,7 +49,29 @@ produce the wrong diagnosis.
 
 The shipped evidence was sufficient to decide the catch behavior and the
 clock reset. SurrealEngine was used only as a licensed cross-check of the
-fresh-level startup flag sequence.
+fresh-level startup and state-frame scheduling.
+
+## League startup state scheduling
+
+The league maps leave `QuidditchReferee.PlayMode` at `PM_Auto`. Compiled
+`Hub2.QuidditchReferee.OnPlayerPossessed` sets `bLeagueMode` to
+`!HPConsole(Console).bInHubFlow`; `HarryPotter.BroomHarry.Possess` calls that
+referee event. The latent `GameIntro.Begin` code then uses `bLeagueMode` to
+skip the story-only `GameIntro2` state and enter `GameIntro3` directly.
+
+OpenHP1 previously resumed latent state code immediately when an event changed
+state. `SetInitialState` therefore ran `GameIntro.Begin` before the later
+player `Possess` event initialized `bLeagueMode`. The shipped native path keeps
+these responsibilities separate: actor startup calls `SetInitialState`, while
+`AActor::ProcessState(float)` is the routine that interprets the state frame.
+`GotoState` still calls `BeginState` synchronously; only latent label code waits
+for `ProcessState`.
+
+After event dispatch stopped eagerly processing latent state code, a headless
+`Quid_SlythA` launch entered `GameIntro3` at the first tick, entered `GamePlay`
+at 11.42 seconds, and emitted a Snitch proximity sound at 11.83 seconds when
+Harry was placed at the Snitch. No league-, map-, or actor-specific behavior
+was added. Menu-launched league play was subsequently confirmed in-game.
 
 ## Authored Snitch path sequence
 

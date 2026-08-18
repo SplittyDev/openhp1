@@ -80,7 +80,6 @@ impl ScriptRuntime {
     ) -> DispatchResult<Vec<ActorAction>> {
         let mut actions = Vec::new();
         let mut instance = self.instances.remove(&actor).unwrap_or_default();
-        let state_revision = self.state_revision(actor);
         let result = if let Some(output_arguments) = output_arguments {
             self.execute_function_with_outputs(
                 actor,
@@ -103,14 +102,8 @@ impl ScriptRuntime {
                 0,
             )
         };
-        let state_result = if result.is_ok() && self.state_revision(actor) != state_revision {
-            self.execute_ready_state(actor, actor_class, &mut instance, &mut actions)
-        } else {
-            Ok(())
-        };
         self.instances.insert(actor, instance);
         result?;
-        state_result?;
         Ok(actions)
     }
 

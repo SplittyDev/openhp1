@@ -1369,7 +1369,6 @@ impl ScriptRuntime {
                 self.object_handle(object)
                     .map_err(|error| error.to_string())
             })?;
-        let revision = self.state_revision(actor);
         let result = self
             .execute_function(
                 actor,
@@ -1381,10 +1380,6 @@ impl ScriptRuntime {
                 0,
             )
             .map_err(|error| error.to_string())?;
-        if self.state_revision(actor) != revision {
-            self.execute_ready_state(actor, actor_class, instance, actions)
-                .map_err(|error| error.to_string())?;
-        }
         match result {
             Value::Bool(stop) => Ok(stop),
             value => Err(format!("Mover.EncroachingOn returned {}", value.kind())),

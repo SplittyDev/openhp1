@@ -9361,9 +9361,14 @@ fn latent_movement_matches_retail_acceleration_direction_and_cleanup() {
         },
     );
     let goto_function = runtime.resolved_object(&goto_replacement).unwrap();
+    let state_resumes = runtime.state_resumes;
     runtime
         .execute_actor_function(caller, &class, &goto_function, &[])
         .unwrap();
+    assert_eq!(
+        runtime.state_resumes, state_resumes,
+        "event dispatch must leave latent state code for ProcessState"
+    );
     assert_eq!(
         runtime.instances[&receiver].get(&acceleration),
         Some(&StoredValue::Value(Value::Vector([0.0; 3])))
@@ -10870,6 +10875,23 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
             )
         })
         .expect("Mover.IsRelevant action was discarded");
+    assert!(!actions.iter().any(|action| matches!(
+        action,
+        ActorAction::Log {
+            actor: 0,
+            message,
+            tag: None,
+        } if message == "DoOpen"
+    )));
+    runtime
+        .instances
+        .insert(1, std::mem::take(&mut projectile_instance));
+    actions.extend(
+        runtime
+            .tick(0.0)
+            .expect("Mover state did not process after Bump"),
+    );
+    projectile_instance = runtime.instances.remove(&1).unwrap();
     let do_open_position = actions
         .iter()
         .position(|action| {
@@ -10882,7 +10904,7 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
                 } if message == "DoOpen"
             )
         })
-        .expect("relevant projectile did not run Mover.Bump at contact");
+        .expect("Mover.Bump state did not resume during ProcessState");
     assert!(relevance_log < do_open_position);
     assert!(!actions.iter().any(|action| matches!(
         action,
@@ -11909,6 +11931,20 @@ fn relevant_projectile_dispatches_mover_bump_state_and_motion() {
     assert_eq!(
         actor_hit.actor, None,
         "BT_AnyBump must notify without making non-blocking actors solid"
+    );
+    assert!(!actor_actions.iter().any(|action| matches!(
+        action,
+        ActorAction::Log {
+            actor: 0,
+            message,
+            tag: None,
+        } if message == "DoOpen"
+    )));
+    runtime.instances.insert(1, actor_instance);
+    actor_actions.extend(
+        runtime
+            .tick(0.0)
+            .expect("Mover state did not process after actor Bump"),
     );
     assert!(actor_actions.iter().any(|action| matches!(
         action,
