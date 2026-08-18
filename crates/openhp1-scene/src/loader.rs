@@ -570,6 +570,15 @@ impl LoadedScene {
             actor: state,
             is_light,
         };
+        self.insert_spawned_actor(actor_index, actor, render_state)
+    }
+
+    fn insert_spawned_actor(
+        &mut self,
+        actor_index: usize,
+        actor: SceneActor,
+        render_state: ActorRenderState,
+    ) -> Result<()> {
         if actor_index == self.actors.len() {
             self.actors.push(actor);
             self.actor_states.push(render_state);
@@ -581,6 +590,18 @@ impl LoadedScene {
             );
             self.actors[actor_index] = actor;
             self.actor_states[actor_index] = render_state;
+        }
+        let actor = &self.actors[actor_index];
+        if let Some(render) = &actor.render {
+            let state = &self.actor_states[actor_index].actor;
+            self.render.actor_submissions.push(crate::ActorSubmission {
+                actor_index,
+                indices: render.indices.clone(),
+                translucent_pass: state.style == 3 || state.opacity < 1.0,
+            });
+            self.render
+                .actor_submissions
+                .sort_by_key(|submission| submission.actor_index);
         }
         Ok(())
     }
@@ -6906,6 +6927,33 @@ mod tests {
         scene.set_actor_hidden(0, true).unwrap();
         assert!(scene.actors[0].hidden);
         assert_eq!(scene.render.coronas, corona);
+    }
+
+    #[test]
+    fn spawned_actor_render_is_submitted() {
+        let mut scene = particle_test_scene();
+        let mut actor = scene.actors[0].clone();
+        actor.id = crate::SceneObjectId {
+            package: "<runtime>".to_owned(),
+            export_index: 1,
+        };
+        actor.render = Some(crate::SceneActorRenderRange {
+            vertices: 0..3,
+            indices: 6..9,
+        });
+        let mut state = super::ActorRenderState::default();
+        state.actor.style = 3;
+
+        scene.insert_spawned_actor(1, actor, state).unwrap();
+
+        assert_eq!(
+            scene.render.actor_submissions,
+            [crate::ActorSubmission {
+                actor_index: 1,
+                indices: 6..9,
+                translucent_pass: true,
+            }]
+        );
     }
 
     fn particle_test_scene() -> super::LoadedScene {
