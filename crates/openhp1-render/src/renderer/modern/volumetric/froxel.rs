@@ -22,6 +22,7 @@ struct FroxelUniform {
     volume_size_portals: [u32; 4],
     distance_density: [f32; 4],
     haze: [f32; 4],
+    shaft: [f32; 4],
 }
 
 pub(super) struct FroxelVolume {
@@ -124,7 +125,7 @@ impl FroxelVolume {
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
                         },
                         alpha: wgpu::BlendComponent {
@@ -206,13 +207,19 @@ impl FroxelVolume {
                     camera.near.max(0.1),
                     far,
                     0.00025 * tuning.haze_density,
-                    2.0,
+                    tuning.shaft_intensity,
                 ],
                 haze: [
                     tuning.haze_size,
                     tuning.haze_density,
                     tuning.haze_opacity,
                     tuning.haze_speed,
+                ],
+                shaft: [
+                    tuning.shaft_anisotropy.clamp(0.0, 0.99),
+                    tuning.shaft_saturation,
+                    0.0,
+                    0.0,
                 ],
             }),
         );
@@ -481,7 +488,7 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
-        assert_eq!(size_of::<FroxelUniform>(), 384);
+        assert_eq!(size_of::<FroxelUniform>(), 400);
         assert_eq!(froxel_size([1024, 768]), [128, 96, 64]);
     }
 }

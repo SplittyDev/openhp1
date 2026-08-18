@@ -58,6 +58,8 @@ struct VolumetricLightKey {
     volume_radius: u8,
 }
 
+const LOCAL_LIGHT_SATURATION: f32 = 0.5;
+
 impl From<&RenderLight> for VolumetricLightKey {
     fn from(light: &RenderLight) -> Self {
         Self {
@@ -497,10 +499,10 @@ fn instance(
     } else {
         let strength = if sprite { 0.002 } else { 0.02 };
         (
-            corona.map_or_else(
+            local_scattering_color(corona.map_or_else(
                 || sprite_color.unwrap_or_else(|| light.source_color()),
                 |corona| corona.color,
-            ) * strength,
+            )) * strength,
             0.0,
             1.0,
         )
@@ -510,6 +512,11 @@ fn instance(
         color_fog: (color * energy_scale).extend(fog).to_array(),
         profile: [profile, 0.0, 0.0, 0.0],
     }
+}
+
+fn local_scattering_color(color: Vec3) -> Vec3 {
+    let luminance = color.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+    Vec3::splat(luminance).lerp(color, LOCAL_LIGHT_SATURATION)
 }
 
 fn volume_radius(light: &RenderLight, corona: Option<&openhp1_scene::Corona>) -> f32 {
@@ -819,10 +826,18 @@ mod tests {
         assert_eq!(instances[1].profile[0], 1.0);
         assert_eq!(instances[2].position_radius[3], 75.0);
         assert_eq!(instances[3].position_radius[3], 50.0);
-        assert_eq!(instances[3].color_fog[0], 0.002);
-        assert!(instances[3].color_fog[1] > 0.001);
-        assert_eq!(instances[3].color_fog[2], 0.0);
+        assert!(instances[3].color_fog[0] > instances[3].color_fog[1]);
+        assert!(instances[3].color_fog[1] > instances[3].color_fog[2]);
+        assert!(instances[3].color_fog[2] > 0.0);
         assert_eq!(instances[3].profile[0], 1.0);
+    }
+
+    #[test]
+    fn local_scattering_keeps_warmth_without_pure_yellow() {
+        let color = local_scattering_color(Vec3::new(1.0, 1.0, 0.0));
+        assert!(color.x > color.z);
+        assert!(color.z > 0.4);
+        assert!((color.dot(Vec3::new(0.2126, 0.7152, 0.0722)) - 0.9278).abs() < 0.0001);
     }
 
     #[test]

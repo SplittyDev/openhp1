@@ -433,6 +433,43 @@ impl ViewerApp {
                         }
                     }
                     ui.separator();
+                    ui.strong("Window shafts");
+                    egui::Grid::new("shaft tuning").show(ui, |ui| {
+                        ui.label("Intensity");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.shaft_intensity,
+                            0.0..=32.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Downward tilt");
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.volumetric_tuning.shaft_tilt_degrees,
+                                0.0..=60.0,
+                            )
+                            .suffix("°"),
+                        );
+                        ui.end_row();
+                        ui.label("Saturation");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.shaft_saturation,
+                            0.0..=3.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Anisotropy");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.shaft_anisotropy,
+                            0.0..=1.0,
+                        ));
+                        ui.end_row();
+                        ui.label("Projection");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.shaft_projection,
+                            0.0..=0.08,
+                        ));
+                        ui.end_row();
+                    });
+                    ui.separator();
                     ui.strong("Dust");
                     egui::Grid::new("dust tuning").show(ui, |ui| {
                         ui.label("Size");
@@ -444,7 +481,7 @@ impl ViewerApp {
                         ui.label("Density");
                         ui.add(egui::Slider::new(
                             &mut self.volumetric_tuning.dust_density,
-                            0..=64,
+                            0..=128,
                         ));
                         ui.end_row();
                         ui.label("Opacity");
@@ -453,11 +490,11 @@ impl ViewerApp {
                             0.0..=4.0,
                         ));
                         ui.end_row();
-                        ui.label("Speed");
-                        ui.add(
-                            egui::Slider::new(&mut self.volumetric_tuning.dust_speed, 0.0..=100.0)
-                                .suffix(" u/s"),
-                        );
+                        ui.label("Drift");
+                        ui.add(egui::Slider::new(
+                            &mut self.volumetric_tuning.dust_speed,
+                            0.0..=20.0,
+                        ));
                         ui.end_row();
                     });
                     ui.separator();
@@ -761,6 +798,13 @@ impl ViewerApp {
             );
             detail_row(ui, "Mode", format!("{:?}", material.mode));
             detail_row(ui, "Masked", yes_no(material.masked));
+            detail_row(
+                ui,
+                "Transmission mask",
+                yes_no(material.texture.is_some_and(|texture| {
+                    self.scene.render.transmission_masks.contains_key(&texture)
+                })),
+            );
             detail_row(ui, "Volumetric source", yes_no(material.volumetric_source));
         });
     }

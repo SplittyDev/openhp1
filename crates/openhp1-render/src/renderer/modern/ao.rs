@@ -72,6 +72,7 @@ struct BindGroups {
     main: wgpu::BindGroup,
     denoise_first: wgpu::BindGroup,
     denoise_final: wgpu::BindGroup,
+    apply: wgpu::BindGroup,
 }
 
 pub(super) struct AoRenderer {
@@ -86,6 +87,7 @@ pub(super) struct AoRenderer {
     xegtao_pipeline: wgpu::RenderPipeline,
     denoise_first_pipeline: wgpu::RenderPipeline,
     denoise_final_pipeline: wgpu::RenderPipeline,
+    apply_pipeline: wgpu::RenderPipeline,
     resources: AoResources,
     bind_groups: BindGroups,
     size: [u32; 2],
@@ -144,6 +146,7 @@ impl AoRenderer {
             "fragment_linearize_depth",
             "OpenHP1 AO depth linearize pipeline",
             &[VIEW_DEPTH_FORMAT],
+            None,
         );
         let downsample_pipeline = pipeline(
             device,
@@ -152,6 +155,7 @@ impl AoRenderer {
             "fragment_downsample_depth",
             "OpenHP1 AO depth downsample pipeline",
             &[VIEW_DEPTH_FORMAT],
+            None,
         );
         let ssao_pipeline = pipeline(
             device,
@@ -160,6 +164,7 @@ impl AoRenderer {
             "fragment_ssao",
             "OpenHP1 SSAO pipeline",
             &[AO_FORMAT, AO_FORMAT],
+            None,
         );
         let xegtao_pipeline = pipeline(
             device,
@@ -168,6 +173,7 @@ impl AoRenderer {
             "fragment_xegtao",
             "OpenHP1 XeGTAO pipeline",
             &[AO_FORMAT, AO_FORMAT],
+            None,
         );
         let denoise_first_pipeline = pipeline(
             device,
@@ -176,6 +182,7 @@ impl AoRenderer {
             "fragment_denoise_first",
             "OpenHP1 AO first denoise pipeline",
             &[AO_FORMAT],
+            None,
         );
         let denoise_final_pipeline = pipeline(
             device,
@@ -184,6 +191,27 @@ impl AoRenderer {
             "fragment_denoise_final",
             "OpenHP1 AO final denoise pipeline",
             &[AO_FORMAT],
+            None,
+        );
+        let apply_pipeline = pipeline(
+            device,
+            &denoise_layout,
+            &denoise_shader,
+            "fragment_apply",
+            "OpenHP1 AO apply pipeline",
+            &[super::HDR_FORMAT],
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::Src,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
         );
         let resources = AoResources::new(device, size);
         let bind_groups = BindGroups::new(
@@ -209,6 +237,7 @@ impl AoRenderer {
             xegtao_pipeline,
             denoise_first_pipeline,
             denoise_final_pipeline,
+            apply_pipeline,
             resources,
             bind_groups,
             size,
@@ -241,16 +270,13 @@ impl AoRenderer {
         self.size = size;
     }
 
-    pub(super) fn view(&self) -> &wgpu::TextureView {
-        &self.resources.raw.view
-    }
-
     pub(super) fn render(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         camera: &Camera,
         method: AmbientOcclusion,
+        scene_color: &wgpu::TextureView,
     ) -> usize {
         if method == AmbientOcclusion::Off {
             return 0;
@@ -325,7 +351,26 @@ impl AoRenderer {
             &self.bind_groups.denoise_final,
             "OpenHP1 AO final denoise pass",
         );
-        passes + 3
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("OpenHP1 AO apply pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: scene_color,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.apply_pipeline);
+        pass.set_bind_group(0, &self.bind_groups.apply, &[]);
+        pass.draw(0..3, 0..1);
+        passes + 4
     }
 }
 
@@ -463,12 +508,21 @@ impl BindGroups {
             uniform,
             "OpenHP1 AO final denoise bind group",
         );
+        let apply = denoise_bind_group(
+            device,
+            denoise_layout,
+            &resources.raw.view,
+            &resources.depth.mip_views[0],
+            uniform,
+            "OpenHP1 AO apply bind group",
+        );
         Self {
             linearize,
             downsample,
             main,
             denoise_first,
             denoise_final,
+            apply,
         }
     }
 }
@@ -499,6 +553,7 @@ fn pipeline(
     fragment_entry: &'static str,
     label: &'static str,
     formats: &[wgpu::TextureFormat],
+    blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
@@ -510,7 +565,7 @@ fn pipeline(
         .map(|format| {
             Some(wgpu::ColorTargetState {
                 format: *format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })
         })
@@ -665,6 +720,7 @@ mod tests {
         assert!(AO_MAIN_SHADER.contains("const SLICE_COUNT = 9u;"));
         assert!(AO_MAIN_SHADER.contains("Copyright (C) 2016-2021, Intel Corporation"));
         assert!(AO_DENOISE_SHADER.contains("fragment_denoise_final"));
+        assert!(AO_DENOISE_SHADER.contains("fragment_apply"));
     }
 
     #[test]

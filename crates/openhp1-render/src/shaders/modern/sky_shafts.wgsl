@@ -7,6 +7,7 @@ struct ShadowSettings {
     distance_intensity_pixel: vec4<f32>,
     haze: vec4<f32>,
     dust: vec4<f32>,
+    shaft: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -155,7 +156,11 @@ fn aperture_value(uv: vec2<f32>, layer: f32) -> f32 {
         uv,
         i32(layer),
         0.0,
-    ).r;
+    ).a;
+}
+
+fn aperture_color(uv: vec2<f32>, layer: f32) -> vec3<f32> {
+    return textureSampleLevel(aperture_masks, aperture_sampler, uv, i32(layer), 0.0).rgb;
 }
 
 fn aperture_transmission(uv: vec2<f32>, layer: f32) -> f32 {
@@ -374,8 +379,12 @@ fn fragment_window_projection(input: PortalVertex) -> @location(0) vec4<f32> {
         * incidence
         * surface_coverage
         * input.color.a
-        * 0.04;
-    return vec4(input.color.rgb * brightness, 0.0);
+        * settings.shaft.z;
+    let color = volumetric_saturated_color(
+        input.color.rgb * aperture_color(aperture_uv, input.direction.w),
+        settings.shaft.y,
+    );
+    return vec4(color * brightness, 0.0);
 }
 
 @fragment
@@ -422,13 +431,13 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         input.direction.xyz,
         inverse_determinant,
     );
-    var scattering = 0.0;
+    var scattering = vec3(0.0);
     var path_transmittance = 1.0;
     var aperture_sum = 0.0;
     var visibility_sum = 0.0;
     let phase = volumetric_henyey_greenstein(
         dot(input.direction.xyz, -ray_direction),
-        0.25,
+        settings.shaft.x,
     );
     for (var index = 0; index < STEP_COUNT; index += 1) {
         let distance = interval.x + (f32(index) + 0.5) * step_length;
@@ -463,7 +472,11 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         let extinction = settings.direction_density.w
             * volumetric_dust(position, settings.camera_position.w, settings.haze);
         let segment_transmittance = volumetric_segment_transmittance(extinction, step_length);
-        let incident_light = visibility * transmission * surface_coverage * end_fade;
+        let color = volumetric_saturated_color(
+            input.color.rgb * aperture_color(aperture_uv, input.direction.w),
+            settings.shaft.y,
+        );
+        let incident_light = color * visibility * transmission * surface_coverage * end_fade;
         visibility_sum += visibility;
         aperture_sum += transmission;
         scattering += path_transmittance
@@ -482,7 +495,7 @@ fn fragment_sky_shafts(input: PortalVertex) -> @location(0) vec4<f32> {
         let visibility = visibility_sum / f32(STEP_COUNT);
         return vec4(1.0 - visibility, visibility, 0.0, 0.0);
     }
-    return vec4(input.color.rgb * scattering * settings.distance_intensity_pixel.y, 0.0);
+    return vec4(scattering * settings.distance_intensity_pixel.y, 0.0);
 }
 
 struct DustMoteVertex {
@@ -522,32 +535,48 @@ fn vertex_dust_mote(
         + b.xyz * (root * (1.0 - split))
         + c.xyz * (root * split);
     let extrusion_length = min(settings.distance_intensity_pixel.x * 0.5, 1500.0);
-    let speed = settings.dust.z
-        * mix(0.7, 1.3, volumetric_hash(seed + vec3(41.0, 53.0, 67.0)));
-    let phase = fract(
-        volumetric_hash(seed + vec3(71.0, 83.0, 97.0))
-            + settings.camera_position.w * speed / extrusion_length,
-    );
+    let phase = volumetric_hash(seed + vec3(71.0, 83.0, 97.0));
     let cross_section_scale = mix(1.0, max(center_scale.w, 1.0), phase);
+    let drift_time = settings.camera_position.w * settings.dust.z * 0.12;
+    let drift_seed = volumetric_hash(seed + vec3(41.0, 53.0, 67.0)) * 6.2831853;
+    let drift_scale = mix(0.5, 2.5, volumetric_hash(seed + vec3(79.0, 89.0, 101.0)));
+    let drift = vec3(
+        sin(drift_time + drift_seed),
+        cos(drift_time * 0.73 + drift_seed * 1.7),
+        sin(drift_time * 0.51 + drift_seed * 2.3) * 0.5,
+    ) * drift_scale;
     let world_position = center_scale.xyz
         + (base - center_scale.xyz) * cross_section_scale
-        + direction.xyz * (phase * extrusion_length);
+        + direction.xyz * (phase * extrusion_length)
+        + drift;
     let clip = settings.view_projection * vec4(world_position, 1.0);
-    let radius = settings.dust.x
-        * mix(0.25, 0.5, volumetric_hash(seed + vec3(101.0, 113.0, 127.0)));
+    let size_random = volumetric_hash(seed + vec3(103.0, 113.0, 127.0));
+    let radius = settings.dust.x * mix(0.12, 0.7, size_random * size_random * size_random);
+    let aspect = mix(0.25, 0.85, volumetric_hash(seed + vec3(131.0, 137.0, 149.0)));
+    let angle = volumetric_hash(seed + vec3(151.0, 163.0, 173.0)) * 6.2831853;
+    let rotation = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
     var position = vec4(2.0, 2.0, 1.0, 1.0);
     if clip.w > 0.001 {
         let pixel_to_ndc = settings.distance_intensity_pixel.zw * 2.0;
-        let offset = (corner * 2.0 - vec2(1.0)) * radius * pixel_to_ndc * clip.w;
-        position = vec4(clip.xy + offset, clip.zw);
+        let offset_pixels = rotation
+            * ((corner * 2.0 - vec2(1.0)) * vec2(radius, radius * aspect));
+        position = vec4(clip.xy + offset_pixels * pixel_to_ndc * clip.w, clip.zw);
     }
 
     var output: DustMoteVertex;
     output.position = position;
     output.uv = corner;
     output.world_position = world_position;
-    output.shadow_position = base + direction.xyz * (phase * extrusion_length);
-    output.color_fade = vec4(color.rgb, 1.0 - smoothstep(0.65, 1.0, phase));
+    output.shadow_position = world_position;
+    let brightness = mix(
+        0.12,
+        1.0,
+        pow(volumetric_hash(seed + vec3(181.0, 191.0, 197.0)), 2.0),
+    );
+    output.color_fade = vec4(
+        color.rgb,
+        brightness * (1.0 - smoothstep(0.7, 1.0, phase)),
+    );
     output.aperture_uv_layer = vec3(
         uv_a.xy * (1.0 - root)
             + uv_b.xy * (root * (1.0 - split))
@@ -564,14 +593,19 @@ fn fragment_dust_mote(input: DustMoteVertex) -> @location(0) vec4<f32> {
     if input.position.z > textureLoad(scene_depth, pixel, 0) + 0.0005 {
         discard;
     }
-    let circle = 1.0 - smoothstep(0.2, 0.5, distance(input.uv, vec2(0.5)));
-    let brightness = circle
+    let radial = length(input.uv * 2.0 - vec2(1.0));
+    let speck = exp2(-5.0 * radial * radial) * (1.0 - smoothstep(0.72, 1.0, radial));
+    let brightness = speck
         * input.color_fade.a
         * sun_visibility(input.shadow_position)
         * aperture_transmission(input.aperture_uv_layer.xy, input.aperture_uv_layer.z)
         * settings.dust.y;
-    return vec4(
-        input.color_fade.rgb * brightness * settings.distance_intensity_pixel.y,
-        0.0,
+    let color = volumetric_saturated_color(
+        input.color_fade.rgb * aperture_color(
+            input.aperture_uv_layer.xy,
+            input.aperture_uv_layer.z,
+        ),
+        settings.shaft.y,
     );
+    return vec4(color * brightness * 2.0, 0.0);
 }

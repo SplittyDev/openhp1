@@ -85,6 +85,8 @@ fn point_phase(incoming: vec3<f32>, outgoing: vec3<f32>) -> f32 {
     return volumetric_henyey_greenstein(dot(incoming, outgoing), 0.25) * 5.0;
 }
 
+const LOCAL_LIGHT_CORE_RADIUS_SQUARED = 0.0225;
+
 @fragment
 fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
     let dimensions = vec2<i32>(textureDimensions(scene_depth));
@@ -130,7 +132,10 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
             let distance = start + (f32(index) + 0.5) * step_length;
             let normalized_position = ray_origin + ray_direction * distance;
             let world_position = input.position_radius.xyz + normalized_position * radius;
-            let local_density = 1.0 / (dot(normalized_position, normalized_position) + 0.0036);
+            let radius_squared = dot(normalized_position, normalized_position);
+            let edge_fade = max(1.0 - radius_squared, 0.0);
+            let local_density = edge_fade * edge_fade
+                / (radius_squared + LOCAL_LIGHT_CORE_RADIUS_SQUARED);
             let visibility = point_visibility(
                 world_position,
                 input.position_radius.xyz,
@@ -155,7 +160,9 @@ fn fragment_volume(input: VolumeOutput) -> @location(0) vec4<f32> {
         }
     } else if input.profile.x > 0.5 {
         let perpendicular_squared = max(dot(ray_origin, ray_origin) - b * b, 0.0);
-        let softened_distance = sqrt(perpendicular_squared + 0.0036);
+        let softened_distance = sqrt(
+            perpendicular_squared + LOCAL_LIGHT_CORE_RADIUS_SQUARED,
+        );
         density = max(
             (atan((end + b) / softened_distance)
                 - atan((start + b) / softened_distance))

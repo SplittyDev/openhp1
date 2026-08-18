@@ -17,6 +17,15 @@ fn fragment_denoise_final(input: FullscreenVertex) -> @location(0) f32 {
     return clamp(denoise(vec2<i32>(input.position.xy), 1.2) * settings.visibility_scale, 0.0, 1.0);
 }
 
+@fragment
+fn fragment_apply(input: FullscreenVertex) -> @location(0) vec4<f32> {
+    let dimensions = vec2<i32>(textureDimensions(ao_input));
+    let pixel = clamp_pixel(vec2<i32>(input.position.xy), dimensions);
+    let background = textureLoad(edge_input, pixel, 0).r >= settings.near_far.y * 0.99999;
+    let visibility = select(textureLoad(ao_input, pixel, 0).r, 1.0, background);
+    return vec4(vec3(visibility), 1.0);
+}
+
 fn denoise(pixel_unclamped: vec2<i32>, center_weight: f32) -> f32 {
     let dimensions = vec2<i32>(textureDimensions(ao_input));
     let pixel = clamp_pixel(pixel_unclamped, dimensions);

@@ -398,7 +398,16 @@ fn point_sources(scene: &RenderScene, texture_colors: &HashMap<usize, Vec3>) -> 
                         .copied()
                 })
                 .unwrap_or_else(|| light.source_color());
-            point_source(light, color, fixture_emitter, source_sprite)
+            point_source(
+                light,
+                if fixture_emitter {
+                    super::local_scattering_color(color)
+                } else {
+                    color
+                },
+                fixture_emitter,
+                source_sprite,
+            )
         })
         .collect()
 }

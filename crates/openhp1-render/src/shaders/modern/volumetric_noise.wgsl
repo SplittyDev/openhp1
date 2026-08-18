@@ -31,3 +31,7 @@ fn volumetric_henyey_greenstein(cosine: f32, anisotropy: f32) -> f32 {
 fn volumetric_segment_transmittance(extinction: f32, distance: f32) -> f32 {
     return exp(-max(extinction, 0.0) * max(distance, 0.0));
 }
+fn volumetric_saturated_color(color: vec3<f32>, saturation: f32) -> vec3<f32> {
+    const LUMINANCE = vec3(0.2126, 0.7152, 0.0722);
+    return max(mix(vec3(dot(color, LUMINANCE)), color, saturation), vec3(0.0));
+}

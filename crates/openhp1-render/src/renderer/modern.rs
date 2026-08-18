@@ -36,8 +36,6 @@ struct ModernUniform {
     bloom_strength: f32,
     contrast: f32,
     tone_mapper: u32,
-    ambient_occlusion: u32,
-    _padding: [u32; 3],
 }
 
 struct BloomTarget {
@@ -136,16 +134,6 @@ impl ModernRenderer {
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -181,7 +169,6 @@ impl ModernRenderer {
             &composite_layout,
             &scene_view,
             &bloom_a.view,
-            ao.view(),
             &sampler,
             &uniform,
         );
@@ -289,7 +276,6 @@ impl ModernRenderer {
             &self.composite_layout,
             &scene_view,
             &bloom_a.view,
-            self.ao.view(),
             &self.sampler,
             &self.uniform,
         );
@@ -355,10 +341,6 @@ impl ModernRenderer {
                 bloom_strength: if bloom { 1.5 } else { 0.0 },
                 contrast,
                 tone_mapper: tone_mapper_id(self.tone_mapper),
-                ambient_occlusion: u32::from(
-                    !debug && self.ambient_occlusion != AmbientOcclusion::Off,
-                ),
-                _padding: [0; 3],
             }),
         );
         if debug {
@@ -379,16 +361,21 @@ impl ModernRenderer {
                 multiview_mask: None,
             });
         }
+        let ao_passes = if debug {
+            0
+        } else {
+            self.ao.render(
+                queue,
+                encoder,
+                camera,
+                self.ambient_occlusion,
+                &self.scene_view,
+            )
+        };
         let volumetric_passes = if self.volumetric_lighting {
             self.volumetrics.render(encoder, &self.scene_view)
         } else {
             0
-        };
-        let ao_passes = if debug {
-            0
-        } else {
-            self.ao
-                .render(queue, encoder, camera, self.ambient_occlusion)
         };
         if bloom {
             draw_fullscreen(
@@ -481,7 +468,6 @@ fn composite_bind_group(
     layout: &wgpu::BindGroupLayout,
     scene_view: &wgpu::TextureView,
     bloom_view: &wgpu::TextureView,
-    ao_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     uniform: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
@@ -503,10 +489,6 @@ fn composite_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(ao_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
                 resource: uniform.as_entire_binding(),
             },
         ],
@@ -625,9 +607,8 @@ mod tests {
 
     #[test]
     fn modern_uniform_matches_shader_layout() {
-        assert_eq!(size_of::<ModernUniform>(), 32);
+        assert_eq!(size_of::<ModernUniform>(), 16);
         assert_eq!(std::mem::offset_of!(ModernUniform, contrast), 8);
-        assert_eq!(std::mem::offset_of!(ModernUniform, ambient_occlusion), 16);
     }
 
     #[test]

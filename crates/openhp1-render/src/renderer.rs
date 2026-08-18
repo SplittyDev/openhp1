@@ -2373,8 +2373,7 @@ mod tests {
         assert!(shader.contains("let contrasted = display_contrast(encoded);"));
         assert!(modern::BLOOM_SHADER.contains("const THRESHOLD = 1.0;"));
         assert!(modern::BLOOM_SHADER.contains("const KNEE = 0.1;"));
-        assert!(shader.contains("textureLoad(ao_texture"));
-        assert!(shader.contains("scene.a >= 0.5"));
+        assert!(!shader.contains("ao_texture"));
         assert!(scene_shader.contains("vec4(color.rgb, 0.0)"));
         assert!(scene_shader.contains("min(light.color.rgb * strength, vec3(1.0))"));
         assert!(scene_shader.contains("color.rgb * illumination * 2.0"));

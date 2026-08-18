@@ -5,6 +5,7 @@ struct FroxelSettings {
     volume_size_portals: vec4<u32>,
     distance_density: vec4<f32>,
     haze: vec4<f32>,
+    shaft: vec4<f32>,
 };
 
 struct PortalTriangle {
@@ -56,7 +57,11 @@ fn prism_coordinates(
 }
 
 fn aperture_transmission(uv: vec2<f32>, layer: i32) -> f32 {
-    return textureSampleLevel(aperture_masks, aperture_sampler, uv, layer, 0.0).r;
+    return textureSampleLevel(aperture_masks, aperture_sampler, uv, layer, 0.0).a;
+}
+
+fn aperture_color(uv: vec2<f32>, layer: i32) -> vec3<f32> {
+    return textureSampleLevel(aperture_masks, aperture_sampler, uv, layer, 0.0).rgb;
 }
 
 fn sun_visibility(position: vec3<f32>, layer: i32) -> f32 {
@@ -131,9 +136,15 @@ fn portal_light(portal: PortalTriangle, position: vec3<f32>, view_direction: vec
         + edge_ac * source_coordinates.y
         + direction * prism.z;
     let layer = i32(portal.uv_a.z + 0.5);
-    let phase = volumetric_henyey_greenstein(dot(direction, -view_direction), 0.25);
+    let phase = volumetric_henyey_greenstein(
+        dot(direction, -view_direction),
+        settings.shaft.x,
+    );
     let end_fade = 1.0 - smoothstep(0.65, 1.0, along_shaft);
-    return portal.color.rgb
+    return volumetric_saturated_color(
+        portal.color.rgb * aperture_color(aperture_uv, i32(portal.direction.w + 0.5)),
+        settings.shaft.y,
+    )
         * aperture_transmission(aperture_uv, i32(portal.direction.w + 0.5))
         * sun_visibility(shadow_position, layer)
         * surface_coverage
@@ -167,9 +178,13 @@ fn compute_froxel(@builtin(global_invocation_id) id: vec3<u32>) {
         let step_length = segment_end - segment_start;
         let position = settings.camera_position_time.xyz
             + ray_direction * ((segment_start + segment_end) * 0.5);
+        let quarter_step = ray_direction * (step_length * 0.25);
         var incident_light = vec3(0.0);
         for (var portal_index = 0u; portal_index < settings.volume_size_portals.w; portal_index += 1u) {
-            incident_light += portal_light(portals[portal_index], position, ray_direction);
+            incident_light += 0.5 * (
+                portal_light(portals[portal_index], position - quarter_step, ray_direction)
+                + portal_light(portals[portal_index], position + quarter_step, ray_direction)
+            );
         }
         let extinction = settings.distance_density.z
             * volumetric_dust(position, settings.camera_position_time.w, settings.haze);
@@ -237,5 +252,5 @@ fn fragment_froxel_composite(input: FullscreenVertex) -> @location(0) vec4<f32> 
         vec3(input.uv, clamp(volume_z, 0.0, 1.0)),
         0.0,
     );
-    return vec4(value.rgb, 0.0);
+    return vec4(value.rgb, value.a);
 }

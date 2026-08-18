@@ -123,6 +123,11 @@ impl Default for DisplaySettings {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VolumetricTuning {
     pub debug_view: VolumetricDebugView,
+    pub shaft_intensity: f32,
+    pub shaft_tilt_degrees: f32,
+    pub shaft_saturation: f32,
+    pub shaft_anisotropy: f32,
+    pub shaft_projection: f32,
     pub dust_size: f32,
     pub dust_density: u32,
     pub dust_opacity: f32,
@@ -172,14 +177,19 @@ impl Default for VolumetricTuning {
     fn default() -> Self {
         Self {
             debug_view: VolumetricDebugView::Composite,
-            dust_size: 3.0,
-            dust_density: 64,
-            dust_opacity: 0.05,
-            dust_speed: 5.0,
-            haze_size: 20.0,
-            haze_density: 1.0,
-            haze_opacity: 0.75,
-            haze_speed: 20.0,
+            shaft_intensity: 1.0,
+            shaft_tilt_degrees: 20.0,
+            shaft_saturation: 1.5,
+            shaft_anisotropy: 0.4,
+            shaft_projection: 0.005,
+            dust_size: 2.0,
+            dust_density: 128,
+            dust_opacity: 0.5,
+            dust_speed: 20.0,
+            haze_size: 30.0,
+            haze_density: 2.0,
+            haze_opacity: 1.0,
+            haze_speed: 25.0,
         }
     }
 }
@@ -295,14 +305,19 @@ mod tests {
             VolumetricTuning::default(),
             VolumetricTuning {
                 debug_view: VolumetricDebugView::Composite,
-                dust_size: 3.0,
-                dust_density: 64,
-                dust_opacity: 0.05,
-                dust_speed: 5.0,
-                haze_size: 20.0,
-                haze_density: 1.0,
-                haze_opacity: 0.75,
-                haze_speed: 20.0,
+                shaft_intensity: 1.0,
+                shaft_tilt_degrees: 20.0,
+                shaft_saturation: 1.5,
+                shaft_anisotropy: 0.4,
+                shaft_projection: 0.005,
+                dust_size: 2.0,
+                dust_density: 128,
+                dust_opacity: 0.5,
+                dust_speed: 20.0,
+                haze_size: 30.0,
+                haze_density: 2.0,
+                haze_opacity: 1.0,
+                haze_speed: 25.0,
             }
         );
         assert_eq!(

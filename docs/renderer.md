@@ -123,8 +123,9 @@ modern post pass provides:
   mapping;
 - selectable SSAO or XeGTAO reconstructed from the scene depth buffer, with a
   full-resolution intermediate visibility texture and two edge-aware spatial
-  denoise passes; fake-backdrop pixels are excluded so sky-box seams do not
-  receive ambient occlusion;
+  denoise passes; AO modulates the opaque HDR scene before volumetric
+  scattering, and fake-backdrop pixels are excluded so neither sky-box seams
+  nor the air volume receive ambient occlusion;
 - selectable FXAA or three-pass SMAA 1x after tone mapping, with SMAA enabled
   by default;
 - authored UE1 coronas drawn through the original persistent visibility cache;
@@ -199,11 +200,14 @@ scattering albedo. The completed 3D volume is trilinearly sampled at scene depth
 and added to the HDR scene.
 
 The source triangles only bound light injection; Composite and Scattering modes
-never render their extruded faces. All triangles from one authored window
-surface share one averaged tint, while each froxel receives the triangle that
-covers its back-projected source coordinate. This keeps haze anchored in the
-room as the camera moves, lets nearer air attenuate farther scattering, and
-removes the camera-facing translucent-prism appearance. See
+never render their extruded faces. Every triangle retains full source strength
+so the complete authored window surface emits, while each froxel back-projects
+to the source UV and samples the original stained-glass RGB beside the derived
+transmission mask. The triangle's authored lightmap hue then tints that spatial
+color, so neutral glass inherits the blue or red visible on the lit window
+without reducing multicolor glass to one averaged color. This keeps multicolor windows spatially distinct, anchors
+haze in the room as the camera moves, lets nearer air attenuate farther
+scattering, and removes the camera-facing translucent-prism appearance. See
 [`research/window-volumetric-lighting.md`](research/window-volumetric-lighting.md)
 for the production-engine comparison and staged design.
 
@@ -211,21 +215,23 @@ In the composite view, each window's affine texture mapping is also projected
 across the complete authored surface rather than clipped to its individual BSP
 triangles, then adds a low-energy, one-sided, shadowed window-shaped footprint
 to the HDR scene.
-The aperture mask is prefiltered with a 13-tap separable tent kernel and retains
-fractional transmission; a nine-tap mask filter then grows from 1.5 to 8 texels
-with distance from the window. A nine-tap shadow filter grows from 2 to 12 shadow
-texels, while the surface-cookie boundary fades from 3 to 12 screen pixels. This
-approximates the softer transmission and penumbra produced by stained glass
-without exposing BSP triangle edges.
+The aperture mask and transmitted RGB are prefiltered with a 13-tap separable
+tent kernel, retaining fractional transmission while diffusing fine painted
+detail into broader stained-glass color fields. A nine-tap mask filter then
+grows from 1.5 to 8 texels with distance from the window. A nine-tap shadow
+filter grows from 2 to 12 shadow texels, while the surface-cookie boundary fades
+from 3 to 12 screen pixels. This approximates the softer transmission and
+penumbra produced by stained glass without exposing BSP triangle edges.
 Fake-backdrop surfaces are authored sky openings. The fixed shipped
 maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface textures whose qualified name contains a `Window`, `Windows`,
 `Window Frame`, or `Window Frames` group, or whose object name contains
 `window` case-insensitively. Textures in the `HP_Outside` package are excluded
 from volumetric lighting but remain available to inspection tools.
-Classified window textures feed a renderer-owned 128-pixel transmission-mask
-array. When a matching derived mask exists under `window_masks/`, the scene
-loader embeds and supplies that authored grayscale transmission. Other windows
+Classified window textures feed a renderer-owned 128-pixel RGBA aperture array
+built at runtime from the original RGB and derived transmission. When a matching
+mask exists under `window_masks/`, the scene loader embeds and supplies that
+authored grayscale transmission. Other windows
 retain the luminance fallback, which flood-fills border-connected wall and keeps
 mid-luminance glass inside the painted frame. The shaft march projects each
 sample back through the opening's authored texture coordinates and samples its
@@ -240,11 +246,14 @@ additive HDR scattering with no scene-wide extinction, retaining values for
 bloom and tone mapping without tinting the whole room.
 Window shafts and local volumetric sources share a slowly drifting world-space
 density field with configurable haze cells. Window shafts also carry
-sparse world-space motes inside their authored prisms; camera-facing billboards
-keep them round while scene depth and the sun shadow map clip them to the lit
-volume. Both layers pause with the rest of the scene.
+sparse world-space motes inside their authored prisms. Their soft, mostly tiny
+elliptical profiles vary in size and brightness and drift locally rather than
+streaming down the shaft. Scene depth and the sun shadow map clip them to the
+lit volume. Both layers pause with the rest of the scene.
 
-The map viewer exposes live dust size, density, opacity, and speed controls,
+The map viewer exposes live window-shaft intensity, downward tilt, saturation,
+anisotropy, and surface-projection strength plus dust size, density, opacity,
+and drift controls,
 plus haze field size, density, opacity, and speed. These are temporary tuning
 controls and do not change `OpenHP1.ini`. Its volumetric view selector can show
 the normal composite, scattering alone on black, the projected window mask,
@@ -252,15 +261,20 @@ directional shadow visibility, or local-light shadow visibility. Visibility
 views use green for light-visible samples and red for blocked samples, while the
 mask view uses white for transmission. Local visibility isolates the nearest
 shadowed local light so overlapping authored ranges do not add into yellow;
-moving the camera near another source selects it. The shared defaults are dust size
-`4 px`, density `64`, opacity `0.05`, and speed `5 units/s`; haze size `60
-units`, density `0.75`, opacity `0.5`, and speed `25 units/s`.
+moving the camera near another source selects it. Window shafts default to
+intensity `1.0`, downward tilt `20 degrees`, saturation `1.5`, anisotropy `0.4`,
+and surface projection `0.005`. The shared defaults are dust size `2 px`,
+density `128`, opacity `0.5`, and drift `20.0`; haze size `30 units`, density
+`2.0`, opacity `1.0`, and speed `25 units/s`.
 
 Local volumetric sources outside the shadow budget retain their compact HDR
 halos. Up to twenty nearest visible emitters or explicitly authored fog lights
 use their authored UE1 lighting radius capped to a 300-unit fog extent, receive
 renderer-owned cube shadow maps, and use a bounded 32-sample
 world-space scattering march, forward-weighted along the light-to-camera path.
+Visible fixture colors retain half their source saturation, and their radial
+density uses a softened core with a smooth edge fade instead of a hard bright
+sphere.
 Near a local source, bright textured fixture triangles transmit while darker
 triangles remain two-sided shadow casters, so a lamp's panes shape the volume
 and its metal frame splits it into rays. Geometry farther from the source stays

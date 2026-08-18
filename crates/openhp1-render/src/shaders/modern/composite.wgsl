@@ -3,10 +3,6 @@ struct ModernSettings {
     bloom_strength: f32,
     contrast: f32,
     tone_mapper: u32,
-    ambient_occlusion: u32,
-    _padding0: u32,
-    _padding1: u32,
-    _padding2: u32,
 };
 
 @group(0) @binding(0)
@@ -19,24 +15,12 @@ var scene_sampler: sampler;
 var bloom_texture: texture_2d<f32>;
 
 @group(0) @binding(3)
-var ao_texture: texture_2d<f32>;
-
-@group(0) @binding(4)
 var<uniform> settings: ModernSettings;
 
 @fragment
 fn fragment_composite(input: FullscreenVertex) -> @location(0) vec4<f32> {
     let scene = textureSampleLevel(scene_texture, scene_sampler, input.uv, 0.0);
-    var ambient = 1.0;
-    if settings.ambient_occlusion != 0u && scene.a >= 0.5 {
-        let ao_pixel = clamp(
-            vec2<i32>(input.position.xy),
-            vec2(0),
-            vec2<i32>(textureDimensions(ao_texture)) - vec2(1),
-        );
-        ambient = textureLoad(ao_texture, ao_pixel, 0).r;
-    }
-    var hdr = max(scene.rgb, vec3(0.0)) * ambient;
+    var hdr = max(scene.rgb, vec3(0.0));
     if settings.bloom_strength != 0.0 {
         let bloom = textureSampleLevel(bloom_texture, scene_sampler, input.uv, 0.0).rgb;
         hdr += bloom * settings.bloom_strength;
