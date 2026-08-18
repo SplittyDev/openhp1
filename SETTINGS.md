@@ -42,6 +42,7 @@ ScreenFlashes=true
 [OpenHP1.Renderer.Classic]
 Brightness=0.5
 ColorMode=32Bit
+CRTEffect=false
 
 [OpenHP1.Renderer.Modern]
 ToneMapper=Reinhard
@@ -108,10 +109,14 @@ These settings apply when `Renderer=Classic`.
 | --- | --- | --- | --- |
 | `Brightness` | `0.5` | `0.2` to `1.0` | Adjusts the image from darker to brighter. Values outside this range are moved to the nearest limit. |
 | `ColorMode` | `32Bit` | `32Bit`, `RGB565` | Uses full colour or emulates the original 16-bit RGB565 output. |
+| `CRTEffect` | `false` | `true`, `false` | Enables a sharp late-1990s/early-2000s PC CRT presentation with fine scanlines, a subtle aperture grille, mild curvature and vignette, and highlight halation. |
 
 For compatibility, `ColorMode` also accepts `32`, `TrueColor`, and `RGBA8888`
 as names for `32Bit`, and `16` or `16Bit` as names for `RGB565`. OpenHP1 writes
 the preferred `32Bit` or `RGB565` spelling back to the file.
+
+`CRTEffect` also accepts `1`, `on`, `0`, and `off`. It is disabled by default
+and has no effect when the Modern renderer is selected.
 
 ## `[OpenHP1.Renderer.Modern]`
 

@@ -164,6 +164,7 @@ fn report_text(graphics: &Graphics, issue: &str, captured: Duration) -> String {
     .unwrap();
     writeln!(report, "- Anti-aliasing: `{:?}`", settings.antialiasing).unwrap();
     writeln!(report, "- Bloom: `{}`", settings.bloom).unwrap();
+    writeln!(report, "- CRT effect: `{}`", settings.crt_effect).unwrap();
     writeln!(
         report,
         "- Internal resolution: `{}x{}`",

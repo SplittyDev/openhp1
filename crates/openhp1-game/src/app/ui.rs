@@ -2003,6 +2003,20 @@ impl GameUi {
                 }
                 option_text(ui, scale, 205.0, 226.0, "Darker", LABEL);
                 option_text(ui, scale, 535.0, 226.0, "Brighter", LABEL);
+                if option_checkbox(
+                    ui,
+                    scale,
+                    205.0,
+                    263.0,
+                    &self.textures.checkbox_off,
+                    &self.textures.checkbox_on,
+                    "CRT Effect",
+                    LABEL,
+                    self.graphics.renderer.crt_effect,
+                ) {
+                    self.graphics.renderer.crt_effect = !self.graphics.renderer.crt_effect;
+                    self.action = Some(Action::ApplyGraphics(self.graphics));
+                }
             }
             RendererMode::Modern => {
                 let defaults = DisplaySettings::for_tone_mapper(self.graphics.renderer.tone_mapper);

@@ -959,8 +959,9 @@ impl Renderer {
             })
             .unwrap_or_default();
         let depth = DepthTarget::new(device, viewport_size, modern_enabled);
-        let classic_display =
-            (!modern_enabled).then(|| ClassicDisplay::new(device, target_format, viewport_size));
+        let classic_display = (!modern_enabled).then(|| {
+            ClassicDisplay::new(device, target_format, viewport_size, settings.crt_effect)
+        });
         let coronas = (!scene.coronas.is_empty()).then(|| {
             CoronaRenderer::new(device, scene_format, modern_enabled, scene, &texture_layout)
         });
@@ -1871,8 +1872,7 @@ impl Renderer {
             draw_calls += self
                 .flash
                 .render(queue, encoder, classic_display.scene_view(), flash);
-            classic_display.render(queue, encoder, target, display.brightness);
-            draw_calls += 1;
+            draw_calls += classic_display.render(queue, encoder, target, display.brightness);
         } else {
             draw_calls += self.flash.render(queue, encoder, target, flash);
         }

@@ -95,6 +95,9 @@ impl GraphicsSettings {
         )
         .and_then(|value| parse_bool(&value))
         .unwrap_or(renderer.detail_textures);
+        renderer.crt_effect = config(console, CLASSIC_SECTION, "CRTEffect", "CRTEffect")
+            .and_then(|value| parse_bool(&value))
+            .unwrap_or(renderer.crt_effect);
         renderer.tone_mapper = config(console, MODERN_SECTION, "ToneMapper", "ToneMapper")
             .and_then(|value| value.parse().ok())
             .unwrap_or(renderer.tone_mapper);
@@ -217,6 +220,7 @@ impl GraphicsSettings {
             &[
                 ("Brightness", self.classic_display.brightness.to_string()),
                 ("ColorMode", color_depth_name(self.color_depth).to_owned()),
+                ("CRTEffect", self.renderer.crt_effect.to_string()),
             ],
         )?;
         console.save_config_value(

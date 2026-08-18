@@ -218,6 +218,8 @@ pub struct RendererSettings {
     pub mode: RendererMode,
     /// Enables the original three-band `UTexture::DetailTexture` pass.
     pub detail_textures: bool,
+    /// Enables the high-resolution PC CRT presentation effect in Classic mode.
+    pub crt_effect: bool,
     pub tone_mapper: ToneMapper,
     pub ambient_occlusion: AmbientOcclusion,
     pub antialiasing: Antialiasing,
@@ -230,6 +232,7 @@ impl Default for RendererSettings {
         Self {
             mode: RendererMode::Classic,
             detail_textures: false,
+            crt_effect: false,
             tone_mapper: ToneMapper::default(),
             ambient_occlusion: AmbientOcclusion::default(),
             antialiasing: Antialiasing::Smaa,
@@ -287,6 +290,7 @@ mod tests {
         assert!(!RendererSettings::default().bloom);
         assert!(!RendererSettings::default().volumetric_lighting);
         assert!(!RendererSettings::default().detail_textures);
+        assert!(!RendererSettings::default().crt_effect);
         assert_eq!(
             VolumetricTuning::default(),
             VolumetricTuning {

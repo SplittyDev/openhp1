@@ -56,7 +56,8 @@ object detail, and brightness directly. OpenHP1 replaces that Video block with
 one Graphics Settings button while retaining the authored controls, audio,
 navigation, and book layout around it. The separate OpenHP1-owned page exposes
 the internal render resolution and Classic/Modern renderer selection. Classic
-adds brightness and optional final-frame RGB565 emulation; Modern adds its own
+adds brightness, optional final-frame RGB565 emulation, and an optional
+late-1990s/early-2000s PC CRT effect; Modern adds its own
 brightness and contrast values for each tone mapper, Off/SSAO/XeGTAO
 selection, Off/FXAA/SMAA anti-aliasing, bloom, and volumetric lighting. Classic
 remains the default. Brightness and contrast sliders show their numeric value

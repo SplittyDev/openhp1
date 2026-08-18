@@ -68,13 +68,15 @@ fn options_from(arguments: impl IntoIterator<Item = OsString>) -> Result<Options
             options.renderer.ambient_occlusion = value.parse()?;
         } else if let Some(value) = argument.strip_prefix("--anti-aliasing=") {
             options.renderer.antialiasing = value.parse()?;
+        } else if argument == "--crt" {
+            options.renderer.crt_effect = true;
         } else if argument == "--no-vsync" {
             options.no_vsync = true;
         } else if argument.starts_with('-') || has_path {
             bail!(
                 "usage: openhp1-viewer [map path] [--renderer=classic|modern] \
                  [--tone-mapper=agx|reinhard|aces] [--ambient-occlusion=off|ssao|xegtao] \
-                 [--anti-aliasing=off|fxaa|smaa] [--no-vsync]"
+                 [--anti-aliasing=off|fxaa|smaa] [--crt] [--no-vsync]"
             );
         } else {
             options.path = PathBuf::from(argument);
@@ -97,6 +99,13 @@ mod tests {
         assert_eq!(defaults.path, PathBuf::from("res/Maps/Quid_RavenA.unr"));
         assert_eq!(defaults.renderer, RendererSettings::default());
         assert!(!defaults.no_vsync);
+
+        let crt = options_from([
+            OsString::from("res/Maps/Lev5_Chess.unr"),
+            OsString::from("--crt"),
+        ])
+        .unwrap();
+        assert!(crt.renderer.crt_effect);
 
         let options = options_from([
             OsString::from("res/Maps/Lev5_Chess.unr"),

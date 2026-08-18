@@ -320,13 +320,22 @@ cargo run --release -p openhp1-viewer -- \
 `--tone-mapper` accepts `agx`, `reinhard` (or `classic`), and `aces`.
 `--ambient-occlusion` accepts `off`, `ssao`, and `xegtao` (or `gtao`). These
 settings have no effect on the classic renderer. `--anti-aliasing` accepts
-`off`, `fxaa`, and `smaa`.
+`off`, `fxaa`, and `smaa`. `--crt` enables the Classic-only PC CRT effect.
 
 The in-game Graphics Settings page edits the same `RendererSettings` used by
 the viewer and command line. Its Classic-only 16-bit option keeps the actual
 wgpu targets at 32-bit and quantizes the final composed frame to RGB565 in the
 presentation shader; it is an output emulation rather than a claim that every
 texture and blend operation ran through a historical 16-bit framebuffer.
+
+Classic also offers an off-by-default PC CRT presentation effect. It keeps the
+original framebuffer sharp, adds a resolution-scaled bright-light halation
+blur, and applies fine one-pixel raster modulation, a weak three-column
+aperture grille, slight barrel curvature, and a mild edge vignette. It models a
+late-1990s/early-2000s VGA monitor rather than a 240p television: there is no
+interlacing, composite noise, chroma offset, or NTSC color bleed. The effect is
+an original OpenHP1 implementation of those physical display characteristics,
+not a source port of a RetroArch shader.
 
 Modern BSP lighting follows runtime light brightness, position, and spotlight
 rotation changes through `RenderScene`; the volumetric instances follow those

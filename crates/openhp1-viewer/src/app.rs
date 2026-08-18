@@ -319,6 +319,12 @@ impl ViewerApp {
                     ui.add(egui::Slider::new(brightness, 0.2..=1.0));
                     ui.end_row();
 
+                    if self.renderer_settings.mode == RendererMode::Classic {
+                        ui.label("CRT effect");
+                        ui.checkbox(&mut self.renderer_settings.crt_effect, "Enabled");
+                        ui.end_row();
+                    }
+
                     if self.renderer_settings.mode == RendererMode::Modern {
                         ui.label("Contrast");
                         ui.add(egui::Slider::new(
