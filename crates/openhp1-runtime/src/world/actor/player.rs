@@ -895,6 +895,264 @@ impl ScriptRuntime {
             .and_then(|state| state.as_deref())
     }
 
+    pub fn skip_active_cutscene(&mut self) -> DispatchResult<Option<Vec<ActorAction>>> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let player_class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let player_class = self.resolved_object(&player_class)?;
+        let player_instance = self
+            .instances
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let Some(hud_object) = self
+            .actor_object(&player_class, &player_instance, "myHUD")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(hud) = self.object_actors.get(&hud_object).copied() else {
+            return Ok(None);
+        };
+        let hud_class = self
+            .actor_classes
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: hud })?;
+        let hud_class = self.resolved_object(&hud_class)?;
+        let hud_instance = self
+            .instances
+            .get(&hud)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: hud })?;
+        let Some(cutscene_object) = self
+            .actor_object(&hud_class, &hud_instance, "curCutScene")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(None);
+        };
+        let Some(cutscene) = self.object_actors.get(&cutscene_object).copied() else {
+            return Ok(None);
+        };
+        let class = self
+            .actor_classes
+            .get(&cutscene)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: cutscene })?;
+        self.dispatch_event(
+            cutscene,
+            Path::new(class.package.as_ref()),
+            class.export_index,
+            "CutSkip",
+        )
+        .map(Some)
+    }
+
+    pub fn cutscene_camera_transition_active(&mut self) -> DispatchResult<bool> {
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let player_class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let player_class = self.resolved_object(&player_class)?;
+        let player_instance = self
+            .instances
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let Some(camera_object) = self
+            .actor_object(&player_class, &player_instance, "ViewTarget")
+            .map_err(|message| DispatchError::UnresolvedObject { message })?
+        else {
+            return Ok(false);
+        };
+        let Some(camera) = self.object_actors.get(&camera_object).copied() else {
+            return Ok(false);
+        };
+        let camera_class = self
+            .actor_classes
+            .get(&camera)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: camera })?;
+        let camera_class = self.resolved_object(&camera_class)?;
+        if !self.class_has_name(&camera_class, "BaseCam")? {
+            return Ok(false);
+        }
+        let camera_instance = self
+            .instances
+            .get(&camera)
+            .cloned()
+            .ok_or(DispatchError::ActiveActorContext { actor: camera })?;
+        let tracking_point =
+            self.instance_property(&camera_class, &camera_instance, "TrackingPoint")?;
+        Ok(cutscene_camera_is_moving(
+            self.actor_states
+                .get(&camera)
+                .and_then(|state| state.as_deref()),
+            tracking_point.as_ref(),
+        ))
+    }
+
+    pub fn complete_active_spell_lesson(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        if !self
+            .player_state_name()
+            .is_some_and(|state| state.eq_ignore_ascii_case("SpellLearning"))
+        {
+            return Ok(Vec::new());
+        }
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        for actor in actors {
+            if self.destroyed.contains(&actor) {
+                continue;
+            }
+            let class_id = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class_id)?;
+            if !self.class_has_name(&class, "SpellLearnTrigger")? {
+                continue;
+            }
+            let instance = self
+                .instances
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::ActiveActorContext { actor })?;
+            let Some(lesson_player) = self
+                .actor_object(&class, &instance, "Player")
+                .map_err(|message| DispatchError::UnresolvedObject { message })?
+            else {
+                continue;
+            };
+            if self.object_actors.get(&lesson_player).copied() == self.player_actor {
+                return self.complete_spell_lesson(actor, &class, instance);
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn complete_active_wizard_card_pickup(&mut self) -> DispatchResult<Vec<ActorAction>> {
+        if !self
+            .player_state_name()
+            .is_some_and(|state| state.eq_ignore_ascii_case("PickingUpWizardCard"))
+        {
+            return Ok(Vec::new());
+        }
+
+        let mut actions = Vec::new();
+        let mut actors = self.actor_classes.keys().copied().collect::<Vec<_>>();
+        actors.sort_unstable();
+        for actor in actors {
+            if self.destroyed.contains(&actor)
+                || !self
+                    .actor_states
+                    .get(&actor)
+                    .and_then(|state| state.as_deref())
+                    .is_some_and(|state| state.eq_ignore_ascii_case("Rising"))
+            {
+                continue;
+            }
+            let class_id = self
+                .actor_classes
+                .get(&actor)
+                .cloned()
+                .ok_or(DispatchError::UnregisteredActor { actor })?;
+            let class = self.resolved_object(&class_id)?;
+            if !self.class_has_name(&class, "WizzardCardIcon")? {
+                continue;
+            }
+            let mut instance = self
+                .instances
+                .remove(&actor)
+                .ok_or(DispatchError::ActiveActorContext { actor })?;
+            let result = (|| {
+                for name in ["fTimeToTargetPoint", "fTimeToWait"] {
+                    self.set_actor_value(&class, &mut instance, name, Value::Float(0.0))?;
+                }
+                Ok(())
+            })();
+            self.instances.insert(actor, instance);
+            result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+            actions.extend(self.dispatch_event_with_arguments(
+                actor,
+                Path::new(class.package.summary().source.as_ref()),
+                class.export_index,
+                "Tick",
+                &[Value::Float(0.0)],
+            )?);
+        }
+        actions.extend(self.dispatch_player_event("EndPickup", &[])?);
+        Ok(actions)
+    }
+
+    fn complete_spell_lesson(
+        &mut self,
+        actor: usize,
+        class: &ResolvedObject,
+        mut instance: InstanceState,
+    ) -> DispatchResult<Vec<ActorAction>> {
+        let points = self.instance_property(class, &instance, "iNumHousePoints")?;
+        let (before_final_round, total) =
+            spell_lesson_points(points.as_ref()).map_err(|message| {
+                DispatchError::UnresolvedObject {
+                    message: format!("spell lesson score is invalid: {message}"),
+                }
+            })?;
+        for (name, value) in [
+            ("LessonLevel", Value::Int(4)),
+            ("TotalHousePointScore", Value::Int(total)),
+        ] {
+            self.set_actor_value(class, &mut instance, name, value)
+                .map_err(|message| DispatchError::UnresolvedObject { message })?;
+        }
+        self.instances.insert(actor, instance);
+
+        let player = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
+        let player_class = self
+            .actor_classes
+            .get(&player)
+            .cloned()
+            .ok_or(DispatchError::UnregisteredActor { actor: player })?;
+        let player_class = self.resolved_object(&player_class)?;
+        let mut player_instance = self
+            .instances
+            .remove(&player)
+            .ok_or(DispatchError::ActiveActorContext { actor: player })?;
+        let result = (|| {
+            self.set_actor_value(
+                &player_class,
+                &mut player_instance,
+                "iLevelReached",
+                Value::Int(4),
+            )?;
+            self.set_actor_value(
+                &player_class,
+                &mut player_instance,
+                "iLessonPoints",
+                Value::Int(total),
+            )
+        })();
+        self.instances.insert(player, player_instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+
+        let mut actions =
+            self.dispatch_player_event("AddHousePoints", &[Value::Int(before_final_round)])?;
+        let mut instance = self
+            .instances
+            .remove(&actor)
+            .ok_or(DispatchError::ActiveActorContext { actor })?;
+        let result = self.destroy_actor(actor, class, &mut instance, &mut actions);
+        self.instances.insert(actor, instance);
+        result.map_err(|message| DispatchError::UnresolvedObject { message })?;
+        Ok(actions)
+    }
+
     pub fn take_player_music(&mut self) -> DispatchResult<Option<PlayerMusic>> {
         let actor = self.player_actor.ok_or(DispatchError::MissingPlayer)?;
         let class = self
@@ -1270,10 +1528,73 @@ impl ScriptRuntime {
     }
 }
 
+fn spell_lesson_points(points: Option<&StoredValue>) -> std::result::Result<(i32, i32), String> {
+    let Some(StoredValue::Array(points)) = points else {
+        return Err(format!("iNumHousePoints is {points:?}"));
+    };
+    let rounds = points
+        .get(..4)
+        .ok_or_else(|| format!("iNumHousePoints has only {} entries", points.len()))?;
+    let values = rounds
+        .iter()
+        .map(|point| match point {
+            StoredValue::Value(Value::Int(point)) => Ok(*point),
+            point => Err(format!("round score is {point:?}")),
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let total = values
+        .iter()
+        .try_fold(0_i32, |total, point| total.checked_add(*point))
+        .ok_or_else(|| "round score total overflows i32".to_owned())?;
+    Ok((total - values[3], total))
+}
+
+fn cutscene_camera_is_moving(state: Option<&str>, tracking_point: Option<&StoredValue>) -> bool {
+    if state.is_some_and(|state| state.eq_ignore_ascii_case("CutState")) {
+        return true;
+    }
+    let Some(StoredValue::Value(Value::Vector(tracking_point))) = tracking_point else {
+        return false;
+    };
+    tracking_point.iter().any(|component| component.abs() > 0.5)
+}
+
 fn normalized_health(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spell_lesson_points_award_all_four_authored_rounds() {
+        let points = StoredValue::Array(
+            [5, 10, 15, 20]
+                .map(|point| StoredValue::Value(Value::Int(point)))
+                .to_vec(),
+        );
+
+        assert_eq!(spell_lesson_points(Some(&points)), Ok((30, 50)));
+    }
+
+    #[test]
+    fn cutscene_camera_finishes_its_release_and_follow_movement() {
+        let moving = StoredValue::Value(Value::Vector([1.0, 0.0, 0.0]));
+        let settled = StoredValue::Value(Value::Vector([0.0, 0.0, 0.0]));
+
+        assert!(cutscene_camera_is_moving(Some("CutState"), Some(&settled)));
+        assert!(cutscene_camera_is_moving(
+            Some("StandardState"),
+            Some(&moving)
+        ));
+        assert!(!cutscene_camera_is_moving(
+            Some("StandardState"),
+            Some(&settled)
+        ));
     }
 }

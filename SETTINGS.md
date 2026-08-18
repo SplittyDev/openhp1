@@ -28,6 +28,12 @@ A newly generated file looks like this:
 Root=/path/to/Harry Potter TM
 Language=eng
 
+[OpenHP1.Gameplay]
+SkipIntro=false
+JumpSkipsCutscenes=false
+AutoLearnSpells=false
+InstantPickupWizardCards=false
+
 [OpenHP1.Renderer]
 ResolutionX=1024
 ResolutionY=768
@@ -71,6 +77,20 @@ values before writing them. When `Root` is absent, OpenHP1 checks for a local
 root is no longer valid, OpenHP1 tries those locations again and remembers the
 first valid replacement. It reports the saved-root error only when auto-detection
 also fails.
+
+## `[OpenHP1.Gameplay]`
+
+These optional tweaks are disabled by default, preserving the authored game
+flow.
+
+| Key | Default | Accepted values | What it does |
+| --- | --- | --- | --- |
+| `SkipIntro` | `false` | `true`, `false` | Starts a new game directly in `Lev_Tut1` instead of playing the opening storybook sequence. |
+| `JumpSkipsCutscenes` | `false` | `true`, `false` | Makes any jump input fast-forward the active cutscene through its shipped `CutSkip` path until the cutscene and final camera transition finish. |
+| `AutoLearnSpells` | `false` | `true`, `false` | Completes triggered spell-learning sequences immediately, learns the spell, and awards the sum of all four authored round scores. |
+| `InstantPickupWizardCards` | `false` | `true`, `false` | Collects wizard cards immediately on touch without playing Harry's card-pickup animation or the card's rising effect. |
+
+These settings also accept `1`, `on`, `0`, and `off`.
 
 ## `[OpenHP1.Renderer]`
 

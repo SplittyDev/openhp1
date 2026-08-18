@@ -219,6 +219,21 @@ Space-key edges also update `baseHarry.bSkipKeyPressed`, matching
 `HPConsole.KeyEvent`, so `baseScroll.popstate` can close the letter and release
 the player.
 
+Optional `[OpenHP1.Gameplay]` tweaks remain host policy rather than changes to
+UE1 execution. `JumpSkipsCutscenes` repeatedly dispatches the shipped active
+`curCutScene.CutSkip()` function under temporary fast-forward after a jump edge,
+then continues ordinary camera ticks through `BaseCam.ExitCutState` until the
+restored follow camera reaches its target. Player input remains suppressed
+during that accelerated tail. `AutoLearnSpells` waits until
+the authored `SpellLearnTrigger.Trigger` has granted the spell and entered
+`SpellLearning`, then uses that trigger's authored four-round
+`iNumHousePoints` values and `Destroyed` cleanup/progression path to complete
+the lesson. `InstantPickupWizardCards` keeps `WizzardCardIcon.Touch`'s authored
+`addcard(ID)` grant, then immediately runs the card's `Rising.Tick` cleanup and
+Harry's `PickingUpWizardCard.EndPickup` cleanup after one initialization tick,
+so `fOldGroundSpeed` is captured before it is restored. It does not wait for
+either animation. All tweaks default to false.
+
 The same bridge preserves the shipped Quidditch/Flying Keys timing game rather
 than recreating its rules in the host. While `QuidHud.bPlayQHUDGame` is true,
 the runtime mirrors `QuidHud.PostRender`'s actor lifecycle for

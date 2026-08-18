@@ -34,12 +34,14 @@ use winit::{
 
 use self::{
     console::DeveloperConsole,
+    gameplay_settings::GameplaySettings,
     graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS, window_size},
     presentation::Presentation,
     ui::GameUi,
 };
 
 mod console;
+mod gameplay_settings;
 mod graphics_settings;
 mod presentation;
 mod ui;
@@ -72,6 +74,14 @@ fn next_redraw_deadline(frame_started: Instant, now: Instant) -> Instant {
 
 fn input_should_be_captured(game_ui_open: bool, console_open: bool) -> bool {
     !game_ui_open && !console_open
+}
+
+fn egui_consumes_game_input(consumed: bool, captured: bool) -> bool {
+    consumed && !captured
+}
+
+fn instant_card_pickup_ready(enabled: bool, player_state: Option<&str>) -> bool {
+    enabled && player_state.is_some_and(|state| state.eq_ignore_ascii_case("PickingUpWizardCard"))
 }
 
 impl ApplicationHandler for GameApp {
@@ -278,7 +288,7 @@ impl ApplicationHandler for GameApp {
             graphics.input.set_key(code, event.state);
             return;
         }
-        if egui_response.consumed {
+        if egui_consumes_game_input(egui_response.consumed, graphics.input.captured) {
             return;
         }
         match event {
@@ -340,6 +350,13 @@ enum RenderOutcome {
     Exit,
     Load(SavedGame),
     LoadLevel(PathBuf, Option<u32>, Option<PlayerTravelState>),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CutsceneSkipState {
+    Inactive,
+    Cutscene,
+    Camera,
 }
 
 struct SavedGame {
@@ -530,6 +547,8 @@ struct Graphics {
     save_dir: PathBuf,
     last_save_slot: Option<u32>,
     pending_screenshots: Vec<Option<u32>>,
+    cutscene_skip: CutsceneSkipState,
+    gameplay_settings: GameplaySettings,
     graphics_settings: GraphicsSettings,
     display_settings: DisplaySettings,
     screen_flash: [f32; 4],
@@ -616,6 +635,7 @@ impl Graphics {
             resolutions,
         )
         .context("could not configure game console commands")?;
+        let initialize_settings = graphics_settings.is_none();
         let graphics_settings = match graphics_settings {
             Some(settings) => settings,
             None => {
@@ -626,6 +646,10 @@ impl Graphics {
                 settings
             }
         };
+        let gameplay_settings = GameplaySettings::load(&console);
+        if initialize_settings && let Err(error) = gameplay_settings.save(&console) {
+            last_error = Some(format!("could not initialize gameplay settings: {error}"));
+        }
         let display_settings = graphics_settings.display();
         let screenshot_dir = console.settings_dir().join("Screenshots");
         let settings_dir = console.settings_dir().to_path_buf();
@@ -780,6 +804,7 @@ impl Graphics {
             &save_dir,
             ui::OptionsState {
                 graphics: graphics_settings,
+                gameplay: gameplay_settings,
                 music_volume,
                 sound_volume,
             },
@@ -818,6 +843,8 @@ impl Graphics {
             save_dir,
             last_save_slot: None,
             pending_screenshots: Vec::new(),
+            cutscene_skip: CutsceneSkipState::Inactive,
+            gameplay_settings,
             graphics_settings,
             display_settings,
             screen_flash: player_view.flash_fog,
@@ -879,11 +906,7 @@ impl Graphics {
         let delta_time = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
         self.frame_time_ms = delta_time * 1_000.0;
-        let ticks = if self.input.keys.iter().copied().any(is_fast_forward_key) {
-            DEBUG_FAST_FORWARD_TICKS
-        } else {
-            1
-        };
+        let debug_fast_forward = self.input.keys.iter().copied().any(is_fast_forward_key);
         let mut input = if self.fly_camera_active {
             update_fly_camera(
                 &mut self.camera,
@@ -896,12 +919,43 @@ impl Graphics {
         } else {
             self.input.player_input(delta_time)
         };
+        if !self.gameplay_settings.jump_skips_cutscenes {
+            self.cutscene_skip = CutsceneSkipState::Inactive;
+        } else if self.cutscene_skip == CutsceneSkipState::Inactive && input.jump {
+            if self.dispatch_cutscene_skip() {
+                self.cutscene_skip = CutsceneSkipState::Cutscene;
+            }
+        } else if self.cutscene_skip == CutsceneSkipState::Cutscene
+            && !self.dispatch_cutscene_skip()
+        {
+            self.cutscene_skip = CutsceneSkipState::Camera;
+        }
+        if self.cutscene_skip != CutsceneSkipState::Inactive {
+            input = PlayerInput::default();
+        }
+        let ticks = if debug_fast_forward || self.cutscene_skip != CutsceneSkipState::Inactive {
+            DEBUG_FAST_FORWARD_TICKS
+        } else {
+            1
+        };
         if !self.game_ui.pauses_game() {
             for _ in 0..ticks {
                 self.renderer.advance_time(delta_time);
                 self.update_animations(delta_time);
                 self.update_runtime(delta_time, input);
                 input = repeated_player_input(input);
+                if self.cutscene_skip == CutsceneSkipState::Cutscene
+                    && !self.dispatch_cutscene_skip()
+                {
+                    self.cutscene_skip = CutsceneSkipState::Camera;
+                } else if self.cutscene_skip == CutsceneSkipState::Camera
+                    && !self.cutscene_camera_transition_active()
+                {
+                    self.cutscene_skip = CutsceneSkipState::Inactive;
+                    if !debug_fast_forward {
+                        break;
+                    }
+                }
             }
         }
         if let Some(url) = self.pending_level_travel.take() {
@@ -1138,6 +1192,13 @@ impl Graphics {
                 self.apply_graphics_settings(settings);
                 if let Err(error) = settings.save(&self.console) {
                     self.last_error = Some(format!("could not save graphics settings: {error}"));
+                }
+                RenderOutcome::Continue
+            }
+            Some(ui::Action::SaveGameplay(settings)) => {
+                self.gameplay_settings = settings;
+                if let Err(error) = settings.save(&self.console) {
+                    self.last_error = Some(format!("could not save gameplay settings: {error}"));
                 }
                 RenderOutcome::Continue
             }
@@ -1440,6 +1501,10 @@ impl Graphics {
     }
 
     fn update_runtime(&mut self, delta_time: f32, input: PlayerInput) {
+        let finish_wizard_card_pickup = instant_card_pickup_ready(
+            self.gameplay_settings.instant_pickup_wizard_cards,
+            self.runtime.player_state_name(),
+        );
         match self
             .runtime
             .set_player_input(input)
@@ -1447,6 +1512,23 @@ impl Graphics {
         {
             Ok(actions) => self.apply_actions(actions),
             Err(error) => self.last_error = Some(format!("runtime tick failed: {error}")),
+        }
+        if self.gameplay_settings.auto_learn_spells {
+            match self.runtime.complete_active_spell_lesson() {
+                Ok(actions) => self.apply_actions(actions),
+                Err(error) => {
+                    self.last_error =
+                        Some(format!("could not auto-complete spell lesson: {error}"));
+                }
+            }
+        }
+        if finish_wizard_card_pickup {
+            match self.runtime.complete_active_wizard_card_pickup() {
+                Ok(actions) => self.apply_actions(actions),
+                Err(error) => {
+                    self.last_error = Some(format!("could not finish wizard card pickup: {error}"));
+                }
+            }
         }
         let Some(player) = self.scene.actors.get(self.player) else {
             self.last_error = Some("the player disappeared from the scene".to_owned());
@@ -1532,6 +1614,30 @@ impl Graphics {
                 }
             }
             Err(error) => self.last_error = Some(format!("player camera failed: {error}")),
+        }
+    }
+
+    fn dispatch_cutscene_skip(&mut self) -> bool {
+        match self.runtime.skip_active_cutscene() {
+            Ok(Some(actions)) => {
+                self.apply_actions(actions);
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                self.last_error = Some(format!("could not skip cutscene: {error}"));
+                false
+            }
+        }
+    }
+
+    fn cutscene_camera_transition_active(&mut self) -> bool {
+        match self.runtime.cutscene_camera_transition_active() {
+            Ok(active) => active,
+            Err(error) => {
+                self.last_error = Some(format!("could not finish cutscene camera: {error}"));
+                false
+            }
         }
     }
 
@@ -2008,6 +2114,23 @@ mod tests {
         assert!(input_should_be_captured(false, false));
         assert!(!input_should_be_captured(true, false));
         assert!(!input_should_be_captured(false, true));
+    }
+
+    #[test]
+    fn captured_gameplay_input_bypasses_egui_consumption() {
+        assert!(!egui_consumes_game_input(true, true));
+        assert!(egui_consumes_game_input(true, false));
+        assert!(!egui_consumes_game_input(false, false));
+    }
+
+    #[test]
+    fn instant_card_pickup_waits_until_the_pickup_state_was_already_active() {
+        assert!(!instant_card_pickup_ready(true, Some("PlayerWalking")));
+        assert!(instant_card_pickup_ready(true, Some("PickingUpWizardCard")));
+        assert!(!instant_card_pickup_ready(
+            false,
+            Some("PickingUpWizardCard")
+        ));
     }
 
     #[test]

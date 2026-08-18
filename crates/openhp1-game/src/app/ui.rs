@@ -13,7 +13,10 @@ use openhp1_render::{AmbientOcclusion, Antialiasing, DisplaySettings, RendererMo
 use openhp1_runtime::{BossHealthUiState, HudGameKind, PlayerUiState, ScriptRuntime};
 use openhp1_texture::{Palette, Texture};
 
-use super::graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS};
+use super::{
+    gameplay_settings::GameplaySettings,
+    graphics_settings::{ColorDepth, GraphicsSettings, RESOLUTION_PRESETS},
+};
 
 const REFERENCE_SIZE: Vec2 = Vec2::new(640.0, 480.0);
 const STORY_MIN_TIME_ON_PAGE: Duration = Duration::from_secs(2);
@@ -235,6 +238,7 @@ pub(super) enum Action {
     Resume,
     ApplyGraphics(GraphicsSettings),
     SaveGraphics(GraphicsSettings),
+    SaveGameplay(GameplaySettings),
     SetMouseSensitivity(f32),
     SetMusicVolume(u8),
     SetSoundVolume(u8),
@@ -244,6 +248,7 @@ pub(super) enum Action {
 
 pub(super) struct OptionsState {
     pub(super) graphics: GraphicsSettings,
+    pub(super) gameplay: GameplaySettings,
     pub(super) music_volume: f32,
     pub(super) sound_volume: f32,
 }
@@ -254,6 +259,7 @@ enum Page {
     Slots,
     Options,
     Graphics,
+    Gameplay,
     Quidditch,
     Report,
     Folio,
@@ -556,6 +562,7 @@ pub(super) struct GameUi {
     option_labels: OptionLabels,
     options: OptionValues,
     graphics: GraphicsSettings,
+    gameplay: GameplaySettings,
     open_combo: Option<usize>,
     game_root: PathBuf,
     settings_dir: PathBuf,
@@ -1145,6 +1152,7 @@ impl GameUi {
                 .and_then(|value| value.parse::<f32>().ok())
                 .unwrap_or(5.1);
         let graphics = options.graphics;
+        let gameplay = options.gameplay;
         let options = OptionValues {
             mouse_speed: ((mouse_sensitivity - 0.2) / 9.8).clamp(0.0, 1.0),
             music_volume: options.music_volume,
@@ -1187,6 +1195,7 @@ impl GameUi {
             option_labels,
             options,
             graphics,
+            gameplay,
             open_combo: None,
             game_root: game_root.to_path_buf(),
             settings_dir: settings_dir.to_path_buf(),
@@ -1229,10 +1238,15 @@ impl GameUi {
     pub(super) fn escape(&mut self) -> bool {
         self.confirm_exit = false;
         self.confirm_quit_game = false;
-        if self.page == Page::Graphics {
+        if matches!(self.page, Page::Graphics | Page::Gameplay) {
+            let action = match self.page {
+                Page::Graphics => Action::SaveGraphics(self.graphics),
+                Page::Gameplay => Action::SaveGameplay(self.gameplay),
+                _ => unreachable!(),
+            };
             self.page = Page::Options;
             self.open_combo = None;
-            self.action = Some(Action::SaveGraphics(self.graphics));
+            self.action = Some(action);
             return false;
         }
         if !self.startup {
@@ -1321,6 +1335,7 @@ impl GameUi {
             Page::Slots => &self.textures.save_background,
             Page::Options => &self.textures.options_background,
             Page::Graphics => &self.textures.options_background,
+            Page::Gameplay => &self.textures.options_background,
             Page::Quidditch => &self.textures.quidditch_background,
             Page::Report => &self.textures.report_background,
             Page::Folio if self.folio_page == 6 => &self.textures.folio_harry_background,
@@ -1355,6 +1370,7 @@ impl GameUi {
                     Page::Slots => self.slot_page(ui, scale),
                     Page::Options => self.options_page(ui, scale),
                     Page::Graphics => self.graphics_page(ui, scale),
+                    Page::Gameplay => self.gameplay_page(ui, scale),
                     Page::Quidditch => self.quidditch_page(ui, scale),
                     Page::Report => self.report_page(ui, scale),
                     Page::Folio => self.folio_page(ui, scale),
@@ -1589,6 +1605,10 @@ impl GameUi {
     }
 
     fn start_new_game_story(&mut self, slot: u32) {
+        if self.gameplay.skip_intro {
+            self.action = Some(Action::NewGame(slot));
+            return;
+        }
         self.story_page = 0;
         self.story_index = None;
         self.story_slot = Some(slot);
@@ -1771,6 +1791,10 @@ impl GameUi {
         if option_button(ui, scale, 159.0, 125.0, &self.textures.option_bar, "Open") {
             self.page = Page::Graphics;
             self.open_combo = None;
+        }
+        option_label(ui, scale, 45.0, 165.0, "Gameplay Tweaks", PURPLE);
+        if option_button(ui, scale, 159.0, 165.0, &self.textures.option_bar, "Open") {
+            self.page = Page::Gameplay;
         }
         option_label(
             ui,
@@ -2238,6 +2262,64 @@ impl GameUi {
                 self.open_combo = None;
                 self.action = Some(Action::ApplyGraphics(self.graphics));
             }
+        }
+    }
+
+    fn gameplay_page(&mut self, ui: &mut egui::Ui, scale: f32) {
+        const GOLD: Color32 = Color32::from_rgb(221, 190, 91);
+        const LABEL: Color32 = Color32::from_rgb(236, 217, 156);
+        let panel = scaled_rect(ui.min_rect().min, scale, 25.0, 39.0, 590.0, 390.0);
+        ui.painter().rect_filled(
+            panel,
+            6.0 * scale,
+            Color32::from_rgba_premultiplied(37, 25, 15, 248),
+        );
+        page_title(ui, scale, 25.0, "Gameplay Tweaks", GOLD);
+
+        for (y, label, value) in [
+            (110.0, "Skip Intro", &mut self.gameplay.skip_intro),
+            (
+                170.0,
+                "Jump to Skip Cutscenes",
+                &mut self.gameplay.jump_skips_cutscenes,
+            ),
+            (
+                230.0,
+                "Auto Learn Spells",
+                &mut self.gameplay.auto_learn_spells,
+            ),
+            (
+                290.0,
+                "Instant Pickup Wizard Cards",
+                &mut self.gameplay.instant_pickup_wizard_cards,
+            ),
+        ] {
+            if option_checkbox(
+                ui,
+                scale,
+                120.0,
+                y,
+                &self.textures.checkbox_off,
+                &self.textures.checkbox_on,
+                label,
+                LABEL,
+                *value,
+            ) {
+                *value = !*value;
+            }
+        }
+
+        if textured_button(
+            ui,
+            scale,
+            565.0,
+            431.0,
+            &self.textures.back,
+            &self.textures.back_hover,
+            "",
+        ) {
+            self.page = Page::Options;
+            self.action = Some(Action::SaveGameplay(self.gameplay));
         }
     }
 
@@ -2967,7 +3049,7 @@ fn load_options_background(
         bail!("shipped parchment background tiles must be 256x256");
     }
     restore_options_span(&mut images, &clean, 65..115);
-    restore_options_span(&mut images, &clean, 154..275);
+    restore_options_span(&mut images, &clean, 193..275);
     Ok(images
         .into_iter()
         .enumerate()
@@ -3930,6 +4012,7 @@ mod tests {
             &save_dir,
             OptionsState {
                 graphics: GraphicsSettings::default(),
+                gameplay: GameplaySettings::default(),
                 music_volume: 1.0,
                 sound_volume: 1.0,
             },

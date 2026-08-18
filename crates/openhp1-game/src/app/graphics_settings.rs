@@ -407,7 +407,7 @@ fn setting_value(value: Option<String>, default: f32, min: f32, max: f32) -> f32
         .map_or(default, |value| value.clamp(min, max))
 }
 
-fn parse_bool(value: &str) -> Option<bool> {
+pub(super) fn parse_bool(value: &str) -> Option<bool> {
     match value.to_ascii_lowercase().as_str() {
         "true" | "1" | "on" => Some(true),
         "false" | "0" | "off" => Some(false),
