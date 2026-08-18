@@ -27,8 +27,8 @@ use tracing::{info, warn};
 use crate::{
     ActorSubmission, Corona, RenderLight, RenderLightmap, RenderScene, Rotator, SceneActor,
     SceneActorAnimation, SceneActorRenderRange, SceneObjectId, SurfaceMaterial, SurfaceMode,
-    TextureImage, WarpCoordinates, WarpPortal, render::light_direction, render_to_unreal,
-    unreal_to_render,
+    TextureImage, TransmissionMask, WarpCoordinates, WarpPortal, render::light_direction,
+    render_to_unreal, unreal_to_render,
 };
 
 mod runtime_display;
@@ -191,7 +191,12 @@ impl LoadedScene {
         });
         mesh.texture_pan_speeds = bsp_texture_pan_speeds(&model, level_pan_speed, &zone_pan_speeds);
         let mut water_animations = TextureAnimations::default();
-        let (mut textures, mut surface_materials, surface_texture_names) = load_materials(
+        let LoadedMaterials {
+            mut textures,
+            materials: mut surface_materials,
+            texture_names: surface_texture_names,
+            transmission_masks,
+        } = load_materials(
             &mut packages,
             &package,
             &model,
@@ -349,6 +354,7 @@ impl LoadedScene {
             surfaces = actor_render.model.surfaces.len(),
             triangles = mesh.indices.len() / 3,
             textures = textures.len(),
+            transmission_masks = transmission_masks.len(),
             lightmaps = lightmaps.len(),
             textured_surfaces,
             masked_surfaces,
@@ -381,6 +387,7 @@ impl LoadedScene {
                 corona_visibility: crate::CoronaVisibility::new(Arc::clone(&collision)),
                 actor_submissions,
                 surface_materials,
+                transmission_masks,
                 warp_portals,
                 sky_zone,
             },
@@ -4418,19 +4425,27 @@ fn skeletal_mesh_adjust(
         * ((origin.z - minimum.z) * scale.z * actor.draw_scale - actor.collision_height - TOLERANCE)
 }
 
+struct LoadedMaterials {
+    textures: Vec<TextureImage>,
+    materials: Vec<SurfaceMaterial>,
+    texture_names: Vec<Option<String>>,
+    transmission_masks: HashMap<usize, TransmissionMask>,
+}
+
 fn load_materials(
     packages: &mut PackageStore,
     map: &std::sync::Arc<openhp1_package::Package>,
     model: &Model,
     default_texture: Option<&SceneObject>,
     water_animations: &mut TextureAnimations,
-) -> (Vec<TextureImage>, Vec<SurfaceMaterial>, Vec<Option<String>>) {
+) -> LoadedMaterials {
     let mut textures = Vec::new();
     let mut decoded = HashMap::<(String, usize, bool), Option<DecodedTexture>>::new();
     let mut images = HashMap::<(String, usize, bool), usize>::new();
     let mut attachment_images = HashMap::<(String, usize), usize>::new();
     let mut materials = Vec::with_capacity(model.surfaces.len());
     let mut texture_names = Vec::with_capacity(model.surfaces.len());
+    let mut transmission_masks = HashMap::new();
     for (surface_index, surface) in model.surfaces.iter().enumerate() {
         texture_names.push(None);
         let raw_texture_present = !matches!(surface.texture, ObjectReference::None);
@@ -4535,6 +4550,24 @@ fn load_materials(
             images.insert(image_key, index);
             index
         };
+        if volumetric_source
+            && !transmission_masks.contains_key(&texture_index)
+            && let Some(name) = texture_names[surface_index].as_deref()
+        {
+            match crate::window_masks::decode(
+                name,
+                [
+                    textures[texture_index].width,
+                    textures[texture_index].height,
+                ],
+            ) {
+                Ok(Some(mask)) => {
+                    transmission_masks.insert(texture_index, mask);
+                }
+                Ok(None) => {}
+                Err(error) => warn!(surface_index, %error, "could not load window mask"),
+            }
+        }
         let macro_attachment = load_texture_attachment(
             packages,
             &resolved.package,
@@ -4631,7 +4664,12 @@ fn load_materials(
         });
     }
 
-    (textures, materials, texture_names)
+    LoadedMaterials {
+        textures,
+        materials,
+        texture_names,
+        transmission_masks,
+    }
 }
 
 fn select_bsp_texture<T, E>(
@@ -6998,6 +7036,7 @@ mod tests {
                 corona_visibility: Default::default(),
                 actor_submissions: Vec::new(),
                 surface_materials: Vec::new(),
+                transmission_masks: Default::default(),
                 warp_portals: Vec::new(),
                 sky_zone: None,
             },

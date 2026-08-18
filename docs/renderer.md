@@ -224,12 +224,14 @@ surface textures whose qualified name contains a `Window`, `Windows`,
 `window` case-insensitively. Textures in the `HP_Outside` package are excluded
 from volumetric lighting but remain available to inspection tools.
 Classified window textures feed a renderer-owned 128-pixel transmission-mask
-array. Because the shipped textures include both the window and its surrounding
-stone wall, mask construction flood-fills the border-connected wall and retains
-only mid-luminance glass inside the painted frame. The shaft march projects each
-sample back through the opening's authored texture coordinates, so painted
-mullions split the light even when the original map did not model them as
-geometry. Fake-backdrop sky openings use a fully transmissive mask.
+array. When a matching derived mask exists under `window_masks/`, the scene
+loader embeds and supplies that authored grayscale transmission. Other windows
+retain the luminance fallback, which flood-fills border-connected wall and keeps
+mid-luminance glass inside the painted frame. The shaft march projects each
+sample back through the opening's authored texture coordinates and samples its
+color from the original texture, so painted mullions split and tint the light
+without shipping the original pixels. Fake-backdrop sky openings use a fully
+transmissive mask.
 Only source triangles whose light volumes intersect the camera frustum are
 injected, capped at the 128 nearest triangles. Opaque walls and props shadow the
 resulting volume.

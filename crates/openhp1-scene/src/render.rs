@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use glam::{Mat3, Vec3};
 use openhp1_map::{LightVisibility, LightmapImage, SkyZone, TriangleMesh, hsb_to_rgb};
@@ -42,6 +42,13 @@ pub struct TextureMipImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransmissionMask {
+    pub width: u32,
+    pub height: u32,
+    pub values: Vec<u8>,
 }
 
 impl TextureImage {
@@ -254,6 +261,8 @@ pub struct RenderScene {
     /// Material for each surface. Missing visible textures use the renderer's
     /// checkerboard; the scene loader hides untextured actor-mesh faces.
     pub surface_materials: Vec<SurfaceMaterial>,
+    /// Derived stained-glass transmission masks keyed by base texture index.
+    pub transmission_masks: HashMap<usize, TransmissionMask>,
     /// Authored `PF_Portal` BSP surfaces backed by `WarpZoneInfo` actors.
     pub warp_portals: Vec<WarpPortal>,
     /// A fixed UE1 sky-box viewpoint rendered behind the main scene.
@@ -366,6 +375,7 @@ mod tests {
             corona_visibility: Default::default(),
             actor_submissions: Vec::new(),
             surface_materials: Vec::new(),
+            transmission_masks: Default::default(),
             warp_portals: Vec::new(),
             sky_zone: None,
         };

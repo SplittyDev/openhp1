@@ -2545,6 +2545,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            transmission_masks: Default::default(),
             warp_portals: vec![],
             sky_zone: None,
         };
@@ -2568,6 +2569,7 @@ mod tests {
                     corona_visibility: Default::default(),
                     actor_submissions: vec![],
                     surface_materials: vec![material],
+                    transmission_masks: Default::default(),
                     warp_portals: vec![],
                     sky_zone: None,
                 },
@@ -2658,6 +2660,7 @@ mod tests {
                 },
                 SurfaceMaterial::default(),
             ],
+            transmission_masks: Default::default(),
             warp_portals: vec![],
             sky_zone: None,
         };

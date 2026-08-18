@@ -14,7 +14,7 @@ use image::{ColorType, ImageFormat};
 use openhp1_package::{
     ObjectReference, PackageStore, ResolvedObject, write_derived_file_atomically,
 };
-use openhp1_texture::{Palette, Texture, is_window_texture_name};
+use openhp1_texture::{Palette, Texture, is_window_texture_name, window_mask_filename};
 use serde::{Deserialize, Serialize};
 
 const STATE_VERSION: u32 = 1;
@@ -920,16 +920,7 @@ fn mask_path(state_path: &Path, name: &str) -> PathBuf {
     let directory = state_path.parent().unwrap_or_else(|| Path::new("."));
     directory
         .join("window_masks")
-        .join(format!("{}.png", safe_filename(name)))
-}
-
-fn safe_filename(name: &str) -> String {
-    name.chars()
-        .map(|character| match character {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => character,
-            _ => '_',
-        })
-        .collect()
+        .join(window_mask_filename(name))
 }
 
 fn write_mask(

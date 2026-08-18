@@ -800,6 +800,7 @@ mod tests {
             corona_visibility: Default::default(),
             actor_submissions: Vec::new(),
             surface_materials: Vec::<SurfaceMaterial>::new(),
+            transmission_masks: Default::default(),
             warp_portals: Vec::new(),
             sky_zone: None,
         };

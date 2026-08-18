@@ -30,9 +30,17 @@ pub fn is_window_texture_name(name: &str) -> bool {
         })
 }
 
+pub fn window_mask_filename(name: &str) -> String {
+    let stem = name.chars().map(|character| match character {
+        'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => character,
+        _ => '_',
+    });
+    stem.chain(".png".chars()).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_window_texture_name;
+    use super::{is_window_texture_name, window_mask_filename};
 
     #[test]
     fn identifies_window_groups_and_object_names() {
@@ -43,5 +51,13 @@ mod tests {
         assert!(!is_window_texture_name(
             "Hub2_Greenhouse.Wall.Greenhousewall"
         ));
+    }
+
+    #[test]
+    fn window_mask_filenames_replace_unsafe_characters() {
+        assert_eq!(
+            window_mask_filename("HP_K.Window Frames.Win14_T1"),
+            "HP_K.Window_Frames.Win14_T1.png"
+        );
     }
 }

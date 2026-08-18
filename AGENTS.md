@@ -61,6 +61,8 @@ committed copies.
   target. `openhp1-render` must remain independent of eframe.
 - `openhp1-window-editor` uses eframe and the read-only package/texture decoders
   to author derived window masks without storing original texture pixels.
+  `openhp1-scene` embeds those masks and associates them with decoded texture
+  indices so `openhp1-render` remains independent of package names and paths.
 - `openhp1-launcher` uses eframe for game-data configuration and starts the
   sibling `openhp1-game` executable. Both executables resolve the original
   game root through `openhp1-package` and `OpenHP1.ini`.

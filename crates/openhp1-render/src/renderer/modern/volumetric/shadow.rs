@@ -5,7 +5,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec2, Vec3};
-use openhp1_scene::{RenderScene, SurfaceMode, TextureImage};
+use openhp1_scene::{RenderScene, SurfaceMode, TextureImage, TransmissionMask};
 use wgpu::util::DeviceExt;
 
 use crate::{Camera, VolumetricDebugView, VolumetricTuning, unreal_to_render};
@@ -754,7 +754,10 @@ fn aperture_masks(
         };
         let layer = bytes.len() as u32 / (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE);
         layers.insert(texture_index, layer);
-        bytes.extend(aperture_mask(image));
+        bytes.extend(aperture_mask(
+            image,
+            scene.transmission_masks.get(&texture_index),
+        ));
     }
     let layer_count = bytes.len() as u32 / (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE);
     let texture = device.create_texture_with_data(
@@ -792,7 +795,23 @@ fn aperture_masks(
     (texture, view, sampler, layers)
 }
 
-fn aperture_mask(image: &TextureImage) -> Vec<u8> {
+fn aperture_mask(image: &TextureImage, authored: Option<&TransmissionMask>) -> Vec<u8> {
+    if let Some(mask) = authored.filter(|mask| {
+        mask.width > 0
+            && mask.height > 0
+            && mask.values.len() == (mask.width * mask.height) as usize
+    }) {
+        let values = (0..APERTURE_MASK_SIZE)
+            .flat_map(|y| {
+                (0..APERTURE_MASK_SIZE).map(move |x| {
+                    let source_x = x * mask.width / APERTURE_MASK_SIZE;
+                    let source_y = y * mask.height / APERTURE_MASK_SIZE;
+                    mask.values[(source_y * mask.width + source_x) as usize]
+                })
+            })
+            .collect();
+        return blur_aperture_mask(values);
+    }
     if image.width == 0 || image.height == 0 {
         return vec![255; (APERTURE_MASK_SIZE * APERTURE_MASK_SIZE) as usize];
     }
@@ -1364,6 +1383,7 @@ mod tests {
                 volumetric_source: mode == SurfaceMode::Backdrop,
                 ..Default::default()
             }],
+            transmission_masks: Default::default(),
             warp_portals: Vec::new(),
             sky_zone: sky.then_some(openhp1_scene::SkyZone {
                 location: Vec3::ZERO,
@@ -1554,12 +1574,15 @@ mod tests {
             }
         }
         rgba[(2 * 5 + 2) * 4..(2 * 5 + 3) * 4].copy_from_slice(&[40, 70, 140, 255]);
-        let mask = aperture_mask(&TextureImage {
-            width: 5,
-            height: 5,
-            rgba,
-            mips: Vec::new(),
-        });
+        let mask = aperture_mask(
+            &TextureImage {
+                width: 5,
+                height: 5,
+                rgba,
+                mips: Vec::new(),
+            },
+            None,
+        );
 
         assert_eq!(
             mask.len(),
@@ -1568,6 +1591,27 @@ mod tests {
         assert_eq!(mask[0], 0);
         assert_eq!(mask[64 * APERTURE_MASK_SIZE as usize + 32], 0);
         assert!(mask[64 * APERTURE_MASK_SIZE as usize + 64] > 200);
+    }
+
+    #[test]
+    fn authored_aperture_mask_replaces_texture_guess() {
+        let image = TextureImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+            mips: Vec::new(),
+        };
+        let authored = TransmissionMask {
+            width: 1,
+            height: 1,
+            values: vec![0],
+        };
+
+        assert!(
+            aperture_mask(&image, Some(&authored))
+                .into_iter()
+                .all(|value| value == 0)
+        );
     }
 
     #[test]

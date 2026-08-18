@@ -97,6 +97,8 @@ hard exclusions, and inspect the source, mask, or overlay preview. Rules are
 saved to the committable `window_editor.state.json`; exported
 8-bit grayscale PNGs under `window_masks/` contain only the authored mask, not
 original texture pixels. Black blocks light and white transmits it.
+The Modern renderer embeds matching exported masks and continues using its
+luminance fallback for configured windows that do not have one yet.
 
 ```sh
 cargo run -p openhp1-window-editor

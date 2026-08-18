@@ -2172,6 +2172,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam 0.30.10",
+ "image",
  "openhp1-map",
  "openhp1-mesh",
  "openhp1-package",

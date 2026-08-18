@@ -513,6 +513,7 @@ mod tests {
             corona_visibility: Default::default(),
             actor_submissions,
             surface_materials: materials,
+            transmission_masks: Default::default(),
             warp_portals: Vec::new(),
             sky_zone: None,
         }
