@@ -241,11 +241,15 @@ impl SubmissionGeometry {
                 let Some(&surface) = self.triangle_surfaces.get(start_triangle + offset) else {
                     continue;
                 };
-                if self
+                if let Some(material) = self
                     .materials
                     .get(surface)
-                    .is_some_and(|material| material.mode != SurfaceMode::Hidden)
+                    .filter(|material| material.mode != SurfaceMode::Hidden)
                 {
+                    if material.mirror {
+                        plan.push_special(surface, triangle, SpecialKind::Mirror, &self.materials);
+                        continue;
+                    }
                     plan.push_geometry(
                         surface,
                         triangle,
@@ -629,6 +633,35 @@ mod tests {
                 SubmissionCommand::Mirror { surface: 2, .. }
             ]
         ));
+    }
+
+    #[test]
+    fn actor_mirror_is_submitted_as_a_mirror() {
+        let geometry = geometry(
+            scene(
+                0..3,
+                vec![0],
+                Vec::new(),
+                Vec::new(),
+                vec![ActorSubmission {
+                    actor_index: 7,
+                    indices: 0..3,
+                    translucent_pass: false,
+                }],
+                vec![SurfaceMaterial {
+                    mirror: true,
+                    ..Default::default()
+                }],
+            ),
+            vec![0],
+        );
+        let plan = geometry.plan(Vec3::ZERO, &[binding(0)]);
+
+        assert!(matches!(
+            plan.commands.as_slice(),
+            [SubmissionCommand::Mirror { surface: 0, .. }]
+        ));
+        assert_eq!(plan.indices, [0, 1, 2]);
     }
 
     #[test]
