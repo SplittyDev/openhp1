@@ -44,7 +44,7 @@ the 14 compiled pages of story 3 before loading `Lev_Tut1.unr`. The four-piece
 page art comes from `StoryBookTest`, narration and localized captions come from
 the matching `AllDialog`/`HPDialog` entries. The compiled `FEStoryBookPage`
 defaults show each page for 1.9 seconds before starting narration in
-`SLOT_Interact`, then leave 1.1 seconds after its actual WAV duration before
+`SLOT_Interact`, then leave 1.1 seconds after its decoded sound duration before
 advancing. `HPConsole.ChangeLevel` marks the destination as newly loaded, and
 its first destination tick saves the selected slot before play continues.
 OpenHP1 performs that same entry save after a new game and each authored level

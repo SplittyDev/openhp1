@@ -212,6 +212,10 @@ fn decoder(clip: &AudioClip) -> Result<StaticSoundData> {
         .map_err(|error| Error::Playback(error.to_string()))
 }
 
+pub(crate) fn duration(clip: &AudioClip) -> Result<Duration> {
+    Ok(decoder(clip)?.duration())
+}
+
 fn immediate_tween() -> Tween {
     Tween {
         duration: Duration::ZERO,
@@ -290,6 +294,10 @@ mod tests {
         };
 
         assert_eq!(decoder(&clip).unwrap().num_frames(), 4);
+        assert_eq!(
+            clip.duration().unwrap(),
+            Duration::from_secs_f64(4.0 / 8_000.0)
+        );
     }
 
     #[test]

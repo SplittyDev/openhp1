@@ -2907,7 +2907,7 @@ fn load_story_pages(
                 if text.is_empty() {
                     bail!("HPDialog.int is missing [all] {dialog}");
                 }
-                let duration = wav_duration(sound.data()).unwrap_or(Duration::from_secs(6));
+                let duration = sound.duration()?;
                 (Some(sound), text, duration)
             };
             Ok(StoryPage {
@@ -3137,38 +3137,6 @@ fn load_audio_clip(packages: &mut PackageStore, name: &str) -> Result<AudioClip>
         .find_localized_object(name, "Sound")?
         .with_context(|| format!("shipped story sound {name} is missing"))?;
     Ok(AudioClip::decode(&package, export_index)?)
-}
-
-fn wav_duration(bytes: &[u8]) -> Option<Duration> {
-    if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
-        return None;
-    }
-    let mut position = 12;
-    let mut byte_rate = None;
-    let mut data_size = None;
-    while position + 8 <= bytes.len() {
-        let size =
-            u32::from_le_bytes(bytes.get(position + 4..position + 8)?.try_into().ok()?) as usize;
-        let value = position + 8;
-        let end = value.checked_add(size)?;
-        if end > bytes.len() {
-            return None;
-        }
-        match bytes.get(position..position + 4)? {
-            b"fmt " if size >= 12 => {
-                byte_rate = Some(u32::from_le_bytes(
-                    bytes.get(value + 8..value + 12)?.try_into().ok()?,
-                ));
-            }
-            b"data" => data_size = Some(size as u64),
-            _ => {}
-        }
-        position = end + (size & 1);
-    }
-    let byte_rate = u64::from(byte_rate?.max(1));
-    Some(Duration::from_secs_f64(
-        data_size? as f64 / byte_rate as f64,
-    ))
 }
 
 fn story_timing(now: Instant, narration: Duration) -> (Option<Instant>, Option<Instant>) {
@@ -3910,6 +3878,14 @@ mod tests {
             .map(|story| load_story_pages(&context, &mut packages, story).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(loaded.iter().map(Vec::len).sum::<usize>(), 57);
+        let opening = &loaded[3];
+        assert!(opening[0].duration > Duration::from_secs(6));
+        assert!(opening[13].duration < Duration::from_secs(6));
+        assert!(opening.iter().all(|page| {
+            page.sound
+                .as_ref()
+                .is_some_and(|sound| !sound.data().starts_with(b"RIFF"))
+        }));
         assert!(loaded[16][0].art.iter().all(Option::is_none));
         assert!(loaded[16][0].sound.is_none());
     }
@@ -4075,25 +4051,13 @@ mod tests {
     }
 
     #[test]
-    fn new_game_story_uses_all_compiled_pages_and_wav_timing() {
+    fn new_game_story_uses_all_compiled_pages_and_authored_timing() {
         assert_eq!(STORY_BOOKS[3].len(), 14);
         assert_eq!(STORY_BOOKS[3][0], ("3_1_", "StoryBook1"));
         assert_eq!(STORY_BOOKS[3][13], ("3_7_", "StoryBook49"));
 
-        let mut wav = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
-        wav.extend(16_u32.to_le_bytes());
-        wav.extend([1, 0, 1, 0]);
-        wav.extend(8_000_u32.to_le_bytes());
-        wav.extend(8_000_u32.to_le_bytes());
-        wav.extend([1, 0, 8, 0]);
-        wav.extend(b"data");
-        wav.extend(16_000_u32.to_le_bytes());
-        wav.resize(wav.len() + 16_000, 0);
-        let narration = wav_duration(&wav).unwrap();
-        assert_eq!(narration, Duration::from_secs(2));
-
         let now = Instant::now();
-        let (sound_at, deadline) = story_timing(now, narration);
+        let (sound_at, deadline) = story_timing(now, Duration::from_secs(2));
         assert_eq!(
             sound_at.unwrap().duration_since(now),
             Duration::from_millis(1900)

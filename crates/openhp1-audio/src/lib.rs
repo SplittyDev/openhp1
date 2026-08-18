@@ -76,6 +76,11 @@ impl AudioClip {
     pub fn looping(&self) -> bool {
         self.looping
     }
+
+    #[cfg(feature = "playback")]
+    pub fn duration(&self) -> Result<std::time::Duration> {
+        playback::duration(self)
+    }
 }
 
 #[derive(Debug, Error)]
