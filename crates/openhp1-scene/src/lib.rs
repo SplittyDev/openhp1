@@ -5,6 +5,7 @@ mod coordinates;
 mod loader;
 mod render;
 mod runtime;
+mod texture_overrides;
 mod window_masks;
 
 pub use actor::{SceneActor, SceneActorAnimation, SceneActorRenderRange, SceneObjectId};
@@ -20,3 +21,4 @@ pub use runtime::{
     apply_runtime_actions, apply_runtime_actions_with, initialize_runtime, initialize_runtime_with,
     initialize_runtime_with_console, initialize_runtime_with_console_unstarted, sync_runtime_pose,
 };
+pub use texture_overrides::load_texture_override;

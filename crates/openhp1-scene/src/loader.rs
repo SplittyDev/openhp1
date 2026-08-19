@@ -896,8 +896,8 @@ impl LoadedScene {
                 continue;
             };
             let dimensions = Vec2::new(
-                self.render.textures[texture_index].width as f32,
-                self.render.textures[texture_index].height as f32,
+                self.render.textures[texture_index].logical_width as f32,
+                self.render.textures[texture_index].logical_height as f32,
             );
             let surface = self.render.surface_materials.len();
             self.render.surface_materials.push(SurfaceMaterial {
@@ -2278,6 +2278,7 @@ struct AnimatedGenericTexture {
 
 struct GenericTextureAnimation {
     frames: Vec<(Texture, Palette, Arc<Package>)>,
+    override_frames: Option<Vec<TextureImage>>,
     next: Vec<Option<usize>>,
     prime_count: u8,
     min_frame_rate: f32,
@@ -3572,8 +3573,8 @@ fn append_scene_actor_sprite(
         return;
     };
     let dimensions = Vec2::new(
-        textures[texture_index].width as f32,
-        textures[texture_index].height as f32,
+        textures[texture_index].logical_width as f32,
+        textures[texture_index].logical_height as f32,
     );
     let surface = materials.len();
     materials.push(SurfaceMaterial {
@@ -4099,7 +4100,7 @@ fn append_actor_mesh(
             .texture
             .and_then(|index| textures.get(index))
             .map_or(Vec2::splat(64.0), |texture| {
-                Vec2::new(texture.width as f32, texture.height as f32)
+                Vec2::new(texture.logical_width as f32, texture.logical_height as f32)
             });
         let base = u32::try_from(render_mesh.positions.len())?;
         let vertex_unlit = unlit || materials[surface].unlit;
@@ -4557,8 +4558,8 @@ fn load_materials(
             match crate::window_masks::decode(
                 name,
                 [
-                    textures[texture_index].width,
-                    textures[texture_index].height,
+                    textures[texture_index].logical_width,
+                    textures[texture_index].logical_height,
                 ],
             ) {
                 Ok(Some(mask)) => {
@@ -4948,6 +4949,7 @@ fn decode_texture(
         mip.width != 0 && mip.height != 0,
         "texture mip has zero dimensions"
     );
+    let logical_dimensions = [mip.width, mip.height];
     let palette = packages
         .resolve(&resolved.package, texture.palette)?
         .context("texture has no palette reference")?;
@@ -5017,6 +5019,9 @@ fn decode_texture(
         None
     };
     let fire = texture.fire.clone();
+    let override_image = (generic.is_none() && can_override_texture(&texture))
+        .then(|| crate::load_texture_override(packages, resolved, logical_dimensions))
+        .flatten();
     Ok(DecodedTexture {
         id: SceneObjectId {
             package: resolved.package.summary().source.to_string(),
@@ -5028,7 +5033,12 @@ fn decode_texture(
         fire,
         ice,
         generic,
+        override_image,
     })
+}
+
+fn can_override_texture(texture: &Texture) -> bool {
+    texture.wet.is_none() && texture.fire.is_none() && texture.ice.is_none()
 }
 
 fn decode_generic_texture_animation(
@@ -5045,6 +5055,13 @@ fn decode_generic_texture_animation(
     let root_id = (root.package.summary().source.to_string(), root.export_index);
     let mut indices = HashMap::from([(root_id, 0)]);
     let mut frames = vec![(texture.clone(), palette.clone(), Arc::clone(&root.package))];
+    let mut override_frames = vec![
+        can_override_texture(texture)
+            .then(|| {
+                crate::load_texture_override(packages, root, [root_dimensions.0, root_dimensions.1])
+            })
+            .flatten(),
+    ];
     let mut next = Vec::new();
     let mut current = ResolvedObject {
         package: Arc::clone(&root.package),
@@ -5083,12 +5100,29 @@ fn decode_generic_texture_animation(
         let index = frames.len();
         indices.insert(id, index);
         next.push(Some(index));
+        override_frames.push(
+            can_override_texture(&frame)
+                .then(|| crate::load_texture_override(packages, &resolved, [mip.width, mip.height]))
+                .flatten(),
+        );
         frames.push((frame, frame_palette, Arc::clone(&resolved.package)));
         current = resolved;
     }
 
+    let override_frames = override_frames
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .filter(|frames| {
+            frames.first().is_some_and(|first| {
+                frames
+                    .iter()
+                    .all(|frame| (frame.width, frame.height) == (first.width, first.height))
+            })
+        });
+
     Ok(Some(GenericTextureAnimation {
         frames,
+        override_frames,
         next,
         prime_count: texture.prime_count,
         min_frame_rate: texture.min_frame_rate,
@@ -5157,6 +5191,7 @@ struct DecodedTexture {
     fire: Option<FireTexture>,
     ice: Option<DecodedIceTexture>,
     generic: Option<GenericTextureAnimation>,
+    override_image: Option<TextureImage>,
 }
 
 struct DecodedIceTexture {
@@ -5186,6 +5221,8 @@ impl DecodedTexture {
             return Ok(TextureImage {
                 width: mip.width,
                 height: mip.height,
+                logical_width: mip.width,
+                logical_height: mip.height,
                 rgba: water.rgba(&self.palette, masked)?,
                 mips: Vec::new(),
             });
@@ -5194,9 +5231,20 @@ impl DecodedTexture {
             return Ok(TextureImage {
                 width: mip.width,
                 height: mip.height,
+                logical_width: mip.width,
+                logical_height: mip.height,
                 rgba: ice.animation.rgba(&self.palette, masked)?,
                 mips: Vec::new(),
             });
+        }
+        if let Some(image) = self
+            .generic
+            .as_ref()
+            .and_then(|animation| animation.override_frames.as_ref())
+            .and_then(|frames| frames.first())
+            .or(self.override_image.as_ref())
+        {
+            return Ok(image.clone());
         }
         authored_texture_image(&self.texture, &self.palette, masked)
     }
@@ -5211,6 +5259,8 @@ fn authored_texture_image(
     Ok(TextureImage {
         width: mip.width,
         height: mip.height,
+        logical_width: mip.width,
+        logical_height: mip.height,
         rgba: texture.rgba(0, palette, masked)?,
         mips: texture
             .mips
@@ -5361,17 +5411,20 @@ fn animated_generic_texture(
     masked: bool,
     mipmapped: bool,
 ) -> Result<AnimatedGenericTexture> {
-    let frames = animation
-        .frames
-        .iter()
-        .map(|(texture, palette, _)| {
-            let mut image = authored_texture_image(texture, palette, masked)?;
-            if !mipmapped {
-                image.mips.clear();
-            }
-            Ok(image)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut frames = if let Some(frames) = &animation.override_frames {
+        frames.clone()
+    } else {
+        animation
+            .frames
+            .iter()
+            .map(|(texture, palette, _)| authored_texture_image(texture, palette, masked))
+            .collect::<Result<Vec<_>>>()?
+    };
+    if !mipmapped {
+        for image in &mut frames {
+            image.mips.clear();
+        }
+    }
     let index_frames = animation
         .frames
         .iter()
@@ -5572,6 +5625,7 @@ mod tests {
             fire: Some(fire),
             ice: None,
             generic: None,
+            override_image: None,
         };
         let mut images = Vec::new();
         let mut animations = super::TextureAnimations::default();
@@ -5727,6 +5781,7 @@ mod tests {
             fire: None,
             ice: None,
             generic: None,
+            override_image: None,
         };
 
         let image = decoded.image(false).unwrap();
@@ -5791,11 +5846,13 @@ mod tests {
             ice: None,
             generic: Some(super::GenericTextureAnimation {
                 frames: Vec::new(),
+                override_frames: None,
                 next: Vec::new(),
                 prime_count: 0,
                 min_frame_rate: 0.0,
                 max_frame_rate: 0.0,
             }),
+            override_image: None,
         };
         let mut images = Vec::new();
         let mut animations = super::TextureAnimations::default();
@@ -5885,6 +5942,8 @@ mod tests {
         scene.render.textures.push(crate::TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![0; 4],
             mips: Vec::new(),
         });
@@ -5904,6 +5963,8 @@ mod tests {
         scene.render.textures.push(crate::TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![0; 4],
             mips: Vec::new(),
         });
@@ -5954,6 +6015,8 @@ mod tests {
         scene.render.textures.push(crate::TextureImage {
             width: 2,
             height: 2,
+            logical_width: 2,
+            logical_height: 2,
             rgba: vec![0; 16],
             mips: vec![crate::TextureMipImage {
                 width: 1,
@@ -5966,6 +6029,8 @@ mod tests {
         animation.frames[1] = crate::TextureImage {
             width: 2,
             height: 2,
+            logical_width: 2,
+            logical_height: 2,
             rgba: vec![1; 16],
             mips: vec![crate::TextureMipImage {
                 width: 1,
@@ -6005,6 +6070,8 @@ mod tests {
         scene.render.textures.push(crate::TextureImage {
             width: 8,
             height: 8,
+            logical_width: 8,
+            logical_height: 8,
             rgba: vec![0; 8 * 8 * 4],
             mips: Vec::new(),
         });
@@ -7171,6 +7238,8 @@ mod tests {
                 .map(|index| crate::TextureImage {
                     width: 1,
                     height: 1,
+                    logical_width: 1,
+                    logical_height: 1,
                     rgba: vec![index as u8; 4],
                     mips: Vec::new(),
                 })

@@ -578,6 +578,8 @@ mod tests {
         let image = TextureImage {
             width: 8,
             height: 8,
+            logical_width: 8,
+            logical_height: 8,
             rgba: vec![8; 8 * 8 * 4],
             mips: [(4, 4), (2, 2), (1, 1)]
                 .map(|(width, height)| openhp1_scene::TextureMipImage {
@@ -597,6 +599,8 @@ mod tests {
         assert!(valid_mip_chain(&TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![0; 4],
             mips: Vec::new(),
         }));

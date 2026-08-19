@@ -30,8 +30,14 @@ impl CoronaVisibility {
 
 #[derive(Clone, Debug)]
 pub struct TextureImage {
+    /// Physical pixel width uploaded to the GPU.
     pub width: u32,
+    /// Physical pixel height uploaded to the GPU.
     pub height: u32,
+    /// Authored UE texel width used for UV normalization and sprite sizing.
+    pub logical_width: u32,
+    /// Authored UE texel height used for UV normalization and sprite sizing.
+    pub logical_height: u32,
     pub rgba: Vec<u8>,
     /// Authored levels after mip zero, in descending size order.
     pub mips: Vec<TextureMipImage>,
@@ -52,6 +58,10 @@ pub struct TransmissionMask {
 }
 
 impl TextureImage {
+    pub fn logical_dimensions(&self) -> [u32; 2] {
+        [self.logical_width, self.logical_height]
+    }
+
     pub fn byte_len(&self) -> usize {
         self.rgba.len() + self.mips.iter().map(|mip| mip.rgba.len()).sum::<usize>()
     }

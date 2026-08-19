@@ -765,6 +765,8 @@ mod tests {
             textures: vec![TextureImage {
                 width: 2,
                 height: 1,
+                logical_width: 2,
+                logical_height: 1,
                 rgba: vec![255, 255, 255, 255, 255, 128, 0, 255],
                 mips: Vec::new(),
             }],
@@ -871,6 +873,8 @@ mod tests {
         let textures = [TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![255, 0, 0, 255],
             mips: Vec::new(),
         }];

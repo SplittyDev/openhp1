@@ -8,7 +8,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow.workspace = true
 glam.workspace = true
-image = { workspace = true, features = ["png"] }
+image = { workspace = true, features = ["dds", "png"] }
 openhp1-map = { path = "../openhp1-map" }
 openhp1-mesh = { path = "../openhp1-mesh" }
 openhp1-package = { path = "../openhp1-package" }

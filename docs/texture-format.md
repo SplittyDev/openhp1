@@ -55,6 +55,25 @@ palette indices. OpenHP1 validates this instead of treating it as padding.
 For the uncompressed P8 textures decoded so far, the index count equals
 `width * height`.
 
+## Optional DDS replacements
+
+OpenHP1 recognizes the replacement layout used by the ESRGAN Upscale Pack and
+the UE1 DirectX 11 renderer: `Textures/<package>/<group>/<object>.dds` beneath
+the configured original game root. Lookup is case-insensitive. A valid DXT1 or
+DXT5 replacement takes precedence for world, actor, attachment, and UI
+textures; otherwise OpenHP1 uses the texture stored in the Unreal package.
+
+Replacement mip levels are decompressed to the renderer's backend-neutral RGBA
+images, including DXT1 one-bit transparency. Missing, unsupported, truncated,
+or malformed files only produce a warning and do not prevent the packaged
+texture from loading. A generic animated texture uses replacements only when
+every frame has a replacement of the same dimensions. Runtime-generated Wet,
+Fire, and Ice textures continue to use their original simulation output. UI
+replacements retain the packaged texture's logical dimensions for layout while
+uploading and sampling the full DDS resolution. World UV normalization, sprite
+sizing, and texture attachments likewise retain the packaged logical dimensions,
+so replacement resolution does not change the authored scale or repetition.
+
 ## WetTexture source scaling
 
 `WetTexture` renders its water refraction over the paletted image named by

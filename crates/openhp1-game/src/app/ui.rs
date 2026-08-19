@@ -466,75 +466,96 @@ impl QuidditchLeague {
     }
 }
 
+#[derive(Clone)]
+struct UiTexture {
+    handle: TextureHandle,
+    logical_size: Vec2,
+}
+
+impl UiTexture {
+    fn id(&self) -> egui::TextureId {
+        self.handle.id()
+    }
+
+    fn size_vec2(&self) -> Vec2 {
+        self.logical_size
+    }
+}
+
+struct LoadedColorImage {
+    image: egui::ColorImage,
+    logical_size: [usize; 2],
+}
+
 struct CardTextures {
-    big: TextureHandle,
-    small: TextureHandle,
+    big: UiTexture,
+    small: UiTexture,
 }
 
 struct StoryPage {
-    art: [Option<TextureHandle>; 4],
+    art: [Option<UiTexture>; 4],
     text: String,
     sound: Option<AudioClip>,
     duration: Duration,
 }
 
 struct UiTextures {
-    main_background: Vec<TextureHandle>,
-    logo: Vec<TextureHandle>,
-    save_background: Vec<TextureHandle>,
-    empty_slot: TextureHandle,
-    back: TextureHandle,
-    back_hover: TextureHandle,
-    options_background: Vec<TextureHandle>,
-    option_bar: TextureHandle,
-    quidditch_background: Vec<TextureHandle>,
-    broomstick_practice_locked: TextureHandle,
-    broomstick_practice: TextureHandle,
-    quidditch_league_locked: TextureHandle,
-    quidditch_league: TextureHandle,
-    quidditch_back: TextureHandle,
-    quidditch_back_hover: TextureHandle,
-    quidditch_team_logos: [[TextureHandle; 3]; 4],
-    quidditch_vs: TextureHandle,
-    quidditch_vs_small: TextureHandle,
-    story_background: Vec<TextureHandle>,
-    report_background: Vec<TextureHandle>,
-    report_badges: [TextureHandle; 3],
-    report_sand: [TextureHandle; 4],
-    report_buttons: [[TextureHandle; 2]; 3],
-    folio_background: Vec<TextureHandle>,
-    folio_harry_background: Vec<TextureHandle>,
+    main_background: Vec<UiTexture>,
+    logo: Vec<UiTexture>,
+    save_background: Vec<UiTexture>,
+    empty_slot: UiTexture,
+    back: UiTexture,
+    back_hover: UiTexture,
+    options_background: Vec<UiTexture>,
+    option_bar: UiTexture,
+    quidditch_background: Vec<UiTexture>,
+    broomstick_practice_locked: UiTexture,
+    broomstick_practice: UiTexture,
+    quidditch_league_locked: UiTexture,
+    quidditch_league: UiTexture,
+    quidditch_back: UiTexture,
+    quidditch_back_hover: UiTexture,
+    quidditch_team_logos: [[UiTexture; 3]; 4],
+    quidditch_vs: UiTexture,
+    quidditch_vs_small: UiTexture,
+    story_background: Vec<UiTexture>,
+    report_background: Vec<UiTexture>,
+    report_badges: [UiTexture; 3],
+    report_sand: [UiTexture; 4],
+    report_buttons: [[UiTexture; 2]; 3],
+    folio_background: Vec<UiTexture>,
+    folio_harry_background: Vec<UiTexture>,
     folio_cards: HashMap<i32, CardTextures>,
-    folio_missing_big: TextureHandle,
-    folio_missing_small: TextureHandle,
-    folio_right: TextureHandle,
-    folio_right_hover: TextureHandle,
-    hud_health_full: TextureHandle,
-    hud_health_empty: TextureHandle,
-    hud_counters: [TextureHandle; 4],
-    hud_bean_piles: [TextureHandle; 4],
-    hud_timer_full: TextureHandle,
-    hud_timer_empty: TextureHandle,
-    hud_enemy_empty: TextureHandle,
-    hud_enemy_voldemort: TextureHandle,
-    hud_enemy_peeves: TextureHandle,
-    hud_enemy_malfoy: TextureHandle,
-    hud_enemy_fluffy_awake: TextureHandle,
-    hud_enemy_fluffy_asleep: TextureHandle,
-    hud_game_bar: TextureHandle,
-    hud_game_bar_tip: TextureHandle,
-    hud_game_closed_hand: TextureHandle,
-    hud_game_closed_hand_key: TextureHandle,
-    hud_game_closed_hand_snitch: TextureHandle,
-    hud_game_half_open_hand: TextureHandle,
-    hud_game_open_hand: TextureHandle,
-    hud_game_key: TextureHandle,
-    hud_game_snitch: TextureHandle,
-    letter: [TextureHandle; 2],
-    slider_track: TextureHandle,
-    slider_knob: TextureHandle,
-    checkbox_off: TextureHandle,
-    checkbox_on: TextureHandle,
+    folio_missing_big: UiTexture,
+    folio_missing_small: UiTexture,
+    folio_right: UiTexture,
+    folio_right_hover: UiTexture,
+    hud_health_full: UiTexture,
+    hud_health_empty: UiTexture,
+    hud_counters: [UiTexture; 4],
+    hud_bean_piles: [UiTexture; 4],
+    hud_timer_full: UiTexture,
+    hud_timer_empty: UiTexture,
+    hud_enemy_empty: UiTexture,
+    hud_enemy_voldemort: UiTexture,
+    hud_enemy_peeves: UiTexture,
+    hud_enemy_malfoy: UiTexture,
+    hud_enemy_fluffy_awake: UiTexture,
+    hud_enemy_fluffy_asleep: UiTexture,
+    hud_game_bar: UiTexture,
+    hud_game_bar_tip: UiTexture,
+    hud_game_closed_hand: UiTexture,
+    hud_game_closed_hand_key: UiTexture,
+    hud_game_closed_hand_snitch: UiTexture,
+    hud_game_half_open_hand: UiTexture,
+    hud_game_open_hand: UiTexture,
+    hud_game_key: UiTexture,
+    hud_game_snitch: UiTexture,
+    letter: [UiTexture; 2],
+    slider_track: UiTexture,
+    slider_knob: UiTexture,
+    checkbox_off: UiTexture,
+    checkbox_on: UiTexture,
 }
 
 struct OptionValues {
@@ -557,7 +578,7 @@ pub(super) struct GameUi {
     selected_slot: Option<usize>,
     action: Option<Action>,
     save_slots: [bool; 6],
-    save_slot_textures: [Option<TextureHandle>; 6],
+    save_slot_textures: [Option<UiTexture>; 6],
     labels: Labels,
     option_labels: OptionLabels,
     options: OptionValues,
@@ -2923,9 +2944,12 @@ fn load_texture(
     packages: &mut PackageStore,
     name: &str,
     masked: bool,
-) -> Result<TextureHandle> {
-    let image = load_color_image(packages, name, masked)?;
-    Ok(context.load_texture(name, image, egui::TextureOptions::NEAREST))
+) -> Result<UiTexture> {
+    let loaded = load_color_image(packages, name, masked)?;
+    Ok(UiTexture {
+        handle: context.load_texture(name, loaded.image, egui::TextureOptions::NEAREST),
+        logical_size: Vec2::new(loaded.logical_size[0] as f32, loaded.logical_size[1] as f32),
+    })
 }
 
 fn load_optional_texture(
@@ -2933,7 +2957,7 @@ fn load_optional_texture(
     packages: &mut PackageStore,
     name: &str,
     masked: bool,
-) -> Result<Option<TextureHandle>> {
+) -> Result<Option<UiTexture>> {
     if packages.find_localized_object(name, "Texture")?.is_none() {
         return Ok(None);
     }
@@ -2944,27 +2968,37 @@ fn load_color_image(
     packages: &mut PackageStore,
     name: &str,
     masked: bool,
-) -> Result<egui::ColorImage> {
-    let ResolvedObject {
-        package,
-        export_index,
-    } = packages
+) -> Result<LoadedColorImage> {
+    let object = packages
         .find_localized_object(name, "Texture")?
         .with_context(|| format!("shipped UI texture {name} is missing"))?;
-    let texture = Texture::decode(&package, export_index)?;
-    let ObjectReference::Export(palette_index) = texture.palette else {
-        bail!("shipped UI texture {name} has a non-local palette");
-    };
-    let palette = Palette::decode(&package, palette_index)?;
+    let texture = Texture::decode(&object.package, object.export_index)?;
     let mip = texture
         .mips
         .first()
         .context("shipped UI texture has no mip")?;
+    let logical_size = [mip.width as usize, mip.height as usize];
+    if let Some(image) =
+        openhp1_scene::load_texture_override(packages, &object, [mip.width, mip.height])
+    {
+        return Ok(LoadedColorImage {
+            image: egui::ColorImage::from_rgba_unmultiplied(
+                [image.width as usize, image.height as usize],
+                &image.rgba,
+            ),
+            logical_size,
+        });
+    }
+    let package = object.package;
+    let ObjectReference::Export(palette_index) = texture.palette else {
+        bail!("shipped UI texture {name} has a non-local palette");
+    };
+    let palette = Palette::decode(&package, palette_index)?;
     let rgba = texture.rgba(0, &palette, masked)?;
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
-        [mip.width as usize, mip.height as usize],
-        &rgba,
-    ))
+    Ok(LoadedColorImage {
+        image: egui::ColorImage::from_rgba_unmultiplied(logical_size, &rgba),
+        logical_size,
+    })
 }
 
 fn load_story_pages(
@@ -2977,7 +3011,7 @@ fn load_story_pages(
         if art.contains_key(graphic) {
             continue;
         }
-        let pieces: [Option<TextureHandle>; 4] = [1, 2, 3, 4]
+        let pieces: [Option<UiTexture>; 4] = [1, 2, 3, 4]
             .map(|piece| {
                 load_optional_texture(
                     context,
@@ -3022,7 +3056,7 @@ fn load_story_pages(
 fn load_options_background(
     context: &egui::Context,
     packages: &mut PackageStore,
-) -> Result<Vec<TextureHandle>> {
+) -> Result<Vec<UiTexture>> {
     let mut images = (1..=6)
         .map(|index| {
             load_color_image(
@@ -3032,7 +3066,7 @@ fn load_options_background(
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    let clean = (1..=6)
+    let mut clean = (1..=6)
         .map(|index| {
             load_color_image(
                 packages,
@@ -3044,58 +3078,122 @@ fn load_options_background(
     if images
         .iter()
         .chain(&clean)
-        .any(|image| image.size != [256, 256])
+        .any(|loaded| loaded.logical_size != [256, 256])
     {
         bail!("shipped parchment background tiles must be 256x256");
     }
-    restore_options_span(&mut images, &clean, 65..115);
-    restore_options_span(&mut images, &clean, 193..275);
+    let tile_size = normalize_options_tiles(&mut images, &mut clean)?;
+    let mut images = images
+        .into_iter()
+        .map(|loaded| loaded.image)
+        .collect::<Vec<_>>();
+    let clean = clean
+        .into_iter()
+        .map(|loaded| loaded.image)
+        .collect::<Vec<_>>();
+    restore_options_span(&mut images, &clean, 65..115, tile_size);
+    restore_options_span(&mut images, &clean, 193..275, tile_size);
     Ok(images
         .into_iter()
         .enumerate()
-        .map(|(index, image)| {
-            context.load_texture(
+        .map(|(index, image)| UiTexture {
+            handle: context.load_texture(
                 format!("OpenHP1 options background {}", index + 1),
                 image,
                 egui::TextureOptions::NEAREST,
-            )
+            ),
+            logical_size: Vec2::splat(256.0),
         })
         .collect())
+}
+
+fn normalize_options_tiles(
+    images: &mut [LoadedColorImage],
+    clean: &mut [LoadedColorImage],
+) -> Result<usize> {
+    let scale = images
+        .iter()
+        .chain(clean.iter())
+        .map(|loaded| {
+            loaded.image.size[0]
+                .div_ceil(256)
+                .max(loaded.image.size[1].div_ceil(256))
+        })
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let tile_size = 256usize
+        .checked_mul(scale)
+        .context("parchment texture scale is too large")?;
+    for loaded in images.iter_mut().chain(clean.iter_mut()) {
+        if loaded.image.size != [tile_size, tile_size] {
+            loaded.image = resize_color_image(&loaded.image, tile_size)?;
+        }
+    }
+    Ok(tile_size)
+}
+
+fn resize_color_image(image: &egui::ColorImage, size: usize) -> Result<egui::ColorImage> {
+    let [source_width, source_height] = image.size;
+    if source_width == 0 || source_height == 0 {
+        bail!("parchment texture has zero dimensions");
+    }
+    let mut pixels = Vec::with_capacity(
+        size.checked_mul(size)
+            .context("parchment texture size is too large")?,
+    );
+    for y in 0..size {
+        let source_y = y * source_height / size;
+        for x in 0..size {
+            pixels.push(image.pixels[source_y * source_width + x * source_width / size]);
+        }
+    }
+    Ok(egui::ColorImage::new([size, size], pixels))
 }
 
 fn restore_options_span(
     images: &mut [egui::ColorImage],
     clean: &[egui::ColorImage],
     rows: std::ops::Range<usize>,
+    tile_size: usize,
 ) {
     const LEFT: usize = 132;
     const RIGHT: usize = 320;
     const FEATHER: usize = 8;
-    let top = rows.start;
-    let bottom = rows.end;
-    for y in rows {
-        for x in LEFT..RIGHT {
-            let distance = (x - LEFT)
-                .min(RIGHT - 1 - x)
+    let scale = tile_size / 256;
+    let left = LEFT * scale;
+    let right = RIGHT * scale;
+    let feather = FEATHER * scale;
+    let top = rows.start * scale;
+    let bottom = rows.end * scale;
+    for y in top..bottom {
+        for x in left..right {
+            let distance = (x - left)
+                .min(right - 1 - x)
                 .min(y - top)
                 .min(bottom - 1 - y)
-                .min(FEATHER);
-            let original = tiled_pixel(images, x, y);
-            let replacement = tiled_pixel(clean, x, y);
-            *tiled_pixel_mut(images, x, y) =
-                interpolate_color(original, replacement, distance, FEATHER);
+                .min(feather);
+            let original = tiled_pixel(images, x, y, tile_size);
+            let replacement = tiled_pixel(clean, x, y, tile_size);
+            *tiled_pixel_mut(images, x, y, tile_size) =
+                interpolate_color(original, replacement, distance, feather);
         }
     }
 }
 
-fn tiled_pixel(images: &[egui::ColorImage], x: usize, y: usize) -> Color32 {
-    let tile = y / 256 * 3 + x / 256;
-    images[tile].pixels[y % 256 * 256 + x % 256]
+fn tiled_pixel(images: &[egui::ColorImage], x: usize, y: usize, tile_size: usize) -> Color32 {
+    let tile = y / tile_size * 3 + x / tile_size;
+    images[tile].pixels[y % tile_size * tile_size + x % tile_size]
 }
 
-fn tiled_pixel_mut(images: &mut [egui::ColorImage], x: usize, y: usize) -> &mut Color32 {
-    let tile = y / 256 * 3 + x / 256;
-    &mut images[tile].pixels[y % 256 * 256 + x % 256]
+fn tiled_pixel_mut(
+    images: &mut [egui::ColorImage],
+    x: usize,
+    y: usize,
+    tile_size: usize,
+) -> &mut Color32 {
+    let tile = y / tile_size * 3 + x / tile_size;
+    &mut images[tile].pixels[y % tile_size * tile_size + x % tile_size]
 }
 
 fn interpolate_color(left: Color32, right: Color32, amount: usize, total: usize) -> Color32 {
@@ -3113,7 +3211,7 @@ fn load_save_thumbnail(
     game_root: &Path,
     save_dir: &Path,
     slot: usize,
-) -> Option<TextureHandle> {
+) -> Option<UiTexture> {
     let save = fs::read(save_dir.join(format!("save{slot}.usa"))).ok()?;
     let level = ScriptRuntime::saved_game_map(&save)
         .ok()
@@ -3132,11 +3230,15 @@ fn load_save_thumbnail(
         .and_then(|level| files.get(&format!("sgs {level}.bmp")).cloned())
         .or_else(|| files.get("defaultgamesnap.bmp").cloned())?;
     let image = decode_indexed_bmp(&fs::read(path).ok()?).ok()?;
-    Some(context.load_texture(
-        format!("save-thumbnail-{slot}"),
-        image,
-        egui::TextureOptions::NEAREST,
-    ))
+    let logical_size = Vec2::new(image.size[0] as f32, image.size[1] as f32);
+    Some(UiTexture {
+        handle: context.load_texture(
+            format!("save-thumbnail-{slot}"),
+            image,
+            egui::TextureOptions::NEAREST,
+        ),
+        logical_size,
+    })
 }
 
 fn map_stem(map: &str) -> Option<String> {
@@ -3273,7 +3375,7 @@ fn draw_texture(
     painter: &egui::Painter,
     origin: Pos2,
     scale: f32,
-    texture: &TextureHandle,
+    texture: &UiTexture,
     position: Pos2,
 ) {
     let size = texture.size_vec2() * scale;
@@ -3290,8 +3392,8 @@ fn draw_countdown(
     painter: &egui::Painter,
     origin: Pos2,
     scale: f32,
-    empty: &TextureHandle,
-    full: &TextureHandle,
+    empty: &UiTexture,
+    full: &UiTexture,
     remaining: f32,
 ) {
     let size = full.size_vec2();
@@ -3380,8 +3482,8 @@ fn draw_boss_health(
 fn draw_boss_bar(
     painter: &egui::Painter,
     canvas: Rect,
-    empty: &TextureHandle,
-    full: &TextureHandle,
+    empty: &UiTexture,
+    full: &UiTexture,
     head_width: f32,
     x: f32,
     health: f32,
@@ -3420,7 +3522,7 @@ fn draw_centered_texture(
     painter: &egui::Painter,
     origin: Pos2,
     scale: f32,
-    texture: &TextureHandle,
+    texture: &UiTexture,
     x: f32,
     y: f32,
 ) {
@@ -3438,7 +3540,7 @@ fn draw_report_sand(
     painter: &egui::Painter,
     origin: Pos2,
     scale: f32,
-    texture: &TextureHandle,
+    texture: &UiTexture,
     x: f32,
     y: f32,
     fraction: f32,
@@ -3517,7 +3619,7 @@ fn option_button(
     scale: f32,
     x: f32,
     y: f32,
-    texture: &TextureHandle,
+    texture: &UiTexture,
     text: &str,
 ) -> bool {
     let rect = scaled_rect(ui.min_rect().min, scale, x, y, 134.0, 18.0);
@@ -3716,8 +3818,8 @@ fn option_slider(
     scale: f32,
     x: f32,
     y: f32,
-    track: &TextureHandle,
-    knob: &TextureHandle,
+    track: &UiTexture,
+    knob: &UiTexture,
     value: &mut f32,
 ) -> bool {
     let origin = ui.min_rect().min;
@@ -3766,7 +3868,7 @@ fn graphics_slider(
     x: f32,
     y: f32,
     width: f32,
-    knob: &TextureHandle,
+    knob: &UiTexture,
     value: &mut f32,
 ) -> bool {
     let rect = scaled_rect(ui.min_rect().min, scale, x, y, width, 25.0);
@@ -3825,8 +3927,8 @@ fn option_checkbox(
     scale: f32,
     x: f32,
     y: f32,
-    off: &TextureHandle,
-    on: &TextureHandle,
+    off: &UiTexture,
+    on: &UiTexture,
     text: &str,
     text_color: Color32,
     checked: bool,
@@ -3854,7 +3956,7 @@ fn option_checkbox(
     response.clicked()
 }
 
-fn texture_uv(texture: &TextureHandle, size: Vec2) -> Rect {
+fn texture_uv(texture: &UiTexture, size: Vec2) -> Rect {
     let texture_size = texture.size_vec2();
     Rect::from_min_max(
         Pos2::ZERO,
@@ -3877,8 +3979,8 @@ fn textured_button(
     scale: f32,
     x: f32,
     y: f32,
-    texture: &TextureHandle,
-    hover_texture: &TextureHandle,
+    texture: &UiTexture,
+    hover_texture: &UiTexture,
     text: &str,
 ) -> bool {
     let rect = scaled_rect(
@@ -4053,11 +4155,26 @@ mod tests {
     }
 
     #[test]
-    fn options_background_cleanup_interpolates_opaque_colors() {
+    fn options_background_cleanup_accepts_upscaled_tiles() {
         assert_eq!(
             interpolate_color(Color32::BLACK, Color32::WHITE, 1, 2),
             Color32::from_rgb(127, 127, 127)
         );
+        let mut images = [LoadedColorImage {
+            image: egui::ColorImage::filled([256, 256], Color32::BLACK),
+            logical_size: [256, 256],
+        }];
+        let mut clean = [LoadedColorImage {
+            image: egui::ColorImage::filled([512, 512], Color32::WHITE),
+            logical_size: [256, 256],
+        }];
+
+        assert_eq!(
+            normalize_options_tiles(&mut images, &mut clean).unwrap(),
+            512
+        );
+        assert_eq!(images[0].image.size, [512, 512]);
+        assert_eq!(clean[0].image.size, [512, 512]);
     }
 
     #[test]

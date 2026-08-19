@@ -1061,6 +1061,13 @@ fn triangle_transmission(scene: &RenderScene, triangle: &[u32], surface: usize) 
     else {
         return 0.0;
     };
+    if image.width == 0
+        || image.height == 0
+        || image.logical_width == 0
+        || image.logical_height == 0
+    {
+        return 0.0;
+    }
     let mut uv = Vec2::ZERO;
     for index in triangle {
         let Some(texture_coordinates) = scene.mesh.texture_coordinates.get(*index as usize) else {
@@ -1069,8 +1076,10 @@ fn triangle_transmission(scene: &RenderScene, triangle: &[u32], surface: usize) 
         uv += *texture_coordinates;
     }
     uv /= triangle.len() as f32;
-    let x = uv.x.rem_euclid(image.width as f32) as u32;
-    let y = uv.y.rem_euclid(image.height as f32) as u32;
+    let x = (uv.x.rem_euclid(image.logical_width as f32) * image.width as f32
+        / image.logical_width as f32) as u32;
+    let y = (uv.y.rem_euclid(image.logical_height as f32) * image.height as f32
+        / image.logical_height as f32) as u32;
     let offset = ((y * image.width + x) * 4) as usize;
     let Some(pixel) = image.rgba.get(offset..offset + 3) else {
         return 0.0;
@@ -1129,7 +1138,7 @@ fn shaft_portals(
             .texture
             .and_then(|index| scene.textures.get(index))
             .map_or(Vec2::ONE, |texture| {
-                Vec2::new(texture.width as f32, texture.height as f32)
+                Vec2::new(texture.logical_width as f32, texture.logical_height as f32)
             });
         for vertex in [a_index, b_index, c_index] {
             let Some(texture_coordinates) =
@@ -1163,7 +1172,7 @@ fn shaft_portals(
                 .texture
                 .and_then(|index| scene.textures.get(index))
                 .map_or(Vec2::ONE, |texture| {
-                    Vec2::new(texture.width as f32, texture.height as f32)
+                    Vec2::new(texture.logical_width as f32, texture.logical_height as f32)
                 });
             let uv = |vertex: u32| {
                 scene
@@ -1684,6 +1693,8 @@ mod tests {
             &TextureImage {
                 width: 5,
                 height: 5,
+                logical_width: 5,
+                logical_height: 5,
                 rgba,
                 mips: Vec::new(),
             },
@@ -1704,6 +1715,8 @@ mod tests {
         let image = TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![255; 4],
             mips: Vec::new(),
         };
@@ -1725,6 +1738,8 @@ mod tests {
         let image = TextureImage {
             width: 2,
             height: 1,
+            logical_width: 2,
+            logical_height: 1,
             rgba: vec![255, 0, 0, 255, 0, 0, 255, 255],
             mips: Vec::new(),
         };
@@ -1795,6 +1810,8 @@ mod tests {
         scene.textures.push(TextureImage {
             width: 1,
             height: 1,
+            logical_width: 1,
+            logical_height: 1,
             rgba: vec![255, 255, 255, 255],
             mips: Vec::new(),
         });
@@ -1829,12 +1846,16 @@ mod tests {
             TextureImage {
                 width: 1,
                 height: 1,
+                logical_width: 1,
+                logical_height: 1,
                 rgba: vec![255, 255, 255, 255],
                 mips: Vec::new(),
             },
             TextureImage {
                 width: 1,
                 height: 1,
+                logical_width: 1,
+                logical_height: 1,
                 rgba: vec![0, 0, 0, 255],
                 mips: Vec::new(),
             },

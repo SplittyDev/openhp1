@@ -84,6 +84,8 @@ pub(super) fn build_lightmap_atlas(
         image: TextureImage {
             width: atlas_width,
             height: atlas_height,
+            logical_width: atlas_width,
+            logical_height: atlas_height,
             rgba,
             mips: Vec::new(),
         },
@@ -123,6 +125,8 @@ pub(super) fn lightmap_patch(source: &LightmapImage) -> Option<TextureImage> {
     Some(TextureImage {
         width,
         height,
+        logical_width: width,
+        logical_height: height,
         rgba,
         mips: Vec::new(),
     })

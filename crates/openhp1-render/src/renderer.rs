@@ -385,9 +385,7 @@ impl Renderer {
                     .copied()
                     .unwrap_or_default();
                 let texture = material.texture.and_then(|index| scene.textures.get(index));
-                let dimensions = texture.map_or([64.0, 64.0], |texture| {
-                    [texture.width as f32, texture.height as f32]
-                });
+                let dimensions = texture_coordinate_dimensions(texture);
                 let coordinates = scene.mesh.texture_coordinates[vertex_index];
                 let attachment_draw_scale = |draw_scale: f32| {
                     if draw_scale.is_finite() && draw_scale != 0.0 {
@@ -395,6 +393,17 @@ impl Renderer {
                     } else {
                         1.0
                     }
+                };
+                let attachment_pixel_scale = |texture: Option<usize>| {
+                    texture.and_then(|index| scene.textures.get(index)).map_or(
+                        [1.0; 2],
+                        |texture| {
+                            [
+                                texture.width as f32 / texture.logical_width.max(1) as f32,
+                                texture.height as f32 / texture.logical_height.max(1) as f32,
+                            ]
+                        },
+                    )
                 };
                 let lightmap_index = scene
                     .surface_materials
@@ -430,6 +439,18 @@ impl Renderer {
                             coordinates.y / lightmap.height as f32,
                         ]
                     });
+                let macro_coordinates = macro_attachment_coordinates(
+                    coordinates.to_array(),
+                    material.bsp_texture_pan,
+                    attachment_draw_scale(material.macro_draw_scale),
+                );
+                let macro_scale = attachment_pixel_scale(material.macro_texture);
+                let detail_coordinates = detail_attachment_coordinates(
+                    coordinates.to_array(),
+                    material.bsp_texture_pan,
+                    attachment_draw_scale(material.detail_draw_scale),
+                );
+                let detail_scale = attachment_pixel_scale(material.detail_texture);
                 Vertex {
                     position: position.to_array(),
                     texture_coordinates: [
@@ -488,16 +509,14 @@ impl Renderer {
                             .unwrap_or(Vec3::ZERO),
                     )
                     .to_array(),
-                    macro_texture_coordinates: macro_attachment_coordinates(
-                        coordinates.to_array(),
-                        material.bsp_texture_pan,
-                        attachment_draw_scale(material.macro_draw_scale),
-                    ),
-                    detail_texture_coordinates: detail_attachment_coordinates(
-                        coordinates.to_array(),
-                        material.bsp_texture_pan,
-                        attachment_draw_scale(material.detail_draw_scale),
-                    ),
+                    macro_texture_coordinates: [
+                        macro_coordinates[0] * macro_scale[0],
+                        macro_coordinates[1] * macro_scale[1],
+                    ],
+                    detail_texture_coordinates: [
+                        detail_coordinates[0] * detail_scale[0],
+                        detail_coordinates[1] * detail_scale[1],
+                    ],
                     attachment_flags: attachment_enabled(material, settings.detail_textures)
                         .map(u32::from),
                 }
@@ -2201,11 +2220,21 @@ fn checkerboard() -> TextureImage {
     TextureImage {
         width: 2,
         height: 2,
+        logical_width: 2,
+        logical_height: 2,
         rgba: vec![
             255, 0, 255, 255, 24, 24, 24, 255, 24, 24, 24, 255, 255, 0, 255, 255,
         ],
         mips: Vec::new(),
     }
+}
+
+fn texture_coordinate_dimensions(texture: Option<&TextureImage>) -> [f32; 2] {
+    texture.map_or([64.0, 64.0], |texture| {
+        texture
+            .logical_dimensions()
+            .map(|dimension| dimension as f32)
+    })
 }
 
 fn scene_bounds(vertices: &[Vertex]) -> SceneBounds {
@@ -2611,6 +2640,8 @@ mod tests {
         let image = TextureImage {
             width: 4,
             height: 4,
+            logical_width: 4,
+            logical_height: 4,
             rgba: vec![0; 4 * 4 * 4],
             mips: vec![openhp1_scene::TextureMipImage {
                 width: 2,
@@ -2622,6 +2653,20 @@ mod tests {
         assert!(!texture_needs_recreation(4, 4, 2, &image));
         assert!(texture_needs_recreation(8, 8, 2, &image));
         assert!(texture_needs_recreation(4, 4, 1, &image));
+    }
+
+    #[test]
+    fn replacement_resolution_does_not_change_texture_coordinate_scale() {
+        let image = TextureImage {
+            width: 1024,
+            height: 512,
+            logical_width: 256,
+            logical_height: 128,
+            rgba: Vec::new(),
+            mips: Vec::new(),
+        };
+
+        assert_eq!(texture_coordinate_dimensions(Some(&image)), [256.0, 128.0]);
     }
 
     #[test]

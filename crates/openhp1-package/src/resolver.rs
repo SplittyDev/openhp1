@@ -460,6 +460,11 @@ impl PackageStore {
         &self.settings_dir
     }
 
+    /// Root of the read-only original game installation.
+    pub fn game_root(&self) -> &Path {
+        self.system_dir.parent().unwrap_or(&self.system_dir)
+    }
+
     pub fn localize(&self, package: &str, section: &str, key: &str) -> String {
         let language_file = format!("{package}.{}", self.language);
         let selected_directory = self
