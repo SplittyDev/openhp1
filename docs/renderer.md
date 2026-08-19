@@ -299,7 +299,14 @@ shafts do not crawl when the camera moves. Directional rays are bounded by
 opening prisms. Local rays integrate only samples visible from their light;
 lights selected for cube shadow maps are removed from the unshadowed fallback
 pass so geometry leaves genuinely dark air behind it. Lights beyond the fixed
-shadow budget retain the compact fallback. Local corpus inspection confirms
+shadow budget retain the compact fallback. The cube-shadow allocator ranks
+frustum-intersecting fixtures with a clear BSP line to the camera first, then
+by projected screen influence, so nearby lights behind walls do not displace a
+larger visible beam. Obstructed fixtures remain eligible when budget remains.
+Directional opening prisms are tested against the opaque camera depth every
+frame; two consecutive hidden results remove a prism from the portal and
+direction budgets, while every hidden prism continues to be queried and a
+camera inside the prism always keeps it visible. Local corpus inspection confirms
 `Lev_Tut1`, `Lev_Tut2`, and `Lev_Tut3` contain classified window apertures,
 while `Lev3_Dungeon` contains none; `Furnacewindow` in `Lev3_DungeonB` is
 explicitly excluded.

@@ -12,6 +12,7 @@ use crate::{Camera, VolumetricDebugView, VolumetricTuning, unreal_to_render};
 
 use super::super::super::DEPTH_FORMAT;
 use super::super::HDR_FORMAT;
+use super::occlusion::ShaftOcclusion;
 
 const SHADOW_SIZE: u32 = 1024;
 const APERTURE_MASK_SIZE: u32 = 128;
@@ -84,8 +85,8 @@ impl ShadowChangeBounds {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PortalTriangle {
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub(super) struct PortalTriangle {
     a: [f32; 4],
     b: [f32; 4],
     c: [f32; 4],
@@ -123,6 +124,7 @@ pub(super) struct DirectionalShadow {
     projection_pipeline: wgpu::RenderPipeline,
     mote_pipeline: wgpu::RenderPipeline,
     shadow_sampler: wgpu::Sampler,
+    occlusion: ShaftOcclusion,
     portals: Vec<PortalTriangle>,
     froxel_portal_buffer: wgpu::Buffer,
     froxel_portal_count: u32,
@@ -399,6 +401,8 @@ impl DirectionalShadow {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let occlusion =
+            ShaftOcclusion::new(device, queue, scene_depth, &portals, shaft_length(3_000.0));
         Self {
             _texture: texture,
             shadow_array_view,
@@ -413,6 +417,7 @@ impl DirectionalShadow {
             projection_pipeline,
             mote_pipeline,
             shadow_sampler,
+            occlusion,
             portals,
             froxel_portal_buffer,
             froxel_portal_count: 0,
@@ -442,6 +447,7 @@ impl DirectionalShadow {
     }
 
     pub(super) fn resize(&mut self, device: &wgpu::Device, scene_depth: &wgpu::TextureView) {
+        self.occlusion.resize(scene_depth);
         for slice in &mut self.slices {
             slice.shaft_bind_group = shaft_bind_group(
                 device,
@@ -491,7 +497,24 @@ impl DirectionalShadow {
         if !self.enabled {
             return;
         }
-        let visible = visible_portals(&self.portals, camera, aspect);
+        let candidates = portal_candidates(&self.portals, camera, aspect);
+        self.occlusion.prepare(
+            queue,
+            camera,
+            aspect,
+            &self.portals,
+            candidates.iter().map(|(index, _)| *index),
+            shaft_length(camera.far),
+        );
+        let visible = candidates
+            .into_iter()
+            .filter(|(index, portal)| {
+                self.occlusion.visible(*index)
+                    || portal_contains_point(*portal, camera.position, shaft_length(camera.far))
+            })
+            .take(MAX_VISIBLE_PORTALS)
+            .map(|(_, portal)| portal)
+            .collect::<Vec<_>>();
         let groups = portal_direction_groups(&visible);
         let mut froxel_portals = Vec::with_capacity(visible.len());
         for slice in &mut self.slices {
@@ -534,6 +557,10 @@ impl DirectionalShadow {
 
     pub(super) fn froxel_portals(&self) -> (&wgpu::Buffer, u32) {
         (&self.froxel_portal_buffer, self.froxel_portal_count)
+    }
+
+    pub(super) fn render_occlusion(&mut self, encoder: &mut wgpu::CommandEncoder) -> usize {
+        self.occlusion.render(encoder)
     }
 
     pub(super) fn froxel_shadow_maps(&self) -> (&wgpu::TextureView, &wgpu::Sampler) {
@@ -1225,25 +1252,25 @@ fn portal_direction(a: Vec3, b: Vec3, c: Vec3, shaft_tilt_degrees: f32) -> Vec3 
     inward * tilt.cos() + Vec3::NEG_Y * tilt.sin()
 }
 
-fn visible_portals(
+fn portal_candidates(
     portals: &[PortalTriangle],
     camera: &Camera,
     aspect: f32,
-) -> Vec<PortalTriangle> {
+) -> Vec<(usize, PortalTriangle)> {
     let view_projection = camera.view_projection(aspect);
     let mut visible = portals
         .iter()
-        .copied()
-        .filter(|portal| {
-            camera_on_interior_side(*portal, camera.position)
-                && portal_in_view(*portal, view_projection, camera.far)
+        .enumerate()
+        .filter(|(_, portal)| {
+            camera_on_interior_side(**portal, camera.position)
+                && portal_in_view(**portal, view_projection, camera.far)
         })
+        .map(|(index, portal)| (index, *portal))
         .collect::<Vec<_>>();
     visible.sort_by(|left, right| {
-        portal_distance_squared(*left, camera.position)
-            .total_cmp(&portal_distance_squared(*right, camera.position))
+        portal_distance_squared(left.1, camera.position)
+            .total_cmp(&portal_distance_squared(right.1, camera.position))
     });
-    visible.truncate(MAX_VISIBLE_PORTALS);
     visible
 }
 
@@ -1292,13 +1319,44 @@ fn portal_in_view(portal: PortalTriangle, view_projection: Mat4, view_distance: 
         && maximum.z >= 0.0
 }
 
-fn portal_volume_points(portal: PortalTriangle, length: f32) -> [Vec3; 6] {
+pub(super) fn portal_volume_points(portal: PortalTriangle, length: f32) -> [Vec3; 6] {
     let [a, b, c] = [portal.a, portal.b, portal.c].map(|point| Vec3::from_slice(&point));
     let center = Vec3::from_slice(&portal.center_scale);
     let scale = portal.center_scale[3].max(1.0);
     let extrusion = Vec3::from_slice(&portal.direction) * length;
     let end = |point| center + (point - center) * scale + extrusion;
     [a, b, c, end(a), end(b), end(c)]
+}
+
+fn portal_contains_point(portal: PortalTriangle, point: Vec3, length: f32) -> bool {
+    let a = Vec3::from_slice(&portal.a);
+    let edge_ab = Vec3::from_slice(&portal.b) - a;
+    let edge_ac = Vec3::from_slice(&portal.c) - a;
+    let direction = Vec3::from_slice(&portal.direction);
+    let determinant = edge_ab.dot(edge_ac.cross(direction));
+    if determinant.abs() < 0.0001 || length <= 0.0 {
+        return false;
+    }
+    let vector = point - a;
+    let coordinates = Vec3::new(
+        vector.dot(edge_ac.cross(direction)),
+        edge_ab.dot(vector.cross(direction)),
+        edge_ab.dot(edge_ac.cross(vector)),
+    ) / determinant;
+    let center = Vec3::from_slice(&portal.center_scale);
+    let center_coordinates = Vec3::new(
+        (center - a).dot(edge_ac.cross(direction)),
+        edge_ab.dot((center - a).cross(direction)),
+        edge_ab.dot(edge_ac.cross(center - a)),
+    ) / determinant;
+    let growth = (portal.center_scale[3].max(1.0) - 1.0) / length;
+    coordinates.z >= 0.0
+        && coordinates.z <= length
+        && coordinates.x + center_coordinates.x * growth * coordinates.z >= 0.0
+        && coordinates.y + center_coordinates.y * growth * coordinates.z >= 0.0
+        && 1.0 - coordinates.x - coordinates.y
+            + (1.0 - center_coordinates.x - center_coordinates.y) * growth * coordinates.z
+            >= 0.0
 }
 
 fn shaft_length(view_distance: f32) -> f32 {
@@ -1485,6 +1543,29 @@ mod tests {
         };
 
         assert!(portal_in_view(portal, Mat4::IDENTITY, 4.0));
+    }
+
+    #[test]
+    fn camera_inside_a_shaft_remains_visible_when_its_shell_is_occluded() {
+        let portal = PortalTriangle {
+            a: Vec3::new(-1.0, -1.0, 0.0).extend(1.0).to_array(),
+            b: Vec3::new(1.0, -1.0, 0.0).extend(1.0).to_array(),
+            c: Vec3::new(0.0, 1.0, 0.0).extend(1.0).to_array(),
+            color: [1.0; 4],
+            direction: Vec3::Z.extend(0.0).to_array(),
+            uv_a: [0.0; 4],
+            uv_b: [0.0; 4],
+            uv_c: [0.0; 4],
+            center_scale: [0.0, 0.0, 0.0, 1.0],
+            uv_bounds: [0.0; 4],
+        };
+
+        assert!(portal_contains_point(portal, Vec3::new(0.0, 0.0, 1.0), 2.0));
+        assert!(!portal_contains_point(
+            portal,
+            Vec3::new(2.0, 0.0, 1.0),
+            2.0
+        ));
     }
 
     #[test]

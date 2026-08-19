@@ -13,6 +13,7 @@ use crate::{Camera, VolumetricDebugView, VolumetricTuning};
 use super::HDR_FORMAT;
 
 mod froxel;
+mod occlusion;
 mod point_shadow;
 mod shadow;
 
@@ -110,7 +111,8 @@ impl VolumetricRenderer {
         let fixtures = point_fixtures(scene, &texture_colors);
         let shadow = DirectionalShadow::new(device, queue, depth_view, scene);
         let froxel = FroxelVolume::new(device, viewport_size, depth_view, &shadow);
-        let point_shadows = PointShadowRenderer::new(device, fixtures.clone());
+        let point_shadows =
+            PointShadowRenderer::new(device, fixtures.clone(), scene.corona_visibility.clone());
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("OpenHP1 volumetric lighting camera"),
             size: size_of::<VolumetricUniform>() as u64,
@@ -347,6 +349,11 @@ impl VolumetricRenderer {
             debug_view,
             VolumetricDebugView::ApertureMask | VolumetricDebugView::DirectionalVisibility
         );
+        let occlusion_passes = if directional {
+            self.shadow.render_occlusion(encoder)
+        } else {
+            0
+        };
         let shadow_passes = if directional {
             self.shadow.render(encoder)
         } else {
@@ -370,7 +377,7 @@ impl VolumetricRenderer {
         let draw_shafts = directional && self.shadow.has_visible_shafts();
         let draw_local = local && (self.instance_count != 0 || self.point_volume_count != 0);
         if !draw_froxel && !draw_shafts && !draw_local {
-            return shadow_passes + point_shadow_passes + froxel_passes;
+            return occlusion_passes + shadow_passes + point_shadow_passes + froxel_passes;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("OpenHP1 additive volumetric lighting pass"),
@@ -411,7 +418,7 @@ impl VolumetricRenderer {
                 pass.draw(0..6, 0..count as u32);
             }
         }
-        shadow_passes + point_shadow_passes + froxel_passes + 1
+        occlusion_passes + shadow_passes + point_shadow_passes + froxel_passes + 1
     }
 }
 

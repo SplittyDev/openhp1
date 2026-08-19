@@ -288,6 +288,19 @@
             123
           ],
           "radius": 18
+        },
+        {
+          "color": [
+            2,
+            2,
+            2
+          ],
+          "kind": "exclude",
+          "threshold": 25.0,
+          "position": [
+            138,
+            93
+          ]
         }
       ],
       "excluded_rectangles": [
@@ -2211,6 +2224,19 @@
             132,
             207
           ]
+        },
+        {
+          "color": [
+            0,
+            0,
+            0
+          ],
+          "kind": "exclude",
+          "threshold": 20.0,
+          "position": [
+            132,
+            114
+          ]
         }
       ],
       "excluded_rectangles": [
@@ -2242,6 +2268,16 @@
           "max": [
             200,
             253
+          ]
+        },
+        {
+          "min": [
+            115,
+            47
+          ],
+          "max": [
+            120,
+            51
           ]
         }
       ]
@@ -2494,6 +2530,19 @@
           "position": [
             73,
             101
+          ]
+        },
+        {
+          "color": [
+            12,
+            12,
+            12
+          ],
+          "kind": "exclude",
+          "threshold": 20.0,
+          "position": [
+            64,
+            34
           ]
         }
       ]

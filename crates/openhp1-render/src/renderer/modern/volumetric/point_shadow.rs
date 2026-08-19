@@ -5,7 +5,7 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
-use openhp1_scene::{RenderLight, RenderScene};
+use openhp1_scene::{CoronaVisibility, RenderLight, RenderScene, render_to_unreal};
 
 use crate::Camera;
 
@@ -120,10 +120,15 @@ pub(super) struct PointShadowRenderer {
     cached: [Option<PointShadowKey>; MAX_POINT_SHADOWS],
     dirty: [bool; MAX_POINT_SHADOWS],
     geometry_changes: Vec<ShadowChangeBounds>,
+    visibility: CoronaVisibility,
 }
 
 impl PointShadowRenderer {
-    pub(super) fn new(device: &wgpu::Device, sources: Vec<PointFixture>) -> Self {
+    pub(super) fn new(
+        device: &wgpu::Device,
+        sources: Vec<PointFixture>,
+        visibility: CoronaVisibility,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("OpenHP1 volumetric point shadow maps"),
             size: wgpu::Extent3d {
@@ -253,6 +258,7 @@ impl PointShadowRenderer {
             cached: [None; MAX_POINT_SHADOWS],
             dirty: [false; MAX_POINT_SHADOWS],
             geometry_changes: Vec::new(),
+            visibility,
         }
     }
 
@@ -273,7 +279,12 @@ impl PointShadowRenderer {
         camera: &Camera,
         aspect: f32,
     ) -> (Vec<usize>, Vec<VolumetricInstance>) {
-        let (shadowed_actor_indices, selected) = select_sources(&self.sources, camera, aspect);
+        let camera_location = render_to_unreal(camera.position);
+        let (shadowed_actor_indices, selected) =
+            select_sources(&self.sources, camera, aspect, |source| {
+                self.visibility
+                    .line_clear(camera_location, render_to_unreal(source.position))
+            });
         for shadow_index in 0..MAX_POINT_SHADOWS {
             let Some(source) = selected.get(shadow_index).copied() else {
                 self.cached[shadow_index] = None;
@@ -532,6 +543,7 @@ fn select_sources(
     fixtures: &[PointFixture],
     camera: &Camera,
     aspect: f32,
+    line_clear: impl Fn(PointSource) -> bool,
 ) -> (Vec<usize>, Vec<PointSource>) {
     let mut visible = fixtures
         .iter()
@@ -541,21 +553,32 @@ fn select_sources(
                 .iter()
                 .copied()
                 .filter(|source| source_in_view(*source, camera, aspect))
+                .map(|source| {
+                    (
+                        line_clear(source),
+                        projected_importance(source, camera),
+                        source.position.distance_squared(camera.position),
+                        source,
+                    )
+                })
                 .collect::<Vec<_>>();
             sources.sort_unstable_by(|left, right| {
-                left.position
-                    .distance_squared(camera.position)
-                    .total_cmp(&right.position.distance_squared(camera.position))
-                    .then_with(|| left.actor_index.cmp(&right.actor_index))
+                right
+                    .0
+                    .cmp(&left.0)
+                    .then_with(|| right.1.total_cmp(&left.1))
+                    .then_with(|| left.2.total_cmp(&right.2))
+                    .then_with(|| left.3.actor_index.cmp(&right.3.actor_index))
             });
             (!sources.is_empty()).then_some((fixture, sources))
         })
         .collect::<Vec<_>>();
     visible.sort_unstable_by(|(left_fixture, left), (right_fixture, right)| {
-        left[0]
-            .position
-            .distance_squared(camera.position)
-            .total_cmp(&right[0].position.distance_squared(camera.position))
+        right[0]
+            .0
+            .cmp(&left[0].0)
+            .then_with(|| right[0].1.total_cmp(&left[0].1))
+            .then_with(|| left[0].2.total_cmp(&right[0].2))
             .then_with(|| left_fixture.actor_indices[0].cmp(&right_fixture.actor_indices[0]))
     });
     let mut shadowed_actor_indices = Vec::new();
@@ -568,13 +591,19 @@ fn select_sources(
             if sample == 0 {
                 shadowed_actor_indices.extend_from_slice(&fixture.actor_indices);
             }
-            selected.push(*source);
+            selected.push(source.3);
             if selected.len() == MAX_POINT_SHADOWS {
                 break 'samples;
             }
         }
     }
     (shadowed_actor_indices, selected)
+}
+
+fn projected_importance(source: PointSource, camera: &Camera) -> f32 {
+    let depth = -camera.view().transform_point3(source.position).z;
+    let projected_radius = source.radius / depth.max(source.radius).max(camera.near);
+    projected_radius * projected_radius
 }
 
 fn source_in_view(source: PointSource, camera: &Camera, aspect: f32) -> bool {
@@ -688,7 +717,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 1_000.0);
-        let (_, selected) = select_sources(&fixtures, &camera, 1.0);
+        let (_, selected) = select_sources(&fixtures, &camera, 1.0, |_| true);
         assert_eq!(
             selected
                 .iter()
@@ -723,7 +752,61 @@ mod tests {
             actor_indices: vec![source.actor_index],
             sources: vec![source],
         });
-        assert_eq!(select_sources(&fixtures, &camera, 1.0).1, vec![sources[0]]);
+        assert_eq!(
+            select_sources(&fixtures, &camera, 1.0, |_| true).1,
+            vec![sources[0]]
+        );
+    }
+
+    #[test]
+    fn clear_sources_win_the_shadow_budget_before_obstructed_sources() {
+        let sources = (0..=MAX_POINT_SHADOWS)
+            .map(|actor_index| PointSource {
+                actor_index,
+                position: Vec3::new(0.0, 0.0, -10.0 - actor_index as f32),
+                color: Vec3::ONE,
+                radius: 10.0,
+                fixture_emitter: true,
+                source_sprite: false,
+            })
+            .collect::<Vec<_>>();
+        let fixtures = sources
+            .iter()
+            .map(|source| fixture(vec![*source]))
+            .collect::<Vec<_>>();
+        let camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 1_000.0);
+        let (_, selected) = select_sources(&fixtures, &camera, 1.0, |source| {
+            source.actor_index == MAX_POINT_SHADOWS
+        });
+
+        assert_eq!(selected[0].actor_index, MAX_POINT_SHADOWS);
+    }
+
+    #[test]
+    fn larger_projected_sources_win_before_nearer_tiny_sources() {
+        let tiny = PointSource {
+            actor_index: 1,
+            position: Vec3::new(0.0, 0.0, -10.0),
+            color: Vec3::ONE,
+            radius: 1.0,
+            fixture_emitter: true,
+            source_sprite: false,
+        };
+        let large = PointSource {
+            actor_index: 2,
+            position: Vec3::new(0.0, 0.0, -100.0),
+            radius: 50.0,
+            ..tiny
+        };
+        let camera = Camera::looking_at(Vec3::ZERO, -Vec3::Z, 1_000.0);
+        let (_, selected) = select_sources(
+            &[fixture(vec![tiny]), fixture(vec![large])],
+            &camera,
+            1.0,
+            |_| true,
+        );
+
+        assert_eq!(selected, vec![large, tiny]);
     }
 
     #[test]
