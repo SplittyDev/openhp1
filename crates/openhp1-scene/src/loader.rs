@@ -4518,10 +4518,10 @@ fn load_materials(
             materials.push(material);
             continue;
         }
-        let volumetric_source = material.volumetric_source
-            || texture_names[surface_index]
-                .as_deref()
-                .is_some_and(is_window_texture);
+        let volumetric_source = is_volumetric_source(
+            material.volumetric_source,
+            texture_names[surface_index].as_deref(),
+        );
         if material.mode == SurfaceMode::Backdrop {
             materials.push(SurfaceMaterial {
                 volumetric_source,
@@ -4727,6 +4727,17 @@ fn is_window_texture(name: &str) -> bool {
         .next()
         .is_some_and(|package| package.eq_ignore_ascii_case("HP_Outside"))
         && is_window_texture_name(name)
+}
+
+fn is_volumetric_source(authored: bool, texture_name: Option<&str>) -> bool {
+    let Some(name) = texture_name else {
+        return authored;
+    };
+    !name
+        .split('.')
+        .next()
+        .is_some_and(|package| package.eq_ignore_ascii_case("Hub2_Greenhouse"))
+        && (authored || is_window_texture(name))
 }
 
 fn load_zone_pan_speeds(
@@ -8036,6 +8047,22 @@ mod tests {
         assert!(super::is_window_texture("Harry Potter.pillar.Window"));
         assert!(!super::is_window_texture(
             "Hub2_Greenhouse.Wall.Greenhousewall"
+        ));
+    }
+
+    #[test]
+    fn excludes_all_greenhouse_textures_from_volumetric_sources() {
+        assert!(!super::is_volumetric_source(
+            false,
+            Some("Hub2_Greenhouse.Window.GreenhouseWindow")
+        ));
+        assert!(!super::is_volumetric_source(
+            true,
+            Some("hub2_greenhouse.Sky.FakeBackdrop")
+        ));
+        assert!(super::is_volumetric_source(
+            false,
+            Some("Hub_3_Lumos.Window.StainedGlassWind")
         ));
     }
 

@@ -227,7 +227,9 @@ maps do not mark indoor stained-glass windows, so the scene loader also marks
 surface textures whose qualified name contains a `Window`, `Windows`,
 `Window Frame`, or `Window Frames` group, or whose object name contains
 `window` case-insensitively. Textures in the `HP_Outside` package are excluded
-from volumetric lighting but remain available to inspection tools.
+from automatic window classification, while every texture in the
+`Hub2_Greenhouse` package is excluded from volumetric lighting; all remain
+available to inspection tools.
 Classified window textures feed a renderer-owned 128-pixel RGBA aperture array
 built at runtime from the original RGB and derived transmission. When a matching
 mask exists under `window_masks/`, the scene loader embeds and supplies that
